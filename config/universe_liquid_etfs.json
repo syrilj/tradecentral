@@ -1,0 +1,45 @@
+{
+  "name": "liquid_etf_survivorship_sensitivity_v1",
+  "description": "Frozen long-lived, liquid ETF sensitivity universe for development-only directional research.",
+  "symbols": [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "DIA",
+    "XLF",
+    "XBI",
+    "XLE",
+    "XLP",
+    "XLU",
+    "TLT",
+    "HYG",
+    "LQD",
+    "GLD"
+  ],
+  "sectors": {
+    "broad_index": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "DIA"
+    ],
+    "sector_equity": [
+      "XLF",
+      "XBI",
+      "XLE",
+      "XLP",
+      "XLU"
+    ],
+    "rates_credit": [
+      "TLT",
+      "HYG",
+      "LQD"
+    ],
+    "real_asset": [
+      "GLD"
+    ]
+  },
+  "research_only": true,
+  "selection_rule": "Fixed before evaluation from the existing checked-in universe; no constituent rebalancing or current-stock selection.",
+  "option_profit_claim": false
+}

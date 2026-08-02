@@ -1,0 +1,45 @@
+# --- secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-qlib/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- vendored third-party source (separate upstream repo) ---
+.qlib-src/
+
+# --- node ---
+node_modules/
+dist/
+.vite/
+
+# --- data + experiment artifacts (large, regenerable) ---
+data/
+runs/
+qlib_xs/
+qlib_xs3/
+qlib_xs4/
+mlruns/
+
+# --- large binary formats ---
+*.parquet
+*.pkl
+*.db
+*.sqlite3
+*.h5
+*.bin
+*.tar.gz
+
+# --- os ---
+.DS_Store

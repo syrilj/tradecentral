@@ -1,0 +1,15 @@
+{
+  "allow_short": true,
+  "base_scale": 0.25,
+  "selective_scale": 0.35,
+  "horizon_bars": 8,
+  "barrier_k_atr": 1.0,
+  "cost_roundtrip": 0.001,
+  "selection_rule": "frozen_before_oos_eval",
+  "train_window": ["2024-08-01", "2025-08-01"],
+  "holdout_window": ["2025-08-01", "2026-07-11"],
+  "shipped_default_operating_point": "balanced_top5",
+  "shipped_default_operating_point_justification": "Pre-hoc rule: first of {active_top10, balanced_top5, selective_top2, sniper_top1} (in that order) with n>100, positive expectancy, and Wilson-95-low within reach of 50%. Full derivation in config.json:default_operating_point, thresholds.json:shipped_default_operating_point, and MODEL.md.",
+  "runtime_gating_note": "FOUND AND FIXED during the edge/ port (2026-07-29). SignalEngine.generate() used to gate ANY signal on thresholds.enter_lo (0.6293, == active_top10's raw threshold -- the operating point measured to have NEGATIVE holdout expectancy, -0.05%/trade at n=320); thresholds.enter_hi (0.6711, == the shipped-default balanced_top5 threshold) was loaded into SignalEngine._enter_hi but never referenced in generate(), so the engine silently traded at the wrong, lower bar. Fix: generate()'s long_ok/short_ok gate now compares against thresholds.enter_hi instead of thresholds.enter_lo -- a single, narrow swap, not a new tiering design. Position-size escalation to selective_scale above thresholds.selective (0.7243, == selective_top2's raw threshold) is unchanged. This was a real bug in the source repo too (TradingAlgoWork/models/poc_va_macdha/v90_meta_confidence/signal_engine.py still has it as of this port); fixing it there is a separate decision for later and was intentionally left untouched. See MODEL.md 'Runtime gating note' for the full before/after record.",
+  "note": "Thresholds live in thresholds.json (derived from train OOF raw-score quantiles). allow_short=false turns the short head into a flatten/avoid signal only."
+}

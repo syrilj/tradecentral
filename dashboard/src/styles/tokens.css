@@ -1,0 +1,115 @@
+/* ============================================================================
+   EDGE · INSTRUMENT — design tokens
+   ----------------------------------------------------------------------------
+   Aesthetic brief: this is a measurement instrument, not a fintech product.
+   The reference points are oscilloscopes, seismographs and printer's
+   registration marks — devices that report what they measured and decline to
+   editorialise. That is the right register for this codebase, where nearly
+   every pre-registered gate came back NO-GO and the dashboard's only real job
+   is to keep saying so.
+
+   Rules the components hold to:
+     · One accent. Phosphor lime means "live / measured now". Nothing else.
+     · Corner ticks, not rounded cards. Panels are framed like a viewfinder.
+     · Every number is tabular. Columns of figures must align on the decimal.
+     · Green/red are reserved for signed quantities. Never for chrome.
+   ========================================================================== */
+
+:root {
+  /* ---- surface ---------------------------------------------------------- */
+  --void: #08090c;
+  --void-lift: #0c0e14;
+  --panel: #11141d;
+  --panel-hi: #171b26;
+  --panel-raise: #1e2332;
+
+  /* ---- rules & structure ------------------------------------------------ */
+  --rule: #232836;
+  --rule-hi: #343c50;
+  --rule-faint: #181c26;
+  --grid: rgba(200, 250, 75, 0.035);
+
+  /* ---- ink -------------------------------------------------------------- */
+  --ink: #f0f2f7;
+  --ink-soft: #c6cefd;
+  --ink-dim: #9da7ba;
+  --ink-faint: #758197;
+  --ink-ghost: #59657b;
+
+  /* ---- the one accent --------------------------------------------------- */
+  --phosphor: #c8fa4b;
+  --phosphor-dim: #9ec637;
+  --phosphor-glow: rgba(200, 250, 75, 0.22);
+  --phosphor-wash: rgba(200, 250, 75, 0.08);
+
+  /* ---- signed quantities ------------------------------------------------ */
+  --long: #56e39f;
+  --long-wash: rgba(86, 227, 159, 0.12);
+  --short: #ff4d6d;
+  --short-wash: rgba(255, 77, 109, 0.12);
+  --warn: #ffb347;
+  --warn-wash: rgba(255, 179, 71, 0.12);
+  --halt: #ff4d6d;
+
+  /* ---- verdict semantics (gates) ---------------------------------------- */
+  --go: var(--long);
+  --no-go: var(--short);
+  --unknown: var(--ink-faint);
+  --running: var(--warn);
+
+  /* ---- type ------------------------------------------------------------- */
+  --font-display: 'Martian Mono Variable', 'Martian Mono', ui-monospace, monospace;
+  --font-ui: 'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
+  --font-data: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+
+  --t-micro: 0.6875rem;   /* 11px — crisp instrument labels    */
+  --t-tiny: 0.75rem;      /* 12px — dense table meta           */
+  --t-small: 0.8125rem;   /* 13px — table body                 */
+  --t-body: 0.875rem;     /* 14px — prose                      */
+  --t-lead: 1.0rem;       /* 16px                              */
+  --t-fig: 1.375rem;      /* 22px — readout figures            */
+  --t-fig-lg: 2.25rem;    /* 36px — hero readout               */
+  --t-display: 1.125rem;  /* 18px — view titles                */
+
+  --track-label: 0.10em;  /* balanced tracking on uppercase micro */
+  --track-tight: -0.01em;
+
+  /* ---- space (4px base) -------------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  /* ---- geometry ---------------------------------------------------------- */
+  --rail-w: 80px;
+  --strip-h: 60px;
+  --tick: 8px;            /* corner registration mark length   */
+  --hair: 1px;
+
+  /* ---- motion ------------------------------------------------------------ */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-slow: 480ms;
+
+  --z-strip: 40;
+  --z-rail: 45;
+  --z-overlay: 90;
+  --z-toast: 100;
+}
+
+/* The instrument runs dark. A light variant would be a different instrument.
+   Respect forced-colors and reduced-motion, but do not offer a light theme
+   that this palette was never designed for. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}

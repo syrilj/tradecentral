@@ -1,0 +1,179 @@
+{
+  "model": "v90_meta_confidence",
+  "contract": {
+    "universe": [
+      "SPY.US",
+      "QQQ.US",
+      "IWM.US",
+      "DIA.US",
+      "AAPL.US",
+      "MSFT.US",
+      "NVDA.US",
+      "GOOGL.US",
+      "META.US",
+      "AMZN.US",
+      "AVGO.US",
+      "AMD.US",
+      "MU.US",
+      "TSM.US",
+      "ASML.US",
+      "INTC.US",
+      "QCOM.US",
+      "CRM.US",
+      "ORCL.US",
+      "ADBE.US",
+      "NOW.US",
+      "SNOW.US",
+      "PLTR.US",
+      "TSLA.US",
+      "HD.US",
+      "MCD.US",
+      "NKE.US",
+      "COST.US",
+      "JPM.US",
+      "GS.US",
+      "V.US",
+      "MA.US",
+      "BAC.US",
+      "XLF.US",
+      "UNH.US",
+      "JNJ.US",
+      "LLY.US",
+      "PFE.US",
+      "XBI.US",
+      "XOM.US",
+      "CVX.US",
+      "CAT.US",
+      "GE.US",
+      "XLE.US",
+      "XLP.US",
+      "XLU.US",
+      "KO.US",
+      "PG.US",
+      "WMT.US",
+      "TLT.US",
+      "HYG.US",
+      "LQD.US",
+      "GLD.US",
+      "COIN.US",
+      "MSTR.US",
+      "IONQ.US",
+      "APLD.US",
+      "RKLB.US",
+      "SMCI.US"
+    ],
+    "interval": "1h",
+    "source": "yfinance_auto_adjust",
+    "train_window": [
+      "2024-08-01",
+      "2025-08-01"
+    ],
+    "holdout_window": [
+      "2025-08-01",
+      "2026-07-11"
+    ],
+    "horizon_bars": 8,
+    "barrier_k_atr": 1.0,
+    "cost_roundtrip": 0.001,
+    "annualization_bars_per_year": 1764
+  },
+  "calibration": {
+    "long": {
+      "oof_brier": 0.2476775292501145,
+      "oof_logloss": 0.6876288121329267,
+      "oof_ece": 4.404773200779209e-16,
+      "calibration": "isotonic"
+    },
+    "short": {
+      "oof_brier": 0.24863273307435868,
+      "oof_logloss": 0.6895495736282018,
+      "oof_ece": 2.7587107375657317e-16,
+      "calibration": "isotonic"
+    },
+    "holdout": {
+      "long_holdout_brier": 0.24736073388195978,
+      "long_holdout_logloss": 0.6863263480780599,
+      "long_holdout_ece": 0.008797390939241336
+    }
+  },
+  "holdout_operating_points": {
+    "active_top10": {
+      "trade_count": 4632,
+      "win_rate": 0.5412348877374784,
+      "win_rate_wilson95": [
+        0.5268563602218531,
+        0.5555450747193235
+      ],
+      "avg_return_per_trade": -3.873704067854858e-05,
+      "profit_factor": 0.9931900232173846,
+      "sharpe": -0.11843288162073662,
+      "total_return_compounded": -0.4605220587485803,
+      "avg_confidence": 0.5334695765015879,
+      "long_trades": 4130,
+      "short_trades": 502,
+      "raw_threshold": 0.5662557482719421
+    },
+    "balanced_top5": {
+      "trade_count": 2049,
+      "win_rate": 0.5256222547584187,
+      "win_rate_wilson95": [
+        0.503973078061925,
+        0.5471755346707866
+      ],
+      "avg_return_per_trade": -0.0002766737915531233,
+      "profit_factor": 0.9593705546828533,
+      "sharpe": -0.7301919575773899,
+      "total_return_compounded": -0.5625813438245233,
+      "avg_confidence": 0.5326399449235903,
+      "long_trades": 1792,
+      "short_trades": 257,
+      "raw_threshold": 0.5833498328924177
+    },
+    "selective_top2": {
+      "trade_count": 444,
+      "win_rate": 0.5247747747747747,
+      "win_rate_wilson95": [
+        0.4783098149795981,
+        0.5708146969013883
+      ],
+      "avg_return_per_trade": -0.0002508294443625416,
+      "profit_factor": 0.9728890294544233,
+      "sharpe": -0.5012845815474861,
+      "total_return_compounded": -0.18910255589931713,
+      "avg_confidence": 0.5282375103023834,
+      "long_trades": 347,
+      "short_trades": 97,
+      "raw_threshold": 0.6079632699489593
+    },
+    "sniper_top1": {
+      "trade_count": 161,
+      "win_rate": 0.5093167701863354,
+      "win_rate_wilson95": [
+        0.43278304467156725,
+        0.5854162448281706
+      ],
+      "avg_return_per_trade": 0.00015628255831586247,
+      "profit_factor": 1.0155039162115351,
+      "sharpe": 0.28233325801835646,
+      "total_return_compounded": -0.01821742847675245,
+      "avg_confidence": 0.5279880606131453,
+      "long_trades": 122,
+      "short_trades": 39,
+      "raw_threshold": 0.6290756332874298
+    }
+  },
+  "recommended_thresholds": {
+    "enter_hi": 0.5833498328924177,
+    "enter_lo": 0.5662557482719421,
+    "selective": 0.6079632699489593,
+    "exit": 0.45,
+    "quantile_source": "train_oof_pooled",
+    "operating_point_quantiles": {
+      "active_top10": 0.9,
+      "balanced_top5": 0.95,
+      "selective_top2": 0.98,
+      "sniper_top1": 0.99
+    }
+  },
+  "note": "Simulated only. Self-contained purged-CV/holdout harness in tools/train_v90_meta_confidence.py; not the legacy dmr runner."
+}

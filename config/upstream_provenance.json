@@ -1,0 +1,37 @@
+{
+  "schema_version": "edge-upstream-provenance-v1",
+  "policy": {
+    "runtime_dependency": false,
+    "code_vendoring": false,
+    "notes": "These sources are documented research references. Implementations in edge/research are independent, offline, and do not import external project code."
+  },
+  "sources": [
+    {
+      "name": "machine-learning-for-trading",
+      "url": "https://github.com/stefan-jansen/machine-learning-for-trading",
+      "commit": "3df12933d4bbc6e080eb4d6156ba3094f62d40ea",
+      "license": "MIT",
+      "purpose": "Primary methodological reference for walk-forward evaluation, search control, execution realism, and monitoring.",
+      "usage": "Conceptual reference only; no repository code or runtime dependency is used.",
+      "code_imported": false
+    },
+    {
+      "name": "gs-quant",
+      "url": "https://github.com/goldmansachs/gs-quant",
+      "commit": "2dfe6fc1388abb7d47a65f51cc7c63fb322c3931",
+      "license": "Apache-2.0",
+      "purpose": "Offline derivatives and risk-parity check reference.",
+      "usage": "Conceptual reference only; no Goldman API, credentials, repository code, or runtime dependency is used.",
+      "code_imported": false
+    },
+    {
+      "name": "financial-models-numerical-methods",
+      "url": "https://github.com/cantaro86/Financial-Models-Numerical-Methods",
+      "commit": "585ed19462665bd822c88b5b6e34fca8ad441370",
+      "license": "AGPL-3.0-only",
+      "purpose": "Mathematical reference for option-pricing, volatility, filtering, and stress scenarios.",
+      "usage": "Conceptual reference only; AGPL code is not copied, imported, or vendored.",
+      "code_imported": false
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+# Pinned Vertex AI training environment for edge/.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Job qlib-xs3-wide-sweep-v2 (2026-07-30, customJobs/5094447772791209984) died with:
+#
+#   ImportError: cannot import name 'ComplexWarning' from 'numpy.core.numeric'
+#     File ".../sklearn/utils/validation.py", line 24
+#
+# The job's inline pip install listed a bare `numpy`. pip saw scikit-learn was
+# already satisfied by the base image's conda env and left it alone, but happily
+# upgraded numpy to 2.2.6. NumPy 2.0 removed the `numpy.core` namespace that the
+# image's older sklearn imports at module load, so `import qlib.contrib.model`
+# raised on the first LGBModel import and workerpool0-0 exited 1.
+#
+# The rule this file enforces: NOTHING that the base image already ships is
+# allowed to float. The versions below are exactly what edge/.venv-qlib runs
+# locally, which is the environment every GATE_XS* result was produced under.
+# Container and laptop must agree or the numbers are not comparable.
+#
+# USAGE (in the job's containerSpec args, before any other step):
+#   pip install --no-cache-dir \
+#     --extra-index-url https://download.pytorch.org/whl/cpu \
+#     -r edge/requirements-vertex.txt
+#
+# Then run edge/tools/preflight_env.py and let it exit non-zero on drift.
+
+# --- The pin that actually matters -------------------------------------------
+# Hard upper bound. Anything that tries to pull numpy>=2 must fail resolution
+# loudly here rather than silently break sklearn at import time.
+numpy==1.26.4
+
+# --- Pinned to match edge/.venv-qlib ------------------------------------------
+pandas==2.3.3
+scipy==1.15.3
+scikit-learn==1.7.2
+lightgbm==4.7.0
+pyarrow==24.0.0
+joblib==1.5.3
+ruamel.yaml==0.19.1
+python-dateutil==2.9.0.post0
+tqdm==4.70.0
+loguru==0.7.3
+fire==0.7.1
+dill==0.4.1
+redis==8.1.0
+cvxpy==1.7.5
+gym==0.26.2
+
+# mlflow is qlib's experiment backend. skinny is not enough -- qlib's
+# workflow recorder touches the full tracking store.
+mlflow==3.14.0
+
+# --- qlib itself, pinned to the exact commit the gates were run on ------------
+# NOT the PyPI release. edge/.venv-qlib runs 0.9.8.dev32 from this ref; PyPI
+# pyqlib is 0.9.6 and differs in the backtest calendar handling that
+# GATE_XS3.md's IntervalTopkDropoutStrategy depends on.
+# Requires `git` and a C toolchain in the image (tf-cpu.2-12.py310 has both).
+pyqlib @ git+https://github.com/microsoft/qlib.git@79633dd9506ea689e5400dea0197717b5b3d74b7
+
+# --- torch, for the GATE_XS4 deep model arms ---------------------------------
+# CPU wheels only -- install with
+#   --extra-index-url https://download.pytorch.org/whl/cpu
+# otherwise pip pulls the ~2.5GB CUDA build onto a CPU worker.
+torch==2.4.1
+
+# --- container plumbing -------------------------------------------------------
+# The base image's sitecustomize.py imports this; without it every python
+# invocation prints "Error in sitecustomize; ModuleNotFoundError:
+# pythonjsonlogger" to stderr. Cosmetic, but it buries real tracebacks.
+python-json-logger==2.0.7
+
+# Keep protobuf inside the range google-cloud-* and tensorflow agree on. The
+# failed job floated it to 6.33.6 and produced nine screens of resolver
+# conflicts that made the real ImportError hard to find.
+protobuf==4.25.8
