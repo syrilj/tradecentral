@@ -76,6 +76,24 @@ body::after {
   text-transform: uppercase;
   color: var(--ink-dim);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Global overflow safety for dense instrument panels */
+.panel,
+.kpi-card,
+.sector-card,
+.gauge {
+  min-width: 0;
+}
+
+table .feat,
+.card-name,
+.kpi-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fig {
@@ -179,4 +197,55 @@ a:hover { text-decoration: underline; }
 @keyframes trace-in {
   from { stroke-dashoffset: var(--trace-len, 2000); }
   to   { stroke-dashoffset: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+   Canonical data table.
+   ----------------------------------------------------------------------------
+   `.grid` was hand-rolled seven times across the views, and the copies had
+   already drifted — three used the token scale, two hardcoded `8px 12px`, one
+   used a tighter row height. This is the reference definition, matching the
+   dominant (Desk / Sectors / Gates) variant.
+
+   It is ADDITIVE on purpose. Vue scoped styles compile to `.grid[data-v-…]`,
+   which outranks this bare class selector, so every existing view keeps its
+   current appearance byte-for-byte. New views get the canonical table by
+   writing nothing. Migrate an old copy only when that view is next touched
+   for its own reasons — a mass sweep here would be an unreviewable diff
+   across six screens for zero user-visible gain.
+   ------------------------------------------------------------------------ */
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
+
+.grid th {
+  text-align: left;
+  padding: var(--s3) var(--s4);
+  color: var(--ink-dim);
+  border-bottom: var(--hair) solid var(--rule);
+  /* The header must survive a scrolled tbody — a column of figures with no
+     header is unreadable, and these tables are frequently taller than the
+     panel that frames them. */
+  position: sticky;
+  top: 0;
+  background: var(--panel-hi);
+  font-weight: 700;
+  z-index: 1;
+}
+
+.grid td {
+  padding: var(--s2) var(--s4);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+/* Figures align on the decimal or they are not worth printing. */
+.grid .num,
+th.num,
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }

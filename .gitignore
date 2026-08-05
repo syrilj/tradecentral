@@ -40,6 +40,13 @@ mlruns/
 *.h5
 *.bin
 *.tar.gz
+*.joblib
+*.npz
+
+# --- trained model snapshots (regenerable, large) ---
+models/qlib_scan_lgb_backup_*/
+models/qlib_scan_lgb_challenger*/
 
 # --- os ---
 .DS_Store
+.gstack/

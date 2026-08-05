@@ -10,6 +10,33 @@ import numpy as np
 import pandas as pd
 
 
+def newey_west_tstat(series: Iterable[float], max_lags: int = 5) -> float:
+    """
+    Computes Newey-West autocorrelation-adjusted t-statistic for a 1D time series.
+    """
+    x = np.asarray(list(series), dtype=float)
+    x = x[np.isfinite(x)]
+    n = len(x)
+    if n < 2:
+        return 0.0
+
+    mean_x = float(np.mean(x))
+    dev = x - mean_x
+
+    gamma_0 = float(np.mean(dev ** 2))
+    if gamma_0 <= 0:
+        return 0.0
+
+    var_sum = gamma_0
+    for lag in range(1, min(max_lags + 1, n)):
+        weight = 1.0 - (lag / (max_lags + 1.0))
+        gamma_lag = float(np.mean(dev[lag:] * dev[:-lag]))
+        var_sum += 2.0 * weight * gamma_lag
+
+    se = np.sqrt(max(var_sum, 1e-12) / n)
+    return float(mean_x / se) if se > 0 else 0.0
+
+
 @dataclass(frozen=True)
 class BootstrapCI:
     estimate: float
@@ -30,11 +57,7 @@ def date_block_bootstrap_ci(
     n_bootstrap: int = 2_000,
     seed: int = 0,
 ) -> BootstrapCI:
-    """Moving-block bootstrap CI for mean daily return, resampling dates not rows.
-
-    Multiple symbols decided on one date are aggregated before resampling, which
-    avoids pretending correlated cross-sectional positions are independent.
-    """
+    """Moving-block bootstrap CI for mean daily return, resampling dates not rows."""
     if not (0.0 < confidence < 1.0):
         raise ValueError("confidence must be in (0, 1)")
     if block_size < 1 or n_bootstrap < 1:
@@ -92,13 +115,7 @@ def bonferroni_deflated_sharpe_approximation(
     periods_per_year: int = 252,
     confidence: float = 0.95,
 ) -> DeflatedSharpeApproximation:
-    """A transparent conservative approximation to a deflated Sharpe test.
-
-    This is *not* the full Bailey--Lopez de Prado DSR.  It applies a one-sided
-    Bonferroni family-wise correction across recorded trials to an IID standard
-    error, so the result is deliberately named as an approximation.  Serial
-    dependence should additionally be assessed with ``date_block_bootstrap_ci``.
-    """
+    """A transparent conservative approximation to a deflated Sharpe test."""
     if trial_count < 1 or periods_per_year < 1 or not (0.0 < confidence < 1.0):
         raise ValueError("invalid trial_count, periods_per_year, or confidence")
     values = np.asarray(list(returns), dtype=float)
@@ -124,49 +141,12 @@ def bonferroni_deflated_sharpe_approximation(
     )
 
 
-# A concise alias for callers that already disclose the approximation in reports.
 deflated_sharpe_approximation = bonferroni_deflated_sharpe_approximation
-
-
-# ---------------------------------------------------------------------------
-# Effective trial count (architecture spec S11.4) -- REPORT-ONLY diagnostic.
-# ---------------------------------------------------------------------------
-#
-# K_eff estimates how many *independent* trials a correlated search behaves
-# like:
-#
-#     K_eff = exp( -sum_j p_j * log(p_j) ),   p_j = lambda_j / sum_k lambda_k
-#
-# where lambda_j are the eigenvalues of the trial-return correlation matrix R
-# after clipping tiny negative floating-point noise to zero.  This is the
-# exponential of the Shannon entropy of R's normalized eigenvalue spectrum:
-# a fully diversified (orthogonal) search of K trials has a flat spectrum
-# and K_eff == K; a fully redundant (identical) search collapses to a single
-# nonzero eigenvalue and K_eff == 1.  K_eff <= raw_trial_count always holds.
-#
-# THIS SECTION IS DIAGNOSTIC ONLY.  Never pass ``effective_trial_count``
-# anywhere ``bonferroni_deflated_sharpe_approximation`` expects
-# ``trial_count``.  Substituting K_eff for the raw, pre-registered trial
-# count would relax the multiple-testing correction above: a smaller
-# ``trial_count`` produces a smaller ``critical_z`` and therefore a *higher*,
-# easier-to-clear ``lower_bound_sharpe``.  That is the wrong direction of
-# error for a project whose two retracted GO calls (``GATE_XS3_RESULT.md``,
-# ``GATE_PEAD_RESULT.md``) were both false positives from under-corrected
-# search.  Continue gating on the raw trial count; report K_eff alongside it
-# purely for human review of how much of the raw count is actually
-# independent.
 
 
 @dataclass(frozen=True)
 class EffectiveTrialCount:
-    """Report-only effective search-multiplicity estimate (spec S11.4).
-
-    ``effective_trial_count`` (K_eff) is a *diagnostic*, not a gating input.
-    It must never be substituted for ``trial_count`` in
-    :func:`bonferroni_deflated_sharpe_approximation` -- see the module note
-    above this class for why that would silently loosen the gate.
-    ``raw_trial_count`` is, and must remain, the value that gates.
-    """
+    """Report-only effective search-multiplicity estimate (spec S11.4)."""
 
     raw_trial_count: int
     effective_trial_count: float
@@ -176,15 +156,6 @@ class EffectiveTrialCount:
 
 
 def _clip_eigenvalues(eigenvalues: np.ndarray, *, negative_eigenvalue_atol: float) -> np.ndarray:
-    """Zero out floating-point negative-eigenvalue noise; refuse real breaks.
-
-    A trial-return correlation matrix is mathematically positive
-    semi-definite, so any negative eigenvalue in an exact computation would
-    be zero; a small negative value is expected floating-point noise from
-    the eigensolver.  A *materially* negative eigenvalue instead means the
-    supplied matrix was not a valid correlation matrix -- a caller bug worth
-    raising on rather than silently absorbing into the estimate.
-    """
     magnitude = float(np.max(np.abs(eigenvalues))) if eigenvalues.size else 0.0
     floor = -negative_eigenvalue_atol * max(1.0, magnitude)
     if float(np.min(eigenvalues)) < floor:
@@ -200,17 +171,6 @@ def effective_trial_count_from_correlation(
     *,
     negative_eigenvalue_atol: float = 1e-8,
 ) -> EffectiveTrialCount:
-    """K_eff (spec S11.4) from a trial-return correlation matrix R.  Report-only.
-
-    ``correlation`` must be square with one row/column per trial.  Tiny
-    negative eigenvalues from floating-point estimation noise are clipped to
-    zero before the entropy calculation (see ``_clip_eigenvalues``); a
-    materially negative eigenvalue raises instead of silently producing a
-    nonsensical result.  ``K_eff`` is bounded in ``[1, raw_trial_count]`` by
-    construction: it is the exponential of the entropy of a probability
-    distribution over at most ``raw_trial_count`` outcomes, and entropy of
-    such a distribution is itself bounded in ``[0, log(raw_trial_count)]``.
-    """
     if not (np.isfinite(negative_eigenvalue_atol) and negative_eigenvalue_atol >= 0.0):
         raise ValueError("negative_eigenvalue_atol must be finite and non-negative")
     matrix = np.asarray(correlation, dtype=float)
@@ -225,9 +185,6 @@ def effective_trial_count_from_correlation(
         scale = max(1.0, float(np.max(np.abs(matrix))))
         if float(np.max(np.abs(matrix - matrix.T))) > 1e-6 * scale:
             raise ValueError("correlation matrix must be symmetric")
-    # Symmetrizing before the symmetric eigensolver only cancels asymmetry
-    # that is itself floating-point noise -- the check above already refused
-    # anything larger.
     eigenvalues = np.linalg.eigvalsh((matrix + matrix.T) / 2.0)
     cleaned = _clip_eigenvalues(eigenvalues, negative_eigenvalue_atol=negative_eigenvalue_atol)
     total = float(cleaned.sum())
@@ -237,10 +194,6 @@ def effective_trial_count_from_correlation(
     positive = probabilities > 0.0
     entropy = float(-np.sum(probabilities[positive] * np.log(probabilities[positive])))
     k_eff = float(np.exp(entropy))
-    # The [1, k] bound is a mathematical property of this construction (see
-    # docstring); clipping here only absorbs float roundoff at the boundary
-    # (e.g. 10.000000000000002 -> 10.0), it cannot mask a real estimation
-    # bug that would show up as a materially wrong value elsewhere in range.
     k_eff = min(max(k_eff, 1.0), float(k))
     return EffectiveTrialCount(
         raw_trial_count=k,
@@ -251,20 +204,6 @@ def effective_trial_count_from_correlation(
 
 
 def trial_return_correlation_matrix(trial_returns: Any) -> np.ndarray:
-    """Build a well-defined correlation matrix from a raw trial-return panel.
-
-    ``trial_returns`` is a dense ``(n_observations, n_trials)`` matrix: one
-    column per trial's return series, aligned on the same observation index
-    (this is independent of how or whether those series are persisted --
-    pass any array-like with that shape).  A constant (zero-variance) trial
-    column has an exactly-zero covariance with every other column regardless
-    of the other column's values, so it is recorded as uncorrelated with
-    every other trial; its diagonal entry is fixed at 1.0 like any other
-    trial's, since a correlation matrix's diagonal is always 1 by
-    definition. This keeps the matrix well-defined (finite, valid for
-    eigen-decomposition) instead of propagating the NaN that ``0/0`` would
-    otherwise produce.
-    """
     values = np.asarray(trial_returns, dtype=float)
     if values.ndim != 2:
         raise ValueError("trial_returns must be a 2D (n_observations, n_trials) matrix")
@@ -276,8 +215,6 @@ def trial_return_correlation_matrix(trial_returns: Any) -> np.ndarray:
     if not np.isfinite(values).all():
         raise ValueError("trial_returns must be finite")
     if n_trials == 1:
-        # A single trial's correlation with itself is 1 by definition; no
-        # variance estimate is needed to know K_eff is trivially 1.
         return np.ones((1, 1))
     if n_obs < 2:
         raise ValueError("at least two observations are required to estimate a correlation matrix")
@@ -296,12 +233,6 @@ def effective_trial_count_from_returns(
     *,
     negative_eigenvalue_atol: float = 1e-8,
 ) -> EffectiveTrialCount:
-    """K_eff (spec S11.4) from a raw ``(n_observations, n_trials)`` return panel.
-
-    Convenience wrapper around :func:`trial_return_correlation_matrix` and
-    :func:`effective_trial_count_from_correlation`.  Report-only -- see the
-    module note above :class:`EffectiveTrialCount`.
-    """
     corr = trial_return_correlation_matrix(trial_returns)
     result = effective_trial_count_from_correlation(corr, negative_eigenvalue_atol=negative_eigenvalue_atol)
     n_obs = int(np.asarray(trial_returns, dtype=float).shape[0])

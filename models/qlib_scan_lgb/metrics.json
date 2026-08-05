@@ -1,0 +1,11 @@
+{
+  "val_mean_rank_ic": 0.04880821143818635,
+  "val_icir": 0.37216295888191503,
+  "val_n_ic_days": 50,
+  "ensemble_ml_weight": 0.85,
+  "ridge_val_mean_rank_ic": 0.03684683047978681,
+  "train_end": "2024-06-28",
+  "val_start": "2024-07-08",
+  "val_end": "2024-12-31",
+  "source_id": "qlib_scan_lgb_v3_challenger"
+}

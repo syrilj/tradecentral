@@ -9,47 +9,87 @@
    is to keep saying so.
 
    Rules the components hold to:
-     · One accent. Phosphor lime means "live / measured now". Nothing else.
+     · One accent. Phosphor means "live / measured now". Nothing else.
      · Corner ticks, not rounded cards. Panels are framed like a viewfinder.
      · Every number is tabular. Columns of figures must align on the decimal.
      · Green/red are reserved for signed quantities. Never for chrome.
+     · No glow. An instrument is lit evenly; a halo around a figure is one
+       more thing between the reader and the number. Emphasis is carried by
+       weight, a solid rule, or a flat fill — never by `box-shadow: 0 0`,
+       `text-shadow`, or `filter: brightness()`.
+     · Data marks take flat fills. Gradients on a bar imply a second encoded
+       dimension that does not exist.
    ========================================================================== */
 
 :root {
   /* ---- surface ---------------------------------------------------------- */
-  --void: #08090c;
-  --void-lift: #0c0e14;
-  --panel: #11141d;
-  --panel-hi: #171b26;
-  --panel-raise: #1e2332;
+  --void: #0a0b0f;
+  --void-lift: #0e1015;
+  --panel: #14161d;
+  --panel-hi: #1a1d26;
+  --panel-raise: #222633;
 
   /* ---- rules & structure ------------------------------------------------ */
-  --rule: #232836;
-  --rule-hi: #343c50;
-  --rule-faint: #181c26;
-  --grid: rgba(200, 250, 75, 0.035);
+  --rule: #262a36;
+  --rule-hi: #39404f;
+  --rule-faint: #1b1e28;
+  /* Neutral graph paper. The substrate should not carry the accent hue. */
+  --grid: rgba(160, 172, 195, 0.04);
 
   /* ---- ink -------------------------------------------------------------- */
-  --ink: #f0f2f7;
-  --ink-soft: #c6cefd;
-  --ink-dim: #9da7ba;
-  --ink-faint: #758197;
-  --ink-ghost: #59657b;
+  --ink: #e9ecf2;
+  --ink-soft: #c3c9d6;
+  --ink-dim: #9aa3b4;
+  --ink-faint: #7d879a;
+  --ink-ghost: #727c8f;
 
-  /* ---- the one accent --------------------------------------------------- */
-  --phosphor: #c8fa4b;
-  --phosphor-dim: #9ec637;
-  --phosphor-glow: rgba(200, 250, 75, 0.22);
-  --phosphor-wash: rgba(200, 250, 75, 0.08);
+  /* ---- the one accent ----------------------------------------------------
+     Sage, not lime. Same role as before — live state, selection, focus — at
+     roughly a third of the chroma, so a locked bar reads as *selected* rather
+     than as the loudest object on screen. */
+  --phosphor: #a9c46c;
+  --phosphor-dim: #7f9550;
+  --phosphor-glow: rgba(169, 196, 108, 0.14);
+  --phosphor-wash: rgba(169, 196, 108, 0.07);
 
-  /* ---- signed quantities ------------------------------------------------ */
-  --long: #56e39f;
-  --long-wash: rgba(86, 227, 159, 0.12);
-  --short: #ff4d6d;
-  --short-wash: rgba(255, 77, 109, 0.12);
-  --warn: #ffb347;
-  --warn-wash: rgba(255, 179, 71, 0.12);
-  --halt: #ff4d6d;
+  /* ---- signed quantities ------------------------------------------------
+     Desaturated enough to sit next to each other in a dense bar chart without
+     vibrating, still ≥4.5:1 against --panel. */
+  --long: #4fae80;
+  --long-wash: rgba(79, 174, 128, 0.12);
+  --short: #cf5f6b;
+  --short-wash: rgba(207, 95, 107, 0.12);
+  /* Options right, not trade direction: quieter blue/amber encoding. */
+  --call: #5b95b5;
+  --call-hi: #86b7d1;
+  --call-wash: rgba(91, 149, 181, 0.11);
+  --put: #c1955e;
+  --put-hi: #d8b183;
+  --put-wash: rgba(193, 149, 94, 0.11);
+  --warn: #d9a441;
+  --warn-wash: rgba(217, 164, 65, 0.12);
+  --halt: #cf5f6b;
+
+  /* ---- categorical ramp (graph communities only) -------------------------
+     The "one accent" rule holds for STATE — phosphor still means live, and
+     long/short still mean signed. But a knowledge-graph community is neither:
+     it is an unsigned nominal category, and encoding eight of them on the ink
+     ramp alone is unreadable at tick size.
+
+     This follows the precedent already set by --call/--put, which encode
+     option right (also nominal, also not direction) in quiet blue/amber. Same
+     discipline applies here: every entry is held to roughly the chroma of
+     --call, so a community reads as a *label* rather than competing with
+     phosphor for attention. Nothing outside the graph may use these.
+     Ordered so adjacent indices stay distinguishable at 1px stroke width. */
+  --cat-1: #5b95b5;
+  --cat-2: #c1955e;
+  --cat-3: #7f9550;
+  --cat-4: #a8788f;
+  --cat-5: #6f8fa0;
+  --cat-6: #b08a6a;
+  --cat-7: #8791a8;
+  --cat-8: #97a36b;
 
   /* ---- verdict semantics (gates) ---------------------------------------- */
   --go: var(--long);
@@ -83,6 +123,12 @@
   --s6: 32px;
   --s7: 48px;
   --s8: 64px;
+
+  /* ---- density (desktop trading desk defaults to compact) --------------- */
+  --density-row-height: 28px;
+  --density-cell-padding: 3px 8px;
+  --density-gap: 4px;
+  --density-control-h: 28px;
 
   /* ---- geometry ---------------------------------------------------------- */
   --rail-w: 80px;

@@ -13,6 +13,24 @@ FLOW_TIMEOUT_SECONDS = 2.0
 FLOW_ACTIVITY_TIMEOUT_SECONDS = 6.0
 FLOW_ACTIVITY_WORKERS = 8
 
+# After this many consecutive timeouts, skip remaining LSE calls for the process
+# lifetime (or until a success). Stops multi-minute deep-scan hangs + log spam
+# when api.londonstrategicedge.com is unreachable.
+_LSE_TIMEOUT_STREAK = 0
+_LSE_CIRCUIT_OPEN = False
+_LSE_CIRCUIT_THRESHOLD = 3
+
+
+def reset_lse_circuit() -> None:
+    """Test helper — re-enable LSE after injected failures."""
+    global _LSE_TIMEOUT_STREAK, _LSE_CIRCUIT_OPEN
+    _LSE_TIMEOUT_STREAK = 0
+    _LSE_CIRCUIT_OPEN = False
+
+
+def lse_circuit_is_open() -> bool:
+    return bool(_LSE_CIRCUIT_OPEN) or bool(os.getenv("EDGE_SKIP_LSE_FLOW"))
+
 
 def _canonical_symbol(value: Any) -> str:
     symbol = str(value or "").strip().upper()
@@ -71,8 +89,12 @@ def _bounded_call(call: Callable[[], Any], *, timeout_seconds: float) -> Any:
 def load_live_forward_flow(symbol: str, *, timeout_seconds: float = FLOW_TIMEOUT_SECONDS,
                            fetcher: Callable[..., Any] | None = None, **_: Any) -> Mapping[str, Any]:
     """Use TradingWork's live flow seam only; this does not fetch a chain."""
+    global _LSE_TIMEOUT_STREAK, _LSE_CIRCUIT_OPEN
+
     if not os.getenv("LSE_API_KEY") and fetcher is None:
         return {"_evidence_warning": "flow_lse_credential_missing"}
+    if lse_circuit_is_open():
+        return {"_evidence_warning": "flow_lse_circuit_open"}
     try:
         if fetcher is None:
             source = Path(__file__).resolve().parents[3] / "TradingWork" / "src"
@@ -85,13 +107,30 @@ def load_live_forward_flow(symbol: str, *, timeout_seconds: float = FLOW_TIMEOUT
                 # worker. If the daemon outlives the timeout it could swallow
                 # the CLI's final report.
                 return fetch_lse_options_flow(symbol, timeout=max(1, int(timeout)))
-        rows = _bounded_call(lambda: fetcher(symbol=symbol.upper(), timeout=timeout_seconds), timeout_seconds=timeout_seconds)
+        rows = _bounded_call(
+            lambda: fetcher(symbol=symbol.upper(), timeout=timeout_seconds),
+            timeout_seconds=timeout_seconds,
+        )
     except TimeoutError:
+        _LSE_TIMEOUT_STREAK += 1
+        if _LSE_TIMEOUT_STREAK >= _LSE_CIRCUIT_THRESHOLD:
+            _LSE_CIRCUIT_OPEN = True
         return {"_evidence_warning": "flow_timeout"}
     except Exception as exc:
+        # Provider read-timeouts often arrive as requests exceptions, not our
+        # TimeoutError wrapper — still trip the circuit on timeout-like errors.
+        msg = f"{type(exc).__name__}: {exc}".lower()
+        if "timeout" in msg or "timed out" in msg:
+            _LSE_TIMEOUT_STREAK += 1
+            if _LSE_TIMEOUT_STREAK >= _LSE_CIRCUIT_THRESHOLD:
+                _LSE_CIRCUIT_OPEN = True
+            return {"_evidence_warning": "flow_timeout"}
         return {"_evidence_warning": f"flow_unavailable:{type(exc).__name__}"}
     if rows is None:
         return {"_evidence_warning": "flow_no_live_prints_or_unavailable"}
+    # Success resets the timeout streak so a flaky window can recover.
+    _LSE_TIMEOUT_STREAK = 0
+    _LSE_CIRCUIT_OPEN = False
     raw_rows = list(rows) if isinstance(rows, list) else []
     matched = _matching_alerts(raw_rows, symbol)
     if raw_rows and not matched:
@@ -209,8 +248,22 @@ def load_live_flow_activity(
             "coverage": {"requested": len(requested), "completed": 0, "with_activity": 0, "direction_signed": 0},
             "warnings": ["flow_activity_lse_credential_missing"],
         }
+    if lse_circuit_is_open() and fetcher is None:
+        return {
+            "schema_version": "daily-plays-flow-activity-v1",
+            "rows": [],
+            "requested_symbols": requested,
+            "coverage": {
+                "requested": len(requested),
+                "completed": 0,
+                "with_activity": 0,
+                "direction_signed": 0,
+            },
+            "warnings": ["flow_lse_circuit_open"],
+        }
 
     observed: dict[str, Mapping[str, Any]] = {}
+    # When LSE is healthy keep parallelism; circuit already short-circuits above.
     worker_count = max(1, min(int(max_workers), len(requested), 16))
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="flow-activity") as pool:
         pending = {
@@ -231,6 +284,13 @@ def load_live_flow_activity(
             observed[symbol] = value if isinstance(value, Mapping) else {
                 "_evidence_warning": "flow_activity_invalid_payload"
             }
+            # Mid-batch circuit: cancel remaining work once open.
+            if lse_circuit_is_open() and fetcher is None:
+                for fut, sym in pending.items():
+                    if fut is not future and not fut.done() and sym not in observed:
+                        fut.cancel()
+                        observed[sym] = {"_evidence_warning": "flow_lse_circuit_open"}
+                break
 
     warnings = sorted({
         str(row["_evidence_warning"])

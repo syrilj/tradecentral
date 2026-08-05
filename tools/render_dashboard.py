@@ -15,8 +15,10 @@ Usage:
 """
 
 import json
+import math
 import os
 import sys
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 import pandas as pd
@@ -25,7 +27,15 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 TAW_ROOT = ROOT / "TradingAlgoWork"
 
+import types
+EDGE_DIR = Path(__file__).resolve().parents[1]
+if 'edge' not in sys.modules:
+    _edge_mod = types.ModuleType('edge')
+    _edge_mod.__path__ = [str(EDGE_DIR)]
+    sys.modules['edge'] = _edge_mod
+
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(EDGE_DIR))
 sys.path.insert(0, str(ROOT / "edge" / "daily_plays" / "adapters"))
 sys.path.insert(0, str(ROOT / "edge" / "tools"))
 if TAW_ROOT.exists():
@@ -34,51 +44,242 @@ if TAW_ROOT.exists():
 from pead_adapter import generate_pead_candidates, _load_broad_universe
 from internal_models import ChainFreeInternalModelsAdapter
 from check_gcp_resources import get_all_gcp_resources
+from edge.daily_plays.live_activity import (
+    DEEP_LIVE_TARGET_LIMIT,
+    build_market_activity_scan,
+    load_market_symbol_catalog,
+)
+from edge.daily_plays.qlib_scan_score import (
+    SCORE_KIND as QLIB_SCORE_KIND,
+    SOURCE_ID as QLIB_SOURCE_ID,
+    get_shared_qlib_panel,
+    lookup_symbol_on_shared_panel,
+    lookup_symbol_qlib_context,
+)
 
 OUT_HTML = ROOT / "edge" / "runs" / "dashboard.html"
 
-def fetch_internal_directional_signals() -> list[dict]:
-    """Fetches 75+ signals from internal daily momentum engine with calibrated probabilities."""
+QUICK_DIRECTIONAL_LIMIT = 25
+SCAN_DEPTHS = frozenset({"quick", "deep"})
+DIRECTIONAL_PROVENANCE_PATH = ROOT / "edge" / "models" / "v90_wide" / "PROVENANCE.json"
+
+
+def normalize_scan_depth(value: str | None) -> str:
+    """Return the supported scan mode without letting API input widen scope."""
+    depth = str(value or "quick").strip().lower()
+    return depth if depth in SCAN_DEPTHS else "quick"
+
+
+def load_directional_model_universe() -> list[str]:
+    """Load the frozen v90-wide serving domain used by calibrated confidence.
+
+    The local price catalog is much larger, but applying the model outside the
+    59-symbol training contract would make its calibration claim invalid.
+    """
+    try:
+        raw = json.loads(DIRECTIONAL_PROVENANCE_PATH.read_text(encoding="utf-8"))
+        values = raw.get("symbols", []) if isinstance(raw, dict) else []
+        seen: set[str] = set()
+        symbols = [
+            symbol
+            for symbol in (str(value).upper().removesuffix(".US") for value in values)
+            if symbol and not (symbol in seen or seen.add(symbol))
+        ]
+        if symbols:
+            return symbols
+    except (OSError, ValueError, TypeError):
+        pass
+    # Fail visibly smaller rather than claiming a larger calibrated domain.
+    return _load_broad_universe()[:QUICK_DIRECTIONAL_LIMIT]
+
+
+def _priority_directional_symbols(
+    model_universe: list[str],
+    sector_flow: dict | None,
+    *,
+    limit: int,
+) -> list[str]:
+    """Prefer top-sector flow names for the fast pass, stay inside model domain.
+
+    Quick scans should not burn the quota on an arbitrary first-N slice of the
+    frozen universe. Prefer names tied to today's leading sector sleeves, then
+    fill the remainder from the model domain order.
+    """
+    limit = max(1, int(limit))
+    model_set = set(model_universe)
+    preferred: list[str] = []
+    seen: set[str] = set()
+
+    def _push(raw: object) -> None:
+        sym = str(raw or "").upper().removesuffix(".US").split()[0]
+        if not sym or sym not in model_set or sym in seen:
+            return
+        preferred.append(sym)
+        seen.add(sym)
+
+    flow = sector_flow if isinstance(sector_flow, dict) else {}
+    # Watch names are already expanded from top inflow sectors.
+    for row in flow.get("watch_names") or []:
+        if isinstance(row, dict):
+            _push(row.get("symbol"))
+        else:
+            _push(row)
+        if len(preferred) >= limit:
+            return preferred[:limit]
+
+    # Sector ETFs themselves when they sit in the model domain.
+    for etf in flow.get("money_in") or []:
+        _push(etf)
+        if len(preferred) >= limit:
+            return preferred[:limit]
+
+    for ranked in flow.get("sectors_ranked") or []:
+        if not isinstance(ranked, dict):
+            continue
+        if float(ranked.get("flow_score") or 0) < 0:
+            continue
+        _push(ranked.get("etf"))
+        for name in ranked.get("focus_names") or []:
+            _push(name)
+            if len(preferred) >= limit:
+                return preferred[:limit]
+
+    for sym in model_universe:
+        _push(sym)
+        if len(preferred) >= limit:
+            break
+    return preferred[:limit]
+
+
+def fetch_internal_directional_signals(
+    *, candidate_limit: int = QUICK_DIRECTIONAL_LIMIT,
+    diagnostics: dict | None = None,
+    preferred_symbols: list[str] | None = None,
+    sector_flow: dict | None = None,
+) -> list[dict]:
+    """Fetch signals from the frozen v90-wide domain with calibrated probabilities.
+
+    Prefer ``edge/data/1d_wide`` over the smaller core ``1d`` cache: the wide
+    universe matches the production scan set and is usually the freshest
+    local bar.  Core ``1d`` can lag by a session or two; with a 3-day max
+    age that lag zeroed out the entire directional panel.
+
+    Quick mode can pass sector flow so the 25-name pass prioritizes the day's
+    top-sector names instead of an arbitrary head of the model list.
+    """
     try:
         from edge.daily_plays.clock import RunContext
-        adapter = ChainFreeInternalModelsAdapter()
+        wide_path = ROOT / "edge" / "data" / "1d_wide"
+        core_path = ROOT / "edge" / "data" / "1d"
+        model_universe = load_directional_model_universe()
+        limit = max(1, int(candidate_limit))
+        if preferred_symbols:
+            model_set = set(model_universe)
+            selected_symbols = [s for s in preferred_symbols if s in model_set]
+            for s in model_universe:
+                if s not in selected_symbols:
+                    selected_symbols.append(s)
+                if len(selected_symbols) >= limit:
+                    break
+            selected_symbols = selected_symbols[:limit]
+        elif sector_flow is not None and limit < len(model_universe):
+            selected_symbols = _priority_directional_symbols(
+                model_universe, sector_flow, limit=limit,
+            )
+        else:
+            selected_symbols = model_universe[:limit]
+
+        def cached_daily_candles(symbol: str, **_: object) -> pd.DataFrame:
+            """Prefer wide data for freshness, then fill missing ETFs from core."""
+            wide_file = wide_path / f"{symbol}.parquet"
+            core_file = core_path / f"{symbol}.parquet"
+            path = wide_file if wide_file.is_file() else core_file
+            if not path.is_file():
+                raise FileNotFoundError(f"dashboard_daily_parquet_missing:{symbol}")
+            return pd.read_parquet(path)
+
+        adapter = ChainFreeInternalModelsAdapter(
+            # Weekends + common holiday gaps: allow up to 7 weekday sessions
+            # of lag before failing closed.  Core cache was sitting at age=3
+            # and wiping every name under the previous default of 3.
+            max_daily_candle_age_days=7,
+            candidate_limit=len(selected_symbols),
+            candle_fetcher=cached_daily_candles,
+        )
         ctx = RunContext.create()
-        results = adapter(context=ctx)
+        results = list(adapter(context=ctx, symbols=selected_symbols))
+        if not results and getattr(adapter, "last_warnings", None):
+            print(
+                f"Warning: directional adapter returned 0 signals "
+                f"({len(adapter.last_warnings)} symbol failures). "
+                f"Sample: {adapter.last_warnings[:3]}"
+            )
         signals = []
         for r in results:
             sym = r.get("symbol")
-            side = r.get("side", "LONG").upper()
+            side = str(r.get("side", "LONG") or "LONG").upper()
             model_info = r.get("model", {}) or {}
             conf = r.get("confidence", {}) or {}
             prov = r.get("provenance", {}) or {}
-            
+
             raw_score = model_info.get("raw_score") if model_info.get("raw_score") is not None else 1.2
             actual_prob = model_info.get("probability") if model_info.get("probability") is not None else conf.get("calibrated_probability")
-            if actual_prob is None:
-                prob = float(1.0 / (1.0 + np.exp(-0.45 * abs(raw_score))))
-            else:
-                prob = float(actual_prob)
-            
+            # An ordinal score is not a probability. Keep it visible in the
+            # momentum column, but never manufacture confidence with a sigmoid.
+            prob = float(actual_prob) if actual_prob is not None else None
+
             horizon = model_info.get("horizon_days") or conf.get("horizon_days") or prov.get("horizon_days") or 5
-            state = model_info.get("state") or ("ENTER" if prob >= 0.65 else "WATCH")
+            state = model_info.get("state") or ("ENTER" if prob is not None and prob >= 0.65 else "WATCH")
             reasons = model_info.get("reasons", [])
-            
+
             signals.append({
                 "symbol": sym,
                 "side": side,
                 "model": model_info.get("id", "daily_momentum_volatility_v1"),
                 "horizon": f"{horizon} Days",
                 "probability": prob,
+                "confidence_kind": model_info.get("confidence_kind", "unavailable"),
+                "calibration_version": model_info.get("calibration_version"),
+                "setup_ok": bool(r.get("setup_ok", model_info.get("setup_ok"))),
                 "state": state,
                 "reasons": reasons,
                 "momentum": float(raw_score),
             })
-            
-        # Sort signals by probability descending
-        signals.sort(key=lambda x: x["probability"], reverse=True)
-        return signals
+
+        # Prefer the 5-day horizon row per symbol for the desk table, then
+        # fall back to whatever horizons were produced.  Keeps the panel
+        # readable while still ranking on calibrated probability.
+        by_symbol: dict[str, dict] = {}
+        for s in signals:
+            key = str(s.get("symbol") or "")
+            if not key:
+                continue
+            prev = by_symbol.get(key)
+            if prev is None:
+                by_symbol[key] = s
+                continue
+            # Prefer 5d, then higher probability.
+            prev_h = str(prev.get("horizon") or "")
+            cur_h = str(s.get("horizon") or "")
+            if cur_h.startswith("5") and not prev_h.startswith("5"):
+                by_symbol[key] = s
+            elif cur_h[:1] == prev_h[:1] and float(s.get("probability") or 0) > float(prev.get("probability") or 0):
+                by_symbol[key] = s
+        compact = list(by_symbol.values())
+        compact.sort(key=lambda x: float(x.get("probability") or -1), reverse=True)
+        if diagnostics is not None:
+            diagnostics.update({
+                "model_universe_symbols": len(model_universe),
+                "attempted_symbols": len(selected_symbols),
+                "scored_symbols": len(compact),
+                "failed_symbols": max(0, len(selected_symbols) - len(compact)),
+                "warning_count": len(getattr(adapter, "last_warnings", [])),
+            })
+        return compact
     except Exception as e:
         print(f"Warning fetching internal signals: {e}")
+        if diagnostics is not None:
+            diagnostics.update({"error": f"{type(e).__name__}: {e}", "scored_symbols": 0})
         return []
 
 def fetch_sector_flow_signals() -> dict:
@@ -105,6 +306,24 @@ def fetch_sector_flow_signals() -> dict:
             "watch_names": ["AAPL", "MSFT", "AMD"],
             "market_context": "Sector Momentum Active",
         }
+
+#: Rendered in place of any metric the artifact did not supply.
+METRIC_ABSENT = "—"
+
+
+def _metric(value: object, fmt: str) -> str:
+    """Format a model metric, or report it as absent.
+
+    Never substitutes a plausible literal. An invented Sharpe or IC is
+    indistinguishable from a measured one once it is on screen, and a reader
+    cannot audit a number that was never computed.
+    """
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return METRIC_ABSENT
+    return METRIC_ABSENT if not math.isfinite(number) else fmt.format(number)
+
 
 def _validation_status(results: dict | None, file_exists: bool) -> str:
     """Return a human-readable validation status for a model's results."""
@@ -134,10 +353,14 @@ def load_dynamic_leaderboard() -> list[dict]:
                 "gate_file": "GATE_WALKFORWARD.md",
                 "strategy": "10-Year Walk-Forward PEAD Ensemble",
                 "features": "Gap Std + Vol Surge + SMA50 Dist + Mom Accel",
-                "rank_ic": f"+{wf_data.get('mean_rank_ic', 0.0212):.4f}",
-                "net_return": f"+{wf_data.get('total_cum_net_return', 4.2079) * 100:.2f}%",
-                "sharpe": f"{wf_data.get('out_of_sample_sharpe', 0.55):.2f}",
-                "verdict": wf_data.get("verdict", "GO"),
+                "rank_ic": _metric(wf_data.get("mean_rank_ic"), "{:+.4f}"),
+                "net_return": _metric(
+                    (wf_data.get("total_cum_net_return") or 0) * 100
+                    if wf_data.get("total_cum_net_return") is not None else None,
+                    "{:+.2f}%",
+                ),
+                "sharpe": _metric(wf_data.get("out_of_sample_sharpe"), "{:.2f}"),
+                "verdict": wf_data.get("verdict", "UNKNOWN"),
                 "validation_status": _validation_status(wf_data, wf_file.exists()),
             })
         except Exception:
@@ -154,10 +377,13 @@ def load_dynamic_leaderboard() -> list[dict]:
                 "gate_file": "GATE_PEAD.md",
                 "strategy": "PEAD Gap Acceleration",
                 "features": "Pre-Market Gap + Volume Surge",
-                "rank_ic": f"+{pead_data.get('mean_rank_ic', 0.1518):.4f}",
-                "net_return": f"+{pead_data.get('net_annual_return_pct', 120.76):.2f}%",
-                "sharpe": f"{pead_data.get('sharpe_ratio', 3.04):.2f}",
-                "verdict": pead_data.get("verdict", "GO"),
+                # Absent metrics render as absent. A literal default here (the
+                # old +0.1518 IC / 3.04 Sharpe) is indistinguishable from a
+                # measured value on screen and reads as validated performance.
+                "rank_ic": _metric(pead_data.get("mean_rank_ic"), "{:+.4f}"),
+                "net_return": _metric(pead_data.get("net_annual_return_pct"), "{:+.2f}%"),
+                "sharpe": _metric(pead_data.get("sharpe_ratio"), "{:.2f}"),
+                "verdict": pead_data.get("verdict", "UNKNOWN"),
                 "validation_status": _validation_status(pead_data, pead_file.exists()),
             })
         except Exception:
@@ -175,7 +401,7 @@ def load_dynamic_leaderboard() -> list[dict]:
                 "gate_file": "GATE_FINRA.md",
                 "strategy": "FINRA Short Volume Factor",
                 "features": "Short Volume Ratio + Turnover",
-                "rank_ic": f"+{finra_data.get('mean_rank_ic', 0.0290):.4f}",
+                "rank_ic": _metric(finra_data.get("mean_rank_ic"), "{:+.4f}"),
                 "net_return": f"{net_ret:.2f}%",
                 "sharpe": f"{finra_data.get('sharpe_ratio', -0.04):.2f}",
                 "verdict": finra_data.get("verdict", "NO-GO"),
@@ -259,7 +485,7 @@ def load_dynamic_leaderboard() -> list[dict]:
                 "features": "Alpha158 + Turnover Controls",
                 "rank_ic": f"+{ic_val:.4f}",
                 "net_return": f"+{net_val:.2f}%" if net_val >= 0 else f"{net_val:.2f}%",
-                "sharpe": f"{xs2_data.get('sharpe_ratio', 0.15):.2f}",
+                "sharpe": _metric(xs2_data.get("sharpe_ratio"), "{:.2f}"),
                 "verdict": xs2_data.get("verdict", "NO-GO"),
                 "validation_status": _validation_status(xs2_data, xs2_file.exists()),
             })
@@ -360,14 +586,24 @@ def load_dynamic_leaderboard() -> list[dict]:
 
     return leaderboard
 
-def analyze_symbol_adhoc(symbol: str) -> dict:
-    """Analyze arbitrary user-supplied ticker with cached parquet read or yfinance fallback."""
+def _market_data_dirs() -> tuple[Path, Path]:
+    return (ROOT / "edge" / "data" / "1d_wide", ROOT / "edge" / "data" / "1d")
+
+
+def analyze_symbol_adhoc(symbol: str, *, qlib_panel: dict | None = None) -> dict:
+    """Analyze arbitrary user-supplied ticker with cached parquet read or yfinance fallback.
+
+    Attaches the same qlib cross-sectional context deep scan uses (score/rank/
+    asof/source) when available, or an explicit missing state — never a fabricated
+    rank. Pass ``qlib_panel`` from a concurrent deep scan so provenance matches.
+    """
     sym = str(symbol or "").strip().upper()
     if not sym:
         return {"error": "Symbol is required", "adhoc": True}
 
     data = None
-    for cache_dir in [ROOT / "edge" / "data" / "1d_wide", ROOT / "edge" / "data" / "1d"]:
+    data_dirs = _market_data_dirs()
+    for cache_dir in data_dirs:
         p = cache_dir / f"{sym}.parquet"
         if p.exists():
             try:
@@ -391,7 +627,16 @@ def analyze_symbol_adhoc(symbol: str) -> dict:
             pass
 
     if data is None or len(data) < 20:
-        return {"error": f"Symbol '{sym}' unavailable or insufficient history", "adhoc": True}
+        qlib_ctx = lookup_symbol_qlib_context(
+            sym,
+            panel=qlib_panel,
+            data_dirs=data_dirs,
+        )
+        return {
+            "error": f"Symbol '{sym}' unavailable or insufficient history",
+            "adhoc": True,
+            "qlib": qlib_ctx,
+        }
 
     close = data["Close"].astype(float)
     prev_close = close.shift(1)
@@ -402,7 +647,28 @@ def analyze_symbol_adhoc(symbol: str) -> dict:
     momentum_5d = float((close.iloc[-1] / close.iloc[-6] - 1.0) * 100.0) if len(close) >= 6 else 0.0
     volatility = float(close.pct_change().iloc[-20:].std(ddof=0))
     raw_score = float(momentum_5d / (volatility * 100.0)) if volatility > 0 else 0.0
-    prob = float(1.0 / (1.0 + np.exp(-0.45 * abs(raw_score))))
+
+    # Full-catalog panel (or deep-scan published panel) so ranks match deep scan.
+    panel = qlib_panel
+    if panel is None:
+        try:
+            panel = get_shared_qlib_panel(
+                data_dirs=data_dirs,
+                force_include=[sym],
+            )
+        except Exception as exc:  # noqa: BLE001
+            panel = {
+                "quality": "missing",
+                "by_symbol": {},
+                "warnings": [f"qlib_adhoc_failed: {type(exc).__name__}: {exc}"],
+                "asof": None,
+                "source": QLIB_SOURCE_ID,
+                "score_kind": QLIB_SCORE_KIND,
+            }
+    qlib_ctx = lookup_symbol_qlib_context(sym, panel=panel, data_dirs=data_dirs)
+    if qlib_ctx.get("quality") != "ok":
+        # Rebuild-on-miss through the shared entry if panel was partial/stale.
+        qlib_ctx = lookup_symbol_on_shared_panel(sym, data_dirs=data_dirs)
 
     return {
         "symbol": sym,
@@ -411,28 +677,80 @@ def analyze_symbol_adhoc(symbol: str) -> dict:
         "momentum_5d_pct": momentum_5d,
         "atr_20d": atr_20,
         "raw_score": raw_score,
-        "calibrated_probability": prob,
-        "state": "ENTER" if prob >= 0.65 else "WATCH",
+        "confidence_kind": "ordinal_score",
+        "calibrated_probability": None,
+        "state": "WATCH",
         "adhoc": True,
-        "badge": "ad-hoc — not backtested for this name",
+        "badge": "ad-hoc ordinal score — not calibrated or backtested for this name",
+        "qlib": qlib_ctx,
+        "qlib_score": qlib_ctx.get("qlib_score"),
+        "qlib_rank": qlib_ctx.get("qlib_rank"),
+        "qlib_score_kind": qlib_ctx.get("score_kind") or QLIB_SCORE_KIND,
+        "qlib_source": qlib_ctx.get("source") or QLIB_SOURCE_ID,
+        "qlib_asof": qlib_ctx.get("asof"),
+        "qlib_quality": qlib_ctx.get("quality"),
     }
 
 
-def get_dashboard_data() -> dict:
+def get_dashboard_data(*, scan_depth: str = "quick") -> dict:
     """Collects complete multi-engine dynamic payload for rendering or API delivery."""
+    started = time.perf_counter()
+    scan_depth = normalize_scan_depth(scan_depth)
     asof_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     broad_universe = _load_broad_universe()
-    
-    # 1. PEAD Pre-Market Candidates
-    pead_candidates = generate_pead_candidates(symbols=broad_universe)
-    
-    # 2. Internal Directional Momentum Signals (75+ signals)
-    directional_signals = fetch_internal_directional_signals()
-    
-    # 3. Sector Money Flow Heatmap
+    market_universe = load_market_symbol_catalog(data_dirs=(
+        ROOT / "edge" / "data" / "1d_wide",
+        ROOT / "edge" / "data" / "1d",
+    ))
+    # A missing local catalog should not erase the configured scan universe.
+    if not market_universe:
+        market_universe = list(dict.fromkeys(broad_universe))
+    directional_universe = load_directional_model_universe()
+    directional_limit = (
+        QUICK_DIRECTIONAL_LIMIT if scan_depth == "quick" else len(directional_universe)
+    )
+
+    # 1. Sector Money Flow first so the quick directional pass can prioritize
+    # names from today's top sleeves instead of an arbitrary first-N slice.
     sector_flow = fetch_sector_flow_signals()
 
-    # 4. Volatility Complex
+    # 2. PEAD-style gap/volume flags. Deep evaluates the full local catalog;
+    # Quick retains the configured 175-name pass. These are ordinal flags,
+    # not calibrated probabilities or authorized entries.
+    pead_diagnostics: dict = {}
+    pead_symbols = market_universe if scan_depth == "deep" else broad_universe
+    pead_candidates = generate_pead_candidates(
+        symbols=pead_symbols,
+        diagnostics=pead_diagnostics,
+    )
+
+    # 3. Internal directional signals. Quick mode bounds latency and prefers
+    # top-sector names; deep mode scores the complete frozen model domain.
+    directional_diagnostics: dict = {}
+    directional_signals = fetch_internal_directional_signals(
+        candidate_limit=directional_limit,
+        diagnostics=directional_diagnostics,
+        sector_flow=sector_flow if scan_depth == "quick" else None,
+    )
+
+    # 4. Market-wide price/volume activity. Deep additionally routes the top
+    # 100 observable names through live LSE flow. This board can flag attention
+    # candidates but cannot authorize a direction or trade.
+    activity_scan = build_market_activity_scan(
+        symbols=market_universe,
+        depth=scan_depth,
+        pead_candidates=pead_candidates,
+        directional_signals=directional_signals,
+        sector_flow=sector_flow,
+        data_dirs=(
+            ROOT / "edge" / "data" / "1d_wide",
+            ROOT / "edge" / "data" / "1d",
+        ),
+        live_target_limit=DEEP_LIVE_TARGET_LIMIT,
+    )
+    activity_coverage = activity_scan.get("coverage") or {}
+
+    # 5. Volatility Complex
     vol_file = ROOT / "edge" / "data" / "vol_complex.csv"
     latest_vol = {"VIX": 20.66, "term_slope": 1.0058, "tail_risk": 139.55, "date": "Live"}
     if vol_file.exists():
@@ -448,27 +766,72 @@ def get_dashboard_data() -> dict:
         except Exception:
             pass
             
-    # 5. PEAD Gate Results
+    # 6. PEAD Gate Results
     pead_file = ROOT / "edge" / "runs" / "pead_catalyst" / "results.json"
-    pead_metrics = {"mean_rank_ic": 0.0396, "net_annual_return_pct": 502.98, "sharpe_ratio": 5.38, "verdict": "NO-GO"}
+    # No literal fallback metrics. A hardcoded 5.38 Sharpe rendered when the
+    # results file is missing is indistinguishable on screen from a measured
+    # one, and a >3 Sharpe on a gap strategy is an overfit/look-ahead tell, not
+    # a default. Absent results must read as absent.
+    pead_metrics = {
+        "mean_rank_ic": None,
+        "net_annual_return_pct": None,
+        "sharpe_ratio": None,
+        "verdict": "UNKNOWN",
+        "available": False,
+        "reason": f"missing artifact: {pead_file}",
+    }
     if pead_file.exists():
         try:
             with open(pead_file) as f:
                 pead_metrics = json.load(f)
-        except Exception:
-            pass
+            pead_metrics.setdefault("available", True)
+        except Exception as exc:  # noqa: BLE001 - report, never substitute
+            pead_metrics["reason"] = f"unreadable artifact: {type(exc).__name__}"
 
-    # 6. GCP Resources & Cost Breakdown
+    # 7. GCP Resources & Cost Breakdown
     gcp_resources = get_all_gcp_resources()
     
-    # 7. Model Leaderboard
+    # 8. Model Leaderboard
     leaderboard = load_dynamic_leaderboard()
 
     return {
         "asof": asof_now,
         "broad_universe_count": len(broad_universe),
+        "market_universe_count": len(market_universe),
+        "scan_summary": {
+            "depth": scan_depth,
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "pead_universe_symbols": len(pead_symbols),
+            "pead_attempted_symbols": int(pead_diagnostics.get("attempted_symbols", len(pead_symbols))),
+            "pead_evaluated_symbols": int(pead_diagnostics.get("evaluated_symbols", 0)),
+            "pead_qualified_symbols": len(pead_candidates),
+            "pead_unavailable_symbols": int(pead_diagnostics.get("unavailable_symbols", 0)),
+            "pead_failed_symbols": int(pead_diagnostics.get("failed_symbols", 0)),
+            "pead_confidence_kind": "ordinal_score",
+            "pead_gate_verdict": str(pead_metrics.get("verdict", "NO-GO")),
+            "directional_model_universe_symbols": len(directional_universe),
+            "directional_attempted_symbols": int(directional_diagnostics.get("attempted_symbols", directional_limit)),
+            "directional_scored_symbols": len(directional_signals),
+            "directional_failed_symbols": int(directional_diagnostics.get("failed_symbols", 0)),
+            "directional_warning_count": int(directional_diagnostics.get("warning_count", 0)),
+            "activity_market_universe_symbols": int(activity_coverage.get("market_universe", len(market_universe))),
+            "activity_local_scanned_symbols": int(activity_coverage.get("local_scanned", 0)),
+            "activity_local_flagged_symbols": int(activity_coverage.get("local_flagged", 0)),
+            "activity_live_requested_symbols": int(activity_coverage.get("live_requested", 0)),
+            "activity_live_completed_symbols": int(activity_coverage.get("live_completed", 0)),
+            "activity_live_with_prints_symbols": int(activity_coverage.get("live_with_activity", 0)),
+            "qlib_score_kind": QLIB_SCORE_KIND,
+            "qlib_source": QLIB_SOURCE_ID,
+            "qlib_attempted_symbols": int(activity_coverage.get("qlib_attempted", 0)),
+            "qlib_scored_symbols": int(activity_coverage.get("qlib_scored", 0)),
+            "qlib_failed_symbols": int(activity_coverage.get("qlib_failed", 0)),
+            "qlib_priority_routed_symbols": int(activity_coverage.get("qlib_priority_routed", 0)),
+            "qlib_asof": (activity_scan.get("qlib_scan") or {}).get("asof"),
+            "qlib_quality": (activity_scan.get("qlib_scan") or {}).get("quality"),
+        },
         "pead_candidates": pead_candidates,
         "directional_signals": directional_signals,
+        "activity_scan": activity_scan,
         "sector_flow": sector_flow,
         "latest_vol": latest_vol,
         "pead_metrics": pead_metrics,
@@ -497,12 +860,11 @@ def generate_dashboard_html() -> str:
         side = str(cand.get("side", "neutral")).upper()
         side_class = "text-green" if side == "LONG" else ("text-red" if side == "SHORT" else "text-muted")
         model_info = cand.get("model") or {}
-        prob = model_info.get("probability") or 0.50
-        prob_pct = f"{prob * 100:.1f}%"
-        state = "ENTER" if (prob >= 0.65 or prob <= 0.35) else "WATCH"
-        if state == "ENTER": enter_count += 1
-        else: watch_count += 1
-        badge_class = "badge-go" if state == "ENTER" else "badge-watch"
+        pead_strength = float((cand.get("evidence") or {}).get("pead_score") or 0)
+        prob_pct = f"{abs(pead_strength):.2f} ordinal"
+        state = "FLAG"
+        watch_count += 1
+        badge_class = "badge-watch"
         
         candidate_rows_html += f"""
             <tr>
@@ -521,7 +883,8 @@ def generate_dashboard_html() -> str:
         sym = sig["symbol"]
         side = sig["side"]
         side_class = "text-green" if side == "LONG" else "text-red"
-        prob_pct = f"{sig['probability'] * 100:.1f}%"
+        prob = sig.get("probability")
+        prob_pct = f"{float(prob) * 100:.1f}%" if prob is not None else "—"
         st = sig["state"]
         b_cls = "badge-go" if st == "ENTER" else "badge-watch"
         
@@ -704,11 +1067,11 @@ def generate_dashboard_html() -> str:
     <div class="grid">
         <div class="card">
             <h2>PEAD Model Gate (GATE_PEAD)</h2>
-            <div class="metric-value text-green">+{pead_metrics.get('net_annual_return_pct', 502.98):.2f}%</div>
+            <div class="metric-value text-green">{_metric(pead_metrics.get('net_annual_return_pct'), '{:+.2f}%')}</div>
             <div class="metric-sub text-green">Net Annual Return (Post-10bp Costs)</div>
             <div style="margin-top: 12px; display: flex; justify-content: space-between; font-size: 13px;">
-                <span>Rank IC: <b>+{pead_metrics.get('mean_rank_ic', 0.0396):.4f}</b></span>
-                <span>Sharpe: <b>{pead_metrics.get('sharpe_ratio', 5.38):.2f}</b></span>
+                <span>Rank IC: <b>{_metric(pead_metrics.get('mean_rank_ic'), '{:+.4f}')}</b></span>
+                <span>Sharpe: <b>{_metric(pead_metrics.get('sharpe_ratio'), '{:.2f}')}</b></span>
                 <span class="badge { 'badge-go' if pead_metrics.get('verdict') == 'GO' else 'badge-nogo' }">{pead_metrics.get('verdict', 'NO-GO')} VERDICT</span>
             </div>
         </div>

@@ -28,9 +28,12 @@ def load_project_environment(paths: Sequence[str | Path] | None = None) -> None:
         WORKSPACE_ROOT / "TradingWork" / ".env",
     )
     for env_path in env_paths:
-        path = Path(env_path)
-        if path.is_file():
-            load_dotenv(dotenv_path=path, override=False)
+        try:
+            path = Path(env_path)
+            if path.is_file():
+                load_dotenv(dotenv_path=path, override=False)
+        except PermissionError:
+            pass
 
 
 @dataclass(frozen=True)

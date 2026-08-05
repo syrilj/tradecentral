@@ -3,7 +3,11 @@ from pathlib import Path
 import time
 
 from edge.daily_plays.adapters.flow import (
-    load_live_flow_activity, load_live_forward_flow, normalize_flow_payload,
+    load_live_flow_activity,
+    load_live_forward_flow,
+    lse_circuit_is_open,
+    normalize_flow_payload,
+    reset_lse_circuit,
 )
 
 
@@ -16,6 +20,8 @@ def test_normalizes_live_uoa_alert_as_non_decisive_evidence():
 
 
 def test_optional_flow_times_out_without_blocking_scan():
+    reset_lse_circuit()
+
     def slow_fetcher(**_kwargs):
         time.sleep(.1)
         return []
@@ -24,6 +30,29 @@ def test_optional_flow_times_out_without_blocking_scan():
     result = load_live_forward_flow("SPY", fetcher=slow_fetcher, timeout_seconds=.01)
     assert time.monotonic() - started < .08
     assert result == {"_evidence_warning": "flow_timeout"}
+    reset_lse_circuit()
+
+
+def test_lse_circuit_opens_after_consecutive_timeouts_and_skips_rest():
+    reset_lse_circuit()
+    calls = {"n": 0}
+
+    def always_timeout(**_):
+        calls["n"] += 1
+        time.sleep(0.05)
+        return []
+
+    for sym in ("A", "B", "C"):
+        out = load_live_forward_flow(sym, fetcher=always_timeout, timeout_seconds=0.01)
+        assert out["_evidence_warning"] == "flow_timeout"
+    assert lse_circuit_is_open() is True
+    # Further calls short-circuit without invoking fetcher.
+    before = calls["n"]
+    skipped = load_live_forward_flow("D", fetcher=always_timeout, timeout_seconds=0.01)
+    assert skipped == {"_evidence_warning": "flow_lse_circuit_open"}
+    assert calls["n"] == before
+    reset_lse_circuit()
+    assert lse_circuit_is_open() is False
 
 
 def test_live_flow_rejects_provider_page_for_the_wrong_underlying():

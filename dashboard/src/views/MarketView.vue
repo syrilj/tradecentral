@@ -18,9 +18,10 @@ const q = ref('')
 const hits = ref<SearchHit[]>([])
 const searching = ref(false)
 
-const symbol = ref<string>((route.query.symbol as string) || 'AAPL')
+const symbol = ref<string>(((route.query.symbol as string) || 'AAPL').toUpperCase())
 const win = ref<TrajWindow>('1y')
 const mode = ref<'price' | 'growth'>('price')
+const chartStyle = ref<'candles' | 'line'>('candles')
 
 const traj = ref<Trajectory | null>(null)
 const trajErr = ref<string | null>(null)
@@ -41,10 +42,31 @@ watch(
   { immediate: true }
 )
 
+function cleanTicker(term: string): string {
+  return term.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
+}
+
 const runSearch = debounce(async (term: string) => {
   searching.value = true
   try {
-    hits.value = await api.search(term, 18)
+    const cleaned = cleanTicker(term)
+    const raw = await api.search(cleaned, 18)
+    let list = raw.filter((h) => (h.kind ?? 'symbol') === 'symbol')
+    // Always surface the exact typed ticker so missing-cache names are visible.
+    if (cleaned && !list.some((h) => h.symbol === cleaned)) {
+      list = [
+        {
+          symbol: cleaned,
+          kind: 'symbol',
+          tier: 'wide',
+          n_bars: 0,
+          first_date: '',
+          last_date: '',
+        } as SearchHit,
+        ...list,
+      ]
+    }
+    hits.value = list
   } catch {
     hits.value = []
   } finally {
@@ -52,7 +74,7 @@ const runSearch = debounce(async (term: string) => {
   }
 }, 140)
 
-watch(q, (v) => runSearch(v.trim()))
+watch(q, (v) => runSearch(v))
 
 async function loadTrajectory(): Promise<void> {
   trajBusy.value = true
@@ -83,8 +105,19 @@ async function loadCompare(): Promise<void> {
 }
 
 function select(sym: string): void {
-  symbol.value = sym
-  void router.replace({ query: { ...route.query, symbol: sym } })
+  const s = cleanTicker(sym)
+  if (!s) return
+  symbol.value = s
+  q.value = s
+  void router.replace({ query: { ...route.query, symbol: s } })
+}
+
+function onSearchKey(e: KeyboardEvent): void {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    const typed = cleanTicker(q.value)
+    if (typed) select(typed)
+  }
 }
 
 function toggleBasket(sym: string): void {
@@ -122,7 +155,7 @@ const dataAudit = computed(() => {
   }
 })
 
-/** Directional signal / call branch computed for active symbol */
+/** Real desk signal only — never invent a ~54% "confidence". */
 const signalBranch = computed(() => {
   const sym = symbol.value?.toUpperCase()
   if (!sym) return null
@@ -134,10 +167,11 @@ const signalBranch = computed(() => {
   const pead = peadCandidates.find((p) => p.symbol?.toUpperCase() === sym)
 
   if (sig) {
+    const prob = sig.probability
     return {
       type: 'Directional Signal',
       side: (sig.side || 'LONG').toUpperCase(),
-      prob: sig.probability ?? 0.5,
+      prob: typeof prob === 'number' && Number.isFinite(prob) ? prob : null,
       state: sig.state || 'WATCH',
       horizon: sig.horizon || '5d',
       momentum: sig.momentum ?? 0,
@@ -146,30 +180,18 @@ const signalBranch = computed(() => {
   }
 
   if (pead) {
+    const prob = pead.model?.probability
     return {
       type: 'PEAD Gap Setup',
       side: (pead.side || 'LONG').toUpperCase(),
-      prob: pead.model?.probability ?? 0.5,
-      state: pead.model?.state || 'WATCH',
+      prob: typeof prob === 'number' && Number.isFinite(prob) ? prob : null,
+      state: pead.model?.state || 'FLAG',
       horizon: `${pead.model?.horizon_days ?? 20}d`,
-      threshold: pead.model?.entry_threshold ?? 0.6,
       model: pead.model?.id || 'PEAD Catalyst',
     }
   }
 
-  const f = traj.value?.factors ?? {}
-  const mom = f.mom12_1 ?? 0
-  const rev = f.rev5 ?? 0
-  const isLong = (mom + rev) >= 0
-  return {
-    type: 'Factor Probe Model',
-    side: isLong ? 'LONG BIAS' : 'SHORT BIAS',
-    prob: 0.52 + Math.min(0.35, Math.abs(mom) * 0.4),
-    state: 'WATCH',
-    horizon: '5d',
-    momentum: mom,
-    model: 'Factor Engine',
-  }
+  return null
 })
 
 /** Every compare curve as a sparkline path, sized to the legend row. */
@@ -189,8 +211,9 @@ const cmpSyms = computed(() => (cmp.value ? Object.keys(cmp.value.series) : []))
 /** Correlation cell tint: 1.0 hot, 0 neutral, negative cool. */
 function corrStyle(r: number): Record<string, string> {
   if (!Number.isFinite(r)) return {}
-  const a = Math.min(1, Math.abs(r)) * 0.55
-  return { background: r >= 0 ? `rgba(255,77,109,${a})` : `rgba(86,227,159,${a})` }
+  const pct = Math.min(1, Math.abs(r)) * 55
+  const hue = r >= 0 ? 'short' : 'long'
+  return { background: `color-mix(in srgb, var(--${hue}) ${pct.toFixed(1)}%, transparent)` }
 }
 
 const factorRows = computed(() => {
@@ -256,9 +279,10 @@ const factorRows = computed(() => {
           v-model="q"
           class="q"
           type="text"
-          placeholder="Ticker or fragment"
+          placeholder="Ticker (case-insensitive)"
           spellcheck="false"
           autocomplete="off"
+          @keydown="onSearchKey"
         />
         <span v-if="searching" class="label busy">···</span>
       </div>
@@ -266,23 +290,27 @@ const factorRows = computed(() => {
       <ul class="hits">
         <li
           v-for="h in hits"
-          :key="h.symbol"
+          :key="h.symbol + String(h.n_bars)"
           class="hit"
-          :class="{ on: h.symbol === symbol }"
+          :class="{ on: h.symbol === symbol, free: !h.n_bars }"
           @click="select(h.symbol)"
         >
           <span class="h-sym fig">{{ h.symbol }}</span>
-          <span class="h-span label">{{ shortDate(h.first_date) }} → {{ shortDate(h.last_date) }}</span>
+          <span class="h-span label">
+            <template v-if="h.n_bars">{{ shortDate(h.first_date) }} → {{ shortDate(h.last_date) }}</template>
+            <template v-else>not in local cache</template>
+          </span>
           <button
             class="h-add label"
             :class="{ in: basket.includes(h.symbol) }"
             :title="basket.includes(h.symbol) ? 'Remove from basket' : 'Add to compare basket'"
+            :disabled="!h.n_bars"
             @click.stop="toggleBasket(h.symbol)"
           >
             {{ basket.includes(h.symbol) ? '−' : '+' }}
           </button>
         </li>
-        <li v-if="!hits.length && !searching" class="empty label">No matches</li>
+        <li v-if="!hits.length && !searching" class="empty label">Type a ticker and press Enter</li>
       </ul>
     </Panel>
 
@@ -305,6 +333,22 @@ const factorRows = computed(() => {
               @click="mode = m"
             >
               {{ m }}
+            </button>
+          </div>
+          <div v-if="mode === 'price'" class="seg">
+            <button
+              class="seg-b label"
+              :class="{ on: chartStyle === 'candles' }"
+              @click="chartStyle = 'candles'"
+            >
+              candles
+            </button>
+            <button
+              class="seg-b label"
+              :class="{ on: chartStyle === 'line' }"
+              @click="chartStyle = 'line'"
+            >
+              line
             </button>
           </div>
           <div class="seg">
@@ -354,6 +398,22 @@ const factorRows = computed(() => {
           </div>
         </div>
 
+        <!-- Qlib cross-sectional research context (same scorer as deep scan). -->
+        <div class="qlib-strip label" :class="{ missing: (traj.qlib_quality || traj.qlib?.quality) === 'missing' }">
+          <span class="qlib-k">QLIB XS</span>
+          <template v-if="traj.qlib_quality === 'ok' || traj.qlib?.quality === 'ok'">
+            <span class="qlib-v fig">score {{ traj.qlib_score != null ? num(traj.qlib_score, 3) : DASH }}</span>
+            <span class="qlib-v fig">rank {{ traj.qlib_rank != null ? traj.qlib_rank : DASH }}</span>
+            <span class="qlib-v dim">asof {{ shortDate(traj.qlib_asof || traj.qlib?.asof || '') }}</span>
+            <span class="qlib-v dim">{{ traj.qlib_source || traj.qlib?.source || 'qlib' }}</span>
+            <span class="qlib-v dim">{{ traj.qlib_score_kind || traj.qlib?.score_kind || 'ordinal_qlib_xs' }} · research only</span>
+          </template>
+          <template v-else>
+            <span class="qlib-v dim">unavailable — no fabricated rank</span>
+            <span v-if="traj.qlib_source || traj.qlib?.source" class="qlib-v dim">{{ traj.qlib_source || traj.qlib?.source }}</span>
+          </template>
+        </div>
+
         <div v-if="signalBranch" class="signal-branch">
           <div class="sig-title-row">
             <span class="label sig-type">{{ signalBranch.type }}</span>
@@ -365,15 +425,26 @@ const factorRows = computed(() => {
             </span>
           </div>
           <div class="sig-metrics">
-            <Readout label="Call Probability" :value="pctFrac(signalBranch.prob, 1)" :tone="signalBranch.prob >= 0.55 ? 'pos' : 'flat'" size="sm" />
-            <Readout label="Signal Horizon" :value="signalBranch.horizon" size="sm" />
-            <Readout label="Target Model" :value="signalBranch.model" size="sm" />
+            <Readout
+              label="Edge"
+              :value="signalBranch.prob != null ? pctFrac(signalBranch.prob, 1) : DASH"
+              :tone="signalBranch.prob != null && signalBranch.prob >= 0.55 ? 'pos' : signalBranch.prob != null ? 'flat' : 'flat'"
+              size="sm"
+              :sub="signalBranch.prob != null && signalBranch.prob < 0.55 ? 'BELOW 55% ENTER BAR' : undefined"
+            />
+            <Readout label="Horizon" :value="signalBranch.horizon" size="sm" />
+            <Readout label="Model" :value="signalBranch.model" size="sm" />
             <Readout v-if="signalBranch.momentum !== undefined" label="Momentum" :value="signedPct(signalBranch.momentum, 2)" :tone="tone(signalBranch.momentum)" size="sm" />
-            <Readout v-if="signalBranch.threshold !== undefined" label="Gate Threshold" :value="pctFrac(signalBranch.threshold, 0)" size="sm" />
           </div>
         </div>
 
-        <TrajectoryChart :series="traj.series" :symbol="traj.symbol" :mode="mode" :height="360" />
+        <TrajectoryChart
+          :series="traj.series"
+          :symbol="traj.symbol"
+          :mode="mode"
+          :render-as="mode === 'price' ? chartStyle : 'line'"
+          :height="360"
+        />
 
         <div class="stats">
           <Readout label="Ann. return" :value="pct(s?.ann_return_pct)" :tone="tone(s?.ann_return_pct)" size="sm" />
@@ -518,6 +589,29 @@ const factorRows = computed(() => {
   border-radius: 3px;
   font-size: var(--t-tiny, 11px);
 }
+.qlib-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid var(--rule);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--phosphor-wash, transparent) 35%, transparent);
+  font-size: var(--t-tiny, 11px);
+}
+.qlib-strip.missing {
+  background: transparent;
+  opacity: 0.85;
+}
+.qlib-k {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--phosphor, var(--ink));
+}
+.qlib-v { color: var(--ink); }
+.qlib-v.dim { color: var(--ink-dim); }
 .audit-item {
   display: flex;
   align-items: center;
@@ -531,7 +625,6 @@ const factorRows = computed(() => {
 }
 .audit-dot.fresh {
   background: var(--phosphor);
-  box-shadow: 0 0 8px var(--phosphor-glow);
 }
 .audit-dot.stale {
   background: var(--warn);
@@ -577,6 +670,8 @@ const factorRows = computed(() => {
 }
 .hit:hover { background: var(--panel-raise); }
 .hit.on { background: var(--phosphor-wash); border-left-color: var(--phosphor); }
+.hit.free .h-sym { color: var(--ink-dim); }
+.hit.free .h-span { color: var(--warn); }
 .h-sym { grid-area: sym; font-size: var(--t-small); font-weight: 700; color: var(--ink); }
 .hit.on .h-sym { color: var(--phosphor); }
 .h-span { grid-area: span; color: var(--ink-dim); font-size: var(--t-micro); }

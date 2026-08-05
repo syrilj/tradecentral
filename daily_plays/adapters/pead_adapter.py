@@ -1,4 +1,4 @@
-"""PEAD (Post-Earnings Announcement Drift) Broad-Universe Live Model Adapter.
+"""PEAD-style broad-universe gap/volume activity adapter.
 
 Scans expanded multi-sector universe (60+ liquid US equities across 11 sectors) for post-earnings gap acceleration.
 
@@ -6,9 +6,11 @@ Computes:
   - gap_std: (Open - PrevClose) / ATR_20d
   - vol_surge: Volume / Volume_20d_SMA
   - pead_score: gap_std * np.log1p(vol_surge)
-  - calibrated_probability: Sigmoid transformation into [0.50, 0.95]
+  - pead_score is kept as an ordinal strength score
 
-Passes top rank-ordered candidates to daily_plays pipeline with state=ENTER / WATCH.
+The checked-in PEAD gate is NO-GO and there is no frozen calibration artifact.
+Consequently this adapter flags setups for attention but never turns its
+hand-written sigmoid into a probability or an ENTER recommendation.
 """
 from __future__ import annotations
 
@@ -19,12 +21,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import hashlib
-
 ROOT = Path(__file__).resolve().parents[3]
-MODEL_ARTIFACT_SHA256 = hashlib.sha256(b"pead_catalyst_v1_validated_gate_go").hexdigest()
-
-from edge.daily_plays.adapters.internal_models import normalize_internal_model_payload
 
 DEFAULT_UNIVERSE_PATH = ROOT / "edge" / "config" / "universe_wide.json"
 
@@ -64,9 +61,13 @@ def generate_pead_candidates(
     symbols: Sequence[str] | None = None,
     asof_utc: datetime | None = None,
     threshold: float = 0.8, # Lower threshold to capture all notable gaps
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     target_symbols = list(symbols) if symbols else _load_broad_universe()
     raw_candidates = []
+    evaluated_symbols = 0
+    unavailable_symbols = 0
+    failed_symbols = 0
     
     print(f"PEAD Engine scanning broad universe ({len(target_symbols)} symbols)...")
     
@@ -74,6 +75,7 @@ def generate_pead_candidates(
         try:
             df = _load_symbol_df(sym)
             if df.empty or len(df) < 20:
+                unavailable_symbols += 1
                 continue
                 
             open_p = df["Open"].dropna()
@@ -84,7 +86,10 @@ def generate_pead_candidates(
             vol = df["Volume"].dropna()
             
             if len(close_p) < 20:
+                unavailable_symbols += 1
                 continue
+
+            evaluated_symbols += 1
                 
             tr = np.maximum(high_p - low_p, np.maximum(abs(high_p - prev_close), abs(low_p - prev_close)))
             atr_20d = tr.rolling(20).mean()
@@ -98,8 +103,6 @@ def generate_pead_candidates(
             
             pead_score = float(gap_std * np.log1p(max(0, vol_surge)))
             
-            # Calibrate pead_score to probability range [0.50, 0.95]
-            cal_prob = float(1.0 / (1.0 + np.exp(-0.6 * pead_score)))
             go_long = pead_score >= threshold
             go_short = pead_score <= -threshold
             
@@ -109,52 +112,59 @@ def generate_pead_candidates(
                     "pead_score": pead_score,
                     "gap_std": gap_std,
                     "vol_surge": vol_surge,
-                    "cal_prob": cal_prob,
                     "go_long": go_long,
                     "go_short": go_short,
                 })
         except Exception:
-            pass
+            failed_symbols += 1
             
     # Sort candidates by absolute PEAD score
     raw_candidates.sort(key=lambda x: abs(x["pead_score"]), reverse=True)
     
     results = []
     for rank, item in enumerate(raw_candidates, start=1):
-        cal_prob = item["cal_prob"]
-        # Allow state ENTER for high probability candidates (> 0.65)
-        state = "ENTER" if (cal_prob >= 0.65 or cal_prob <= 0.35) else "WATCH"
-        
-        raw_rec = {
+        results.append({
+            "source": "local_daily_ohlcv",
             "symbol": item["symbol"],
             "rank": rank,
-            "live": {
-                "go_long": item["go_long"],
-                "go_short": item["go_short"],
-            },
+            "side": "long" if item["go_long"] else "short",
+            "setup_ok": True,
+            "live": {"go_long": item["go_long"], "go_short": item["go_short"]},
             "model": {
-                "setup_ok": True,
-                "model": "pead_catalyst_v1",
-            },
-            "confidence": {
-                "calibrated_probability": cal_prob if item["go_long"] else (1.0 - cal_prob),
-                "calibration_version": "v1-pead-cal",
-                "probability_target": "underlying_directional_return",
+                "id": "pead_gap_volume_ordinal_v1",
+                "probability": None,
+                "raw_score": item["pead_score"],
+                "confidence_kind": "ordinal_score",
+                "calibration_version": None,
+                "probability_target": None,
                 "horizon_days": 5,
-                "entry_threshold": 0.60,
-                "threshold_version": "v1-pead-gate-1",
-                "model_artifact_sha256": MODEL_ARTIFACT_SHA256,
-                "promotion_authorized": True,
-                "state": state,
+                "entry_threshold": None,
+                "threshold_version": "pead-activity-threshold-v1",
+                "artifact_sha256": None,
+                "promotion_authorized": False,
+                "state": "FLAG",
+                "reasons": [
+                    "pead_gate_no_go",
+                    "calibrated_probability_unavailable",
+                    "activity_flag_not_entry",
+                ],
             },
             "evidence": {
                 "pead_score": item["pead_score"],
                 "gap_std": item["gap_std"],
                 "vol_surge": item["vol_surge"],
-            }
-        }
-        norm_rec = normalize_internal_model_payload(raw_rec)
-        results.append(norm_rec)
+            },
+            "decision_authorized": False,
+        })
         
     print(f"PEAD Engine identified {len(results)} active gap candidates across universe.")
+    if diagnostics is not None:
+        diagnostics.update({
+            "attempted_symbols": len(target_symbols),
+            "evaluated_symbols": evaluated_symbols,
+            "unavailable_symbols": unavailable_symbols,
+            "failed_symbols": failed_symbols,
+            "qualified_symbols": len(results),
+            "threshold": threshold,
+        })
     return results

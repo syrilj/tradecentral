@@ -20,16 +20,73 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Sectors', index: '03' },
   },
   {
+    path: '/sentiment',
+    name: 'sentiment',
+    component: () => import('@/views/SentimentView.vue'),
+    meta: { title: 'Pulse', index: '04' },
+  },
+  /* Legacy path — structure + outliers now live on /sentiment */
+  {
+    path: '/anomalies',
+    name: 'anomalies',
+    redirect: (to) => ({
+      name: 'sentiment',
+      query: { ...to.query, tab: 'outliers' },
+    }),
+  },
+  {
+    path: '/options',
+    name: 'options',
+    component: () => import('@/views/OptionsView.vue'),
+    meta: { title: 'Options Drift', index: '05' },
+  },
+  {
     path: '/gates',
     name: 'gates',
     component: () => import('@/views/GatesView.vue'),
-    meta: { title: 'Gates', index: '04' },
+    meta: { title: 'Gates', index: '06' },
   },
   {
     path: '/cloud',
     name: 'cloud',
     component: () => import('@/views/CloudView.vue'),
-    meta: { title: 'Cloud', index: '05' },
+    meta: { title: 'Cloud', index: '07' },
+  },
+  {
+    path: '/evolution',
+    name: 'evolution',
+    component: () => import('@/views/EvolutionView.vue'),
+    meta: { title: 'Evolution', index: '08' },
+  },
+  {
+    path: '/research',
+    name: 'research',
+    component: () => import('@/views/ResearchView.vue'),
+    meta: { title: 'Research', index: '09' },
+  },
+  {
+    path: '/graph',
+    name: 'graph',
+    component: () => import('@/views/GraphView.vue'),
+    meta: { title: 'Graph', index: '10' },
+  },
+  {
+    path: '/adaptive',
+    name: 'adaptive',
+    component: () => import('@/views/AdaptiveView.vue'),
+    meta: { title: 'Live Blend', index: '11' },
+  },
+  {
+    path: '/fintel',
+    name: 'fintel',
+    component: () => import('@/views/FintelView.vue'),
+    meta: { title: 'Fintel', index: '12' },
+  },
+  {
+    path: '/changepoints',
+    name: 'changepoints',
+    component: () => import('@/views/ChangepointsView.vue'),
+    meta: { title: 'Breaks', index: '13' },
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]

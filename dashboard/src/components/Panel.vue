@@ -43,19 +43,21 @@ withDefaults(
 
 <style scoped>
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   border: var(--hair) solid var(--rule);
   padding: var(--s1);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  /* Soft depth only — not a floating card */
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
   transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .panel:hover {
   border-color: var(--rule-hi);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.28);
 }
 
 .panel.live::before {
@@ -66,14 +68,14 @@ withDefaults(
   bottom: 18%;
   width: 2px;
   background: var(--phosphor);
-  box-shadow: 0 0 10px var(--phosphor-glow);
 }
 
 .head {
   display: flex;
   align-items: center;
   gap: var(--s2);
-  padding: var(--s3) var(--s4) var(--s3);
+  padding: 4px 6px;
+  min-height: 26px;
   flex: 0 0 auto;
 }
 
@@ -90,24 +92,27 @@ withDefaults(
   letter-spacing: 0.05em;
 }
 
-/* The hairline that carries the eye from the label to the metadata. */
+/* Quiet spacer — no dashed rule chrome. */
 .rule {
   flex: 1 1 auto;
-  height: var(--hair);
-  background: linear-gradient(to right, var(--rule-hi), var(--rule-faint));
-  min-width: var(--s4);
+  min-width: var(--s3);
+  height: 0;
+  opacity: 0;
 }
 
 .meta {
   color: var(--ink-dim);
   letter-spacing: 0.06em;
   font-size: var(--t-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .body {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 0 var(--s4) var(--s4);
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--s2) var(--s2);
 }
 
 .flush .body {

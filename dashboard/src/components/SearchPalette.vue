@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { ref, onMounted, nextTick, watch, computed } from 'vue'
 import { api, type SearchHit } from '@/api'
 import { debounce } from '@/composables/useResource'
 import { shortDate } from '@/format'
 
 /**
- * ⌘K symbol search over the 558-name daily universe.
- * Keyboard-first: type, arrow, enter. The mouse is optional.
+ * ⌘K symbol search over the server-indexed local daily universe.
+ * Keyboard-first: type, arrow, enter. Case-insensitive. Exact typed tickers
+ * that are not in cache still appear so the user can try to open them.
  */
+defineProps<{ symbolCount?: number | null }>()
 const emit = defineEmits<{ close: []; select: [symbol: string] }>()
 
 const q = ref('')
@@ -17,10 +19,32 @@ const busy = ref(false)
 const err = ref<string | null>(null)
 const input = ref<HTMLInputElement | null>(null)
 
+function cleanTicker(term: string): string {
+  return term.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
+}
+
+const displayHits = computed(() => {
+  const term = cleanTicker(q.value)
+  const list = [...hits.value]
+  if (term.length >= 1 && !list.some((h) => h.symbol === term)) {
+    list.unshift({
+      symbol: term,
+      kind: 'symbol',
+      tier: 'wide',
+      n_bars: 0,
+      first_date: '',
+      last_date: '',
+    } as SearchHit)
+  }
+  return list
+})
+
 const run = debounce(async (term: string) => {
   busy.value = true
   try {
-    hits.value = await api.search(term, 40)
+    const raw = await api.search(term, 40)
+    // Symbols only — factor tracks are not tradeable underlyings.
+    hits.value = raw.filter((h) => (h.kind ?? 'symbol') === 'symbol')
     cursor.value = 0
     err.value = null
   } catch (e) {
@@ -31,7 +55,7 @@ const run = debounce(async (term: string) => {
   }
 }, 130)
 
-watch(q, (v) => run(v.trim()))
+watch(q, (v) => run(cleanTicker(v)))
 
 onMounted(async () => {
   await nextTick()
@@ -40,16 +64,20 @@ onMounted(async () => {
 })
 
 function move(delta: number): void {
-  if (!hits.value.length) return
-  cursor.value = (cursor.value + delta + hits.value.length) % hits.value.length
+  if (!displayHits.value.length) return
+  cursor.value = (cursor.value + delta + displayHits.value.length) % displayHits.value.length
   document
     .getElementById(`hit-${cursor.value}`)
     ?.scrollIntoView({ block: 'nearest' })
 }
 
 function commit(): void {
-  const hit = hits.value[cursor.value]
+  const hit = displayHits.value[cursor.value]
   if (hit) emit('select', hit.symbol)
+  else {
+    const term = cleanTicker(q.value)
+    if (term) emit('select', term)
+  }
 }
 </script>
 
@@ -63,7 +91,7 @@ function commit(): void {
           v-model="q"
           class="input"
           type="text"
-          placeholder="Search 558 symbols — ticker or fragment"
+          :placeholder="`Search ${symbolCount ?? 'all'} symbols · SPY · AAPL · NVDA`"
           autocomplete="off"
           spellcheck="false"
           @keydown.down.prevent="move(1)"
@@ -71,31 +99,30 @@ function commit(): void {
           @keydown.enter.prevent="commit"
           @keydown.esc.prevent="emit('close')"
         />
-        <span class="label state">{{ busy ? 'SCANNING' : `${hits.length} HIT${hits.length === 1 ? '' : 'S'}` }}</span>
+        <span class="label state">{{ busy ? 'SCANNING' : `${displayHits.length} TICKER${displayHits.length === 1 ? '' : 'S'}` }}</span>
       </div>
 
       <p v-if="err" class="err label">{{ err }}</p>
 
       <ul v-else class="hits">
         <li
-          v-for="(h, i) in hits"
+          v-for="(h, i) in displayHits"
           :id="`hit-${i}`"
-          :key="h.symbol"
+          :key="h.symbol + String(h.n_bars)"
           class="hit"
-          :class="{ on: i === cursor, isTrack: h.kind === 'track' }"
+          :class="{ on: i === cursor, free: !h.n_bars }"
           @mouseenter="cursor = i"
           @click="emit('select', h.symbol)"
         >
           <span class="sym fig">{{ h.symbol }}</span>
-          <span v-if="h.kind === 'track'" class="tier label track-badge">{{ h.category || 'TRACK' }}</span>
-          <span v-else class="tier label" :class="h.tier">{{ h.tier }}</span>
+          <span class="tier label" :class="h.tier || (h.n_bars ? 'wide' : 'live')">{{ h.n_bars ? h.tier : (h.tier === 'live' ? 'LIVE' : 'OPEN') }}</span>
           <span class="span label">
-            <template v-if="h.kind === 'track'">{{ h.description || h.name }}</template>
-            <template v-else>{{ shortDate(h.first_date) }} → {{ shortDate(h.last_date) }}</template>
+            <template v-if="h.n_bars">{{ shortDate(h.first_date) }} to {{ shortDate(h.last_date) }}</template>
+            <template v-else>not in local catalog — open via live bars</template>
           </span>
-          <span class="bars fig">{{ h.kind === 'track' ? 'TRACK' : h.n_bars }}</span>
+          <span class="bars fig">{{ h.n_bars || '—' }}</span>
         </li>
-        <li v-if="!hits.length && !busy" class="empty label">No symbol or track matches “{{ q }}”</li>
+        <li v-if="!displayHits.length && !busy" class="empty label">No ticker matches “{{ q }}”</li>
       </ul>
 
       <footer class="keys">
@@ -174,6 +201,8 @@ function commit(): void {
   background: var(--phosphor-wash);
   border-left-color: var(--phosphor);
 }
+.hit.free .sym { color: var(--ink-dim); }
+.hit.free .tier { color: var(--warn); border-color: var(--warn); }
 
 .sym { font-size: var(--t-body); font-weight: 600; color: var(--ink); }
 .hit.on .sym { color: var(--phosphor); }
@@ -185,6 +214,7 @@ function commit(): void {
   color: var(--ink-faint);
 }
 .tier.core { color: var(--phosphor-dim); border-color: var(--phosphor-dim); }
+.tier.live { color: var(--warn); border-color: var(--warn); }
 .track-badge { color: #ffb703; border-color: #ffb703; font-weight: 600; font-size: 0.7rem; letter-spacing: 0.05em; }
 
 .span { color: var(--ink-ghost); letter-spacing: 0.05em; }

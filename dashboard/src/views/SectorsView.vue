@@ -6,6 +6,8 @@ import type { Resource } from '@/composables/useResource'
 import { signedPct, tone } from '@/format'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import LoadingState from '@/components/LoadingState.vue'
 
 /**
  * Sector Rotation & Flow Analysis View.
@@ -18,6 +20,8 @@ const router = useRouter()
 
 const watchSearch = ref('')
 const selectedCategory = ref<'all' | 'in' | 'out'>('all')
+/** ETF code expanded under the rotation map (click a sector row). */
+const expandedEtf = ref<string | null>(null)
 
 const d = computed(() => status.data.value)
 const flow = computed(() => d.value?.sector_flow as
@@ -86,6 +90,18 @@ const filteredWatch = computed(() => {
 function open(sym: string | undefined): void {
   if (sym) void router.push({ name: 'market', query: { symbol: sym } })
 }
+
+function toggleSector(etf: string): void {
+  expandedEtf.value = expandedEtf.value === etf ? null : etf
+}
+
+const expandedNames = computed(() => {
+  const etf = expandedEtf.value
+  if (!etf) return [] as WatchRow[]
+  return watch.value
+    .filter((w) => w.etf === etf)
+    .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+})
 </script>
 
 <template>
@@ -144,7 +160,14 @@ function open(sym: string | undefined): void {
     </div>
 
     <!-- ── 01 Market Context Strip & Cards ────────────────────────────── -->
-    <Panel label="Market Context & Sector Heatmap" index="01" :meta="mkt ? `vs ${mkt.benchmark}` : ''" class="w-full">
+    <Panel label="Sector rotation map" index="01" :meta="mkt ? `vs ${mkt.benchmark}` : ''" class="w-full">
+      <template #action>
+        <HelpTip
+          label="Sector rotation"
+          text="Flow score ranks sector ETFs by multi-horizon relative strength vs the benchmark. Right/green = accumulation (money in), left/red = distribution. Use this for which sleeve is leading — then open Market on the ETF or a watch name."
+        />
+      </template>
+      <LoadingState v-if="status.loading.value && !sectors.length" label="Loading sector flow" compact />
       <div v-if="mkt" class="mkt-readouts">
         <Readout label="SPY 1D Return" :value="signedPct(Number(mkt.spy_ret_1d) * 100)" :tone="tone(mkt.spy_ret_1d)" size="sm" />
         <Readout label="SPY 5D Return" :value="signedPct(Number(mkt.spy_ret_5d) * 100)" :tone="tone(mkt.spy_ret_5d)" size="sm" />
@@ -158,77 +181,57 @@ function open(sym: string | undefined): void {
         <Readout label="QQQ 5D RS vs SPY" :value="signedPct(Number(mkt.qqq_spy_rs_5d) * 100)" :tone="tone(mkt.qqq_spy_rs_5d)" size="sm" />
       </div>
 
-      <div v-if="sectors.length" class="sector-cards-grid">
-        <div
-          v-for="s in sectors"
-          :key="s.etf"
-          class="sector-card"
-          :class="s.flow_score >= 0 ? 'card-in' : 'card-out'"
-          @click="open(s.etf)"
-        >
-          <div class="card-top">
-            <span class="card-etf fig">{{ s.etf }}</span>
-            <span class="card-score fig" :class="tone(s.flow_score)">
-              {{ signedPct(s.flow_score * 100, 1) }}
+      <!-- Single rotation visual — click a row to expand names under it -->
+      <div v-if="sectors.length" class="rotation-strip">
+        <template v-for="s in [...sectors].sort((a, b) => b.flow_score - a.flow_score)" :key="'rot-' + s.etf">
+          <div
+            class="rot-row"
+            :class="[s.flow_score >= 0 ? 'in' : 'out', { open: expandedEtf === s.etf }]"
+            @click="toggleSector(s.etf)"
+          >
+            <span class="fig rot-etf">{{ s.etf }}</span>
+            <span class="label rot-name" :title="s.name">{{ s.name }}</span>
+            <span class="rot-bar" aria-hidden="true">
+              <i
+                :class="s.flow_score >= 0 ? 'in' : 'out'"
+                :style="{ width: `${Math.min(100, (Math.abs(s.flow_score) / flowMax) * 100)}%` }"
+              />
             </span>
+            <span class="fig rot-score" :class="tone(s.flow_score)">{{ signedPct(s.flow_score * 100, 1) }}</span>
+            <span class="fig rot-rs" :class="tone(s.ret_5d)">{{ signedPct(s.ret_5d * 100, 1) }} 5D</span>
+            <span class="fig rot-rs" :class="tone(s.rs_5d)">{{ signedPct(s.rs_5d * 100, 1) }} RS</span>
+            <span class="rot-chev label">{{ expandedEtf === s.etf ? '▴' : '▾' }}</span>
           </div>
-          <span class="card-name label" :title="s.name">{{ s.name }}</span>
-          <div class="card-metrics">
-            <span class="label">5D: <b :class="tone(s.ret_5d)">{{ signedPct(s.ret_5d * 100, 1) }}</b></span>
-            <span class="label">5D RS: <b :class="tone(s.rs_5d)">{{ signedPct(s.rs_5d * 100, 1) }}</b></span>
+          <div v-if="expandedEtf === s.etf" class="rot-expand">
+            <div class="rot-expand-head">
+              <span class="label">{{ s.etf }} · surfaced names</span>
+              <button class="filter-btn label" type="button" @click.stop="open(s.etf)">OPEN ETF ↗</button>
+            </div>
+            <div v-if="expandedNames.length" class="name-chips">
+              <button
+                v-for="w in expandedNames"
+                :key="w.symbol"
+                type="button"
+                class="name-chip"
+                :class="(w.score ?? 0) >= 0 ? 'in' : 'out'"
+                @click.stop="open(w.symbol)"
+              >
+                <span class="fig">{{ w.symbol }}</span>
+                <span class="fig" :class="tone(w.score)">{{ signedPct(w.score * 100, 1) }}</span>
+              </button>
+            </div>
+            <p v-else class="note tiny">No watch names mapped to this sleeve this session.</p>
           </div>
-        </div>
+        </template>
       </div>
-      <p v-else class="note pad">No sector flow data available.</p>
-    </Panel>
-
-    <!-- ── 02 Detailed Sector Flow Table ──────────────────────────────── -->
-    <Panel label="Bi-Directional Sector Flow Distribution" index="02" :meta="`${sectors.length} sectors`" class="w-half" flush>
-      <div class="table-container">
-        <table v-if="sectors.length" class="grid">
-          <thead>
-            <tr>
-              <th class="label">ETF</th>
-              <th class="label">Sector Name</th>
-              <th class="label">Flow Distribution</th>
-              <th class="label num">5D Return</th>
-              <th class="label num">5D RS</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="s in sectors" :key="s.etf" @click="open(s.etf)">
-              <td class="fig etf-sym">{{ s.etf }}</td>
-              <td class="label name-cell" :title="s.name">{{ s.name }}</td>
-              <td>
-                <span class="fl-track" aria-hidden="true">
-                  <b class="fl-mid" />
-                  <i
-                    class="fl-fill"
-                    :class="s.flow_score >= 0 ? 'in' : 'out'"
-                    :style="
-                      s.flow_score >= 0
-                        ? { left: '50%', width: `${(s.flow_score / flowMax) * 50}%` }
-                        : { right: '50%', width: `${(-s.flow_score / flowMax) * 50}%` }
-                    "
-                  />
-                </span>
-              </td>
-              <td class="fig num" :class="tone(s.ret_5d)">{{ signedPct(s.ret_5d * 100, 2) }}</td>
-              <td class="fig num" :class="tone(s.rs_5d)">{{ signedPct(s.rs_5d * 100, 2) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-else class="note pad">No sector data loaded.</p>
-      </div>
-
-      <p class="note tiny pad-x">
-        Flow score bars are zero-centered: right indicates accumulation (money in), left indicates distribution (money out).
-        <strong>5D RS</strong> is return relative to {{ mkt?.benchmark ?? 'the benchmark' }}.
+      <p v-else-if="!status.loading.value" class="note pad">No sector flow data available.</p>
+      <p v-if="sectors.length" class="note tiny pad-x">
+        Green = accumulation · red = distribution. Click a sector to expand stock names; click a name for Market.
       </p>
     </Panel>
 
-    <!-- ── 03 Flow Watch Names ────────────────────────────────────────── -->
-    <Panel label="Surfaced Flow Watch Names" index="03" :meta="`${watch.length} names`" class="w-half" flush>
+    <!-- Full catalog (filterable) stays below for search across all sleeves -->
+    <Panel label="All surfaced names" index="02" :meta="`${filteredWatch.length} shown`" class="w-full" flush>
       <template #action>
         <div class="action-bar">
           <div class="filter-group">
@@ -263,22 +266,43 @@ function open(sym: string | undefined): void {
         </div>
       </template>
 
-      <div class="table-container">
+      <div class="table-container watch-expanded">
         <table v-if="filteredWatch.length" class="grid">
           <thead>
             <tr>
               <th class="label">Symbol</th>
-              <th class="label">Sector / ETF</th>
-              <th class="label num">Flow Score</th>
-              <th class="label num">5D RS vs SPY</th>
+              <th class="label">Sector</th>
+              <th class="label">ETF</th>
+              <th class="label">Flow bar</th>
+              <th class="label num">Flow score</th>
+              <th class="label num">5D RS</th>
+              <th class="label">Lean</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(w, i) in filteredWatch" :key="i" @click="open(w.symbol)">
               <td class="fig sym">{{ w.symbol }}</td>
-              <td class="label dim">{{ w.sector_hint }} · {{ w.etf }}</td>
+              <td class="label">{{ w.sector_hint }}</td>
+              <td class="fig etf-sym">{{ w.etf }}</td>
+              <td>
+                <span class="fl-track" aria-hidden="true">
+                  <b class="fl-mid" />
+                  <i
+                    class="fl-fill"
+                    :class="(w.score ?? 0) >= 0 ? 'in' : 'out'"
+                    :style="
+                      (w.score ?? 0) >= 0
+                        ? { left: '50%', width: `${Math.min(50, Math.abs(Number(w.score ?? 0)) / flowMax * 50)}%` }
+                        : { right: '50%', width: `${Math.min(50, Math.abs(Number(w.score ?? 0)) / flowMax * 50)}%` }
+                    "
+                  />
+                </span>
+              </td>
               <td class="fig num" :class="tone(w.score)">{{ signedPct(w.score * 100, 2) }}</td>
               <td class="fig num" :class="tone(w.rs_5d)">{{ signedPct(w.rs_5d * 100, 2) }}</td>
+              <td class="label" :class="(w.score ?? 0) >= 0 ? 'pos' : 'neg'">
+                {{ (w.score ?? 0) >= 0 ? 'money in' : 'money out' }}
+              </td>
             </tr>
           </tbody>
         </table>
@@ -365,6 +389,86 @@ function open(sym: string | undefined): void {
   border-bottom: var(--hair) solid var(--rule);
 }
 
+.rotation-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--s3);
+  border: var(--hair) solid var(--rule);
+  max-height: 420px;
+  overflow: auto;
+}
+.rot-row {
+  display: grid;
+  grid-template-columns: 4.5ch minmax(0, 1.2fr) minmax(100px, 1.6fr) 6ch 6ch 6ch 2ch;
+  align-items: center;
+  gap: var(--s3);
+  padding: 9px 12px;
+  cursor: pointer;
+  border-bottom: var(--hair) solid var(--rule-faint);
+  min-width: 0;
+}
+.rot-row:hover { background: var(--panel-hi); }
+.rot-row.open { background: var(--panel-hi); }
+.rot-row.in { box-shadow: inset 2px 0 0 var(--long); }
+.rot-row.out { box-shadow: inset 2px 0 0 var(--short); }
+.rot-chev { color: var(--ink-ghost); text-align: right; }
+.rot-expand {
+  padding: 8px 12px 12px 14px;
+  border-bottom: var(--hair) solid var(--rule);
+  background: rgba(8, 9, 12, 0.45);
+}
+.rot-expand-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: 8px;
+  color: var(--ink-dim);
+}
+.name-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.name-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+}
+.name-chip:hover { border-color: var(--phosphor-dim); color: var(--phosphor); }
+.name-chip.in { border-left: 2px solid var(--long); }
+.name-chip.out { border-left: 2px solid var(--short); }
+.name-chip .fig:first-child { font-weight: 700; color: var(--phosphor); }
+.rot-etf { font-weight: 700; color: var(--phosphor); }
+.rot-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-dim);
+}
+.rot-bar {
+  position: relative;
+  height: 8px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+  overflow: hidden;
+}
+.rot-bar i {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+}
+.rot-bar i.in { background: var(--long); }
+.rot-bar i.out { background: var(--short); }
+.rot-score, .rot-rs { text-align: right; font-size: var(--t-small); }
+
 .sector-cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -450,6 +554,9 @@ function open(sym: string | undefined): void {
   overflow-y: auto;
   scrollbar-width: thin;
 }
+.watch-expanded { max-height: min(70vh, 720px); }
+.pos { color: var(--long); }
+.neg { color: var(--short); }
 
 .grid { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
 .grid th {

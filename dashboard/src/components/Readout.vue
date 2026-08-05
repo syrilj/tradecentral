@@ -5,7 +5,7 @@ withDefaults(
     label: string
     value: string
     /** Colour semantics for signed quantities. */
-    tone?: 'pos' | 'neg' | 'flat' | 'accent' | 'default'
+    tone?: 'pos' | 'neg' | 'call' | 'put' | 'flat' | 'accent' | 'default'
     /** Secondary line under the figure — units, as-of, denominator. */
     sub?: string
     size?: 'sm' | 'md' | 'lg'
@@ -45,6 +45,8 @@ withDefaults(
 
 .t-pos .val { color: var(--long); }
 .t-neg .val { color: var(--short); }
+.t-call .val { color: var(--call); }
+.t-put .val { color: var(--put); }
 .t-flat .val { color: var(--ink-dim); }
 .t-accent .val { color: var(--phosphor); }
 

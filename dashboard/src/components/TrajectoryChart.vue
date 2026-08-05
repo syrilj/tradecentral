@@ -1,17 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { TrajectoryBar } from '@/api'
-import { linearScale, niceTicks, niceDomain, dateTicks } from '@/charts'
-import { linePath, areaPath } from '@/charts'
+import { linearScale, niceTicks, niceDomain, dateTicks, ema, linePath, areaPath } from '@/charts'
 import { num, signedPct, shortDate } from '@/format'
 
 /**
  * The financial trajectory: price trace over a drawdown underlay.
- *
- * Two stacked panes share one x-axis — price on top, underwater curve below.
- * Showing drawdown *beneath* the price rather than as a separate tab is the
- * whole point: a trace that only goes up hides the path it took, and the path
- * is what a position actually has to survive.
+ * In price mode, also overlays session-style VWAP and EMA 9/21 — the levels
+ * discretionary and systematic desks pin execution against.
  */
 const props = withDefaults(
   defineProps<{
@@ -19,9 +15,13 @@ const props = withDefaults(
     symbol: string
     /** Draw the cumulative-growth curve instead of raw price. */
     mode?: 'price' | 'growth'
+    /** OHLC candles (price mode) vs close line. */
+    renderAs?: 'candles' | 'line'
     height?: number
+    showVwap?: boolean
+    showEma?: boolean
   }>(),
-  { mode: 'price', height: 340 },
+  { mode: 'price', renderAs: 'candles', height: 340, showVwap: true, showEma: true },
 )
 
 const W = 1000
@@ -36,14 +36,87 @@ const values = computed(() =>
   props.mode === 'growth' ? props.series.map((b) => b.cum) : props.series.map((b) => b.c),
 )
 
+/** Cumulative VWAP from typical price (H+L+C)/3 · volume — daily bars proxy. */
+const vwapSeries = computed(() => {
+  if (props.mode !== 'price' || !props.showVwap || !props.series.length) return null as number[] | null
+  let pv = 0
+  let vol = 0
+  return props.series.map((b) => {
+    const typical = (b.h + b.l + b.c) / 3
+    const v = Math.max(0, b.v || 0)
+    pv += typical * v
+    vol += v
+    return vol > 0 ? pv / vol : b.c
+  })
+})
+
+const ema9 = computed(() => {
+  if (props.mode !== 'price' || !props.showEma) return null as number[] | null
+  const closes = props.series.map((b) => b.c)
+  return closes.length ? ema(closes, 9) : null
+})
+const ema21 = computed(() => {
+  if (props.mode !== 'price' || !props.showEma) return null as number[] | null
+  const closes = props.series.map((b) => b.c)
+  return closes.length ? ema(closes, 21) : null
+})
+
 const x = computed(() =>
   linearScale([0, Math.max(1, props.series.length - 1)], [PAD.l, W - PAD.r]),
 )
 
+const useCandles = computed(
+  () => props.mode === 'price' && props.renderAs === 'candles' && props.series.length > 0,
+)
+
 const yDomain = computed(() => {
-  const v = values.value
+  const v: number[] = []
+  if (useCandles.value) {
+    for (const b of props.series) {
+      v.push(b.h, b.l, b.o, b.c)
+    }
+  } else {
+    v.push(...values.value)
+  }
+  if (props.mode === 'price') {
+    if (vwapSeries.value) v.push(...vwapSeries.value)
+    if (ema9.value) v.push(...ema9.value)
+    if (ema21.value) v.push(...ema21.value)
+  }
   if (!v.length) return [0, 1] as [number, number]
   return niceDomain(Math.min(...v), Math.max(...v), 0.06)
+})
+
+/** Candle geometry — body + wick for each bar. */
+const candles = computed(() => {
+  if (!useCandles.value) return [] as {
+    x: number
+    mid: number
+    bodyTop: number
+    bodyBot: number
+    high: number
+    low: number
+    up: boolean
+    w: number
+  }[]
+  const n = props.series.length
+  const slot = Math.max(1, (W - PAD.l - PAD.r) / Math.max(1, n))
+  const bodyW = Math.max(1.2, Math.min(8, slot * 0.62))
+  return props.series.map((b, i) => {
+    const cx = x.value(i)
+    const o = y.value(b.o)
+    const c = y.value(b.c)
+    return {
+      x: cx - bodyW / 2,
+      mid: cx,
+      bodyTop: Math.min(o, c),
+      bodyBot: Math.max(o, c),
+      high: y.value(b.h),
+      low: y.value(b.l),
+      up: b.c >= b.o,
+      w: bodyW,
+    }
+  })
 })
 
 const y = computed(() =>
@@ -64,6 +137,30 @@ const ddPts = computed(() =>
 const trace = computed(() => linePath(pts.value))
 const fill = computed(() => areaPath(pts.value, PAD.t + priceH.value))
 const ddTrace = computed(() => areaPath(ddPts.value, ddTop.value))
+
+const vwapPath = computed(() => {
+  if (!vwapSeries.value) return ''
+  return linePath(vwapSeries.value.map((v, i) => ({ x: x.value(i), y: y.value(v) })))
+})
+const ema9Path = computed(() => {
+  if (!ema9.value) return ''
+  return linePath(ema9.value.map((v, i) => ({ x: x.value(i), y: y.value(v) })))
+})
+const ema21Path = computed(() => {
+  if (!ema21.value) return ''
+  return linePath(ema21.value.map((v, i) => ({ x: x.value(i), y: y.value(v) })))
+})
+
+const lastOverlays = computed(() => {
+  if (props.mode !== 'price' || !props.series.length) return null
+  const i = props.series.length - 1
+  return {
+    px: props.series[i].c,
+    vwap: vwapSeries.value?.[i] ?? null,
+    e9: ema9.value?.[i] ?? null,
+    e21: ema21.value?.[i] ?? null,
+  }
+})
 
 const yTicks = computed(() => niceTicks(yDomain.value[0], yDomain.value[1], 5))
 const xTicks = computed(() => dateTicks(props.series.map((b) => b.d), 6))
@@ -131,9 +228,31 @@ const flip = computed(() => curX.value > W * 0.62)
         />
       </g>
 
-      <!-- price pane -->
-      <path :d="fill" :fill="`url(#g-${symbol})`" />
-      <path :d="trace" class="trace" :stroke="stroke" />
+      <!-- price pane: candles (live daily OHLC) or line -->
+      <template v-if="useCandles">
+        <g class="candles">
+          <g v-for="(c, i) in candles" :key="i" class="candle" :class="c.up ? 'up' : 'dn'">
+            <line :x1="c.mid" :x2="c.mid" :y1="c.high" :y2="c.low" class="wick" />
+            <rect
+              :x="c.x"
+              :y="c.bodyTop"
+              :width="c.w"
+              :height="Math.max(1, c.bodyBot - c.bodyTop)"
+              class="body"
+            />
+          </g>
+        </g>
+        <path v-if="ema21Path" class="overlay ema21" :d="ema21Path" />
+        <path v-if="ema9Path" class="overlay ema9" :d="ema9Path" />
+        <path v-if="vwapPath" class="overlay vwap" :d="vwapPath" />
+      </template>
+      <template v-else>
+        <path :d="fill" :fill="`url(#g-${symbol})`" />
+        <path v-if="ema21Path" class="overlay ema21" :d="ema21Path" />
+        <path v-if="ema9Path" class="overlay ema9" :d="ema9Path" />
+        <path v-if="vwapPath" class="overlay vwap" :d="vwapPath" />
+        <path :d="trace" class="trace" :stroke="stroke" />
+      </template>
 
       <!-- y labels, right gutter -->
       <g class="ylab">
@@ -173,7 +292,19 @@ const flip = computed(() => curX.value > W * 0.62)
         {{ signedPct(cur.ret * 100, 2) }}
       </span>
       <span class="r-dd fig neg">{{ num(cur.dd * 100, 1) }}% dd</span>
+      <template v-if="mode === 'price' && hover !== null">
+        <span v-if="vwapSeries" class="r-ov fig vwap-c">VWAP {{ num(vwapSeries[hover], 2) }}</span>
+        <span v-if="ema9" class="r-ov fig ema9-c">E9 {{ num(ema9[hover], 2) }}</span>
+        <span v-if="ema21" class="r-ov fig ema21-c">E21 {{ num(ema21[hover], 2) }}</span>
+      </template>
     </figcaption>
+
+    <div v-if="mode === 'price' && lastOverlays" class="legend label">
+      <span class="leg-px">PRICE {{ num(lastOverlays.px, 2) }}</span>
+      <span v-if="lastOverlays.vwap != null" class="vwap-c">VWAP {{ num(lastOverlays.vwap, 2) }}</span>
+      <span v-if="lastOverlays.e9 != null" class="ema9-c">EMA9 {{ num(lastOverlays.e9, 2) }}</span>
+      <span v-if="lastOverlays.e21 != null" class="ema21-c">EMA21 {{ num(lastOverlays.e21, 2) }}</span>
+    </div>
   </figure>
 </template>
 
@@ -195,6 +326,43 @@ const flip = computed(() => curX.value > W * 0.62)
   stroke-linejoin: round;
   stroke-linecap: round;
 }
+
+.candle .wick {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.candle .body {
+  stroke-width: 0;
+  vector-effect: non-scaling-stroke;
+}
+.candle.up .wick { stroke: var(--long); }
+.candle.up .body { fill: var(--long); }
+.candle.dn .wick { stroke: var(--short); }
+.candle.dn .body { fill: var(--short); }
+
+.overlay {
+  fill: none;
+  stroke-width: 1.15;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  opacity: 0.92;
+}
+.overlay.vwap { stroke: #ffb703; stroke-dasharray: 5 3; }
+.overlay.ema9 { stroke: #4cc9f0; }
+.overlay.ema21 { stroke: #b5179e; opacity: 0.75; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  padding: 6px 2px 0;
+  color: var(--ink-faint);
+}
+.leg-px { color: var(--ink-dim); }
+.vwap-c { color: #ffb703; }
+.ema9-c { color: #4cc9f0; }
+.ema21-c { color: #d77bcf; }
+.r-ov { font-size: 10px; }
 
 .dd {
   fill: var(--short);

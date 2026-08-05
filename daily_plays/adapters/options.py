@@ -108,6 +108,8 @@ def normalize_contract(
         "bid": bid,
         "ask": ask,
         "mid": mid,
+        "last_price": _float(_pick(row, "last_price", "lastPrice", "price")),
+        "premium_today": _float(_pick(row, "premium_today", "session_premium")),
         "spread_pct": spread_pct,
         "volume": _integer(_pick(row, "volume", "volume_today")),
         "open_interest": _integer(_pick(row, "open_interest", "openInterest", "oi")),
@@ -201,6 +203,8 @@ class LSEOptionsAdapter:
     """Primary live adapter; ``fetcher`` makes it deterministic and testable."""
     api_key: str | None = None
     fetcher: Callable[[str], Mapping[str, Any] | Iterable[Mapping[str, Any]]] | None = None
+    min_dte: int = 30
+    max_dte: int = 60
 
     def _fetch(self, symbol: str) -> Mapping[str, Any] | Iterable[Mapping[str, Any]]:
         if self.fetcher:
@@ -216,7 +220,7 @@ class LSEOptionsAdapter:
         from lse_provider import fetch_lse_options_chain  # type: ignore[import-not-found]
         with redirect_stdout(io.StringIO()):
             rows = fetch_lse_options_chain(
-                symbol.upper(), min_dte=30, max_dte=60, api_key=key
+                symbol.upper(), min_dte=self.min_dte, max_dte=self.max_dte, api_key=key
             )
         if not rows:
             raise RuntimeError("LSE options chain unavailable or empty")

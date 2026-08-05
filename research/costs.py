@@ -1,17 +1,50 @@
-"""Causal, conservative underlying-return accounting for frozen research horizons.
-
-This module accounts only for hypothetical underlying long/short exposure.  It
-does not consume option chains and must never be used to infer option P&L.
 """
+Causal, conservative underlying-return accounting for frozen research horizons
+and dynamic cost-aware execution models.
+
+Includes nonlinear market impact approximation:
+Impact_{i,t} = eta * sigma_{i,t} * (|Q_{i,t}| / ADV_{i,t})^1.5
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any
-
+from typing import Any, Dict, Optional, Tuple
 import pandas as pd
+import numpy as np
 
 from .labels import FROZEN_HORIZONS
+
+
+@dataclass(frozen=True)
+class DynamicCostModel:
+    """Configurable transaction cost model including market impact."""
+    commission_bps: float = 2.5
+    half_spread_bps: float = 2.5
+    slippage_bps: float = 2.5
+    impact_multiplier_eta: float = 0.5
+
+    def estimate_order_cost_bps(
+        self,
+        order_value_usd: float,
+        adv_usd: float,
+        daily_volatility: float = 0.02,
+    ) -> float:
+        """
+        Calculates total round-trip estimated cost in bps:
+        estimated_cost_bps = commission_bps + half_spread_bps + slippage_bps + impact_bps
+        where impact_bps = eta * volatility_bps * (order_value / ADV)^1.5
+        """
+        fixed_bps = self.commission_bps + self.half_spread_bps + self.slippage_bps
+        if adv_usd <= 0 or order_value_usd <= 0:
+            impact_bps = 0.0
+        else:
+            vol_bps = daily_volatility * 10_000.0
+            participation = min(order_value_usd / adv_usd, 1.0)
+            impact_bps = self.impact_multiplier_eta * vol_bps * (participation ** 1.5)
+
+        return fixed_bps + impact_bps
 
 
 @dataclass(frozen=True)
@@ -78,8 +111,6 @@ def directional_underlying_return(*, entry_close: float, exit_close: float, posi
         raise ValueError("entry_close and exit_close must be finite positive prices")
     side = normalize_position(position)
     gross = side * (exit_ / entry - 1.0)
-    # Holding no position has neither a fill nor a cost.  An active position is
-    # debited for entry and exit at the configured one-way conservative costs.
     net = gross - costs.round_trip_cost_return if side else 0.0
     return DirectionalUnderlyingReturn(side, gross, net, costs.round_trip_cost_bps if side else 0.0)
 
@@ -95,13 +126,7 @@ def directional_underlying_returns(
     signal_col: str | None = None,
     symbol_col: str | None = "symbol",
 ) -> pd.DataFrame:
-    """Account for fixed-horizon underlying signals strictly by trading-date rows.
-
-    The entry is the origin close at row ``t`` and the exit is row ``t+h`` for
-    the same symbol.  Missing terminal outcomes remain ``NaN``; no later row is
-    substituted.  Signals are read at the origin only, so mutating data after a
-    resolved target cannot affect that target's accounting result.
-    """
+    """Account for fixed-horizon underlying signals strictly by trading-date rows."""
     if horizon_days not in FROZEN_HORIZONS:
         raise ValueError(f"horizon_days must be one of frozen horizons {FROZEN_HORIZONS}")
     selected_signal_col = signal_col or position_col
