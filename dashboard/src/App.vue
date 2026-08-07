@@ -351,6 +351,11 @@ function openSymbol(sym: string): void {
     'rail stage'
     'rail foot';
   height: 100%;
+  /* Defense in depth, matching body's promise below: a grid item's intrinsic
+     min-content size can otherwise force this box (and the document with it)
+     taller than the viewport — see .rail's min-height/overflow for the actual
+     fix. This just guarantees nothing can silently repeat that upward. */
+  overflow: hidden;
 }
 
 /* ---- rail ---------------------------------------------------------------- */
@@ -364,6 +369,14 @@ function openSymbol(sym: string): void {
   border-right: var(--hair) solid var(--rule);
   background: var(--void-lift);
   z-index: var(--z-rail);
+  /* .rail spans all three grid rows as one item, so its automatic minimum
+     size (min-content height) would otherwise force the shared 1fr row —
+     and with it #app/.shell/the whole document — to grow past the viewport
+     whenever the 13 nav items + logo + find button don't fit. min-height: 0
+     opts out of that, so an overflowing rail scrolls internally instead. */
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .mark {
