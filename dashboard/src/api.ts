@@ -1195,12 +1195,36 @@ export interface ChangepointDetail {
 
 /* ---------------------------------------------------------------- endpoints */
 
+export interface MomentumCandidate {
+  symbol: string
+  price: number
+  gap_pct: number | null
+  day_change_pct: number | null
+  rvol: number | null
+  float_shares: number | null
+  float_badge: 'optimal' | 'qualifies' | 'no' | 'unknown'
+  gap_sweet_spot: boolean
+  price_qualifies: boolean
+  gap_qualifies: boolean
+  rvol_qualifies: boolean
+  pillars_met: number
+}
+
+export interface MomentumScanPayload {
+  asof: string
+  universe_size: number
+  expected_universe_size: number
+  float_coverage_pct: number
+  candidates: MomentumCandidate[]
+}
+
 export const api = {
   health: () => req<Health>('/api/health'),
   status: () => req<StatusPayload>('/api/status'),
   leaderboard: () => req<{ asof: string; leaderboard: LeaderboardRow[] }>('/api/leaderboard'),
   gcp: () => req<Record<string, unknown>>('/api/gcp'),
   gates: () => req<{ gates: Gate[] }>('/api/gates'),
+  momentumScan: () => req<MomentumScanPayload>('/api/momentum-scan'),
   readiness: () => req<Readiness>('/api/readiness'),
   marketClock: () => req<MarketClock>('/api/market-clock'),
 
