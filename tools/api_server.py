@@ -43,6 +43,15 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
       -> truth-preserving call/put activity, stock overlay, gamma-by-strike,
          risk-neutral range diagnostics, provenance, and filter accounting.
 
+  GET|POST /api/options/backfill_oi?symbol=X[&max_dte=60]
+      -> Live OI capture for one symbol (tools/backfill_option_oi.py, run
+         in-process via yfinance). Writes
+         data/option_chains/date=<today>/<SYMBOL>.parquet and evicts that
+         symbol's /api/options cache entries so the next fetch reflects it
+         immediately. {status:"ok", symbol, asof, contracts, with_oi} on
+         success; 404 {status:"error", symbol, message} when the provider
+         has no chain for the symbol at all.
+
   GET  /api/gates
       -> {gates: [{id, name, verdict, source_file, metrics, checks, updated}]}
          Walks the pre-registered gate artifacts (pead_catalyst, gex_model,
@@ -202,6 +211,7 @@ from sentiment_anomalies import (  # noqa: E402
     build_anomalies_payload,
     build_sentiment_payload,
 )
+from backfill_option_oi import capture as _capture_option_oi  # noqa: E402
 
 sys.path.insert(0, str(ROOT))
 from edge.daily_plays.config import load_project_environment  # noqa: E402
@@ -1785,6 +1795,45 @@ def _fetch_live_option_inputs(
     return chain_rows, flow_rows, spot, open_interest_source, warnings
 
 
+def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
+    """Capture a live OI snapshot for one symbol and cache it to disk.
+
+    Runs the same fetch as `tools/backfill_option_oi.py`, in-process, so the
+    dashboard's "BACKFILL OI" button can drive it directly instead of the user
+    running the CLI by hand. Provider gaps (delisted, no listed chain, a
+    transient yfinance hiccup) are expected per-symbol outcomes, not server
+    bugs -- they come back as a clean 404 with the reason, not a 500 trace.
+    """
+    asof = datetime.now(timezone.utc).date()
+    try:
+        frame = _capture_option_oi(symbol, asof=asof, max_dte=max_dte)
+    except Exception as exc:  # noqa: BLE001 - provider gaps are per-symbol, not fatal
+        return {
+            "error": f"No options data from the provider for {symbol}: "
+                     f"{type(exc).__name__}: {exc}",
+            "endpoint": "/api/options/backfill_oi",
+            "symbol": symbol,
+        }, 404
+
+    out_dir = EDGE_DIR / "data" / "option_chains" / f"date={asof.isoformat()}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(out_dir / f"{symbol}.parquet")
+
+    # The next /api/options fetch must see this snapshot immediately, not
+    # after the 20s options cache TTL expires.
+    with _OPTIONS_LOCK:
+        for key in [k for k in _OPTIONS_CACHE if k[0] == symbol]:
+            _OPTIONS_CACHE.pop(key, None)
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "asof": asof.isoformat(),
+        "contracts": int(len(frame)),
+        "with_oi": int((frame["openInterest"] > 0).sum()),
+    }, 200
+
+
 def _options_payload(symbol: str, query: dict) -> tuple[dict, int]:
     mode = str(query.get("mode", ["live"])[0]).lower()
     mode = mode if mode in {"live", "history"} else "live"
@@ -2642,6 +2691,15 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     require_live_flow=require_live_flow,
                     force=force,
                 ))
+
+            elif path == "/api/options/backfill_oi":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                max_dte = _safe_int(query.get("max_dte", ["60"])[0], 60, 1, 730)
+                payload, status = _backfill_oi_payload(sym_or_err, max_dte=max_dte)
+                self._send_json(payload, status=status)
 
             elif path == "/api/compare":
                 raw = query.get("symbols", [""])[0]
