@@ -88,6 +88,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ChangepointsView.vue'),
     meta: { title: 'Breaks', index: '13' },
   },
+  {
+    path: '/momentum',
+    name: 'momentum',
+    component: () => import('@/views/MomentumView.vue'),
+    meta: { title: 'Momentum', index: '14' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 

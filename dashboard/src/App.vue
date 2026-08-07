@@ -32,6 +32,7 @@ const nav = [
   { name: 'adaptive', idx: '11', title: 'Live Blend', hint: 'Regime multi-stream adapt' },
   { name: 'fintel', idx: '12', title: 'Fintel', hint: 'Short · borrow · owners · flow' },
   { name: 'changepoints', idx: '13', title: 'Breaks', hint: 'Bayesian regime breaks' },
+  { name: 'momentum', idx: '14', title: 'Momentum', hint: 'Five Pillars · gap scan' },
 ] as const
 
 const vol = computed(() => status.data.value?.latest_vol)
