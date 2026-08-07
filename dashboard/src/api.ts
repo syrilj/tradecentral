@@ -1259,6 +1259,25 @@ export const api = {
   },
 
   /**
+   * Triggers a live OI capture for one symbol (`/api/options/backfill_oi`) so
+   * a symbol with no cached open-interest snapshot can resolve out of the
+   * "unmeasured" state without a manual `tools/backfill_option_oi.py` run.
+   * Takes several seconds (live yfinance fetch) — callers should show a
+   * loading state and refresh `options()`/`optionsBoard()` on success.
+   */
+  backfillOptionOi: (symbol: string, opts?: { maxDte?: number }) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.maxDte != null) q.set('max_dte', String(opts.maxDte))
+    return req<{
+      status: 'ok'
+      symbol: string
+      asof: string
+      contracts: number
+      with_oi: number
+    }>(`/api/options/backfill_oi?${q.toString()}`, { method: 'POST' })
+  },
+
+  /**
    * Conviction board (`/api/options/board`): pulls live option chains for the
    * top-ranked names the active scan produced, so structure is visible for the
    * candidates the desk actually surfaced instead of only for a hand-typed
