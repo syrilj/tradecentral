@@ -183,6 +183,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EDGE_DIR = ROOT / "edge"
 DATA_WIDE_DIR = EDGE_DIR / "data" / "1d_wide"
 DATA_CORE_DIR = EDGE_DIR / "data" / "1d"
+DATA_SMALLCAP_DIR = EDGE_DIR / "data" / "1d_smallcap"
 RUNS_DIR = EDGE_DIR / "runs"
 DOCS_DIR = EDGE_DIR / "docs"
 TOOLS_DIR = EDGE_DIR / "tools"
@@ -212,6 +213,8 @@ from sentiment_anomalies import (  # noqa: E402
     build_sentiment_payload,
 )
 from backfill_option_oi import capture as _capture_option_oi  # noqa: E402
+from momentum_scan import build_momentum_scan  # noqa: E402
+from fetch_float_data import load_float_data  # noqa: E402
 
 sys.path.insert(0, str(ROOT))
 from edge.daily_plays.config import load_project_environment  # noqa: E402
@@ -2362,6 +2365,48 @@ def _factor_probe_gate() -> dict:
     return entry
 
 
+_MOMENTUM_SCAN_CACHE: dict | None = None
+_MOMENTUM_SCAN_CACHE_TS: float = 0.0
+_MOMENTUM_SCAN_CACHE_TTL_S = 300.0
+_MOMENTUM_SCAN_LOCK = threading.Lock()
+
+
+def _load_smallcap_price_data() -> dict[str, pd.DataFrame]:
+    out: dict[str, pd.DataFrame] = {}
+    if not DATA_SMALLCAP_DIR.is_dir():
+        return out
+    for path in DATA_SMALLCAP_DIR.glob("*.parquet"):
+        try:
+            out[path.stem] = pd.read_parquet(path)
+        except Exception:
+            continue
+    return out
+
+
+def _momentum_scan_payload(*, force: bool = False) -> dict:
+    global _MOMENTUM_SCAN_CACHE, _MOMENTUM_SCAN_CACHE_TS
+    now = time.time()
+    if not force and _MOMENTUM_SCAN_CACHE is not None and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S:
+        return _MOMENTUM_SCAN_CACHE
+    with _MOMENTUM_SCAN_LOCK:
+        now = time.time()
+        if not force and _MOMENTUM_SCAN_CACHE is not None and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S:
+            return _MOMENTUM_SCAN_CACHE
+        price_data = _load_smallcap_price_data()
+        float_data = load_float_data()
+        expected = len(price_data)
+        manifest_path = DATA_SMALLCAP_DIR / "FETCH_MANIFEST_SMALLCAP.json"
+        if manifest_path.exists():
+            try:
+                expected = json.loads(manifest_path.read_text()).get("expected_universe_size", expected)
+            except Exception:
+                pass
+        payload = build_momentum_scan(price_data, float_data, expected_universe_size=expected)
+        _MOMENTUM_SCAN_CACHE = payload
+        _MOMENTUM_SCAN_CACHE_TS = time.time()
+        return payload
+
+
 def _gates_payload() -> dict:
     gates = [
         _load_json_gate(
@@ -2728,6 +2773,9 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/gates":
                 self._send_json(_gates_payload())
+
+            elif path == "/api/momentum-scan":
+                self._send_json(_momentum_scan_payload())
 
             elif path == "/api/readiness":
                 self._send_json(_readiness_payload())
