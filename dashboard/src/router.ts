@@ -41,6 +41,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Options Drift', index: '05' },
   },
   {
+    path: '/flow',
+    name: 'flow',
+    component: () => import('@/views/FlowView.vue'),
+    meta: { title: 'Market Flow', index: '04' },
+  },
+  {
     path: '/gates',
     name: 'gates',
     component: () => import('@/views/GatesView.vue'),
@@ -93,6 +99,14 @@ const routes: RouteRecordRaw[] = [
     name: 'momentum',
     component: () => import('@/views/MomentumView.vue'),
     meta: { title: 'Momentum', index: '14' },
+  },
+  {
+    path: '/flow-state',
+    name: 'flowstate',
+    redirect: (to) => ({
+      name: 'flow',
+      query: { ...to.query, tab: 'states' },
+    }),
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]

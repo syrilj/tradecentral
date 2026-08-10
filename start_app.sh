@@ -36,12 +36,12 @@ fi
 
 # Prefer a backend that includes current routes. An old api_server left running
 # from a prior session will pass /api/health but 404 new endpoints.
-# Require Research (/api/factors), Graph (/api/graph), and Evolution (/api/ga) —
-# any single 404 means the process is stale and must be restarted.
+# Require the current research routes plus Flow State. A prior backend can
+# answer /api/health while leaving the Flow workspace on a permanent 404.
 backend_is_current() {
   curl -fsS "${API_URL}/api/health" >/dev/null 2>&1 || return 1
   local code path
-  for path in /api/ga /api/factors /api/graph /api/changepoints; do
+  for path in /api/ga /api/factors /api/graph /api/changepoints /api/flow-state; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' "${API_URL}${path}" 2>/dev/null || echo 000)"
     [ "$code" = "200" ] || return 1
   done

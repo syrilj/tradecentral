@@ -13,6 +13,7 @@ confidence or applying a 59-name model to a much larger symbol catalog.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import math
 from pathlib import Path
@@ -178,13 +179,26 @@ def scan_local_market_activity(
                 return pd.read_parquet(path)
         return pd.DataFrame()
 
+    def evaluate(symbol: str) -> dict[str, Any] | None:
+        try:
+            return _local_activity_row(symbol, load(symbol))
+        except Exception:
+            return None
+
+    # Parquet decoding is native Arrow work and releases the GIL. A small pool
+    # overlaps file reads/decodes without creating the dozens of workers used
+    # by the genuinely network-bound live-flow pass. Custom loaders remain
+    # serial because tests and caller-provided SDK seams are not guaranteed to
+    # be thread-safe.
+    if candle_loader is None and len(requested) > 1:
+        with ThreadPoolExecutor(max_workers=min(4, len(requested)), thread_name_prefix="flow-local") as pool:
+            evaluated = list(pool.map(evaluate, requested))
+    else:
+        evaluated = [evaluate(symbol) for symbol in requested]
+
     rows: list[dict[str, Any]] = []
     failures = 0
-    for symbol in requested:
-        try:
-            row = _local_activity_row(symbol, load(symbol))
-        except Exception:
-            row = None
+    for row in evaluated:
         if row is None:
             failures += 1
         else:

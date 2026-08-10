@@ -339,6 +339,25 @@ function navTo(name: string): void {
 
 <template>
   <div class="desk">
+    <header class="arena-head">
+      <div class="arena-title">
+        <span class="label arena-kicker">Desk / Arena</span>
+        <h1>Execution arena</h1>
+        <p>Capital posture, ranked market activity, and the names worth opening for deeper work.</p>
+      </div>
+
+      <div class="arena-context" aria-label="Desk scope and shortcuts">
+        <span class="scope-chip">SESSION BOARD</span>
+        <span class="scope-chip" :class="scan?.depth === 'deep' ? 'live' : 'proxy'">
+          {{ scan?.depth === 'deep' ? 'MARKET-WIDE SCAN' : 'LOCAL SCAN' }}
+        </span>
+        <span class="scope-chip" :class="r?.cleared_for_live ? 'live' : 'held'">
+          {{ r?.cleared_for_live ? 'CAPITAL CLEARED' : 'PAPER MODE' }}
+        </span>
+        <RouterLink :to="{ name: 'flow' }" class="arena-flow-link label">OPEN MARKET FLOW</RouterLink>
+      </div>
+    </header>
+
     <!-- ── 00 Summary KPI Deck ─────────────────────────────────────────── -->
     <div class="desk-summary">
       <div class="kpi-card" :class="r?.cleared_for_live ? 'armed' : 'held'">
@@ -376,8 +395,8 @@ function navTo(name: string): void {
         </span>
       </div>
 
-      <div class="kpi-card clickable" @click="navTo('sectors')">
-        <span class="label kpi-label">Top Sector Flow ➔</span>
+      <button class="kpi-card clickable" type="button" aria-label="Open Sectors for top sector flow" @click="navTo('sectors')">
+        <span class="label kpi-label">Top Sector Flow</span>
         <div class="kpi-val-row">
           <span class="kpi-val sym">{{ topSector ? topSector.etf : '—' }}</span>
           <span class="kpi-badge" :class="tone(topSector?.flow_score ?? 0)">
@@ -387,10 +406,10 @@ function navTo(name: string): void {
         <span class="kpi-sub fl-truncate">
           {{ topSector ? topSector.name : 'Sectors tab' }}
         </span>
-      </div>
+      </button>
 
-      <div class="kpi-card clickable" @click="navTo('gates')">
-        <span class="label kpi-label">Top Alpha Strategy ➔</span>
+      <button class="kpi-card clickable" type="button" aria-label="Open Gates for the top alpha strategy" @click="navTo('gates')">
+        <span class="label kpi-label">Top Alpha Strategy</span>
         <div class="kpi-val-row">
           <span class="kpi-val strat-name">{{ topStrategy ? topStrategy.strategy : '—' }}</span>
           <VerdictChip v-if="topStrategy" :verdict="topStrategy.verdict" size="sm" />
@@ -398,7 +417,7 @@ function navTo(name: string): void {
         <span class="kpi-sub">
           Net {{ topStrategy?.net_return ?? '—' }} · Sharpe {{ topStrategy?.sharpe ?? '—' }}
         </span>
-      </div>
+      </button>
     </div>
 
     <section class="scan-console" aria-label="Market scan depth">
@@ -828,6 +847,58 @@ function navTo(name: string): void {
 .w-full { grid-column: 1 / -1; }
 .w-half { grid-column: span 2; }
 
+/* ---- workspace identity ------------------------------------------------- */
+.arena-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s5);
+  padding: var(--s2) 0 var(--s1);
+  border-bottom: var(--hair) solid var(--border-subtle);
+}
+.arena-title { min-width: 0; }
+.arena-kicker { color: var(--phosphor-dim); font-size: var(--t-micro); }
+.arena-title h1 {
+  margin: 3px 0 4px;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: clamp(1.45rem, 2vw, 2rem);
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+.arena-title p { max-width: 620px; color: var(--text-secondary); font-size: var(--t-small); }
+.arena-context { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--s2); }
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: var(--hair) solid var(--border-strong);
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  font-family: var(--font-display);
+  font-size: var(--t-micro);
+  letter-spacing: var(--track-label);
+  white-space: nowrap;
+}
+.scope-chip.live { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
+.scope-chip.proxy { color: var(--warn); }
+.scope-chip.held { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border-strong)); }
+.arena-flow-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: var(--hair) solid var(--phosphor-dim);
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  font-size: var(--t-micro);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.arena-flow-link:hover { color: var(--surface-canvas); background: var(--phosphor); }
+
 /* ---- 00 Summary KPI Deck ------------------------------------------------ */
 .desk-summary {
   grid-column: 1 / -1;
@@ -853,7 +924,14 @@ function navTo(name: string): void {
   background: var(--panel-hi);
 }
 .kpi-card.clickable { cursor: pointer; }
-.kpi-card.armed { border-color: rgba(34, 197, 94, 0.3); }
+button.kpi-card {
+  width: 100%;
+  appearance: none;
+  text-align: left;
+  font: inherit;
+}
+.kpi-card:focus-visible, .arena-flow-link:focus-visible { outline: 2px solid var(--action-focus); outline-offset: 2px; }
+.kpi-card.armed { border-color: var(--long); }
 .kpi-card.held { border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 
 .kpi-label {
@@ -895,8 +973,8 @@ function navTo(name: string): void {
   flex-shrink: 0;
   white-space: nowrap;
 }
-.kpi-badge.armed, .kpi-badge.pos { color: var(--long); background: rgba(34, 197, 94, 0.12); }
-.kpi-badge.held, .kpi-badge.neg { color: var(--short); background: rgba(239, 68, 68, 0.12); }
+.kpi-badge.armed, .kpi-badge.pos { color: var(--long); background: var(--long-wash); }
+.kpi-badge.held, .kpi-badge.neg { color: var(--short); background: var(--short-wash); }
 .kpi-badge.enter { color: var(--phosphor); background: var(--phosphor-wash); }
 .kpi-badge.flat { color: var(--ink-dim); background: var(--rule); }
 
@@ -910,8 +988,8 @@ function navTo(name: string): void {
   position: relative;
   overflow: hidden;
   border: var(--hair) solid var(--rule-hi);
+  border-left: 3px solid var(--phosphor-dim);
   background:
-    linear-gradient(90deg, var(--phosphor-wash), transparent 24%),
     repeating-linear-gradient(90deg, transparent 0 79px, var(--grid) 80px),
     var(--void-lift);
 }
@@ -1148,8 +1226,8 @@ function navTo(name: string): void {
 .num { text-align: right; }
 .sym { color: var(--phosphor); font-weight: 700; }
 .side-pill { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 2px; }
-.side-pill.pos { color: var(--long); background: rgba(34, 197, 94, 0.12); }
-.side-pill.neg { color: var(--short); background: rgba(239, 68, 68, 0.12); }
+.side-pill.pos { color: var(--long); background: var(--long-wash); }
+.side-pill.neg { color: var(--short); background: var(--short-wash); }
 .side-pill.neutral { color: var(--ink-dim); background: var(--rule); }
 
 /* ---- Live activity tape ------------------------------------------------- */
@@ -1247,6 +1325,9 @@ function navTo(name: string): void {
   .scan-controls { grid-column: 1 / -1; border-top: var(--hair) solid var(--rule); justify-content: flex-end; }
 }
 @media (max-width: 768px) {
+  .arena-head { align-items: flex-start; flex-direction: column; gap: var(--s3); padding-bottom: var(--s3); }
+  .arena-context { justify-content: flex-start; }
+  .arena-flow-link { min-height: 44px; }
   .desk-summary { grid-template-columns: 1fr; }
   .desk { grid-template-columns: 1fr; }
   .w-half { grid-column: span 1; }

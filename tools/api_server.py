@@ -119,6 +119,17 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
          60 usable daily bars. Research/diagnostic only — never authorizes a
          trade.
 
+  GET  /api/flow-state
+      -> Latent flow-state cross-section (forced-flow shocks / cascades /
+         absorption / fade) written by tools/build_flow_state.py
+         (runs/flow_state/latest.json) — offline artifact only, same
+         contract as /api/changepoints without ?symbol. Daily-bar proxies
+         only (no order-book depth anywhere in this repo); tier 0/1 today
+         (states + matched-control validation, if a study has been run);
+         models stay null and decision_authorized stays false until a
+         Phase-3 development gate exists and passes. Returns
+         {available: false, reason} before the builder has been run.
+
   GET  /api/adaptive-signal[?symbol=X&limit=40]
       -> Regime-aware multi-stream live blend (technical, sector, sentiment,
          fundamental). Prefers 1h bars when present (else daily). Weights shift
@@ -230,6 +241,7 @@ from edge.daily_plays.options_board import (  # noqa: E402
 )
 from edge.daily_plays.adapters.options import LSEOptionsAdapter  # noqa: E402
 from edge.daily_plays.live_activity import build_unusual_options_flow  # noqa: E402
+from edge.daily_plays.opportunity_scanner import build_live_opportunities  # noqa: E402
 from edge.daily_plays.qlib_scan_score import (  # noqa: E402
     SCORE_KIND as QLIB_SCORE_KIND,
     SOURCE_ID as QLIB_SOURCE_ID,
@@ -271,6 +283,7 @@ _STREAM_HIT_TTL_S = 120.0
 _OPTIONS_BOARD_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _OPTIONS_BOARD_TTL_S = 300.0
 _OPTIONS_BOARD_LOCK = threading.Lock()
+_OPTIONS_BOARD_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
 _OPTIONS_BOARD_MAX_WORKERS = 6
 
 load_project_environment(paths=(EDGE_DIR / ".env", ROOT / "TradingWork" / ".env"))
@@ -290,6 +303,7 @@ load_project_environment(paths=(EDGE_DIR / ".env", ROOT / "TradingWork" / ".env"
 GRAPH_DIR = RUNS_DIR / "graph"
 FACTOR_DIR = RUNS_DIR / "factor_diagnostics"
 CHANGEPOINT_DIR = RUNS_DIR / "changepoints"
+FLOW_STATE_DIR = RUNS_DIR / "flow_state"
 
 
 def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> pd.DataFrame:
@@ -658,6 +672,55 @@ def _changepoints_payload() -> dict:
     return {**empty, **payload, "available": bool(payload.get("available", True))}
 
 
+def _flow_state_payload() -> dict:
+    """Latest cross-section written by tools/build_flow_state.py.
+
+    Same "read an offline artifact, never compute on request" contract as
+    _changepoints_payload above: a missing/malformed artifact degrades to
+    `available: false` + `reason`, never raises, and never manufactures
+    data. `models` stays `null` until Phase 3 (cascade/fade ML models)
+    exists and a passing development-gate record raises `tier` to >= 2.
+    """
+    empty = {
+        "available": False,
+        "reason": None,
+        "as_of": None,
+        "tier": 0,
+        "decision_authorized": False,
+        "caveats": [],
+        "states": [],
+        "timelines": {},
+        "events": [],
+        "barrier_fields": {},
+        "impact_curve": {"lags": [], "mean_cum_ret": [], "ci_lo": [], "ci_hi": []},
+        "phenomenon": {
+            "tested": False, "effect": None, "nw_t": None, "boot_ci": None,
+            "perm_p": None, "n_events": 0, "n_controls": 0, "grid": [],
+            "prereg_id": None, "passed": False,
+        },
+        "gate": {"evaluated": False, "passed": False, "checks": {}, "ledger_id": None},
+        "models": None,
+        "producing_script": "tools/build_flow_state.py",
+    }
+    latest = FLOW_STATE_DIR / "latest.json"
+    if not latest.is_file():
+        try:
+            shown_path = latest.relative_to(EDGE_DIR)
+        except ValueError:
+            # FLOW_STATE_DIR is monkeypatched outside EDGE_DIR in tests;
+            # fall back to the absolute path rather than raising here.
+            shown_path = latest
+        return {**empty, "reason": f"no flow-state artifact at {shown_path}"}
+    try:
+        with latest.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except Exception as e:  # noqa: BLE001
+        return {**empty, "reason": f"unreadable flow-state artifact: {type(e).__name__}: {e}"}
+    if not isinstance(payload, dict):
+        return {**empty, "reason": "flow-state artifact is not a JSON object"}
+    return {**empty, **payload, "available": bool(payload.get("available", True))}
+
+
 def _bocpd_align_dates(index: pd.DatetimeIndex, arr_len: int) -> pd.DatetimeIndex:
     """Map a BocpdResult array back onto dates.
 
@@ -814,8 +877,19 @@ def _bocpd_runlength_heatmap(
 
     win = full[:, cols]
 
-    row_step = max(1, math.ceil(n_rows_full / _BOCPD_MAX_ROWS))
-    row_starts = list(range(0, n_rows_full, row_step))
+    # Crop vertical extent to active run-length range (plus buffer) so heatmap
+    # doesn't waste 80% height on empty space
+    active_rows = np.nonzero(win >= 10**_BOCPD_LOG_FLOOR)[0]
+    if len(active_rows) > 0:
+        max_active_r = int(active_rows.max())
+        r_limit = min(n_rows_full, max(60, max_active_r + 15))
+    else:
+        r_limit = min(n_rows_full, 120)
+    win = win[:r_limit, :]
+    n_rows_crop = r_limit
+
+    row_step = max(1, math.ceil(n_rows_crop / _BOCPD_MAX_ROWS))
+    row_starts = list(range(0, n_rows_crop, row_step))
     pooled = np.stack([win[r:r + row_step, :].max(axis=0) for r in row_starts], axis=0)
     run_values = row_starts
 
@@ -1121,6 +1195,7 @@ _OPTIONS_CACHE_TTL_S = 20.0
 # single-name options pull so the desk can re-open the board without re-taxing LSE.
 _UNUSUAL_FLOW_CACHE: dict[tuple, tuple[float, dict]] = {}
 _UNUSUAL_FLOW_LOCK = threading.Lock()
+_UNUSUAL_FLOW_BUILD_LOCKS: dict[tuple, threading.Lock] = {}
 _UNUSUAL_FLOW_TTL_S = 90.0
 
 
@@ -2075,7 +2150,7 @@ def _options_board_row(candidate) -> dict:
         )
 
 
-def _options_board_payload(
+def _options_board_payload_impl(
     *, limit: int, depth: str, require_live_flow: bool, force: bool,
 ) -> dict:
     cache_key = (limit, depth, require_live_flow)
@@ -2136,6 +2211,22 @@ def _options_board_payload(
         require_live_flow=require_live_flow,
         warnings=warnings,
     )
+    payload["calibrated_signals"] = [
+        {
+            "symbol": row.get("symbol"),
+            "side": row.get("side"),
+            "probability": row.get("probability"),
+            "confidence_kind": row.get("confidence_kind"),
+            "calibration_version": row.get("calibration_version"),
+            "model": row.get("model"),
+            "setup_ok": row.get("setup_ok"),
+            "state": row.get("state"),
+        }
+        for row in (status.get("directional_signals") or [])
+        if isinstance(row, dict)
+        and row.get("symbol")
+        and row.get("confidence_kind") == "calibrated_probability"
+    ]
     payload["cache"] = {
         "hit": False,
         "age_seconds": 0.0,
@@ -2148,6 +2239,150 @@ def _options_board_payload(
             oldest = min(_OPTIONS_BOARD_CACHE, key=lambda k: _OPTIONS_BOARD_CACHE[k][0])
             _OPTIONS_BOARD_CACHE.pop(oldest, None)
     return payload
+
+
+def _options_board_payload(
+    *, limit: int, depth: str, require_live_flow: bool, force: bool,
+) -> dict:
+    """Return one board build per cache key, even under concurrent requests.
+
+    The threaded HTTP server can receive the Flow radar and the optional full
+    structure board together. Without a keyed build lock, both cache misses
+    launch the same 25 vendor chain reads. A concurrent forced request may use
+    a result produced after it began; a later, deliberate force still rebuilds.
+    """
+    cache_key = (limit, depth, require_live_flow)
+    request_started = time.time()
+    with _OPTIONS_BOARD_LOCK:
+        build_lock = _OPTIONS_BOARD_BUILD_LOCKS.setdefault(cache_key, threading.Lock())
+    with build_lock:
+        if force:
+            with _OPTIONS_BOARD_LOCK:
+                hit = _OPTIONS_BOARD_CACHE.get(cache_key)
+            if hit and hit[0] >= request_started:
+                return dict(hit[1])
+        return _options_board_payload_impl(
+            limit=limit,
+            depth=depth,
+            require_live_flow=require_live_flow,
+            force=force,
+        )
+
+
+def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = False) -> dict:
+    cache_key = (limit, round(min_premium, 2))
+    if not force:
+        with _UNUSUAL_FLOW_LOCK:
+            cached = _UNUSUAL_FLOW_CACHE.get(cache_key)
+        if cached and time.time() - cached[0] < _UNUSUAL_FLOW_TTL_S:
+            payload = dict(cached[1])
+            payload["cache"] = {
+                "hit": True,
+                "age_seconds": round(time.time() - cached[0], 1),
+                "ttl_seconds": _UNUSUAL_FLOW_TTL_S,
+                "refresh_hint": "GET /api/unusual-flow?force=1 for a live refetch",
+            }
+            return payload
+    data_dirs = [p for p in (DATA_WIDE_DIR, DATA_CORE_DIR) if p.is_dir()]
+    payload = build_unusual_options_flow(
+        data_dirs=data_dirs,
+        live_target_limit=min(60, max(24, limit + 12)),
+        row_limit=limit,
+        min_premium=min_premium,
+    )
+    payload = dict(payload)
+    payload["cache"] = {
+        "hit": False,
+        "age_seconds": 0.0,
+        "ttl_seconds": _UNUSUAL_FLOW_TTL_S,
+        "refresh_hint": "GET /api/unusual-flow?force=1 for a live refetch",
+    }
+    with _UNUSUAL_FLOW_LOCK:
+        _UNUSUAL_FLOW_CACHE[cache_key] = (time.time(), payload)
+        if len(_UNUSUAL_FLOW_CACHE) > 8:
+            oldest = min(_UNUSUAL_FLOW_CACHE, key=lambda k: _UNUSUAL_FLOW_CACHE[k][0])
+            _UNUSUAL_FLOW_CACHE.pop(oldest, None)
+    return payload
+
+
+def _unusual_flow_payload(*, limit: int, min_premium: float, force: bool = False) -> dict:
+    """Coalesce identical concurrent market-wide tape scans.
+
+    Threshold/limit variants remain independent cache keys, but two browser
+    panes asking for the same variant now share one local parquet + LSE pass.
+    """
+    cache_key = (limit, round(min_premium, 2))
+    request_started = time.time()
+    with _UNUSUAL_FLOW_LOCK:
+        build_lock = _UNUSUAL_FLOW_BUILD_LOCKS.setdefault(cache_key, threading.Lock())
+    with build_lock:
+        if force:
+            with _UNUSUAL_FLOW_LOCK:
+                hit = _UNUSUAL_FLOW_CACHE.get(cache_key)
+            if hit and hit[0] >= request_started:
+                return dict(hit[1])
+        return _unusual_flow_payload_impl(
+            limit=limit,
+            min_premium=min_premium,
+            force=force,
+        )
+
+
+# Passive reads recombine the board/unusual-flow caches above. A force request
+# is an explicit operator action and refreshes both upstream sources once.
+_LIVE_OPPORTUNITIES_CACHE: dict | None = None
+_LIVE_OPPORTUNITIES_CACHE_TS: float = 0.0
+_LIVE_OPPORTUNITIES_TTL_S = 90.0
+_LIVE_OPPORTUNITIES_LOCK = threading.Lock()
+
+
+def _live_opportunities_payload(*, force: bool = False) -> dict:
+    global _LIVE_OPPORTUNITIES_CACHE, _LIVE_OPPORTUNITIES_CACHE_TS
+    now = time.time()
+    if (
+        not force and _LIVE_OPPORTUNITIES_CACHE is not None
+        and (now - _LIVE_OPPORTUNITIES_CACHE_TS) < _LIVE_OPPORTUNITIES_TTL_S
+    ):
+        return _LIVE_OPPORTUNITIES_CACHE
+    with _LIVE_OPPORTUNITIES_LOCK:
+        now = time.time()
+        if (
+            not force and _LIVE_OPPORTUNITIES_CACHE is not None
+            and (now - _LIVE_OPPORTUNITIES_CACHE_TS) < _LIVE_OPPORTUNITIES_TTL_S
+        ):
+            return _LIVE_OPPORTUNITIES_CACHE
+        # Passive polling stays cache-friendly. Only an explicit force request
+        # cascades to vendors, matching the dashboard's "PULL LIVE DATA" action.
+        board = _options_board_payload(
+            limit=25, depth=_ACTIVE_SCAN_DEPTH, require_live_flow=False, force=force,
+        )
+        flow = _unusual_flow_payload(limit=40, min_premium=25_000.0, force=force)
+        board_cache = board.get("cache") if isinstance(board.get("cache"), dict) else {}
+        flow_cache = flow.get("cache") if isinstance(flow.get("cache"), dict) else {}
+        payload = build_live_opportunities(
+            board_rows=list(board.get("rows") or []),
+            flow_rows=list(flow.get("rows") or []),
+            calibrated_rows=list(board.get("calibrated_signals") or []),
+            filters=OptionsFilters(),
+            board_cache_age_seconds=float(board_cache.get("age_seconds") or 0.0),
+            flow_cache_age_seconds=float(flow_cache.get("age_seconds") or 0.0),
+        )
+        if payload.get("available"):
+            payload["sources"] = {
+                "board": {
+                    "cache": board_cache,
+                    "asof_utc": board.get("asof_utc"),
+                    "scan_asof": board.get("scan_asof"),
+                },
+                "flow": {
+                    "cache": flow_cache,
+                    "asof": flow.get("asof"),
+                },
+                "scan_depth": _ACTIVE_SCAN_DEPTH,
+            }
+        _LIVE_OPPORTUNITIES_CACHE = payload
+        _LIVE_OPPORTUNITIES_CACHE_TS = time.time()
+        return payload
 
 
 FACTOR_TRACKS = [
@@ -2373,13 +2608,22 @@ _MOMENTUM_SCAN_LOCK = threading.Lock()
 
 def _load_smallcap_price_data() -> dict[str, pd.DataFrame]:
     out: dict[str, pd.DataFrame] = {}
-    if not DATA_SMALLCAP_DIR.is_dir():
-        return out
-    for path in DATA_SMALLCAP_DIR.glob("*.parquet"):
-        try:
-            out[path.stem] = pd.read_parquet(path)
-        except Exception:
+    search_dirs = [
+        DATA_SMALLCAP_DIR,
+        RUNS_DIR.parent / "data" / "1d",
+        RUNS_DIR.parent / "data" / "1d_wide",
+    ]
+    for d in search_dirs:
+        if not d.is_dir():
             continue
+        for path in d.glob("*.parquet"):
+            sym = path.stem
+            if sym in out or "MANIFEST" in sym:
+                continue
+            try:
+                out[sym] = pd.read_parquet(path)
+            except Exception:
+                continue
     return out
 
 
@@ -2817,24 +3061,14 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     min_premium = 25_000.0
                 min_premium = max(0.0, min(min_premium, 5_000_000.0))
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
-                cache_key = (limit, round(min_premium, 2))
-                with _UNUSUAL_FLOW_LOCK:
-                    cached = _UNUSUAL_FLOW_CACHE.get(cache_key)
-                if cached and not force and time.time() - cached[0] < _UNUSUAL_FLOW_TTL_S:
-                    self._send_json(cached[1])
-                    return
-                data_dirs = [p for p in (DATA_WIDE_DIR, DATA_CORE_DIR) if p.is_dir()]
-                payload = build_unusual_options_flow(
-                    data_dirs=data_dirs,
-                    live_target_limit=min(60, max(24, limit + 12)),
-                    row_limit=limit,
-                    min_premium=min_premium,
-                )
-                with _UNUSUAL_FLOW_LOCK:
-                    _UNUSUAL_FLOW_CACHE[cache_key] = (time.time(), payload)
-                    if len(_UNUSUAL_FLOW_CACHE) > 8:
-                        oldest = min(_UNUSUAL_FLOW_CACHE, key=lambda k: _UNUSUAL_FLOW_CACHE[k][0])
-                        _UNUSUAL_FLOW_CACHE.pop(oldest, None)
+                self._send_json(_unusual_flow_payload(limit=limit, min_premium=min_premium, force=force))
+
+            elif path == "/api/options/opportunities":
+                limit = _safe_int(query.get("limit", [None])[0], default=0, lo=1, hi=500)
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                payload = _live_opportunities_payload(force=force)
+                if limit and isinstance(payload.get("rows"), list):
+                    payload = {**payload, "rows": payload["rows"][:limit]}
                 self._send_json(payload)
 
             elif path == "/api/ga":
@@ -2869,6 +3103,9 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json(_changepoint_symbol_payload(sym_or_err, window))
                 else:
                     self._send_json(_changepoints_payload())
+
+            elif path == "/api/flow-state":
+                self._send_json(_flow_state_payload())
 
             elif path == "/api/adaptive-signal":
                 limit = _safe_int(query.get("limit", ["40"])[0], default=40, lo=5, hi=120)

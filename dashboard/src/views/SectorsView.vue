@@ -341,8 +341,8 @@ const expandedNames = computed(() => {
   flex-direction: column;
   gap: 4px;
 }
-.kpi-card.armed { border-color: rgba(34, 197, 94, 0.3); }
-.kpi-card.held { border-color: rgba(239, 68, 68, 0.3); }
+.kpi-card.armed { border-color: var(--long); }
+.kpi-card.held { border-color: var(--short); }
 
 .kpi-label {
   font-size: 10px;
@@ -372,8 +372,8 @@ const expandedNames = computed(() => {
   border-radius: 3px;
   text-transform: uppercase;
 }
-.kpi-badge.pos { color: var(--long); background: rgba(34, 197, 94, 0.12); }
-.kpi-badge.neg { color: var(--short); background: rgba(239, 68, 68, 0.12); }
+.kpi-badge.pos { color: var(--long); background: var(--long-wash); }
+.kpi-badge.neg { color: var(--short); background: var(--short-wash); }
 .kpi-badge.flat { color: var(--ink-dim); background: var(--rule); }
 
 .kpi-sub { font-size: 11px; color: var(--ink-dim); }

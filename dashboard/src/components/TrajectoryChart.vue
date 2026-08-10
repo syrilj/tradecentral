@@ -347,9 +347,10 @@ const flip = computed(() => curX.value > W * 0.62)
   stroke-linejoin: round;
   opacity: 0.92;
 }
-.overlay.vwap { stroke: #ffb703; stroke-dasharray: 5 3; }
-.overlay.ema9 { stroke: #4cc9f0; }
-.overlay.ema21 { stroke: #b5179e; opacity: 0.75; }
+/* Series hues stay on-token: warn / call / put. No rainbow chart defaults. */
+.overlay.vwap { stroke: var(--warn); stroke-dasharray: 5 3; }
+.overlay.ema9 { stroke: var(--call-hi); }
+.overlay.ema21 { stroke: var(--put); opacity: 0.85; }
 
 .legend {
   display: flex;
@@ -359,9 +360,9 @@ const flip = computed(() => curX.value > W * 0.62)
   color: var(--ink-faint);
 }
 .leg-px { color: var(--ink-dim); }
-.vwap-c { color: #ffb703; }
-.ema9-c { color: #4cc9f0; }
-.ema21-c { color: #d77bcf; }
+.vwap-c { color: var(--warn); }
+.ema9-c { color: var(--call-hi); }
+.ema21-c { color: var(--put); }
 .r-ov { font-size: 10px; }
 
 .dd {
@@ -414,9 +415,9 @@ text {
   gap: var(--s3);
   padding: 3px 0;
   pointer-events: none;
-  background: linear-gradient(to right, transparent, var(--panel) 12%);
+  background: var(--panel);
 }
-.readout.flip { right: auto; left: 8px; background: linear-gradient(to left, transparent, var(--panel) 12%); }
+.readout.flip { right: auto; left: 8px; background: var(--panel); }
 
 .r-date { color: var(--ink-ghost); }
 .r-px { font-size: var(--t-body); color: var(--ink); font-weight: 500; }

@@ -23,7 +23,7 @@
  * `simulate_long_short`, and the repo's rule is that only that module's
  * accounting counts.
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { api, type FactorTearsheet } from '@/api'
 import { useResource } from '@/composables/useResource'
 import { num, pctFrac, age, DASH } from '@/format'
@@ -161,6 +161,8 @@ function toneFor(v: number | null | undefined): 'pos' | 'neg' | 'flat' {
   if (v == null || !Number.isFinite(v)) return 'flat'
   return v > 0 ? 'pos' : v < 0 ? 'neg' : 'flat'
 }
+
+const chartTab = ref<'ic' | 'quantile'>('ic')
 </script>
 
 <template>
@@ -230,189 +232,192 @@ function toneFor(v: number | null | undefined): 'pos' | 'neg' | 'flat' {
 
     <template v-if="available">
       <Panel
-        label="Information coefficient decay"
+        label="Signal diagnostics"
         index="—"
-        meta="how long the forecast stays alive"
+        :meta="chartTab === 'ic' ? 'IC decay' : `top−bottom ${spreadRow ? pctFrac(spreadRow.mean_return, 3) : '—'}`"
         :delay="40"
+        class="w-full"
       >
-        <svg v-if="icChart" :viewBox="`0 0 ${IC_W} ${IC_H}`" class="chart" preserveAspectRatio="none">
-          <g class="axis">
+        <!-- tab strip -->
+        <div class="chart-tabs">
+          <button type="button" class="ctab label" :class="{ on: chartTab === 'ic' }" @click="chartTab = 'ic'">IC DECAY</button>
+          <button type="button" class="ctab label" :class="{ on: chartTab === 'quantile' }" @click="chartTab = 'quantile'">QUANTILE SPREAD</button>
+        </div>
+
+        <!-- IC DECAY tab -->
+        <template v-if="chartTab === 'ic'">
+          <svg v-if="icChart" :viewBox="`0 0 ${IC_W} ${IC_H}`" class="chart" preserveAspectRatio="none">
+            <g class="axis">
+              <line
+                v-for="t in icChart.yTicks"
+                :key="`gy-${t}`"
+                :x1="PAD.l"
+                :x2="IC_W - PAD.r"
+                :y1="icChart.y(t)"
+                :y2="icChart.y(t)"
+                class="gridline"
+              />
+              <text
+                v-for="t in icChart.yTicks"
+                :key="`ly-${t}`"
+                :x="PAD.l - 8"
+                :y="icChart.y(t) + 3"
+                text-anchor="end"
+                class="tick-label"
+              >{{ t.toFixed(3) }}</text>
+            </g>
+
             <line
-              v-for="t in icChart.yTicks"
-              :key="`gy-${t}`"
               :x1="PAD.l"
               :x2="IC_W - PAD.r"
-              :y1="icChart.y(t)"
-              :y2="icChart.y(t)"
-              class="gridline"
-            />
-            <text
-              v-for="t in icChart.yTicks"
-              :key="`ly-${t}`"
-              :x="PAD.l - 8"
-              :y="icChart.y(t) + 3"
-              text-anchor="end"
-              class="tick-label"
-            >{{ t.toFixed(3) }}</text>
-          </g>
-
-          <line
-            :x1="PAD.l"
-            :x2="IC_W - PAD.r"
-            :y1="icChart.zeroY"
-            :y2="icChart.zeroY"
-            class="zero"
-          />
-
-          <path :d="icChart.path" class="ic-line" />
-
-          <g v-for="p in icChart.pts" :key="`p-${p.row.horizon}`">
-            <circle
-              :cx="p.x"
-              :cy="p.y"
-              r="3.5"
-              :class="[
-                'ic-dot',
-                p.row.ic_t_stat != null && Math.abs(p.row.ic_t_stat) >= 2 ? 'sig' : 'weak',
-              ]"
-            />
-            <text :x="p.x" :y="IC_H - 10" text-anchor="middle" class="tick-label">
-              {{ p.row.horizon }}d
-            </text>
-          </g>
-        </svg>
-        <p v-else class="note">Not enough horizons to plot a decay curve.</p>
-
-        <table v-if="icRows.length" class="grid ic-table">
-          <thead>
-            <tr>
-              <th class="label">Horizon</th>
-              <th class="label num">Mean IC</th>
-              <th class="label num">NW t</th>
-              <th class="label num">IC IR</th>
-              <th class="label num">% positive</th>
-              <th class="label num">Periods</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="r in icRows"
-              :key="r.horizon"
-              :class="{ faded: r.ic_t_stat == null || Math.abs(r.ic_t_stat) < 2 }"
-            >
-              <td class="fig">{{ r.horizon }}d</td>
-              <td class="fig num" :class="toneFor(r.mean_ic)">{{ num(r.mean_ic, 4) }}</td>
-              <td class="fig num">{{ num(r.ic_t_stat, 2) }}</td>
-              <td class="fig num">{{ num(r.ic_ir, 3) }}</td>
-              <td class="fig num">{{ pctFrac(r.pct_positive, 1) }}</td>
-              <td class="fig num dim">{{ r.n_periods }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </Panel>
-
-      <Panel
-        label="Quantile spread against its own cost"
-        index="—"
-        :meta="spreadRow ? `top−bottom ${pctFrac(spreadRow.mean_return, 3)}` : 'no spread row'"
-        :delay="80"
-      >
-        <div v-if="qChart" class="qwrap">
-          <svg :viewBox="`0 0 100 ${Q_H}`" class="chart qchart" preserveAspectRatio="none">
-            <line
-              v-for="t in qChart.yTicks"
-              :key="`qg-${t}`"
-              x1="0"
-              x2="100"
-              :y1="qChart.y(t)"
-              :y2="qChart.y(t)"
-              class="gridline"
-              vector-effect="non-scaling-stroke"
-            />
-            <line
-              x1="0"
-              x2="100"
-              :y1="qChart.zeroY"
-              :y2="qChart.zeroY"
+              :y1="icChart.zeroY"
+              :y2="icChart.zeroY"
               class="zero"
-              vector-effect="non-scaling-stroke"
             />
 
-            <g v-for="(r, i) in qChart.rows" :key="`bar-${r.quantile}`">
-              <rect
-                :x="qChart.band(i).left + qChart.slot * 0.22"
-                :y="Math.min(qChart.zeroY, qChart.y(r.mean_return ?? 0))"
-                :width="qChart.slot * 0.56"
-                :height="Math.abs(qChart.y(r.mean_return ?? 0) - qChart.zeroY)"
-                :class="['qbar', (r.mean_return ?? 0) >= 0 ? 'up' : 'down']"
+            <path :d="icChart.path" class="ic-line" />
+
+            <g v-for="p in icChart.pts" :key="`p-${p.row.horizon}`">
+              <circle
+                :cx="p.x"
+                :cy="p.y"
+                r="3.5"
+                :class="[
+                  'ic-dot',
+                  p.row.ic_t_stat != null && Math.abs(p.row.ic_t_stat) >= 2 ? 'sig' : 'weak',
+                ]"
               />
-              <!-- The cost line: what this bucket costs to hold at its own
-                   measured turnover. A bar shorter than this tick is not a
-                   tradable bucket, whatever its gross number says. -->
-              <line
-                v-if="costOf(r.quantile) != null"
-                :x1="qChart.band(i).left + qChart.slot * 0.14"
-                :x2="qChart.band(i).left + qChart.slot * 0.86"
-                :y1="qChart.y(costOf(r.quantile) as number)"
-                :y2="qChart.y(costOf(r.quantile) as number)"
-                class="costline"
-                vector-effect="non-scaling-stroke"
-              />
+              <text :x="p.x" :y="IC_H - 10" text-anchor="middle" class="tick-label">
+                {{ p.row.horizon }}d
+              </text>
             </g>
           </svg>
-          <div class="qaxis">
-            <span v-for="r in qChart.rows" :key="`qa-${r.quantile}`" class="label qlab">
-              {{ qLabel(r.quantile) }}
-            </span>
-          </div>
-          <div class="legend">
-            <span class="key"><i class="sw up" /> mean forward return</span>
-            <span class="key"><i class="sw cost" /> round-trip cost at measured turnover</span>
-          </div>
-        </div>
-        <p v-else class="note">No quantile rows.</p>
+          <p v-else class="note">Not enough horizons to plot a decay curve.</p>
 
-        <table v-if="quantiles.length" class="grid">
-          <thead>
-            <tr>
-              <th class="label">Bucket</th>
-              <th class="label num">Mean return</th>
-              <th class="label num">Sharpe</th>
-              <th class="label num">Turnover</th>
-              <th class="label num">Cost</th>
-              <th class="label num">Net</th>
-              <th class="label num">Names</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in quantiles" :key="`qt-${r.quantile}`">
-              <td class="fig">{{ qLabel(r.quantile) }}</td>
-              <td class="fig num" :class="toneFor(r.mean_return)">{{ pctFrac(r.mean_return, 3) }}</td>
-              <td class="fig num">{{ num(r.sharpe, 2) }}</td>
-              <td class="fig num dim">{{ pctFrac(turnoverOf.get(r.quantile), 1) }}</td>
-              <td class="fig num dim">{{ pctFrac(costOf(r.quantile), 3) }}</td>
-              <td
-                class="fig num"
-                :class="clears(r.quantile, r.mean_return) ? 'pos' : 'neg'"
+          <table v-if="icRows.length" class="grid ic-table">
+            <thead>
+              <tr>
+                <th class="label">Horizon</th>
+                <th class="label num">Mean IC</th>
+                <th class="label num">NW t</th>
+                <th class="label num">IC IR</th>
+                <th class="label num">% positive</th>
+                <th class="label num">Periods</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="r in icRows"
+                :key="r.horizon"
+                :class="{ faded: r.ic_t_stat == null || Math.abs(r.ic_t_stat) < 2 }"
               >
-                {{
-                  r.mean_return != null && costOf(r.quantile) != null
-                    ? pctFrac(r.mean_return - (costOf(r.quantile) as number), 3)
-                    : DASH
-                }}
-              </td>
-              <td class="fig num dim">{{ num(r.mean_count, 0) }}</td>
-            </tr>
-            <tr v-if="spreadRow" class="spread-row">
-              <td class="fig">Spread</td>
-              <td class="fig num" :class="toneFor(spreadRow.mean_return)">
-                {{ pctFrac(spreadRow.mean_return, 3) }}
-              </td>
-              <td class="fig num">{{ num(spreadRow.sharpe, 2) }}</td>
-              <td class="fig num dim" colspan="4">top minus bottom, gross</td>
-            </tr>
-          </tbody>
-        </table>
+                <td class="fig">{{ r.horizon }}d</td>
+                <td class="fig num" :class="toneFor(r.mean_ic)">{{ num(r.mean_ic, 4) }}</td>
+                <td class="fig num">{{ num(r.ic_t_stat, 2) }}</td>
+                <td class="fig num">{{ num(r.ic_ir, 3) }}</td>
+                <td class="fig num">{{ pctFrac(r.pct_positive, 1) }}</td>
+                <td class="fig num dim">{{ r.n_periods }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
+
+        <!-- QUANTILE SPREAD tab -->
+        <template v-else-if="chartTab === 'quantile'">
+          <div v-if="qChart" class="qwrap">
+            <svg :viewBox="`0 0 100 ${Q_H}`" class="chart qchart" preserveAspectRatio="none">
+              <line
+                v-for="t in qChart.yTicks"
+                :key="`qg-${t}`"
+                x1="0"
+                x2="100"
+                :y1="qChart.y(t)"
+                :y2="qChart.y(t)"
+                class="gridline"
+                vector-effect="non-scaling-stroke"
+              />
+              <line
+                x1="0"
+                x2="100"
+                :y1="qChart.zeroY"
+                :y2="qChart.zeroY"
+                class="zero"
+                vector-effect="non-scaling-stroke"
+              />
+
+              <g v-for="(r, i) in qChart.rows" :key="`bar-${r.quantile}`">
+                <rect
+                  :x="qChart.band(i).left + qChart.slot * 0.22"
+                  :y="Math.min(qChart.zeroY, qChart.y(r.mean_return ?? 0))"
+                  :width="qChart.slot * 0.56"
+                  :height="Math.abs(qChart.y(r.mean_return ?? 0) - qChart.zeroY)"
+                  :class="['qbar', (r.mean_return ?? 0) >= 0 ? 'up' : 'down']"
+                />
+                <line
+                  v-if="costOf(r.quantile) != null"
+                  :x1="qChart.band(i).left + qChart.slot * 0.14"
+                  :x2="qChart.band(i).left + qChart.slot * 0.86"
+                  :y1="qChart.y(costOf(r.quantile) as number)"
+                  :y2="qChart.y(costOf(r.quantile) as number)"
+                  class="costline"
+                  vector-effect="non-scaling-stroke"
+                />
+              </g>
+            </svg>
+            <div class="qaxis">
+              <span v-for="r in qChart.rows" :key="`qa-${r.quantile}`" class="label qlab">
+                {{ qLabel(r.quantile) }}
+              </span>
+            </div>
+            <div class="legend">
+              <span class="key"><i class="sw up" /> mean forward return</span>
+              <span class="key"><i class="sw cost" /> round-trip cost at measured turnover</span>
+            </div>
+          </div>
+          <p v-else class="note">No quantile rows.</p>
+
+          <table v-if="quantiles.length" class="grid">
+            <thead>
+              <tr>
+                <th class="label">Bucket</th>
+                <th class="label num">Mean return</th>
+                <th class="label num">Sharpe</th>
+                <th class="label num">Turnover</th>
+                <th class="label num">Cost</th>
+                <th class="label num">Net</th>
+                <th class="label num">Names</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in quantiles" :key="`qt-${r.quantile}`">
+                <td class="fig">{{ qLabel(r.quantile) }}</td>
+                <td class="fig num" :class="toneFor(r.mean_return)">{{ pctFrac(r.mean_return, 3) }}</td>
+                <td class="fig num">{{ num(r.sharpe, 2) }}</td>
+                <td class="fig num dim">{{ pctFrac(turnoverOf.get(r.quantile), 1) }}</td>
+                <td class="fig num dim">{{ pctFrac(costOf(r.quantile), 3) }}</td>
+                <td
+                  class="fig num"
+                  :class="clears(r.quantile, r.mean_return) ? 'pos' : 'neg'"
+                >
+                  {{
+                    r.mean_return != null && costOf(r.quantile) != null
+                      ? pctFrac(r.mean_return - (costOf(r.quantile) as number), 3)
+                      : DASH
+                  }}
+                </td>
+                <td class="fig num dim">{{ num(r.mean_count, 0) }}</td>
+              </tr>
+              <tr v-if="spreadRow" class="spread-row">
+                <td class="fig">Spread</td>
+                <td class="fig num" :class="toneFor(spreadRow.mean_return)">
+                  {{ pctFrac(spreadRow.mean_return, 3) }}
+                </td>
+                <td class="fig num">{{ num(spreadRow.sharpe, 2) }}</td>
+                <td class="fig num dim" colspan="4">top minus bottom, gross</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
       </Panel>
     </template>
   </div>
@@ -423,6 +428,33 @@ function toneFor(v: number | null | undefined): 'pos' | 'neg' | 'flat' {
   display: flex;
   flex-direction: column;
   gap: var(--s4);
+}
+
+.w-full { width: 100%; min-width: 0; }
+
+/* ---- chart tab strip ----------------------------------------------------- */
+.chart-tabs {
+  display: flex;
+  margin: calc(-1 * var(--s4)) calc(-1 * var(--s4)) var(--s4);
+  border-bottom: var(--hair) solid var(--rule);
+}
+.ctab {
+  padding: 5px 14px;
+  border: none;
+  border-right: var(--hair) solid var(--rule);
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  font-size: var(--t-micro);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ctab:hover { color: var(--ink); background: var(--panel-hi); }
+.ctab.on {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border-bottom: 2px solid var(--phosphor);
 }
 
 .banner {

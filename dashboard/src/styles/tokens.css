@@ -52,6 +52,25 @@
   --phosphor-glow: rgba(169, 196, 108, 0.14);
   --phosphor-wash: rgba(169, 196, 108, 0.07);
 
+  /* ---- semantic aliases --------------------------------------------------
+     Components use roles rather than raw palette values. This keeps live,
+     selection, market direction and option identity from collapsing into the
+     same visual signal as the dashboard grows. */
+  --surface-canvas: var(--void);
+  --surface-base: var(--void-lift);
+  --surface-raised: var(--panel);
+  --surface-overlay: var(--panel-hi);
+  --border-subtle: var(--rule-faint);
+  --border-strong: var(--rule-hi);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-dim);
+  --text-tertiary: var(--ink-faint);
+  --action-focus: var(--phosphor);
+  --selection: var(--phosphor);
+  --status-live: var(--phosphor);
+  --status-stale: var(--warn);
+  --status-proxy: var(--call);
+
   /* ---- signed quantities ------------------------------------------------
      Desaturated enough to sit next to each other in a dense bar chart without
      vibrating, still ≥4.5:1 against --panel. */
@@ -147,6 +166,15 @@
   --z-rail: 45;
   --z-overlay: 90;
   --z-toast: 100;
+}
+
+/* A desk defaults to compact, while review / presentation sessions can be
+   made calmer without changing the component structure. */
+[data-density='comfortable'] {
+  --density-row-height: 36px;
+  --density-cell-padding: 6px 10px;
+  --density-gap: 8px;
+  --density-control-h: 34px;
 }
 
 /* The instrument runs dark. A light variant would be a different instrument.

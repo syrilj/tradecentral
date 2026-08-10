@@ -28,9 +28,18 @@ export interface Resource<T> {
  */
 export function useResource<T>(
   loader: () => Promise<T>,
-  opts: { intervalMs?: number; immediate?: boolean } = {},
+  opts: {
+    intervalMs?: number
+    immediate?: boolean
+    /**
+     * Optional activity gate for expensive resources. The caller remains in
+     * charge of calling `refresh()` when the gate first becomes true; polling
+     * and visibility refreshes stay dormant while it is false.
+     */
+    enabled?: () => boolean
+  } = {},
 ): Resource<T> {
-  const { intervalMs = 0, immediate = true } = opts
+  const { intervalMs = 0, immediate = true, enabled = () => true } = opts
 
   const data = shallowRef<T | null>(null)
   const error = ref<string | null>(null)
@@ -86,7 +95,7 @@ export function useResource<T>(
     // Skip ticks while a request is still in flight so a slow backend cannot
     // stack fetches until the tab freezes.
     timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && !inFlight) void refresh()
+      if (enabled() && document.visibilityState === 'visible' && !inFlight) void refresh()
     }, intervalMs)
   }
 
@@ -98,10 +107,10 @@ export function useResource<T>(
   }
 
   function onVisible(): void {
-    if (document.visibilityState === 'visible') void refresh()
+    if (enabled() && document.visibilityState === 'visible') void refresh()
   }
 
-  if (immediate) void refresh()
+  if (immediate && enabled()) void refresh()
   schedule()
   document.addEventListener('visibilitychange', onVisible)
 

@@ -58,7 +58,7 @@ defineProps<{
   padding: 10px 12px;
   background: var(--void-lift);
   border: var(--hair) solid var(--rule-hi);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;

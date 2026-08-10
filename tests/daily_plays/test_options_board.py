@@ -151,6 +151,17 @@ class TestSummarize:
         row = summarize_board_row(self._candidate(), _intel())
         assert len(row["warnings"]) == 3
 
+    def test_open_interest_and_spread_are_surfaced_on_the_row(self):
+        row = summarize_board_row(self._candidate(), _intel())
+        assert row["open_interest"] == 7500  # call_oi 4000 + put_oi 3500
+        assert row["spread_pct"] is None  # fixture summary has no median_spread_pct
+
+    def test_spread_pct_passes_through_when_present(self):
+        summary = dict(_intel()["summary"])
+        summary["median_spread_pct"] = 0.0821
+        row = summarize_board_row(self._candidate(), _intel(summary=summary))
+        assert row["spread_pct"] == pytest.approx(0.0821)
+
     def test_failed_fetch_stays_on_the_board(self):
         row = summarize_board_row(self._candidate(), None, error="boom")
         assert row["available"] is False
@@ -184,6 +195,7 @@ class TestUnmeasuredGex:
         assert row["squeeze_label"] is None
         assert row["call_wall"] is None
         assert "unmeasured" in row["warnings"][0]
+        assert row["open_interest"] is None, "0 OI here means unobserved, not a real zero"
 
     def test_unavailable_oi_source_is_unmeasurable_even_with_nonzero_oi(self):
         row = self._row(provider={
@@ -191,6 +203,7 @@ class TestUnmeasuredGex:
             "open_interest": "unavailable",
         })
         assert row["gex_measurable"] is False
+        assert row["open_interest"] is None
         assert row["squeeze_score"] is None
 
     def test_non_structural_fields_survive_an_unmeasurable_row(self):

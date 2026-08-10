@@ -732,21 +732,21 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
   border: var(--hair) solid var(--rule);
 }
 .pill.ok {
-  color: var(--pos, #6dcea0);
-  border-color: color-mix(in srgb, var(--pos, #6dcea0) 40%, var(--rule));
+  color: var(--long);
+  border-color: color-mix(in srgb, var(--long) 40%, var(--rule));
 }
 .pill.bad {
-  color: var(--neg, #e07070);
-  border-color: color-mix(in srgb, var(--neg, #e07070) 40%, var(--rule));
+  color: var(--short);
+  border-color: color-mix(in srgb, var(--short) 40%, var(--rule));
 }
 .quota {
-  border-color: color-mix(in srgb, var(--neg, #e07070) 45%, var(--rule));
+  border-color: color-mix(in srgb, var(--short) 45%, var(--rule));
 }
 .quota-body {
   margin: 0 0 var(--s2);
   font-size: 13px;
   line-height: 1.45;
-  color: var(--neg, #e07070);
+  color: var(--short);
 }
 .btn {
   background: transparent;
@@ -760,7 +760,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
   cursor: pointer;
 }
 .btn:hover {
-  border-color: var(--phosphor, #8fd4b8);
+  border-color: var(--phosphor);
 }
 .tabs {
   display: flex;
@@ -782,8 +782,8 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
 }
 .tab.on {
   opacity: 1;
-  border-color: var(--phosphor, #8fd4b8);
-  color: var(--phosphor, #8fd4b8);
+  border-color: var(--phosphor);
+  color: var(--phosphor);
 }
 .sym-form {
   display: flex;
@@ -835,15 +835,15 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
   font-variant-numeric: tabular-nums;
 }
 .pos {
-  color: var(--pos, #6dcea0);
+  color: var(--long);
 }
 .neg {
-  color: var(--neg, #e07070);
+  color: var(--short);
 }
 .link {
   background: none;
   border: none;
-  color: var(--phosphor, #8fd4b8);
+  color: var(--phosphor);
   font: inherit;
   cursor: pointer;
   padding: 0;
@@ -878,7 +878,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
   margin: 0;
 }
 .err {
-  color: var(--neg, #e07070);
+  color: var(--short);
   font-size: 13px;
 }
 .setup-steps {
@@ -895,6 +895,6 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
   overflow-x: auto;
 }
 a {
-  color: var(--phosphor, #8fd4b8);
+  color: var(--phosphor);
 }
 </style>

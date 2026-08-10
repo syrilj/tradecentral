@@ -121,6 +121,7 @@ def build_momentum_scan(
         if candidate is not None:
             records.append(candidate)
     ranked = rank_candidates(records)
+    all_ranked = sorted(records, key=lambda r: (r["pillars_met"], r["rvol"] or 0, r["gap_pct"] or 0), reverse=True)
     known_float = sum(1 for r in records if r["float_shares"] is not None)
     float_coverage_pct = (known_float / len(records) * 100.0) if records else 0.0
     return {
@@ -129,4 +130,6 @@ def build_momentum_scan(
         "expected_universe_size": expected_universe_size,
         "float_coverage_pct": round(float_coverage_pct, 1),
         "candidates": ranked,
+        "all_candidates": all_ranked,
     }
+
