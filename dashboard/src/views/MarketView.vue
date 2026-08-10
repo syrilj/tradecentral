@@ -324,6 +324,17 @@ const factorRows = computed(() => {
     >
       <template #action>
         <div class="switches">
+          <button
+            type="button"
+            class="mkt-refresh-btn label"
+            :disabled="trajBusy"
+            title="Run live scan and reload trajectory"
+            @click="loadTrajectory"
+          >
+            <span class="refresh-icon" :class="{ spinning: trajBusy }">↻</span>
+            {{ trajBusy ? 'SCANNING…' : 'RUN LIVE SCAN' }}
+          </button>
+
           <div class="seg">
             <button
               v-for="m in (['price', 'growth'] as const)"
@@ -374,6 +385,14 @@ const factorRows = computed(() => {
         <span class="audit-item dim">{{ dataAudit.nBars }} bars ({{ shortDate(dataAudit.firstDate) }} → {{ shortDate(dataAudit.lastDate) }})</span>
         <span class="audit-item source-badge">{{ dataAudit.source.toUpperCase() }} TIER</span>
         <span v-if="dataAudit.advUsd" class="audit-item dim">ADV: {{ compact(dataAudit.advUsd) }}</span>
+
+        <div class="desk-quick-nav label">
+          <span class="nav-tag">VIEW IN:</span>
+          <RouterLink :to="{ name: 'options', query: { symbol } }" class="nav-qlink">Options</RouterLink>
+          <RouterLink :to="{ name: 'changepoints', query: { symbol } }" class="nav-qlink">Breaks</RouterLink>
+          <RouterLink :to="{ name: 'sentiment', query: { symbol } }" class="nav-qlink">Pulse</RouterLink>
+          <RouterLink :to="{ name: 'momentum', query: { symbol } }" class="nav-qlink">Momentum</RouterLink>
+        </div>
       </div>
 
       <p v-if="trajErr" class="err">{{ trajErr }}</p>
@@ -688,8 +707,68 @@ const factorRows = computed(() => {
 .h-add:hover { color: var(--phosphor); border-color: var(--phosphor); background: var(--phosphor-wash); }
 .h-add.in { color: var(--phosphor); border-color: var(--phosphor); background: var(--phosphor-wash); }
 
+.mkt-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  height: 24px;
+  font-family: var(--font-data);
+  font-weight: 700;
+  font-size: var(--t-micro);
+  letter-spacing: 0.05em;
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.mkt-refresh-btn:hover:not(:disabled) {
+  background: var(--phosphor);
+  color: var(--void);
+}
+.mkt-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.refresh-icon {
+  display: inline-block;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.refresh-icon.spinning {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.desk-quick-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-left: auto;
+}
+.nav-tag { color: var(--ink-ghost); font-size: 9px; }
+.nav-qlink {
+  display: inline-block;
+  padding: 1px 6px;
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--ink-dim);
+  font-size: 10px;
+  text-decoration: none;
+  transition: all 0.12s ease;
+}
+.nav-qlink:hover {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
+
 /* ---- switches ------------------------------------------------------------ */
-.switches { display: flex; gap: var(--s3); flex: 0 0 auto; }
+.switches { display: flex; align-items: center; gap: var(--s3); flex: 0 0 auto; }
 .seg { display: flex; border: var(--hair) solid var(--rule); border-radius: 2px; overflow: hidden; }
 .seg-b {
   padding: 4px 9px;

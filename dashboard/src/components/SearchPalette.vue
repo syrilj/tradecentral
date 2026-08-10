@@ -3,14 +3,45 @@ import { ref, onMounted, nextTick, watch, computed } from 'vue'
 import { api, type SearchHit } from '@/api'
 import { debounce } from '@/composables/useResource'
 import { shortDate } from '@/format'
+import AppIcon from '@/components/AppIcon.vue'
 
 /**
  * ⌘K symbol search over the server-indexed local daily universe.
  * Keyboard-first: type, arrow, enter. Case-insensitive. Exact typed tickers
  * that are not in cache still appear so the user can try to open them.
  */
+import { useRouter } from 'vue-router'
+
 defineProps<{ symbolCount?: number | null }>()
 const emit = defineEmits<{ close: []; select: [symbol: string] }>()
+
+const router = useRouter()
+
+interface NavCommand {
+  name: string
+  title: string
+  idx: string
+  hint: string
+}
+
+const NAV_COMMANDS: NavCommand[] = [
+  { name: 'desk', title: 'Desk', idx: '01', hint: 'Signals & candidates' },
+  { name: 'market', title: 'Market', idx: '02', hint: 'Search · VWAP · EMA' },
+  { name: 'sectors', title: 'Sectors', idx: '03', hint: 'Sector rotation & flow' },
+  { name: 'sentiment', title: 'Pulse', idx: '04', hint: 'Structure · COT · outliers' },
+  { name: 'options', title: 'Options', idx: '05', hint: 'Flow · gamma · density' },
+  { name: 'flow', title: 'Flow', idx: '04', hint: 'Whole-market options activity' },
+  { name: 'gates', title: 'Gates', idx: '06', hint: 'Pre-registered verdicts' },
+  { name: 'cloud', title: 'Cloud', idx: '07', hint: 'Vertex AI training' },
+  { name: 'evolution', title: 'Evolution', idx: '08', hint: 'GA survivors lab' },
+  { name: 'research', title: 'Research', idx: '09', hint: 'IC decay · quantile spread' },
+  { name: 'graph', title: 'Graph', idx: '10', hint: 'Repo knowledge graph' },
+  { name: 'adaptive', title: 'Live Blend', idx: '11', hint: 'Regime multi-stream adapt' },
+  { name: 'fintel', title: 'Fintel', idx: '12', hint: 'Short · borrow · owners · flow' },
+  { name: 'changepoints', title: 'Breaks', idx: '13', hint: 'Bayesian regime breaks' },
+  { name: 'momentum', title: 'Momentum', idx: '14', hint: 'Five Pillars · gap scan' },
+  { name: 'flowstate', title: 'Flow State', idx: '15', hint: 'Daily proxy research' },
+]
 
 const q = ref('')
 const hits = ref<SearchHit[]>([])
@@ -22,6 +53,18 @@ const input = ref<HTMLInputElement | null>(null)
 function cleanTicker(term: string): string {
   return term.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
 }
+
+const matchingViews = computed(() => {
+  const term = q.value.trim().toLowerCase()
+  if (!term) return NAV_COMMANDS
+  return NAV_COMMANDS.filter(
+    (v) =>
+      v.title.toLowerCase().includes(term) ||
+      v.name.toLowerCase().includes(term) ||
+      v.hint.toLowerCase().includes(term) ||
+      v.idx.includes(term)
+  )
+})
 
 const displayHits = computed(() => {
   const term = cleanTicker(q.value)
@@ -38,6 +81,11 @@ const displayHits = computed(() => {
   }
   return list
 })
+
+function openView(name: string): void {
+  emit('close')
+  void router.push({ name })
+}
 
 const run = debounce(async (term: string) => {
   busy.value = true
@@ -85,7 +133,7 @@ function commit(): void {
   <div class="scrim" @click.self="emit('close')">
     <div class="palette ticked" role="dialog" aria-modal="true" aria-label="Symbol search">
       <div class="field">
-        <span class="glyph" aria-hidden="true">⌕</span>
+        <AppIcon class="glyph" name="search" :size="18" />
         <input
           ref="input"
           v-model="q"
@@ -104,30 +152,55 @@ function commit(): void {
 
       <p v-if="err" class="err label">{{ err }}</p>
 
-      <ul v-else class="hits">
-        <li
-          v-for="(h, i) in displayHits"
-          :id="`hit-${i}`"
-          :key="h.symbol + String(h.n_bars)"
-          class="hit"
-          :class="{ on: i === cursor, free: !h.n_bars }"
-          @mouseenter="cursor = i"
-          @click="emit('select', h.symbol)"
-        >
-          <span class="sym fig">{{ h.symbol }}</span>
-          <span class="tier label" :class="h.tier || (h.n_bars ? 'wide' : 'live')">{{ h.n_bars ? h.tier : (h.tier === 'live' ? 'LIVE' : 'OPEN') }}</span>
-          <span class="span label">
-            <template v-if="h.n_bars">{{ shortDate(h.first_date) }} to {{ shortDate(h.last_date) }}</template>
-            <template v-else>not in local catalog — open via live bars</template>
-          </span>
-          <span class="bars fig">{{ h.n_bars || '—' }}</span>
-        </li>
-        <li v-if="!displayHits.length && !busy" class="empty label">No ticker matches “{{ q }}”</li>
-      </ul>
+      <div v-else class="results-scroll">
+        <div v-if="matchingViews.length" class="section-block">
+          <header class="section-head label">VIEWS &amp; COMMANDS</header>
+          <ul class="cmd-list">
+            <li
+              v-for="v in matchingViews"
+              :key="v.name"
+            >
+              <button class="cmd-hit" type="button" @click="openView(v.name)">
+                <span class="cmd-idx fig">{{ v.idx }}</span>
+                <span class="cmd-title label">{{ v.title }}</span>
+                <span class="cmd-hint label">{{ v.hint }}</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div class="section-block">
+          <header class="section-head label">SYMBOLS &amp; TICKERS</header>
+          <ul class="hits">
+            <li
+              v-for="(h, i) in displayHits"
+              :key="h.symbol + String(h.n_bars)"
+            >
+              <button
+                :id="`hit-${i}`"
+                type="button"
+                class="hit"
+                :class="{ on: i === cursor, free: !h.n_bars }"
+                @mouseenter="cursor = i"
+                @click="emit('select', h.symbol)"
+              >
+                <span class="sym fig">{{ h.symbol }}</span>
+                <span class="tier label" :class="h.tier || (h.n_bars ? 'wide' : 'live')">{{ h.n_bars ? h.tier : (h.tier === 'live' ? 'LIVE' : 'OPEN') }}</span>
+                <span class="span label">
+                  <template v-if="h.n_bars">{{ shortDate(h.first_date) }} to {{ shortDate(h.last_date) }}</template>
+                  <template v-else>not in local catalog — open via live bars</template>
+                </span>
+                <span class="bars fig">{{ h.n_bars || '—' }}</span>
+              </button>
+            </li>
+            <li v-if="!displayHits.length && !busy" class="empty label">No ticker matches “{{ q }}”</li>
+          </ul>
+        </div>
+      </div>
 
       <footer class="keys">
         <span class="label"><kbd>↑↓</kbd> move</span>
-        <span class="label"><kbd>⏎</kbd> open trajectory</span>
+        <span class="label"><kbd>⏎</kbd> open ticker</span>
         <span class="label"><kbd>esc</kbd> dismiss</span>
       </footer>
     </div>
@@ -139,8 +212,7 @@ function commit(): void {
   position: fixed;
   inset: 0;
   z-index: var(--z-overlay);
-  background: rgba(4, 5, 7, 0.72);
-  backdrop-filter: blur(3px);
+  background: color-mix(in srgb, var(--void) 88%, transparent);
   display: flex;
   justify-content: center;
   padding-top: 12vh;
@@ -153,7 +225,9 @@ function commit(): void {
   flex-direction: column;
   border: var(--hair) solid var(--rule-hi);
   padding: var(--s1);
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.62);
+  background: var(--panel);
+  /* Hard edge lift — instrument overlay, not floating glass card */
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4), 0 8px 0 -1px var(--void);
   animation: rise var(--dur) var(--ease-out) both;
 }
 
@@ -165,7 +239,7 @@ function commit(): void {
   border-bottom: var(--hair) solid var(--rule);
 }
 
-.glyph { color: var(--phosphor); font-size: 1rem; line-height: 1; }
+.glyph { color: var(--phosphor); }
 
 .input {
   flex: 1 1 auto;
@@ -180,18 +254,80 @@ function commit(): void {
 
 .state { color: var(--ink-faint); flex: 0 0 auto; }
 
-.hits {
-  list-style: none;
+.results-scroll {
   overflow-y: auto;
   flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
   padding: var(--s2) 0;
+}
+
+.section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.section-head {
+  padding: 4px var(--s4);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: var(--ink-ghost);
+  border-bottom: var(--hair) solid var(--rule);
+}
+
+.cmd-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cmd-hit {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  text-align: left;
+  gap: var(--s3);
+  min-height: 36px;
+  padding: 6px var(--s4);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.cmd-hit:hover {
+  background: var(--phosphor-wash);
+}
+.cmd-idx {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  color: var(--phosphor);
+  min-width: 2ch;
+}
+.cmd-title {
+  font-weight: 700;
+  font-size: var(--t-small);
+  color: var(--ink);
+  min-width: 90px;
+}
+.cmd-hint {
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+}
+
+.hits {
+  list-style: none;
 }
 
 .hit {
   display: grid;
+  width: 100%;
   grid-template-columns: 7ch 4.5rem 1fr auto;
   align-items: center;
+  text-align: left;
   gap: var(--s3);
+  min-height: 36px;
   padding: var(--s2) var(--s4);
   cursor: pointer;
   border-left: 2px solid transparent;
@@ -215,7 +351,7 @@ function commit(): void {
 }
 .tier.core { color: var(--phosphor-dim); border-color: var(--phosphor-dim); }
 .tier.live { color: var(--warn); border-color: var(--warn); }
-.track-badge { color: #ffb703; border-color: #ffb703; font-weight: 600; font-size: 0.7rem; letter-spacing: 0.05em; }
+.track-badge { color: var(--warn); border-color: var(--warn); font-weight: 600; font-size: 0.7rem; letter-spacing: 0.05em; }
 
 .span { color: var(--ink-ghost); letter-spacing: 0.05em; }
 .bars { font-size: var(--t-tiny); color: var(--ink-faint); }
@@ -237,5 +373,20 @@ kbd {
   padding: 0 4px;
   margin-right: 3px;
   color: var(--ink-faint);
+}
+
+.cmd-hit:focus-visible,
+.hit:focus-visible {
+  outline: var(--hair) solid var(--phosphor);
+  outline-offset: -2px;
+}
+
+@media (max-width: 780px) {
+  .scrim { padding-top: var(--s3); }
+  .palette { width: calc(100vw - var(--s4)); max-height: calc(100dvh - var(--s6)); }
+  .state, .cmd-hint, .span { display: none; }
+  .cmd-hit, .hit { min-height: 44px; }
+  .hit { grid-template-columns: 7ch 4.5rem 1fr; }
+  .bars { justify-self: end; }
 }
 </style>

@@ -354,7 +354,7 @@ def _normalize_trade_class(row: Mapping[str, Any], *, volume: int, premium: floa
     return "single"
 
 
-def _normalize_flow_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
+def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = None) -> dict[str, Any] | None:
     right = _right(_first(row, "contract_type", "option_type", "right", "type"))
     observed = _timestamp(_first(row, "ts", "timestamp", "datetime", "time", "last_trade_at", "updated_at"))
     volume = _integer(_first(row, "volume", "volume_today", "size", "contracts", "quantity")) or 0
@@ -384,6 +384,11 @@ def _normalize_flow_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
         bias = vendor_bias
         bias_source = "vendor_sentiment"
         signed = premium if bias == "bullish" else -premium
+    # Extract stock/underlying price when trade occurred, falling back to session spot
+    underlying_price = _number(_first(row, "underlying_price", "spot", "underlying_spot", "stock_price"))
+    if underlying_price is None and fallback_spot is not None:
+        underlying_price = fallback_spot
+
     # Always expose contract identity for the tape (CALL/PUT activity scan).
     activity_side = "call" if right == "call" else "put"
     trade_class = _normalize_trade_class(row, volume=volume, premium=float(premium))
@@ -396,6 +401,7 @@ def _normalize_flow_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "contracts": volume,
         "price": round(price, 4) if price is not None else None,
         "strike": _number(row.get("strike")),
+        "underlying_price": round(underlying_price, 4) if underlying_price is not None else None,
         "expiry": _expiry(_first(row, "expiry", "expiration", "expiration_date")),
         "aggressor": aggressor,
         "signed_premium": signed,
@@ -515,6 +521,7 @@ def _flow_series(
     asof: datetime,
     selected_expiry: str | None,
     mode_requested: str = "live",
+    spot: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     lower, upper = _flow_date_bounds(filters, asof, mode_requested=mode_requested)
     normalized: list[dict[str, Any]] = []
@@ -532,7 +539,7 @@ def _flow_series(
     }
     seen: set[tuple[Any, ...]] = set()
     for raw in flow_rows:
-        row = _normalize_flow_row(raw)
+        row = _normalize_flow_row(raw, fallback_spot=spot)
         if row is None:
             rejected["invalid"] += 1
             continue
@@ -557,7 +564,8 @@ def _flow_series(
             return "below_volume"
         if not lo <= row["timestamp"] <= hi:
             return "outside_range"
-        if selected_expiry and row["expiry"] is not None and row["expiry"].isoformat() != selected_expiry:
+        explicit_expiry_filter = selected_expiry if filters.expiry not in ("all", "nearest") else None
+        if explicit_expiry_filter and row["expiry"] is not None and row["expiry"].isoformat() != explicit_expiry_filter:
             return "outside_expiry"
         return None
 
@@ -1574,12 +1582,15 @@ def build_options_intelligence(
         filters=filters,
         selection_date=now.date() if mode_requested == "live" else chain_asof.date(),
     )
+    spread_samples = [row["spread_pct"] for row in filtered_chain if row["spread_pct"] is not None]
+    median_spread_pct = median(spread_samples) if spread_samples else None
     flow_series, tape, flow_rejected = _flow_series(
         flow_rows,
         filters=filters,
         asof=now,
         selected_expiry=chain_context["selected_expiry"],
         mode_requested=mode_requested,
+        spot=resolved_spot,
     )
     activity_basis = "trade_tape"
     if not flow_series:
@@ -1735,6 +1746,7 @@ def build_options_intelligence(
             "activity_imbalance": round((call_premium - put_premium) / total_premium, 6) if total_premium > 0 else None,
             "signed_net_premium": round(signed_net, 2) if signed_net is not None else None,
             "unresolved_premium": round(unresolved, 2),
+            "median_spread_pct": round(median_spread_pct, 6) if median_spread_pct is not None else None,
             **gex_summary,
             "squeeze": squeeze,
         },

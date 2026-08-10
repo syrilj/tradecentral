@@ -1,12 +1,11 @@
 <script setup lang="ts">
 /**
- * InsiderFinance-style Gamma Squeeze Screener.
- * Primary-side probability board with factor breakdown, key levels,
- * setup analysis, and trading implication. Dual-side data still available;
- * the active (higher) side is featured — structure is never hard-zeroed.
+ * Gamma Squeeze Screener — primary-side probability board with circular score,
+ * factor breakdown, key levels, and takeaways. Dual-side data still available;
+ * the active (higher) side is featured. Structure is never hard-zeroed.
  */
 import { computed } from 'vue'
-import type { OptionsSqueeze, SqueezeSetup } from '@/api'
+import type { OptionsSqueeze, SqueezeSetup, SqueezeFactor } from '@/api'
 import { usd } from '@/format'
 
 const props = defineProps<{
@@ -44,9 +43,11 @@ const boardScore = computed(() => featured.value.setup?.score ?? 0)
 const likelihood = computed(() => featured.value.setup?.likelihood ?? 'unlikely')
 const factors = computed(() => featured.value.setup?.factors ?? [])
 const analysis = computed(() => featured.value.setup?.setup_analysis ?? [])
-
-/** Spectrum fill: map 0–100 score onto the likelihood track. */
 const spectrumPct = computed(() => Math.max(0, Math.min(100, boardScore.value)))
+
+/** Full ring: circumference of r=42 → 2πr ≈ 263.9 */
+const RING_C = 263.89
+const ringOffset = computed(() => RING_C * (1 - boardScore.value / 100))
 
 function scoreCls(score: number): string {
   if (score >= 75) return 'hot'
@@ -57,14 +58,37 @@ function scoreCls(score: number): string {
 
 const featuredWall = computed(() => {
   const setup = featured.value.setup
-  if (setup?.wall != null) return { level: setup.wall, pct: setup.wall_pct, label: featured.value.side === 'bullish' ? 'Call Wall' : 'Put Wall' }
-  if (featured.value.side === 'bullish') {
-    return { level: levels.value?.call_wall ?? null, pct: levels.value?.call_wall_pct ?? null, label: 'Call Wall' }
+  if (setup?.wall != null) {
+    return {
+      level: setup.wall,
+      pct: setup.wall_pct,
+      label: featured.value.side === 'bullish' ? 'Call Wall' : 'Put Wall',
+    }
   }
-  return { level: levels.value?.put_wall ?? null, pct: levels.value?.put_wall_pct ?? null, label: 'Put Wall' }
+  if (featured.value.side === 'bullish') {
+    return {
+      level: levels.value?.call_wall ?? null,
+      pct: levels.value?.call_wall_pct ?? null,
+      label: 'Call Wall',
+    }
+  }
+  return {
+    level: levels.value?.put_wall ?? null,
+    pct: levels.value?.put_wall_pct ?? null,
+    label: 'Put Wall',
+  }
 })
 
 const displayFactors = computed(() => factors.value ?? [])
+
+function factorTheme(f: SqueezeFactor): string {
+  const id = (f.id || '').toLowerCase()
+  const lbl = (f.label || '').toLowerCase()
+  if (id.includes('call') || lbl.includes('call') || id.includes('bull')) return 'bullish'
+  if (id.includes('put') || lbl.includes('put') || id.includes('bear')) return 'bearish'
+  if (id.includes('fuel') || id.includes('gamma') || id.includes('skew')) return 'warn'
+  return 'accent'
+}
 
 const displayTakeaways = computed(() => {
   if (analysis.value && analysis.value.length > 0) {
@@ -85,7 +109,6 @@ const displayTakeaways = computed(() => {
       return { line, icon, type }
     })
   }
-  // Real structure only — never invent takeaways when the model is quiet.
   const lines: { line: string; icon: string; type: 'pos' | 'warn' | 'info' }[] = []
   if (featuredWall.value.level != null) {
     const pct = featuredWall.value.pct
@@ -117,101 +140,111 @@ const otherSide = computed(() => {
 </script>
 
 <template>
-  <div v-if="squeeze" class="sq">
-    <!-- Top Setup Hero: Circular Gauge + Probability Track -->
-    <section class="setup-hero" :class="featured.side">
-      <!-- Left: Semi-circular arc score gauge -->
-      <div class="gauge-card">
-        <div class="gauge-svg-wrap">
-          <svg class="gauge-svg" viewBox="0 0 120 75" preserveAspectRatio="xMidYMid meet">
-            <path
-              d="M 16 62 A 44 44 0 0 1 104 62"
-              fill="none"
-              stroke="var(--rule-hi)"
-              stroke-width="8"
-              stroke-linecap="round"
-            />
-            <path
-              d="M 16 62 A 44 44 0 0 1 104 62"
-              fill="none"
-              :stroke="featured.side === 'bullish' ? 'var(--call)' : 'var(--put)'"
-              stroke-width="8"
-              stroke-linecap="round"
-              stroke-dasharray="138.2"
-              :stroke-dashoffset="138.2 * (1 - boardScore / 100)"
+  <div v-if="squeeze" class="sq" :class="featured.side">
+    <!-- Hero: full ring score + bias + likelihood track -->
+    <section class="hero">
+      <div class="ring-block">
+        <div class="ring-wrap">
+          <svg class="ring-svg" viewBox="0 0 108 108" aria-hidden="true">
+            <circle class="ring-track" cx="54" cy="54" r="42" />
+            <circle
+              class="ring-fill"
+              :class="featured.side"
+              cx="54"
+              cy="54"
+              r="42"
+              :stroke-dasharray="RING_C"
+              :stroke-dashoffset="ringOffset"
             />
           </svg>
-          <div class="gauge-inner">
-            <div class="score-display">
-              <span class="score-num fig">{{ boardScore }}</span>
-              <span class="score-denom">/100</span>
-            </div>
-            <span class="likelihood-badge label" :class="likelihood">{{ (likelihood || 'POSSIBLE').toUpperCase() }}</span>
+          <div class="ring-center">
+            <span class="score-num fig" :class="scoreCls(boardScore)">{{ boardScore }}</span>
+            <span class="score-denom label">/100</span>
           </div>
         </div>
-        <div class="bias-lockup label" :class="featured.side">
-          <span class="bias-sub">SQUEEZE BIAS</span>
-          <strong class="bias-heading">{{ featured.side === 'bullish' ? 'BULLISH SETUP' : 'BEARISH SETUP' }}</strong>
+        <div class="bias-lock" :class="featured.side">
+          <i class="side-dot" :class="featured.side === 'bullish' ? 'call' : 'put'" />
+          <div class="bias-copy">
+            <span class="bias-sub label">SQUEEZE BIAS</span>
+            <strong class="bias-heading">{{ featured.side === 'bullish' ? 'BULLISH' : 'BEARISH' }}</strong>
+          </div>
         </div>
       </div>
 
-      <!-- Right: Probability Score slider bar -->
-      <div class="prob-track-block">
-        <div class="prob-track-head label">
-          <span>PROBABILITY SCORE</span>
+      <div class="hero-meta">
+        <div class="lik-row">
+          <span class="likelihood-badge label" :class="likelihood">
+            {{ (likelihood || 'POSSIBLE').toUpperCase() }}
+          </span>
+          <span v-if="dampened" class="tag damp label">LONG Γ</span>
+          <span v-else-if="fuel != null && fuel > 0" class="tag fuel label">FUEL {{ Math.round(fuel * 100) }}%</span>
         </div>
-        <div class="prob-track-bar">
-          <div class="prob-track-bg">
-            <i class="prob-track-fill" :class="featured.side" :style="{ width: `${spectrumPct}%` }" />
-            <span class="prob-track-thumb" :style="{ left: `${spectrumPct}%` }" />
+
+        <div class="prob-track">
+          <div class="prob-track-head label">
+            <span>PROBABILITY</span>
+            <strong class="fig">{{ boardScore }}</strong>
+          </div>
+          <div class="prob-bar">
+            <i class="prob-fill" :class="featured.side" :style="{ width: `${spectrumPct}%` }" />
+            <span class="prob-thumb" :class="featured.side" :style="{ left: `${spectrumPct}%` }" />
+          </div>
+          <div class="prob-labels label">
+            <span :class="{ active: likelihood === 'unlikely' }">UNLIKELY</span>
+            <span :class="{ active: likelihood === 'possible' }">POSSIBLE</span>
+            <span :class="{ active: likelihood === 'likely' }">LIKELY</span>
+            <span :class="{ active: likelihood === 'imminent' }">IMMINENT</span>
           </div>
         </div>
-        <div class="prob-track-labels label">
-          <span :class="{ active: likelihood === 'unlikely' }">UNLIKELY</span>
-          <span :class="{ active: likelihood === 'possible' }">POSSIBLE</span>
-          <span :class="{ active: likelihood === 'likely' }">LIKELY</span>
-          <span :class="{ active: likelihood === 'imminent' }">IMMINENT</span>
+
+        <div class="signed-row label">
+          <span>SIGNED</span>
+          <strong
+            class="fig"
+            :class="signedScore != null && signedScore > 0 ? 'call' : signedScore != null && signedScore < 0 ? 'put' : ''"
+          >
+            {{ signedScore == null ? '—' : `${signedScore > 0 ? '+' : ''}${signedScore}` }}
+          </strong>
+          <span v-if="levels?.near_spot_net_gex_m != null" class="near">
+            near ${{ levels.near_spot_net_gex_m.toFixed(1) }}M
+          </span>
         </div>
       </div>
     </section>
 
-    <!-- Key levels: wall / flip / spot -->
-    <section class="levels-section" v-if="levels || featuredWall.level != null">
-      <div class="section-hdr label">KEY LEVELS</div>
+    <!-- Key levels -->
+    <section v-if="levels || featuredWall.level != null" class="block levels-block">
+      <div class="block-hdr label">KEY LEVELS</div>
       <div class="kl-grid">
-        <div class="kl-row">
+        <div class="kl-cell">
           <span class="label">{{ featuredWall.label || 'WALL' }}</span>
           <strong class="fig" :class="featured.side === 'bullish' ? 'call' : 'put'">
             {{ featuredWall.level != null ? usd(featuredWall.level) : '—' }}
           </strong>
         </div>
-        <div class="kl-row">
+        <div class="kl-cell">
           <span class="label">FLIP</span>
           <strong class="fig accent">{{ levels?.gamma_flip != null ? usd(levels.gamma_flip) : '—' }}</strong>
         </div>
-        <div class="kl-row">
+        <div class="kl-cell">
           <span class="label">SPOT</span>
           <strong class="fig">{{ usd(spot ?? levels?.spot ?? featured.setup?.spot) }}</strong>
         </div>
       </div>
     </section>
 
-    <!-- Key Factors Breakdown -->
-    <section class="factors-section">
-      <div class="section-hdr label">KEY FACTORS</div>
+    <!-- Factors -->
+    <section class="block factors-block">
+      <div class="block-hdr label">KEY FACTORS</div>
       <div v-if="displayFactors.length" class="factors-list">
         <div v-for="f in displayFactors" :key="f.id || f.label" class="factor-row">
-          <div class="factor-label-wrap">
-            <span class="factor-title label">{{ f.label }}</span>
-          </div>
-          <div class="factor-bar-wrap" :title="f.detail || ''">
-            <div class="factor-track">
-              <i
-                class="factor-fill"
-                :class="[featured.side, scoreCls(f.max ? (f.score / f.max) * 100 : 0)]"
-                :style="{ width: `${f.max ? Math.min(100, (f.score / f.max) * 100) : 0}%` }"
-              />
-            </div>
+          <span class="factor-title label">{{ f.label }}</span>
+          <div class="factor-track" :title="f.detail || ''">
+            <i
+              class="factor-fill"
+              :class="[factorTheme(f), scoreCls(f.max ? (f.score / f.max) * 100 : 0)]"
+              :style="{ width: `${f.max ? Math.min(100, (f.score / f.max) * 100) : 0}%` }"
+            />
           </div>
           <span class="factor-score fig">{{ f.score }}/{{ f.max }}</span>
         </div>
@@ -219,46 +252,36 @@ const otherSide = computed(() => {
       <p v-else class="quiet label">No factor scores on this chain yet.</p>
     </section>
 
-    <!-- Key Takeaways -->
-    <section class="takeaways-section">
-      <div class="section-hdr label">KEY TAKEAWAYS</div>
+    <!-- Takeaways -->
+    <section class="block takeaways-block">
+      <div class="block-hdr label">KEY TAKEAWAYS</div>
       <ul class="takeaways-list">
         <li v-for="(item, i) in displayTakeaways" :key="i" class="takeaway-item" :class="item.type">
-          <span class="takeaway-badge" :class="item.type">{{ item.icon }}</span>
-          <span class="takeaway-text label">{{ item.line }}</span>
+          <span class="takeaway-dot" :class="item.type" aria-hidden="true" />
+          <span class="takeaway-text">{{ item.line }}</span>
         </li>
       </ul>
       <p v-if="implication" class="impl-line">{{ implication }}</p>
       <div v-if="stronger.length" class="stronger">
-        <div class="section-hdr label">FOR STRONGER</div>
+        <div class="block-hdr label">FOR STRONGER</div>
         <ul>
           <li v-for="(s, i) in stronger" :key="i">{{ s }}</li>
         </ul>
       </div>
     </section>
 
-    <!-- Other side + metadata -->
+    <!-- Other side -->
     <div v-if="otherSide.setup" class="other-side" :class="otherSide.side">
-      <span>{{ otherSide.side === 'bullish' ? 'BULL' : 'BEAR' }} ALT</span>
+      <i class="side-dot" :class="otherSide.side === 'bullish' ? 'call' : 'put'" />
+      <span class="label">{{ otherSide.side === 'bullish' ? 'BULL' : 'BEAR' }} ALT</span>
       <span class="fig">{{ otherSide.setup.score ?? 0 }}/100</span>
-      <span class="lik">{{ (otherSide.setup.likelihood || '—').toUpperCase() }}</span>
-      <div class="otrack"><i :style="{ width: `${Math.min(100, otherSide.setup.score ?? 0)}%` }" /></div>
-    </div>
-
-    <div class="meta-strip label">
-      <span>
-        Signed
-        <strong class="fig" :class="signedScore != null && signedScore > 0 ? 'call' : signedScore != null && signedScore < 0 ? 'put' : ''">
-          {{ signedScore == null ? '—' : `${signedScore > 0 ? '+' : ''}${signedScore}` }}
-        </strong>
-      </span>
-      <span v-if="dampened" class="tag damp">LONG Γ</span>
-      <span v-else-if="fuel != null && fuel > 0" class="tag fuel">FUEL {{ Math.round(fuel * 100) }}%</span>
-      <span v-if="levels?.near_spot_net_gex_m != null" class="near">
-        near ${{ levels.near_spot_net_gex_m.toFixed(1) }}M
-      </span>
+      <span class="lik label">{{ (otherSide.setup.likelihood || '—').toUpperCase() }}</span>
+      <div class="otrack">
+        <i :class="otherSide.side" :style="{ width: `${Math.min(100, otherSide.setup.score ?? 0)}%` }" />
+      </div>
     </div>
   </div>
+
   <div v-else class="sq empty label">
     <strong>Squeeze unavailable</strong>
     <span>Need a chain with OI + gamma (or IV for BS gamma) to score structure.</span>
@@ -269,21 +292,23 @@ const otherSide = computed(() => {
 .sq {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--s3);
   min-width: 0;
   min-height: 0;
   height: 100%;
+  padding: var(--s3);
+  background: var(--panel);
 }
 .sq.empty {
-  min-height: 48px;
+  min-height: 96px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--s1);
+  gap: var(--s2);
   color: var(--ink-faint);
   text-align: center;
-  padding: var(--s2);
+  padding: var(--s4);
 }
 .sq.empty strong {
   color: var(--ink-dim);
@@ -291,486 +316,191 @@ const otherSide = computed(() => {
   font-size: var(--t-micro);
 }
 
-.bolt { color: var(--phosphor); font-size: var(--t-micro); }
-.bias {
-  padding: 1px 6px;
-  border: var(--hair) solid var(--rule-hi);
-  letter-spacing: 0.08em;
-  font-size: 9px;
-  font-weight: 700;
-  color: var(--ink-dim);
-}
-.bias.bullish { color: var(--call); border-color: rgba(98, 182, 203, 0.45); background: var(--call-wash); }
-.bias.bearish { color: var(--put); border-color: rgba(213, 163, 95, 0.45); background: var(--put-wash); }
-
-.primary-card {
-  background: transparent;
-  padding: 2px 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border-radius: 0;
+/* ---- hero --------------------------------------------------------------- */
+.hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s4);
+  align-items: center;
+  padding: var(--s3) var(--s3) var(--s4);
+  margin: calc(-1 * var(--s3)) calc(-1 * var(--s3)) 0;
+  background: var(--void-lift);
+  border-bottom: var(--hair) solid var(--rule-hi);
   flex: 0 0 auto;
 }
-.primary-card.bullish { box-shadow: inset 2px 0 0 var(--call); padding-left: 8px; }
-.primary-card.bearish { box-shadow: inset 2px 0 0 var(--put); padding-left: 8px; }
+.sq.bullish .hero { box-shadow: inset 3px 0 0 var(--call); }
+.sq.bearish .hero { box-shadow: inset 3px 0 0 var(--put); }
 
-.pc-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s2);
-}
-.pc-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ink);
-  font-size: var(--t-small);
-  flex-wrap: wrap;
-}
-.pc-title .bolt { font-size: 10px; }
-.likelihood-pill {
-  padding: 1px 6px;
-  border: var(--hair) solid var(--rule-hi);
-  letter-spacing: 0.1em;
-  font-size: 10px;
-  font-weight: 800;
-  color: var(--ink-dim);
-}
-.likelihood-pill.possible,
-.likelihood-pill.likely { color: var(--warn); border-color: rgba(232, 184, 74, 0.5); }
-.likelihood-pill.imminent { color: var(--put-hi); border-color: var(--put); }
-
-.prob-block { display: flex; flex-direction: column; gap: 4px; }
-.prob-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  color: var(--ink-ghost);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: var(--t-micro);
-}
-.prob-head .fig {
-  font-size: 1.125rem;
-  font-weight: 500;
-  letter-spacing: -0.03em;
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-data);
-}
-.prob-head .fig small {
-  font-size: var(--t-tiny);
-  color: var(--ink-faint);
-  margin-left: 2px;
-  font-weight: 400;
-}
-.prob-head .fig.hot { color: var(--warn); }
-.prob-head .fig.elev { color: var(--ink); }
-.prob-head .fig.mid { color: var(--ink-soft); }
-.prob-head .fig.low { color: var(--ink-faint); }
-
-.spectrum {
-  position: relative;
-  height: 5px;
-  background: var(--rule);
-  overflow: visible;
-  border-radius: 0;
-}
-.spectrum .fill {
-  display: block;
-  height: 100%;
-  border-radius: 0;
-  transition: width var(--dur-fast) var(--ease-out);
-}
-/* Flat fills — instrument aesthetic, no encoded gradient */
-.spectrum .fill.bullish { background: var(--call); }
-.spectrum .fill.bearish { background: var(--put); }
-.spectrum .tick {
-  position: absolute;
-  top: -2px;
-  width: 2px;
-  height: 10px;
-  background: var(--ink-faint);
-  transform: translateX(-50%);
-  opacity: 0.35;
-}
-.spectrum .tick.on { background: var(--ink); opacity: 1; height: 12px; top: -3px; }
-.spectrum-labels {
-  display: flex;
-  justify-content: space-between;
-  color: var(--ink-faint);
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.section-lab {
-  color: var(--ink-faint);
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-  margin-bottom: 3px;
-  font-size: 9px;
-}
-
-.factors { display: flex; flex-direction: column; gap: 3px; }
-.factor { margin-bottom: 0; }
-.factor-top {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 1px;
-  gap: var(--s2);
-}
-.factor-top .label {
-  color: var(--ink-dim);
-  font-size: var(--t-micro);
-}
-.factor-top .fig {
-  font-size: var(--t-micro);
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-data);
-}
-.ftrack {
-  height: 3px;
-  background: var(--rule);
-  overflow: hidden;
-  border-radius: 0;
-}
-.ftrack i {
-  display: block;
-  height: 100%;
-  background: var(--ink-dim);
-  transition: width var(--dur-fast) var(--ease-out);
-}
-.ftrack i.bullish { background: var(--call); }
-.ftrack i.bearish { background: var(--put); }
-.ftrack i.hot { opacity: 1; }
-.ftrack i.low { opacity: 0.45; }
-
-/* Key levels: 3-up scannable cells */
-.key-levels { display: flex; flex-direction: column; gap: 0; }
-.key-levels .section-lab { margin-bottom: 4px; }
-.kl-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0;
-  border: var(--hair) solid var(--rule);
-}
-.kl-row {
+.ring-block {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 5px 7px;
-  border-right: var(--hair) solid var(--rule);
+  align-items: center;
+  gap: var(--s2);
   min-width: 0;
 }
-.kl-row:last-child { border-right: 0; }
-.kl-row .label {
-  color: var(--ink-ghost);
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.ring-wrap {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  flex: 0 0 auto;
 }
-.kl-row .fig {
-  color: var(--ink);
-  font-size: var(--t-small);
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-data);
-  font-weight: 600;
-  line-height: 1.2;
+.ring-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
 }
-.kl-row .fig.call { color: var(--call); }
-.kl-row .fig.put { color: var(--put); }
-.kl-row .fig.accent { color: var(--phosphor); }
-.kl-row .pct {
-  margin-left: 4px;
-  color: var(--ink-faint);
-  font-size: 9px;
-  font-weight: 400;
+.ring-track {
+  fill: none;
+  stroke: var(--rule-hi);
+  stroke-width: 8;
 }
-
-.analysis {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.ring-fill {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--dur) var(--ease-out);
+}
+.ring-fill.bullish { stroke: var(--call-hi); }
+.ring-fill.bearish { stroke: var(--put-hi); }
+.ring-center {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-.analysis li {
-  display: flex;
-  gap: 6px;
-  align-items: flex-start;
-  color: var(--ink-dim);
-  font-size: var(--t-tiny);
-  line-height: 1.35;
-}
-.analysis .dot {
-  flex: 0 0 6px;
-  width: 6px;
-  height: 6px;
-  margin-top: 4px;
-  border-radius: 50%;
-  background: var(--ink-faint);
-}
-.analysis li.pos .dot { background: var(--call); }
-.analysis li.neg .dot { background: var(--put); }
-.analysis li.warn .dot { background: var(--warn); }
-
-.stronger {
-  padding: 6px var(--s2);
-  border: var(--hair) solid rgba(232, 184, 74, 0.35);
-  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
-}
-.stronger ul {
-  margin: 0;
-  padding: 0 0 0 12px;
-  color: var(--ink-dim);
-  font-size: var(--t-tiny);
-  line-height: 1.35;
-}
-.stronger li { margin-bottom: 2px; }
-.stronger li:last-child { margin-bottom: 0; }
-
-.impl-line {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: var(--t-tiny);
-  line-height: 1.35;
-  padding-top: 2px;
-  border-top: var(--hair) solid var(--rule-faint);
-}
-
-.other-side {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 4px var(--s2);
   align-items: center;
-  padding: 3px 6px;
-  border: var(--hair) solid var(--rule);
-  color: var(--ink-faint);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  justify-content: center;
+  gap: 0;
+  pointer-events: none;
+  line-height: 1;
+}
+.score-num {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-data);
+  letter-spacing: -0.03em;
+}
+.sq.bullish .score-num { color: var(--call-hi); }
+.sq.bearish .score-num { color: var(--put-hi); }
+.score-num.hot { color: var(--warn); }
+.score-num.elev { color: inherit; }
+.score-num.mid { color: inherit; opacity: 0.9; }
+.score-num.low { color: var(--ink-faint); }
+.score-denom {
   font-size: 10px;
-  flex: 0 0 auto;
-}
-.other-side .fig {
-  color: var(--ink);
-  font-size: var(--t-micro);
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-data);
-}
-.other-side .lik { color: var(--ink-faint); }
-.other-side .otrack {
-  grid-column: 1 / -1;
-  height: 2px;
-  background: var(--rule);
-  overflow: hidden;
-}
-.other-side.bullish .otrack i { display: block; height: 100%; background: var(--call); opacity: 0.7; }
-.other-side.bearish .otrack i { display: block; height: 100%; background: var(--put); opacity: 0.7; }
-
-.meta-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px var(--s2);
-  align-items: center;
-  padding: 3px 6px;
-  border: var(--hair) solid var(--rule);
   color: var(--ink-faint);
-  letter-spacing: 0.06em;
-  font-size: var(--t-micro);
+  margin-top: 2px;
+}
+
+.bias-lock {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+.side-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   flex: 0 0 auto;
 }
-.meta-strip .fig {
-  color: var(--ink);
-  margin-left: 4px;
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-data);
+.side-dot.call { background: var(--call); }
+.side-dot.put { background: var(--put); }
+.bias-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
-.meta-strip .fig.call { color: var(--call); }
-.meta-strip .fig.put { color: var(--put); }
+.bias-sub {
+  color: var(--ink-ghost);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+.bias-heading {
+  font: 700 12px var(--font-display);
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+.bias-lock.bullish .bias-heading { color: var(--call-hi); }
+.bias-lock.bearish .bias-heading { color: var(--put-hi); }
+
+.hero-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+}
+.lik-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.likelihood-badge {
+  padding: 3px 8px;
+  border: var(--hair) solid var(--rule-hi);
+  font: 800 10px var(--font-display);
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  background: var(--panel);
+}
+.likelihood-badge.possible,
+.likelihood-badge.likely {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--rule));
+  background: var(--warn-wash);
+}
+.likelihood-badge.imminent {
+  color: var(--put-hi);
+  border-color: var(--put);
+  background: var(--put-wash);
+}
 .tag {
-  padding: 1px 5px;
+  padding: 2px 6px;
   border: var(--hair) solid var(--rule-hi);
   letter-spacing: 0.06em;
   font-size: 9px;
 }
 .tag.damp { color: var(--warn); border-color: var(--warn); }
 .tag.fuel { color: var(--phosphor); border-color: var(--phosphor-dim); }
-.near { margin-left: auto; color: var(--ink-faint); }
 
-.sq-detail {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  border: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-}
-.sq-detail > summary {
-  cursor: pointer;
-  padding: 4px 6px;
-  color: var(--ink-dim);
-  list-style: none;
-  letter-spacing: 0.06em;
-}
-.sq-detail > summary::-webkit-details-marker { display: none; }
-.sq-detail[open] > summary {
-  border-bottom: var(--hair) solid var(--rule);
-  color: var(--ink-soft);
-}
-.sq-detail .analysis-block,
-.sq-detail .stronger,
-.sq-detail .sig-strip { padding: 6px; }
-
-.sig-strip {
+.prob-track {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-.sig-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
   gap: 6px;
-  align-items: center;
-  padding: 3px 4px;
-  border-left: 2px solid var(--rule-hi);
   min-width: 0;
 }
-.sig-row .title {
-  color: var(--ink-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sig-row .fig { color: var(--ink-faint); font-size: 10px; }
-.str { font-weight: 800; font-size: 9px; }
-.str.strong { color: var(--warn); }
-.str.moderate { color: var(--ink-soft); }
-.str.weak { color: var(--ink-faint); }
-.sig-row.volatility { border-left-color: var(--warn); }
-.sig-row.support { border-left-color: var(--put); }
-.sig-row.resistance { border-left-color: var(--call); }
-.sig-row.regime_flip { border-left-color: var(--phosphor-dim); }
-
-.foot {
-  color: var(--ink-faint);
-  text-align: center;
-  letter-spacing: 0.06em;
-  margin: 0;
-  font-size: 9px;
-  flex: 0 0 auto;
-}
-
-/* ---- live layout used by the template (was missing → broken UI) -------- */
-.setup-hero {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.4fr);
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px 4px;
-  border-bottom: var(--hair) solid var(--rule);
-  flex: 0 0 auto;
-}
-.setup-hero.bullish { box-shadow: inset 3px 0 0 var(--call); }
-.setup-hero.bearish { box-shadow: inset 3px 0 0 var(--put); }
-.gauge-card {
+.prob-track-head {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-.gauge-svg-wrap {
-  position: relative;
-  width: 100%;
-  max-width: 140px;
-}
-.gauge-svg { display: block; width: 100%; height: auto; }
-.gauge-inner {
-  position: absolute;
-  left: 50%;
-  bottom: 4px;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  pointer-events: none;
-}
-.score-display {
-  display: flex;
+  justify-content: space-between;
   align-items: baseline;
-  gap: 2px;
-  line-height: 1;
+  color: var(--ink-ghost);
+  letter-spacing: 0.08em;
 }
-.score-num {
-  font-size: 1.35rem;
-  font-weight: 700;
+.prob-track-head .fig {
   color: var(--ink);
+  font-size: var(--t-body);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   font-family: var(--font-data);
 }
-.score-denom { font-size: 10px; color: var(--ink-faint); }
-.likelihood-badge {
-  padding: 1px 6px;
-  border: var(--hair) solid var(--rule-hi);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: var(--ink-dim);
-}
-.likelihood-badge.possible,
-.likelihood-badge.likely { color: var(--warn); border-color: rgba(232, 184, 74, 0.55); }
-.likelihood-badge.imminent { color: var(--put-hi); border-color: var(--put); }
-.bias-lockup {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  text-align: center;
-}
-.bias-sub { color: var(--ink-faint); font-size: 9px; letter-spacing: 0.1em; }
-.bias-heading {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--ink);
-}
-.bias-lockup.bullish .bias-heading { color: var(--call); }
-.bias-lockup.bearish .bias-heading { color: var(--put); }
-
-.prob-track-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 4px 2px;
-}
-.prob-track-head {
-  color: var(--ink-faint);
-  letter-spacing: 0.08em;
-  font-size: 9px;
-}
-.prob-track-bar { padding: 4px 0; }
-.prob-track-bg {
+.prob-bar {
   position: relative;
   height: 8px;
-  background: var(--rule);
+  background: var(--void);
   border: var(--hair) solid var(--rule-hi);
 }
-.prob-track-fill {
+.prob-fill {
   display: block;
   height: 100%;
   transition: width var(--dur-fast) var(--ease-out);
 }
-.prob-track-fill.bullish { background: var(--call); }
-.prob-track-fill.bearish { background: var(--put); }
-.prob-track-thumb {
+.prob-fill.bullish { background: var(--call); }
+.prob-fill.bearish { background: var(--put); }
+.prob-thumb {
   position: absolute;
   top: 50%;
   width: 10px;
@@ -779,116 +509,232 @@ const otherSide = computed(() => {
   background: var(--ink);
   border: 2px solid var(--void);
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 0 1px var(--rule-hi);
+  pointer-events: none;
 }
-.prob-track-labels {
+.prob-thumb.bullish { background: var(--call-hi); }
+.prob-thumb.bearish { background: var(--put-hi); }
+.prob-labels {
   display: flex;
   justify-content: space-between;
   color: var(--ink-faint);
   font-size: 9px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 }
-.prob-track-labels .active { color: var(--ink); font-weight: 800; }
+.prob-labels .active {
+  color: var(--phosphor);
+  font-weight: 800;
+}
 
-.section-hdr {
+.signed-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
   color: var(--ink-faint);
-  letter-spacing: 0.1em;
-  font-size: 9px;
-  margin-bottom: 4px;
-  padding: 0 8px;
+  letter-spacing: 0.06em;
+  padding-top: 2px;
+  border-top: var(--hair) solid var(--rule-faint);
 }
-.levels-section,
-.factors-section,
-.takeaways-section {
-  padding: 4px 0;
+.signed-row .fig {
+  color: var(--ink);
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-data);
+}
+.signed-row .fig.call { color: var(--call-hi); }
+.signed-row .fig.put { color: var(--put-hi); }
+.near { margin-left: auto; color: var(--ink-ghost); font-size: 9px; }
+
+/* ---- shared blocks ------------------------------------------------------ */
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
   flex: 0 0 auto;
-  border-bottom: var(--hair) solid var(--rule-faint);
+  min-width: 0;
 }
-.levels-section .kl-grid {
-  margin: 0 8px;
-  border: var(--hair) solid var(--rule);
+.block-hdr {
+  color: var(--ink-ghost);
+  font: 700 9px var(--font-display);
+  letter-spacing: 0.1em;
 }
-.factors-list {
+
+.kl-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void-lift);
+}
+.kl-cell {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 0 8px 4px;
+  padding: var(--s2) var(--s3);
+  border-right: var(--hair) solid var(--rule);
+  min-width: 0;
+}
+.kl-cell:last-child { border-right: 0; }
+.kl-cell .label {
+  color: var(--ink-ghost);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+.kl-cell .fig {
+  color: var(--ink);
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-data);
+  font-weight: 600;
+  line-height: 1.2;
+}
+.kl-cell .fig.call { color: var(--call-hi); }
+.kl-cell .fig.put { color: var(--put-hi); }
+.kl-cell .fig.accent { color: var(--phosphor); }
+
+.factors-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .factor-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) auto;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.5fr) auto;
+  gap: var(--s2);
   align-items: center;
   min-width: 0;
 }
-.factor-label-wrap { min-width: 0; }
 .factor-title {
-  color: var(--ink-dim);
-  font-size: 10px;
+  color: var(--ink-soft);
+  font: 600 10px var(--font-display);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .factor-track {
-  height: 4px;
-  background: var(--rule);
+  height: 5px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
   overflow: hidden;
 }
 .factor-fill {
   display: block;
   height: 100%;
   background: var(--ink-dim);
+  transition: width var(--dur-fast) var(--ease-out);
 }
 .factor-fill.bullish { background: var(--call); }
 .factor-fill.bearish { background: var(--put); }
+.factor-fill.warn { background: var(--warn); }
+.factor-fill.accent { background: var(--phosphor-dim); }
 .factor-fill.hot { opacity: 1; }
-.factor-fill.low { opacity: 0.45; }
+.factor-fill.elev { opacity: 0.92; }
+.factor-fill.mid { opacity: 0.75; }
+.factor-fill.low { opacity: 0.5; }
 .factor-score {
-  font-size: 10px;
+  font: 700 10px var(--font-data);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-data);
   min-width: 3.5ch;
   text-align: right;
 }
-.quiet { padding: 4px 8px; color: var(--ink-faint); font-size: 10px; }
+.quiet {
+  color: var(--ink-dim);
+  font-size: 10px;
+  margin: 0;
+}
 
 .takeaways-list {
   list-style: none;
   margin: 0;
-  padding: 0 8px 4px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 .takeaway-item {
   display: flex;
-  gap: 6px;
+  gap: var(--s2);
   align-items: flex-start;
-  color: var(--ink-dim);
-  font-size: 11px;
-  line-height: 1.35;
+  color: var(--ink-soft);
+  font-size: var(--t-tiny);
+  line-height: 1.4;
+  font-family: var(--font-ui);
 }
-.takeaway-badge {
+.takeaway-dot {
   flex: 0 0 auto;
-  width: 14px;
-  text-align: center;
-  font-size: 10px;
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.takeaway-dot.pos { background: var(--call); }
+.takeaway-dot.warn { background: var(--warn); }
+.takeaway-dot.info { background: var(--phosphor-dim); }
+.takeaway-text { min-width: 0; }
+
+.impl-line {
+  margin: 0;
+  padding-top: var(--s2);
+  border-top: var(--hair) solid var(--rule-faint);
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
   line-height: 1.4;
 }
-.takeaway-badge.pos { color: var(--call); }
-.takeaway-badge.warn { color: var(--warn); }
-.takeaway-badge.info { color: var(--phosphor-dim); }
-.takeaway-text { min-width: 0; }
-.takeaways-section .impl-line {
-  margin: 4px 8px 0;
-  padding-top: 4px;
+.stronger {
+  margin-top: 2px;
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 35%, var(--rule));
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
 }
-.takeaways-section .stronger {
-  margin: 6px 8px 0;
+.stronger ul {
+  margin: var(--s1) 0 0;
+  padding: 0 0 0 14px;
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
+  line-height: 1.4;
 }
+.stronger li { margin-bottom: 2px; }
+.stronger li:last-child { margin-bottom: 0; }
+
+.other-side {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 4px var(--s2);
+  align-items: center;
+  padding: 6px var(--s2);
+  border: var(--hair) solid var(--rule);
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+.other-side .fig {
+  color: var(--ink);
+  font-size: var(--t-micro);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-data);
+  justify-self: end;
+}
+.other-side .lik { color: var(--ink-faint); }
+.other-side .otrack {
+  grid-column: 1 / -1;
+  height: 3px;
+  background: var(--rule);
+  overflow: hidden;
+}
+.other-side .otrack i {
+  display: block;
+  height: 100%;
+  opacity: 0.75;
+}
+.other-side .otrack i.bullish { background: var(--call); }
+.other-side .otrack i.bearish { background: var(--put); }
 
 @media (max-width: 520px) {
-  .setup-hero { grid-template-columns: 1fr; }
+  .hero { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .bias-lock { justify-content: center; }
+  .hero-meta { width: 100%; }
+  .signed-row .near { margin-left: 0; }
 }
 </style>

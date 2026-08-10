@@ -148,6 +148,7 @@ function selectionDisplay(row: OptionsBoardRow): string {
             <th class="label num">EXP MOVE</th>
             <th class="label num">ATM IV</th>
             <th class="label">DATA</th>
+            <th class="label num sq-col">RISK VIZ</th>
           </tr>
         </thead>
         <tbody>
@@ -176,8 +177,8 @@ function selectionDisplay(row: OptionsBoardRow): string {
               <i v-if="row.squeeze_label" class="sq-label">{{ row.squeeze_label }}</i>
             </td>
             <td class="fig num">{{ num(row.net_gex_m, 1) }}</td>
-            <td class="fig num">{{ num(row.put_wall) }}</td>
-            <td class="fig num">{{ num(row.call_wall) }}</td>
+            <td class="fig num put">{{ num(row.put_wall) }}</td>
+            <td class="fig num call">{{ num(row.call_wall) }}</td>
             <td class="fig num">{{ num(row.expected_move) }}</td>
             <td class="fig num">{{ pct(row.atm_iv) }}</td>
             <td class="flags">
@@ -188,6 +189,20 @@ function selectionDisplay(row: OptionsBoardRow): string {
                 class="chip warn label"
                 :title="`Chain is ${row.clock_skew_days}d newer than the last price bar (${row.price_asof}) — momentum term is stale`"
               >{{ row.clock_skew_days }}D STALE</span>
+            </td>
+            <td class="risk-viz-cell">
+              <!-- Squeeze score spark bar -->
+              <div class="sq-spark" :title="row.squeeze_score != null ? `Squeeze: ${row.squeeze_score.toFixed(1)}` : 'Unmeasured'">
+                <div
+                  class="sq-spark-bar"
+                  :class="row.squeeze_score == null ? 'unmeasured' : row.squeeze_score > 0 ? 'pos' : 'neg'"
+                  :style="{ width: row.squeeze_score != null ? `${Math.min(100, Math.abs(row.squeeze_score))}%` : '0%' }"
+                />
+              </div>
+              <!-- ATM IV chip -->
+              <span v-if="row.atm_iv != null" class="iv-chip label">IV {{ pct(row.atm_iv) }}</span>
+              <!-- Expected move -->
+              <span v-if="row.expected_move != null" class="em-chip label">±{{ num(row.expected_move, 1) }}</span>
             </td>
           </tr>
         </tbody>
@@ -275,6 +290,9 @@ function selectionDisplay(row: OptionsBoardRow): string {
   color: var(--ink-faint);
 }
 
+.call { color: var(--call-hi, var(--call)); }
+.put { color: var(--put-hi, var(--put)); }
+
 .basis {
   border: var(--hair) solid var(--rule-hi);
   padding: 0.1rem 0.35rem;
@@ -305,8 +323,53 @@ function selectionDisplay(row: OptionsBoardRow): string {
   padding: 0.05rem 0.3rem;
 }
 
-.chip.warn { color: var(--warn); }
+.sq-col { min-width: 120px; }
+
+.risk-viz-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 8px;
+  min-width: 120px;
+}
+
+.sq-spark {
+  height: 5px;
+  background: var(--rule);
+  overflow: hidden;
+  width: 100%;
+}
+
+.sq-spark-bar {
+  height: 100%;
+  transition: width 0.4s ease;
+  min-width: 2px;
+}
+.sq-spark-bar.pos { background: var(--call); }
+.sq-spark-bar.neg { background: var(--put); }
+.sq-spark-bar.unmeasured { background: var(--rule-hi); width: 100% !important; opacity: 0.4; }
+
+.iv-chip {
+  display: inline-block;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 4px;
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--ink-dim);
+  background: var(--panel-hi);
+}
+
+.em-chip {
+  display: inline-block;
+  font-size: 8.5px;
+  font-weight: 600;
+  color: var(--ink-ghost);
+  letter-spacing: 0.03em;
+}
 .chip.halt { color: var(--halt); }
+.chip.warn { color: var(--warn); }
+
 
 .board-msg {
   padding: 1rem 0.75rem;

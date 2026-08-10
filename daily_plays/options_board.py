@@ -304,6 +304,7 @@ def summarize_board_row(
         "activity_imbalance": _finite(summary.get("activity_imbalance")),
         "expected_move": _finite(probability.get("expected_move")),
         "atm_iv": _finite(probability.get("atm_iv")),
+        "spread_pct": _finite(summary.get("median_spread_pct")),
         "selected_expiry": context.get("selected_expiry"),
         "selected_dte": context.get("selected_dte"),
         "contracts_included": quality.get("chain_contracts_included"),
@@ -325,16 +326,17 @@ def summarize_board_row(
     # to a local recomputation keeps older payloads working.
     oi_source = str(provider.get("open_interest") or "")
     row["open_interest_source"] = oi_source or None
+    total_oi = int(summary.get("call_oi") or 0) + int(summary.get("put_oi") or 0)
+    row["open_interest"] = total_oi
     if "gex_measurable" in quality:
         row["gex_measurable"] = bool(quality.get("gex_measurable"))
     else:
-        total_oi = int(summary.get("call_oi") or 0) + int(summary.get("put_oi") or 0)
         row["gex_measurable"] = bool(total_oi > 0 and oi_source != "unavailable")
     if not row["gex_measurable"]:
         for field_name in (
             "net_gex_m", "gex_regime", "call_wall", "call_wall_pct", "put_wall",
             "put_wall_pct", "gamma_flip", "pin_strike", "squeeze_score",
-            "squeeze_label", "squeeze_primary", "structure_score",
+            "squeeze_label", "squeeze_primary", "structure_score", "open_interest",
         ):
             row[field_name] = None
         row["warnings"] = ([

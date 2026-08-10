@@ -720,10 +720,10 @@ function onMove(e: MouseEvent): void {
   stroke-width: 1.3;
   opacity: .4;
 }
-.flow-trace.call { stroke: var(--call); }
-.flow-trace.put { stroke: var(--put); }
-.activity-bars .bar.call { fill: var(--call); opacity: 0.85; }
-.activity-bars .bar.put { fill: var(--put); opacity: 0.85; }
+.flow-trace.call { stroke: var(--call-hi); stroke-width: 1.75; }
+.flow-trace.put { stroke: var(--put-hi); stroke-width: 1.75; }
+.activity-bars .bar.call { fill: var(--call); opacity: 0.95; }
+.activity-bars .bar.put { fill: var(--put); opacity: 0.95; }
 .anomaly-dot { fill: var(--warn); }
 .opex-marks .opex-line {
   stroke: var(--phosphor-dim);

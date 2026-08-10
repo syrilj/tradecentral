@@ -490,6 +490,8 @@ export interface OptionsTapeRow {
   /** Per-contract fill price when known or back-solved from premium. */
   price?: number | null
   strike: number | null
+  /** Underlying stock price when trade occurred or session spot. */
+  underlying_price?: number | null
   expiry: string | null
   aggressor: 'buy' | 'sell' | null
   /** BUY / SELL / NO SIDE — always set for display. */
@@ -713,6 +715,154 @@ export interface OptionsBoard {
     age_seconds: number
     ttl_seconds: number
     refresh_hint: string
+  }
+}
+
+/** Why a row's signal came from — which upstream board(s) had this symbol. */
+export type LiveOpportunitySignalBasis = 'structure_only' | 'flow_only' | 'both' | string
+
+export interface LiveOpportunityConfidence {
+  kind: 'calibrated_probability' | 'unavailable' | string
+  probability: number | null
+  band: 'HIGH' | 'MODERATE' | 'LOW' | 'UNCALIBRATED' | string
+  source: string | null
+  is_high: boolean
+  setup_ok: boolean | null
+  state: string | null
+  calibration_version: string | null
+  model: string | null
+  reason: string | null
+}
+
+export interface LiveOpportunityFreshness {
+  pass: boolean
+  status: 'FRESH' | 'STALE_OR_PROXY' | string
+  max_age_seconds: number
+  chain_live: boolean
+  chain_age_seconds: number | null
+  flow_required: boolean
+  flow_live: boolean | null
+  flow_age_seconds: number | null
+  reasons: string[]
+}
+
+export interface LiveOpportunityCosts {
+  method: 'quoted_spread_only' | string
+  observed_spread_pct: number | null
+  one_way_half_spread_pct: number | null
+  one_way_half_spread_bps: number | null
+  round_trip_spread_pct: number | null
+  spread_gate_max_pct: number
+  spread_gate_pass: boolean
+  market_impact: number | null
+  commission: number | null
+  complete: boolean
+  note: string
+}
+
+export interface LiveOpportunityPlaybook {
+  status: 'candidate' | 'research_only' | 'blocked' | string
+  direction: 'long' | 'short' | 'watch' | string
+  direction_source: string
+  structure: string
+  structure_label: string
+  expiry: string | null
+  trigger: number | null
+  target: number | null
+  invalidation: number | null
+  levels: {
+    spot: number | null
+    call_wall: number | null
+    put_wall: number | null
+    gamma_flip: number | null
+    expected_move: number | null
+  }
+  legs: Array<{ action: string; instruction: string }>
+  risk: {
+    max_account_risk_pct: number
+    max_portfolio_heat_pct: number
+    max_loss: string
+    sizing_formula: string
+    entry_order: string
+    exit_rule: string
+    quote_cost: LiveOpportunityCosts
+  }
+  blockers: string[]
+  warnings: string[]
+}
+
+export interface LiveOpportunityRow {
+  symbol: string
+  signal_basis: LiveOpportunitySignalBasis
+  /** Ordinal z-blend of board squeeze + flow unusual scores. Can be negative. */
+  composite_score: number | null
+  board_squeeze_score: number | null
+  board_squeeze_z: number | null
+  flow_unusual_score: number | null
+  flow_unusual_z: number | null
+  gate_pass: boolean
+  /** Populated when gate_pass is false, e.g. ["spread 42% > max 25%"]. */
+  gate_reasons: string[]
+  spread_pct: number | null
+  open_interest: number | null
+  selected_dte: number | null
+  call_put_imbalance: number | null
+  ret_1d: number | null
+  premium: number | null
+  confidence: LiveOpportunityConfidence
+  highlighted: boolean
+  live_ready: boolean
+  freshness: LiveOpportunityFreshness
+  costs: LiveOpportunityCosts
+  barriers: {
+    spot: number | null
+    call_wall: number | null
+    put_wall: number | null
+    gamma_flip: number | null
+    expected_move: number | null
+  }
+  playbook: LiveOpportunityPlaybook
+}
+
+export interface LiveOpportunitiesCoverage {
+  board_symbols: number
+  flow_symbols: number
+  union_symbols: number
+  gate_pass: number
+  gate_fail: number
+  high_confidence: number
+  live_ready: number
+  uncalibrated: number
+  stale_or_proxy: number
+}
+
+/**
+ * Live opportunities (`/api/options/opportunities`): the conviction board's
+ * structural squeeze score and market-wide unusual flow, z-blended per symbol
+ * into one ordinal composite ranking. Rows are pre-sorted gate_pass first
+ * (desc composite_score), then gate_fail — both groups render, never filter
+ * gate_fail client-side, that's a deliberate honesty choice upstream.
+ * `available: false` is the normal pre-data state — render `reason` as an
+ * empty state, not an error.
+ */
+export interface LiveOpportunities {
+  schema_version?: string
+  asof_utc?: string
+  available: boolean
+  reason?: string
+  decision_authorized?: false
+  /** Always 'ordinal_composite' when available — never a probability. */
+  score_kind?: 'ordinal_composite' | string
+  method?: string
+  filters?: Record<string, unknown>
+  rows?: LiveOpportunityRow[]
+  coverage?: LiveOpportunitiesCoverage
+  warnings?: string[]
+  caveats?: string[]
+  sources?: {
+    board?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof_utc?: string | null; scan_asof?: string | null }
+    flow?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof?: string | null }
+    scan_depth?: string
   }
 }
 
@@ -1195,12 +1345,159 @@ export interface ChangepointDetail {
 
 /* ---------------------------------------------------------------- endpoints */
 
+export interface MomentumCandidate {
+  symbol: string
+  price: number
+  gap_pct: number | null
+  day_change_pct: number | null
+  rvol: number | null
+  float_shares: number | null
+  float_badge: 'optimal' | 'qualifies' | 'no' | 'unknown'
+  gap_sweet_spot: boolean
+  price_qualifies: boolean
+  gap_qualifies: boolean
+  rvol_qualifies: boolean
+  pillars_met: number
+}
+
+export interface MomentumScanPayload {
+  asof: string
+  universe_size: number
+  expected_universe_size: number
+  float_coverage_pct: number
+  candidates: MomentumCandidate[]
+  all_candidates?: MomentumCandidate[]
+}
+
+/* ------------------------------------------------------------- flow-state -
+   Latent market-state estimator for forced-flow events (`/api/flow-state`),
+   built offline by tools/build_flow_state.py from daily-bar proxies only —
+   there is no order-book depth/trades/quotes anywhere in this repo, so every
+   "flow", "impact", or "liquidity" figure here is a descriptive proxy, not a
+   causal identification. tier 0 = states/events only; tier 1 = a Phase-2
+   matched-control study has been run and its own T1 criterion passed
+   (bootstrap CI excludes 0 AND deflated permutation p < 0.01). `models` is
+   always null and decision_authorized always false until a Phase-3
+   development gate (not built yet) records a pass and raises tier to >= 2 —
+   the Model/EV panel renders permanently locked below that. */
+
+export type FlowStateName =
+  | 'NORMAL' | 'PRESSURE' | 'SHOCK' | 'TEST' | 'CASCADE' | 'ABSORB' | 'EXHAUSTION' | 'FADE'
+
+export interface FlowStateRow {
+  symbol: string
+  current_state: FlowStateName | string
+  days_in_state: number
+  flow_z: number | null
+  persistence_5d: number | null
+  amihud_z: number | null
+  cs_spread: number | null
+  /** Rolling OLS slope of returns on flow_z (descriptive impact proxy). */
+  impact_beta?: number | null
+  /** Trailing robust z of impact_beta; only positive values feed the sleeve. */
+  impact_beta_z?: number | null
+  /**
+   * Barrier-conditioned continuation sleeve:
+   * |flow_z| × max(impact_beta_z,0) × persistence × exp(−d/τ).
+   * Ranking feature for continuation research — not a bottom/fade call.
+   */
+  continuation_score?: number | null
+  /** sign(flow_z): +1 buy pressure, −1 sell pressure. */
+  continuation_direction?: number | null
+  /** Smooth barrier kernel exp(−d/τ) in [0,1]. */
+  barrier_proximity?: number | null
+  /** Distance to nearest structural barrier in ATR units. */
+  dist_to_barrier_atr?: number | null
+  air_pocket_up: number | null
+  air_pocket_down: number | null
+  next_support: number | null
+  next_resistance: number | null
+  /** ORDINAL rank across this run's symbols (1 = most stressed) — never a probability. */
+  stress_rank: number
+}
+
+export interface FlowStateTimelinePoint {
+  date: string
+  state: FlowStateName | string
+}
+
+export interface FlowStateEvent {
+  symbol: string
+  t0: string
+  direction: number
+  state_path: string[]
+  outcome: 'DOWN_FIRST' | 'UP_FIRST' | 'NEITHER' | 'AMBIGUOUS' | null
+  time_to_hit: number | null
+  mfe: number | null
+  mae: number | null
+}
+
+export interface BarrierFieldNode {
+  price: number | null
+  mass: number | null
+}
+
+export interface BarrierField {
+  grid: number[]
+  density: number[]
+  price: number | null
+  nodes: BarrierFieldNode[]
+  /** Today's live options-chain snapshot only, when populated — null otherwise. */
+  strikes_overlay: number[] | null
+}
+
+export interface ImpactCurve {
+  lags: number[]
+  mean_cum_ret: (number | null)[]
+  ci_lo: (number | null)[]
+  ci_hi: (number | null)[]
+}
+
+export interface PhenomenonResult {
+  tested: boolean
+  effect: number | null
+  nw_t: number | null
+  boot_ci: [number | null, number | null] | null
+  perm_p: number | null
+  n_events: number
+  n_controls: number
+  grid: Record<string, unknown>[]
+  prereg_id: string | null
+  passed: boolean
+}
+
+export interface GateResult {
+  evaluated: boolean
+  passed: boolean
+  checks: Record<string, unknown>
+  ledger_id: string | null
+}
+
+export interface FlowStatePayload {
+  available: boolean
+  reason: string | null
+  as_of: string | null
+  tier: 0 | 1 | 2
+  decision_authorized: boolean
+  caveats: string[]
+  states: FlowStateRow[]
+  timelines: Record<string, FlowStateTimelinePoint[]>
+  events: FlowStateEvent[]
+  barrier_fields: Record<string, BarrierField>
+  impact_curve: ImpactCurve
+  phenomenon: PhenomenonResult
+  gate: GateResult
+  models: null
+  producing_script: string
+}
+
 export const api = {
   health: () => req<Health>('/api/health'),
   status: () => req<StatusPayload>('/api/status'),
   leaderboard: () => req<{ asof: string; leaderboard: LeaderboardRow[] }>('/api/leaderboard'),
   gcp: () => req<Record<string, unknown>>('/api/gcp'),
   gates: () => req<{ gates: Gate[] }>('/api/gates'),
+  momentumScan: () => req<MomentumScanPayload>('/api/momentum-scan'),
   readiness: () => req<Readiness>('/api/readiness'),
   marketClock: () => req<MarketClock>('/api/market-clock'),
 
@@ -1259,6 +1556,25 @@ export const api = {
   },
 
   /**
+   * Triggers a live OI capture for one symbol (`/api/options/backfill_oi`) so
+   * a symbol with no cached open-interest snapshot can resolve out of the
+   * "unmeasured" state without a manual `tools/backfill_option_oi.py` run.
+   * Takes several seconds (live yfinance fetch) — callers should show a
+   * loading state and refresh `options()`/`optionsBoard()` on success.
+   */
+  backfillOptionOi: (symbol: string, opts?: { maxDte?: number }) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.maxDte != null) q.set('max_dte', String(opts.maxDte))
+    return req<{
+      status: 'ok'
+      symbol: string
+      asof: string
+      contracts: number
+      with_oi: number
+    }>(`/api/options/backfill_oi?${q.toString()}`, { method: 'POST' })
+  },
+
+  /**
    * Conviction board (`/api/options/board`): pulls live option chains for the
    * top-ranked names the active scan produced, so structure is visible for the
    * candidates the desk actually surfaced instead of only for a hand-typed
@@ -1291,6 +1607,20 @@ export const api = {
     return req<UnusualFlowPayload>(`/api/unusual-flow${qs ? `?${qs}` : ''}`)
   },
 
+  /**
+   * Live opportunities (`/api/options/opportunities`): composite board+flow
+   * ranking, z-blended per symbol. Ordinal only — see `caveats`.
+   *
+   * Pass `force` to bypass the server's 90s cache and recompute now.
+   */
+  liveOpportunities: (opts?: { limit?: number; force?: boolean }) => {
+    const q = new URLSearchParams()
+    if (opts?.limit != null) q.set('limit', String(opts.limit))
+    if (opts?.force) q.set('force', '1')
+    const qs = q.toString()
+    return req<LiveOpportunities>(`/api/options/opportunities${qs ? `?${qs}` : ''}`)
+  },
+
   /** Genetic evolution lab (research-only artifacts under runs/ga/). */
   ga: (runId?: string) =>
     req<GaPayload>(
@@ -1311,6 +1641,9 @@ export const api = {
     req<ChangepointDetail>(
       `/api/changepoints?symbol=${encodeURIComponent(symbol)}&window=${window}`,
     ),
+
+  /** Latent flow-state cross-section — offline artifact, tier-gated panels. */
+  flowState: () => req<FlowStatePayload>('/api/flow-state'),
 
   /** Live multi-stream adaptive blend (regime weights + optional online soft reweight). */
   adaptiveSignal: (opts?: { symbol?: string; limit?: number }) => {

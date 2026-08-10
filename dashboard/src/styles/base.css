@@ -25,6 +25,14 @@ body,
   height: 100%;
 }
 
+/* Defense in depth: #app must never let a descendant's intrinsic size grow
+   it past the viewport (see App.vue .rail for the actual fix — this just
+   guarantees the page can't silently start scrolling again if something
+   else overflows later). Matches the promise body makes below. */
+#app {
+  overflow: hidden;
+}
+
 body {
   background: var(--void);
   color: var(--ink);

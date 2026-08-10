@@ -124,6 +124,11 @@ function kindClass(kind: string): string {
 
 const structureLoading = computed(() => sentiment.loading.value && !sentiment.data.value)
 const outliersLoading = computed(() => anomalies.loading.value && !anomalies.data.value)
+const isRefreshing = computed(() => sentiment.loading.value || anomalies.loading.value)
+
+async function refreshAll(): Promise<void> {
+  await Promise.all([sentiment.refresh(), anomalies.refresh()])
+}
 
 /** Human labels + lean for vol complex keys (raw CSV names are unreadable on a desk). */
 const VOL_META: Record<string, { label: string; help: string; lean: (v: number | null) => string; toneOf: (v: number | null) => 'pos' | 'neg' | 'flat' }> = {
@@ -221,29 +226,43 @@ function formMeaning(form: string | undefined): string {
 <template>
   <div class="pulse-view">
     <div class="page-head">
-      <div class="tabs" role="tablist">
+      <div class="head-left">
+        <div class="tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            class="tab label"
+            :class="{ on: tab === 'structure' }"
+            :aria-selected="tab === 'structure'"
+            @click="setTab('structure')"
+          >
+            Structure
+          </button>
+          <button
+            type="button"
+            role="tab"
+            class="tab label"
+            :class="{ on: tab === 'outliers' }"
+            :aria-selected="tab === 'outliers'"
+            @click="setTab('outliers')"
+          >
+            Outliers
+            <span v-if="unified.length" class="tab-count fig">{{ unified.length }}</span>
+          </button>
+        </div>
+
         <button
           type="button"
-          role="tab"
-          class="tab label"
-          :class="{ on: tab === 'structure' }"
-          :aria-selected="tab === 'structure'"
-          @click="setTab('structure')"
+          class="pulse-refresh-btn label"
+          :disabled="isRefreshing"
+          title="Update all pulse info and anomaly scans"
+          @click="refreshAll"
         >
-          Structure
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="tab label"
-          :class="{ on: tab === 'outliers' }"
-          :aria-selected="tab === 'outliers'"
-          @click="setTab('outliers')"
-        >
-          Outliers
-          <span v-if="unified.length" class="tab-count fig">{{ unified.length }}</span>
+          <span class="refresh-icon" :class="{ spinning: isRefreshing }">↻</span>
+          {{ isRefreshing ? 'UPDATING...' : 'UPDATE ALL INFO' }}
         </button>
       </div>
+
       <form class="sym-row" @submit.prevent="applySymbol">
         <label class="label" for="pulse-sym">
           Ticker
@@ -753,6 +772,48 @@ function formMeaning(form: string | undefined): string {
   gap: var(--s3);
   padding-bottom: var(--s2);
   border-bottom: var(--hair) solid var(--rule);
+}
+.head-left {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.pulse-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  height: 32px;
+  font-family: var(--font-data);
+  font-weight: 700;
+  font-size: var(--t-micro);
+  letter-spacing: 0.05em;
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.pulse-refresh-btn:hover:not(:disabled) {
+  background: var(--phosphor);
+  color: var(--void);
+}
+.pulse-refresh-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.refresh-icon {
+  display: inline-block;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.refresh-icon.spinning {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 .tabs {
   display: flex;

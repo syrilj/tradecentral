@@ -128,6 +128,18 @@ function loadSymbol(raw: string, opts: { pushRoute?: boolean } = {}): void {
 
 if (initialSymbol) loadSymbol(initialSymbol, { pushRoute: false })
 
+watch(
+  () => route.query.symbol,
+  (newSym) => {
+    if (typeof newSym === 'string') {
+      const clean = cleanTicker(newSym)
+      if (clean && clean !== symbol.value) {
+        loadSymbol(clean, { pushRoute: false })
+      }
+    }
+  },
+)
+
 // Payload A is an offline artifact that may be unavailable independently of
 // payload B (computed on demand) — but if the desk hasn't typed a ticker
 // yet, the most interesting default is the top row of the cross-section.
@@ -192,7 +204,7 @@ const PAD_R = 16
 const TOP_H = 170
 const TOP_PAD_T = 12
 const TOP_PAD_B = 8
-const BOT_H = 300
+const BOT_H = 360
 const BOT_PAD_T = 24
 const BOT_PAD_B = 30
 
@@ -235,17 +247,20 @@ const topChart = computed(() => {
   if (!series.length) return null
   let maxAbs = 0.005
   for (const p of series) {
-    maxAbs = Math.max(maxAbs, Math.abs(p.ret), Math.abs(p.pred_mean) + Math.abs(p.pred_vol))
+    maxAbs = Math.max(maxAbs, Math.abs(p.ret), Math.abs(p.pred_mean) + 2 * Math.abs(p.pred_vol))
   }
   maxAbs *= 1.15
   const yRet = linearScale([-maxAbs, maxAbs], [TOP_H - TOP_PAD_B, TOP_PAD_T])
   const upper = series.map((p) => ({ x: xOf(p.d), y: yRet(p.pred_mean + p.pred_vol) }))
   const lower = series.map((p) => ({ x: xOf(p.d), y: yRet(p.pred_mean - p.pred_vol) }))
+  const upper2 = series.map((p) => ({ x: xOf(p.d), y: yRet(p.pred_mean + 2 * p.pred_vol) }))
+  const lower2 = series.map((p) => ({ x: xOf(p.d), y: yRet(p.pred_mean - 2 * p.pred_vol) }))
   return {
     series,
     yRet,
     zeroY: yRet(0),
     band: bandPath(upper, lower),
+    band2: bandPath(upper2, lower2),
     yTicks: niceTicks(-maxAbs, maxAbs, 4),
   }
 })
@@ -305,17 +320,35 @@ function buildHeatmapDataUrl(rl: ChangepointRunlength, phosphorHex: string, void
       const v = row ? row[j] : null
       const idx = (canvasRow * rl.n_cols + j) * 4
       if (v == null || !Number.isFinite(v)) {
-        img.data[idx + 3] = 0 // transparent: structurally impossible or below floor
+        img.data[idx] = vr
+        img.data[idx + 1] = vg
+        img.data[idx + 2] = vb
+        img.data[idx + 3] = 0 // transparent background
         continue
       }
       const clipped = Math.min(0, Math.max(floor, v))
       const t = floor === 0 ? 1 : (clipped - floor) / (0 - floor)
-      // Perceptual boost so the ridge tail stays visible next to the floor.
-      const g = Math.pow(Math.min(1, Math.max(0, t)), 0.6)
-      img.data[idx] = Math.round(vr + (pr - vr) * g)
-      img.data[idx + 1] = Math.round(vg + (pg - vg) * g)
-      img.data[idx + 2] = Math.round(vb + (pb - vb) * g)
-      img.data[idx + 3] = 255
+      const g = Math.pow(Math.min(1, Math.max(0, t)), 0.5)
+
+      if (g < 0.35) {
+        const u = g / 0.35
+        img.data[idx] = Math.round(vr + (24 - vr) * u)
+        img.data[idx + 1] = Math.round(vg + (80 - vg) * u)
+        img.data[idx + 2] = Math.round(vb + (80 - vb) * u)
+      } else if (g < 0.75) {
+        const u = (g - 0.35) / 0.40
+        img.data[idx] = Math.round(24 + (pr - 24) * u)
+        img.data[idx + 1] = Math.round(80 + (pg - 80) * u)
+        img.data[idx + 2] = Math.round(pb + (80 - pb) * u)
+      } else {
+        const u = (g - 0.75) / 0.25
+        img.data[idx] = Math.round(pr + (240 - pr) * u)
+        img.data[idx + 1] = Math.round(pg + (255 - pg) * u)
+        img.data[idx + 2] = Math.round(pb + (200 - pb) * u)
+      }
+      // Crisp alpha: low-probability background is transparent, active ridge glows bright
+      const alpha = g < 0.1 ? 0 : Math.round(255 * Math.pow((g - 0.1) / 0.9, 1.2))
+      img.data[idx + 3] = Math.min(255, Math.max(0, alpha))
     }
   }
   ctx.putImageData(img, 0, 0)
@@ -563,6 +596,19 @@ const symbolInsight = computed(() => {
       :meta="boardData?.asof ? `asof ${boardData.asof} · ${age(boardData.generated_at)} ago` : 'diagnostics only'"
       class="w-full"
     >
+      <template #action>
+        <button
+          type="button"
+          class="cp-refresh-btn label"
+          :disabled="board.loading.value"
+          title="Reload changepoints cross-section artifact"
+          @click="board.refresh({ clear: false })"
+        >
+          <span class="refresh-icon" :class="{ spinning: board.loading.value }">↻</span>
+          {{ board.loading.value ? 'RELOADING...' : 'REFRESH' }}
+        </button>
+      </template>
+
       <LoadingState v-if="board.loading.value && !boardData" label="loading changepoint artifact" />
       <p v-else-if="board.error.value" class="err">{{ board.error.value }}</p>
 
@@ -613,6 +659,18 @@ const symbolInsight = computed(() => {
       flush
       :delay="40"
     >
+      <template #action>
+        <button
+          type="button"
+          class="cp-refresh-btn label"
+          :disabled="detail.loading.value"
+          title="Recompute single symbol run-length posterior"
+          @click="detail.refresh({ clear: false })"
+        >
+          <span class="refresh-icon" :class="{ spinning: detail.loading.value }">↻</span>
+          {{ detail.loading.value ? 'RECOMPUTING...' : 'RECOMPUTE' }}
+        </button>
+      </template>
       <div class="figure-controls">
         <form class="symbol-form" @submit.prevent="selectSymbol">
           <input
@@ -720,6 +778,7 @@ const symbolInsight = computed(() => {
                 >{{ pctFrac(t, 1) }}</text>
               </g>
 
+              <path :d="topChart.band2" class="vol-band-outer" />
               <path :d="topChart.band" class="vol-band" />
               <line :x1="PAD_L" :x2="W - PAD_R" :y1="topChart.zeroY" :y2="topChart.zeroY" class="zero" />
 
@@ -967,7 +1026,7 @@ const symbolInsight = computed(() => {
   background: var(--panel-raise);
   max-height: 220px;
   overflow: auto;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, .45);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
 }
 .search-hits li {
   display: flex;
@@ -1004,6 +1063,43 @@ const symbolInsight = computed(() => {
 .cr-item .label { font-size: 9px; }
 .cr-item .fig { font-size: var(--t-small); color: var(--ink); }
 
+.cp-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  height: 22px;
+  font-family: var(--font-data);
+  font-weight: 700;
+  font-size: var(--t-micro);
+  letter-spacing: 0.05em;
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.cp-refresh-btn:hover:not(:disabled) {
+  background: var(--phosphor);
+  color: var(--void);
+}
+.cp-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.refresh-icon {
+  display: inline-block;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.refresh-icon.spinning {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* ---- figure charts ------------------------------------------------------ */
 .figure-stack {
   display: flex;
@@ -1012,13 +1108,14 @@ const symbolInsight = computed(() => {
 }
 .chart { display: block; width: 100%; }
 .top-chart { height: 170px; border-bottom: var(--hair) solid var(--rule-faint); }
-.bottom-chart { height: 300px; }
+.bottom-chart { height: 360px; }
 
 .gridline { stroke: var(--grid); stroke-width: 1; }
 .zero { stroke: var(--rule-hi); stroke-width: 1; }
 .tick-label { font-family: var(--font-data); font-size: 9px; fill: var(--ink-faint); }
 .axis-title { font-family: var(--font-data); font-size: 9px; fill: var(--ink-ghost); }
 
+.vol-band-outer { fill: rgba(169, 196, 108, 0.06); stroke: rgba(169, 196, 108, 0.22); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .vol-band { fill: var(--phosphor-wash); stroke: var(--phosphor-dim); stroke-width: 1; vector-effect: non-scaling-stroke; }
 
 .needle { stroke-width: 1.3; vector-effect: non-scaling-stroke; }

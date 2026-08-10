@@ -419,15 +419,15 @@ const weightBars = computed(() => {
 .sym-form { display: flex; gap: 0.4rem; align-items: center; }
 .sym-input {
   width: 7.5rem;
-  background: var(--bg-elevated, #12141a);
-  border: 1px solid var(--border, #2a2f3a);
+  background: var(--panel-hi);
+  border: 1px solid var(--rule);
   color: inherit;
   padding: 0.4rem 0.55rem;
   font-size: 0.9rem;
   letter-spacing: 0.06em;
 }
 .btn {
-  background: var(--accent, #6ee7b7);
+  background: var(--phosphor);
   color: #0b0d10;
   border: 0;
   padding: 0.4rem 0.75rem;
@@ -440,12 +440,12 @@ const weightBars = computed(() => {
 .btn.ghost {
   background: transparent;
   color: inherit;
-  border: 1px solid var(--border, #2a2f3a);
+  border: 1px solid var(--rule);
 }
 .auth-banner {
   font-size: 0.72rem;
   opacity: 0.7;
-  border: 1px solid var(--border, #2a2f3a);
+  border: 1px solid var(--rule);
   padding: 0.45rem 0.7rem;
 }
 .grid-top {
@@ -481,7 +481,7 @@ const weightBars = computed(() => {
 .stream-head .w, .stream-head .q { opacity: 0.55; font-size: 0.68rem; }
 .bar-track {
   height: 4px;
-  background: color-mix(in srgb, var(--border, #2a2f3a) 70%, transparent);
+  background: color-mix(in srgb, var(--rule) 70%, transparent);
   margin-top: 0.25rem;
   display: flex;
 }
@@ -497,7 +497,7 @@ const weightBars = computed(() => {
 .dual {
   position: relative;
   height: 10px;
-  background: color-mix(in srgb, var(--border, #2a2f3a) 50%, transparent);
+  background: color-mix(in srgb, var(--rule) 50%, transparent);
 }
 .dual .base, .dual .adapt {
   position: absolute;
@@ -505,8 +505,8 @@ const weightBars = computed(() => {
   top: 0;
   height: 100%;
 }
-.dual .base { background: color-mix(in srgb, var(--fg, #ccc) 25%, transparent); }
-.dual .adapt { background: var(--accent, #6ee7b7); opacity: 0.85; }
+.dual .base { background: color-mix(in srgb, var(--ink-dim) 25%, transparent); }
+.dual .adapt { background: var(--phosphor); opacity: 0.85; }
 .nums { font-size: 0.75rem; opacity: 0.8; }
 .legend { margin: 0.75rem 0 0; opacity: 0.5; font-size: 0.68rem; }
 .table-wrap { overflow-x: auto; }
@@ -517,7 +517,7 @@ const weightBars = computed(() => {
 }
 .board th, .board td {
   padding: 0.45rem 0.55rem;
-  border-bottom: 1px solid var(--border, #2a2f3a);
+  border-bottom: 1px solid var(--rule);
   text-align: left;
   white-space: nowrap;
 }
@@ -529,7 +529,7 @@ const weightBars = computed(() => {
   font-weight: 500;
 }
 .board tr.clickable { cursor: pointer; }
-.board tr.clickable:hover { background: color-mix(in srgb, var(--accent, #6ee7b7) 8%, transparent); }
+.board tr.clickable:hover { background: color-mix(in srgb, var(--phosphor) 8%, transparent); }
 .board .sym { letter-spacing: 0.04em; }
 .pad { padding: 1rem; }
 .empty { opacity: 0.55; }
@@ -542,12 +542,12 @@ const weightBars = computed(() => {
 }
 .hist-bar {
   height: 6px;
-  background: color-mix(in srgb, var(--border, #2a2f3a) 60%, transparent);
+  background: color-mix(in srgb, var(--rule) 60%, transparent);
 }
 .hist-bar span {
   display: block;
   height: 100%;
-  background: var(--accent, #6ee7b7);
+  background: var(--phosphor);
 }
 .hit-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
 .hit-row {
@@ -558,17 +558,17 @@ const weightBars = computed(() => {
 }
 .hit-track {
   height: 6px;
-  background: color-mix(in srgb, var(--border, #2a2f3a) 60%, transparent);
+  background: color-mix(in srgb, var(--rule) 60%, transparent);
 }
 .hit-fill {
   display: block;
   height: 100%;
-  background: var(--accent, #6ee7b7);
+  background: var(--phosphor);
   min-width: 0;
 }
-.err { color: var(--neg, #f87171); }
-.pos { color: var(--pos, #6ee7b7); }
-.neg { color: var(--neg, #f87171); }
-.warm { color: var(--warn, #fbbf24); }
+.err { color: var(--short); }
+.pos { color: var(--long); }
+.neg { color: var(--short); }
+.warm { color: var(--warn); }
 .muted { opacity: 0.55; }
 </style>

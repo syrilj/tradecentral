@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from edge.daily_plays.options_intelligence import (
     OptionsFilters,
     _imbalance_confidence,
@@ -437,3 +439,30 @@ def test_unavailable_oi_emits_a_warning_before_any_zero_is_read():
 def test_measurable_chain_emits_no_unmeasured_warning():
     payload = _measurability_payload(open_interest=2_000, oi_source="lse_live")
     assert not any("unmeasured" in w for w in payload["warnings"])
+
+
+def test_median_spread_pct_is_reported_on_summary():
+    # _chain() rows both quote bid=4.9/ask=5.1 on mid=5.0 -> spread_pct 0.04.
+    result = _payload([])
+    assert result["summary"]["median_spread_pct"] == pytest.approx(0.04)
+
+
+def test_median_spread_pct_is_none_without_usable_bid_ask():
+    payload = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[{
+            "right": "call", "expiry": "2026-08-28", "strike": 105,
+            "volume": 500, "open_interest": 2_000, "iv": 0.35, "gamma": 0.02,
+            "multiplier": 100, "captured_utc": ASOF.isoformat(), "spot": 100,
+        }],
+        flow_rows=[],
+        price_series=[{"t": ASOF.isoformat(), "close": 100}],
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+    assert payload["summary"]["median_spread_pct"] is None
