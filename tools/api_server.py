@@ -168,8 +168,8 @@ stderr -- one bad symbol or malformed artifact must never kill the server.
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 from dataclasses import asdict
+from functools import lru_cache
 import http.server
 import json
 import math
@@ -187,8 +187,48 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
-import numpy as np
-import pandas as pd
+# Lazy imports for heavy dependencies - imported on first use
+_np = None
+_pd = None
+_concurrent_futures = None
+
+def _get_np():
+    """Lazy load numpy to defer import cost until first use."""
+    global _np
+    if _np is None:
+        import numpy as np
+        _np = np
+    return _np
+
+def _get_pd():
+    """Lazy load pandas to defer import cost until first use."""
+    global _pd
+    if _pd is None:
+        import pandas as pd
+        _pd = pd
+    return _pd
+
+def _get_concurrent_futures():
+    """Lazy load concurrent.futures to defer import cost until first use."""
+    global _concurrent_futures
+    if _concurrent_futures is None:
+        import concurrent.futures
+        _concurrent_futures = concurrent.futures
+    return _concurrent_futures
+
+
+# Type aliases for annotations (evaluated lazily at runtime)
+def _DataFrame():
+    return _get_pd().DataFrame
+
+def _Series():
+    return _get_pd().Series
+
+def _DatetimeIndex():
+    return _get_pd().DatetimeIndex
+
+def _DateOffset():
+    return _get_pd().DateOffset
 
 ROOT = Path(__file__).resolve().parents[2]
 EDGE_DIR = ROOT / "edge"
@@ -306,7 +346,7 @@ CHANGEPOINT_DIR = RUNS_DIR / "changepoints"
 FLOW_STATE_DIR = RUNS_DIR / "flow_state"
 
 
-def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> pd.DataFrame:
+def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> "_get_pd().DataFrame":
     """OHLCV for adaptive scoring: prefer 1h when present so the blend moves intraday."""
     bases: list[Path] = []
     if prefer_intraday:
@@ -316,12 +356,12 @@ def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> pd.DataFr
         path = base / f"{symbol}.parquet"
         if path.is_file():
             try:
-                frame = pd.read_parquet(path)
+                frame = _get_pd().read_parquet(path)
             except Exception:
                 continue
             if frame is not None and len(frame) > 0:
                 return frame
-    return pd.DataFrame()
+    return _get_pd().DataFrame()
 
 
 def _stream_performance_payload() -> dict[str, Any]:
@@ -331,7 +371,7 @@ def _stream_performance_payload() -> dict[str, Any]:
     if cached is not None and now - float(_STREAM_HIT_CACHE.get("ts") or 0) < _STREAM_HIT_TTL_S:
         return cached
 
-    def loader(symbol: str) -> pd.DataFrame:
+    def loader(symbol: str) -> "_get_pd().DataFrame":
         # Hit-rate reconstruction uses the same bar preference as live scoring.
         return _load_symbol_bars(symbol, prefer_intraday=True)
 
@@ -470,7 +510,7 @@ def _adaptive_signal_payload(*, symbol: str | None = None, limit: int = 40) -> d
         else {}
     )
 
-    def loader(sym: str) -> pd.DataFrame:
+    def loader(sym: str) -> "_get_pd().DataFrame":
         return _load_symbol_bars(sym, prefer_intraday=True)
 
     if symbol:
@@ -721,7 +761,7 @@ def _flow_state_payload() -> dict:
     return {**empty, **payload, "available": bool(payload.get("available", True))}
 
 
-def _bocpd_align_dates(index: pd.DatetimeIndex, arr_len: int) -> pd.DatetimeIndex:
+def _bocpd_align_dates(index: pd.DatetimeIndex, arr_len: int) -> "_get_pd().DatetimeIndex":
     """Map a BocpdResult array back onto dates.
 
     BOCPD_CONTRACT.md documents `BocpdResult`'s arrays as "per bar" without
@@ -743,7 +783,7 @@ def _bocpd_align_dates(index: pd.DatetimeIndex, arr_len: int) -> pd.DatetimeInde
 
 
 def _changepoint_row_from_result(
-    symbol: str, close: pd.Series, aligned_index: pd.DatetimeIndex, result: BocpdResult,
+    symbol: str, close: "_get_pd().Series", aligned_index: pd.DatetimeIndex, result: BocpdResult,
 ) -> dict | None:
     """The exact payload-A per-symbol row shape, built from an already-run result.
 
@@ -758,12 +798,12 @@ def _changepoint_row_from_result(
     # constant by construction and never emitted in any payload. `break_prob`
     # / `break_prob_20` are the real, data-responsive detection statistics,
     # computed by research/bocpd.py itself -- never re-derived here.
-    break_prob_arr = np.asarray(result.break_prob, dtype=float)
-    break_prob_20_arr = np.asarray(result.break_prob_20, dtype=float)
-    map_run_arr = np.asarray(result.map_run_length)
-    exp_run_arr = np.asarray(result.expected_run_length, dtype=float)
-    pred_std_arr = np.asarray(result.pred_std, dtype=float)
-    defined_mass_arr = np.asarray(result.pred_var_defined_mass, dtype=float)
+    break_prob_arr = _get_np().asarray(result.break_prob, dtype=float)
+    break_prob_20_arr = _get_np().asarray(result.break_prob_20, dtype=float)
+    map_run_arr = _get_np().asarray(result.map_run_length)
+    exp_run_arr = _get_np().asarray(result.expected_run_length, dtype=float)
+    pred_std_arr = _get_np().asarray(result.pred_std, dtype=float)
+    defined_mass_arr = _get_np().asarray(result.pred_var_defined_mass, dtype=float)
     if len(break_prob_arr) == 0:
         return None
     last_break_prob = float(break_prob_arr[-1])
@@ -799,7 +839,7 @@ def _changepoint_row_from_result(
 
     break_mask = break_prob_arr >= _BOCPD_BREAK_THRESHOLD
     if break_mask.any():
-        break_idx = int(np.nonzero(break_mask)[0][-1])
+        break_idx = int(_get_np().nonzero(break_mask)[0][-1])
         last_break_date = aligned_index[break_idx].strftime("%Y-%m-%d")
         days_since_break = int(len(aligned_index) - 1 - break_idx)
     else:
@@ -833,7 +873,7 @@ def _changepoint_row_from_result(
 
 
 def _bocpd_runlength_heatmap(
-    result: BocpdResult, pos_in_window: np.ndarray, aligned_index: pd.DatetimeIndex,
+    result: BocpdResult, pos_in_window: "_get_np().ndarray", aligned_index: pd.DatetimeIndex,
 ) -> dict:
     """The paper's Fig-3-bottom heatmap, trimmed to the window and downsampled.
 
@@ -862,7 +902,7 @@ def _bocpd_runlength_heatmap(
         "log_floor": _BOCPD_LOG_FLOOR, "matrix": [],
     }
     try:
-        full = np.asarray(result.run_length_posterior(), dtype=float)
+        full = _get_np().asarray(result.run_length_posterior(), dtype=float)
     except Exception:  # noqa: BLE001
         return empty
     if full.ndim != 2 or full.shape[0] == 0 or full.shape[1] == 0:
@@ -870,7 +910,7 @@ def _bocpd_runlength_heatmap(
 
     n_rows_full, n_cols_full = full.shape
     t_full = min(n_cols_full, len(aligned_index))
-    cols = np.asarray(pos_in_window, dtype=int)
+    cols = _get_np().asarray(pos_in_window, dtype=int)
     cols = cols[cols < t_full]
     if len(cols) == 0:
         return empty
@@ -879,7 +919,7 @@ def _bocpd_runlength_heatmap(
 
     # Crop vertical extent to active run-length range (plus buffer) so heatmap
     # doesn't waste 80% height on empty space
-    active_rows = np.nonzero(win >= 10**_BOCPD_LOG_FLOOR)[0]
+    active_rows = _get_np().nonzero(win >= 10**_BOCPD_LOG_FLOOR)[0]
     if len(active_rows) > 0:
         max_active_r = int(active_rows.max())
         r_limit = min(n_rows_full, max(60, max_active_r + 15))
@@ -890,7 +930,7 @@ def _bocpd_runlength_heatmap(
 
     row_step = max(1, math.ceil(n_rows_crop / _BOCPD_MAX_ROWS))
     row_starts = list(range(0, n_rows_crop, row_step))
-    pooled = np.stack([win[r:r + row_step, :].max(axis=0) for r in row_starts], axis=0)
+    pooled = _get_np().stack([win[r:r + row_step, :].max(axis=0) for r in row_starts], axis=0)
     run_values = row_starts
 
     col_step = max(1, math.ceil(len(cols) / _BOCPD_MAX_COLS))
@@ -988,12 +1028,12 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
         return payload
 
     df_full = raw
-    if not isinstance(df_full.index, pd.DatetimeIndex):
+    if not isinstance(df_full.index, _get_pd().DatetimeIndex):
         payload = {**empty, "reason": f"'{symbol}' bars have no DatetimeIndex"}
         _changepoint_symbol_cache_put(cache_key, payload)
         return payload
     df_full = df_full[~df_full.index.duplicated(keep="last")].sort_index()
-    close_full = pd.to_numeric(df_full["close"], errors="coerce").dropna()
+    close_full = _get_pd().to_numeric(df_full["close"], errors="coerce").dropna()
     if len(close_full) < _BOCPD_MIN_BARS:
         payload = {**empty, "reason": f"only {len(close_full)} usable bars (< {_BOCPD_MIN_BARS})"}
         _changepoint_symbol_cache_put(cache_key, payload)
@@ -1005,7 +1045,7 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
             lambda_gap=_BOCPD_LAMBDA_GAP, a=_BOCPD_PRIOR_A, b=_BOCPD_PRIOR_B,
             truncation_mass=_BOCPD_TRUNCATION_MASS,
         )
-        aligned_index = _bocpd_align_dates(close_full.index, len(np.asarray(result.break_prob)))
+        aligned_index = _bocpd_align_dates(close_full.index, len(_get_np().asarray(result.break_prob)))
     except Exception as e:  # noqa: BLE001
         payload = {**empty, "reason": f"changepoints_from_prices failed: {type(e).__name__}: {e}"}
         _changepoint_symbol_cache_put(cache_key, payload)
@@ -1013,11 +1053,11 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
 
     # `cp_prob_raw` is deliberately not read (AMENDMENT 1: constant by
     # construction, carries zero information, never emitted).
-    break_prob_arr = np.asarray(result.break_prob, dtype=float)
-    break_prob_20_arr = np.asarray(result.break_prob_20, dtype=float)
-    map_run_arr = np.asarray(result.map_run_length)
-    pred_mean_arr = np.asarray(result.pred_mean, dtype=float)
-    pred_std_arr = np.asarray(result.pred_std, dtype=float)
+    break_prob_arr = _get_np().asarray(result.break_prob, dtype=float)
+    break_prob_20_arr = _get_np().asarray(result.break_prob_20, dtype=float)
+    map_run_arr = _get_np().asarray(result.map_run_length)
+    pred_mean_arr = _get_np().asarray(result.pred_mean, dtype=float)
+    pred_std_arr = _get_np().asarray(result.pred_std, dtype=float)
     ret_by_date = close_full.pct_change()
 
     stats_row = _changepoint_row_from_result(symbol, close_full, aligned_index, result)
@@ -1037,7 +1077,7 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
         return payload
     win_start, win_end = win_df.index[0], win_df.index[-1]
 
-    pos_in_window = np.nonzero((aligned_index >= win_start) & (aligned_index <= win_end))[0]
+    pos_in_window = _get_np().nonzero((aligned_index >= win_start) & (aligned_index <= win_end))[0]
     if len(pos_in_window) == 0:
         payload = {**empty, "reason": f"no BOCPD output in window for '{symbol}'", "stats": stats_row}
         _changepoint_symbol_cache_put(cache_key, payload)
@@ -1165,12 +1205,12 @@ SYMBOL_INDEX: dict[str, str] = _build_symbol_index()
 _SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
 WINDOW_OFFSETS = {
-    "1m": pd.DateOffset(months=1),
-    "3m": pd.DateOffset(months=3),
-    "6m": pd.DateOffset(months=6),
-    "1y": pd.DateOffset(years=1),
-    "3y": pd.DateOffset(years=3),
-    "5y": pd.DateOffset(years=5),
+    "1m": _get_pd().DateOffset(months=1),
+    "3m": _get_pd().DateOffset(months=3),
+    "6m": _get_pd().DateOffset(months=6),
+    "1y": _get_pd().DateOffset(years=1),
+    "3y": _get_pd().DateOffset(years=3),
+    "5y": _get_pd().DateOffset(years=5),
     "max": None,
 }
 DEFAULT_WINDOW = "1y"
@@ -1181,7 +1221,7 @@ _META_LOCK = threading.Lock()
 
 # Parquet DataFrame cache keyed by (symbol, tier, mtime) so repeat trajectory
 # requests are fast; stale entries for a symbol are evicted on reload.
-_PARQUET_CACHE: dict[tuple, pd.DataFrame] = {}
+_PARQUET_CACHE: dict[tuple, "_get_pd().DataFrame"] = {}
 _PARQUET_LOCK = threading.Lock()
 
 # Options tape/chain calls are materially more expensive than daily price
@@ -1214,9 +1254,9 @@ def _get_symbol_meta(symbol: str) -> dict:
         path = _symbol_path(symbol, tier)
         try:
             try:
-                df = pd.read_parquet(path, columns=["close"])
+                df = _get_pd().read_parquet(path, columns=["close"])
             except Exception:
-                df = pd.read_parquet(path)
+                df = _get_pd().read_parquet(path)
             n = len(df)
             meta = {
                 "n_bars": int(n),
@@ -1241,20 +1281,20 @@ TRACK_FALLBACK_MAP = {
 }
 
 
-def _normalize_ohlcv_df(df: pd.DataFrame) -> pd.DataFrame | None:
+def _normalize_ohlcv_df(df: pd.DataFrame) -> "_get_pd().DataFrame" | None:
     """Coerce parquet/yfinance frames into the trajectory OHLCV schema."""
     if df is None or df.empty:
         return None
     out = df.copy()
-    if not isinstance(out.index, pd.DatetimeIndex):
+    if not isinstance(out.index, _get_pd().DatetimeIndex):
         for col in ("date", "Date", "datetime", "Datetime"):
             if col in out.columns:
-                out[col] = pd.to_datetime(out[col], utc=False, errors="coerce")
+                out[col] = _get_pd().to_datetime(out[col], utc=False, errors="coerce")
                 out = out.set_index(col)
                 break
         else:
             try:
-                out.index = pd.to_datetime(out.index, utc=False, errors="coerce")
+                out.index = _get_pd().to_datetime(out.index, utc=False, errors="coerce")
             except (TypeError, ValueError):
                 return None
     out = out[~out.index.isna()].sort_index()
@@ -1271,14 +1311,14 @@ def _normalize_ohlcv_df(df: pd.DataFrame) -> pd.DataFrame | None:
     if "volume" not in out.columns:
         out["volume"] = 0.0
     for c in ("open", "high", "low", "close", "volume"):
-        out[c] = pd.to_numeric(out[c], errors="coerce")
+        out[c] = _get_pd().to_numeric(out[c], errors="coerce")
     out = out.dropna(subset=["close"])
     if out.empty:
         return None
     return out[["open", "high", "low", "close", "volume"]]
 
 
-def _fetch_yfinance_ohlcv(symbol: str) -> pd.DataFrame | None:
+def _fetch_yfinance_ohlcv(symbol: str) -> "_get_pd().DataFrame" | None:
     """On-demand daily bars for names missing from the local parquet universe."""
     try:
         import yfinance as yf  # type: ignore[import-not-found]
@@ -1290,7 +1330,7 @@ def _fetch_yfinance_ohlcv(symbol: str) -> pd.DataFrame | None:
         return None
     if raw is None or raw.empty:
         return None
-    if isinstance(raw.columns, pd.MultiIndex):
+    if isinstance(raw.columns, _get_pd().MultiIndex):
         # yfinance often returns (Price, Ticker) even for a single name.
         try:
             levels = [str(x).upper() for x in raw.columns.get_level_values(-1)]
@@ -1303,7 +1343,7 @@ def _fetch_yfinance_ohlcv(symbol: str) -> pd.DataFrame | None:
     return _normalize_ohlcv_df(raw)
 
 
-def _load_symbol_df(symbol: str) -> tuple[pd.DataFrame | None, str | None]:
+def _load_symbol_df(symbol: str) -> tuple["_get_pd().DataFrame | None, str | None"]:
     """Load a symbol's full OHLCV parquet, cached by (symbol, tier, mtime).
 
     Falls back to a short-lived yfinance pull when the ticker is not in the
@@ -1336,7 +1376,7 @@ def _load_symbol_df(symbol: str) -> tuple[pd.DataFrame | None, str | None]:
         df = _PARQUET_CACHE.get(key)
     if df is not None:
         return df, tier
-    df = _normalize_ohlcv_df(pd.read_parquet(path))
+    df = _normalize_ohlcv_df(_get_pd().read_parquet(path))
     if df is None:
         return None, None
     with _PARQUET_LOCK:
@@ -1384,24 +1424,24 @@ def _pct(a, b):
     return (bf / af - 1.0) * 100.0
 
 
-def _lookback_chg_pct(close: pd.Series, n_bars: int):
+def _lookback_chg_pct(close: "_get_pd().Series", n_bars: int):
     if len(close) <= n_bars:
         return None
     return _pct(close.iloc[-1 - n_bars], close.iloc[-1])
 
 
-def _asof_chg_pct(close: pd.Series, months: int = 0, years: int = 0):
+def _asof_chg_pct(close: "_get_pd().Series", months: int = 0, years: int = 0):
     if close.empty:
         return None
     last_date = close.index[-1]
-    target = last_date - pd.DateOffset(months=months, years=years)
+    target = last_date - _get_pd().DateOffset(months=months, years=years)
     sub = close.loc[close.index <= target]
     if sub.empty:
         return None
     return _pct(sub.iloc[-1], close.iloc[-1])
 
 
-def _ytd_chg_pct(close: pd.Series):
+def _ytd_chg_pct(close: "_get_pd().Series"):
     if close.empty:
         return None
     last_date = close.index[-1]
@@ -1417,7 +1457,7 @@ def _ytd_chg_pct(close: pd.Series):
     return _pct(base, close.iloc[-1])
 
 
-def _window_stats(win_close: pd.Series) -> dict:
+def _window_stats(win_close: "_get_pd().Series") -> dict:
     """ann_return/vol/sharpe/max_dd/calmar + best/worst/pct-up over one price
     series. Sharpe/calmar/ann_* are null (never Inf/NaN) when the denominator
     is zero or the window is too short to annualize meaningfully."""
@@ -1521,7 +1561,7 @@ def _compute_factors(df_full: pd.DataFrame) -> dict:
     # Positive log10 dollar volume score for intuitive UI display (e.g. 9.18 for $1.5B ADV)
     liq_score = math.log10(max(1.0, last_dollar_vol)) if last_dollar_vol > 0 else 0.0
 
-    def last(s: pd.Series):
+    def last(s: "_get_pd().Series"):
         return _safe_round(s.iloc[-1], 6) if len(s) else None
 
     return {
@@ -1535,7 +1575,7 @@ def _compute_factors(df_full: pd.DataFrame) -> dict:
     }
 
 
-def _slice_window(df_full: pd.DataFrame, window: str) -> pd.DataFrame:
+def _slice_window(df_full: pd.DataFrame, window: str) -> "_get_pd().DataFrame":
     offset = WINDOW_OFFSETS.get(window)
     if offset is None:
         return df_full
@@ -1772,7 +1812,7 @@ def _option_chain_dates(symbol: str, *, limit: int = 93) -> list[str]:
     for path in sorted(option_root.glob(f"date=*/{symbol}.parquet"))[-limit:]:
         try:
             # Skip unreadable / empty files so "last good" is actually usable.
-            frame = pd.read_parquet(path)
+            frame = _get_pd().read_parquet(path)
         except (OSError, ValueError):
             continue
         if frame.empty:
@@ -1802,7 +1842,7 @@ def _historical_option_rows(
         if not path.exists():
             continue
         try:
-            frame = pd.read_parquet(path)
+            frame = _get_pd().read_parquet(path)
         except (OSError, ValueError):
             continue
         if frame.empty:
@@ -2621,7 +2661,7 @@ def _load_smallcap_price_data() -> dict[str, pd.DataFrame]:
             if sym in out or "MANIFEST" in sym:
                 continue
             try:
-                out[sym] = pd.read_parquet(path)
+                out[sym] = _get_pd().read_parquet(path)
             except Exception:
                 continue
     return out
@@ -2775,7 +2815,7 @@ def _sanitize(obj):
         return [_sanitize(v) for v in obj]
     if obj is pd.NaT:
         return None
-    if isinstance(obj, np.generic):
+    if isinstance(obj, _get_np().generic):
         obj = obj.item()
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
@@ -2785,7 +2825,7 @@ def _sanitize(obj):
         return obj.strftime("%Y-%m-%d")
     if isinstance(obj, datetime):
         return obj.isoformat()
-    if isinstance(obj, np.ndarray):
+    if isinstance(obj, _get_np().ndarray):
         return _sanitize(obj.tolist())
     if isinstance(obj, Path):
         return str(obj)
