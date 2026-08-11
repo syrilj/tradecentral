@@ -1,52 +1,65 @@
-# --- secrets ---
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-
-# --- python ---
+```
+# Python
 __pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-.venv-qlib/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
 venv/
+.venv/
+.eggs/
+*.egg-info/
+.egg/
+
+# Build artifacts
+build/
+dist/
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+*.env.*
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Testing
 .pytest_cache/
-.ruff_cache/
+.mypy_cache/
+.hypothesis/
+
+# Distribution / packaging
+*.tar.gz
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# mypy
 .mypy_cache/
 
-# --- vendored third-party source (separate upstream repo) ---
-.qlib-src/
-
-# --- node ---
-node_modules/
-dist/
-.vite/
-
-# --- data + experiment artifacts (large, regenerable) ---
-data/
-runs/
-qlib_xs/
-qlib_xs3/
-qlib_xs4/
-mlruns/
-
-# --- large binary formats ---
-*.parquet
-*.pkl
-*.db
-*.sqlite3
-*.h5
-*.bin
-*.tar.gz
-*.joblib
-*.npz
-
-# --- trained model snapshots (regenerable, large) ---
-models/qlib_scan_lgb_backup_*/
-models/qlib_scan_lgb_challenger*/
-
-# --- os ---
-.DS_Store
-.gstack/
+# Debug
+debug.log
+*.stackdump
+```
