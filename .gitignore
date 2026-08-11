@@ -1,65 +1,124 @@
-```
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
+*.egg
+*.egg-info/
+.eggs/
+eggs/
+MANIFEST
+
+# Virtual environments (any local name)
 env/
 venv/
+venv*/
 .venv/
-.eggs/
-*.egg-info/
-.egg/
+.venv*/
+.venv-qlib/
+ENV/
 
-# Build artifacts
+# Build / packaging
 build/
 dist/
-*.so
-*.dylib
-*.dll
-*.exe
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
 
 # Logs
 *.log
+debug.log
+*.stackdump
 
-# Environment variables
+# Environment / secrets (keep .env.example tracked)
 .env
 .env.local
-*.env.*
+.env.*.local
+!.env.example
 
-# Coverage reports
+# Coverage / test caches
 .coverage
+.coverage.*
 coverage/
 htmlcov/
+.pytest_cache/
+.hypothesis/
+.tox/
+.nox/
+.cache/
 
-# IDE
+# Type / lint caches
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+dmypy.json
+.dmypy.json
+
+# IDE / editor
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
+
+# OS
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
+Desktop.ini
 
-# Testing
-.pytest_cache/
-.mypy_cache/
-.hypothesis/
+# Jupyter
+.ipynb_checkpoints/
 
-# Distribution / packaging
+# Node / frontend
+node_modules/
+.vite/
+.turbo/
+.npm/
+.yarn/
+*.tsbuildinfo
+
+# Local tool / agent state (not project source)
+.gstack/
+.qodo/
+.claude/settings.local.json
+.claude/local/
+*.local.md
+
+# Vendored third-party source (separate upstream repo)
+.qlib-src/
+
+# Data + experiment artifacts (large, regenerable)
+data/
+runs/
+qlib_xs/
+qlib_xs3/
+qlib_xs4/
+mlruns/
+wandb/
+.wandb/
+outputs/
+artifacts/
+
+# Large binary formats
+*.parquet
+*.pkl
+*.joblib
+*.db
+*.sqlite3
+*.h5
+*.bin
+*.npz
 *.tar.gz
-*.whl
-pip-log.txt
-pip-delete-this-directory.txt
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Trained model snapshots (regenerable, large)
+models/qlib_scan_lgb_backup_*/
+models/qlib_scan_lgb_challenger*/
 
-# mypy
-.mypy_cache/
-
-# Debug
-debug.log
-*.stackdump
-```
+# Ignore vscode AI rules
+.github/instructions/codacy.instructions.md

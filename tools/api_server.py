@@ -2813,22 +2813,33 @@ def _sanitize(obj):
         return {str(k): _sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set)):
         return [_sanitize(v) for v in obj]
-    if obj is pd.NaT:
-        return None
-    if isinstance(obj, _get_np().generic):
-        obj = obj.item()
+    # Cheap early exits for JSON-native types (avoid lazy pandas/numpy import).
+    if obj is None or isinstance(obj, (bool, str, int)):
+        return obj
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
-    if isinstance(obj, pd.Timestamp):
-        if obj.hour or obj.minute or obj.second or obj.microsecond:
-            return obj.strftime("%Y-%m-%d %H:%M:%S")
-        return obj.strftime("%Y-%m-%d")
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    if isinstance(obj, _get_np().ndarray):
-        return _sanitize(obj.tolist())
     if isinstance(obj, Path):
         return str(obj)
+    # pandas types (Timestamp/NaT subclass datetime -- handle before bare datetime).
+    # Gate on module name so pure-datetime payloads don't force a pandas import.
+    mod = type(obj).__module__ or ""
+    if mod.startswith("pandas"):
+        pd = _get_pd()
+        if obj is pd.NaT:
+            return None
+        if isinstance(obj, pd.Timestamp):
+            if pd.isna(obj):
+                return None
+            if obj.hour or obj.minute or obj.second or obj.microsecond:
+                return obj.strftime("%Y-%m-%d %H:%M:%S")
+            return obj.strftime("%Y-%m-%d")
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if mod.startswith("numpy"):
+        if isinstance(obj, _get_np().generic):
+            return _sanitize(obj.item())
+        if isinstance(obj, _get_np().ndarray):
+            return _sanitize(obj.tolist())
     return obj
 
 
