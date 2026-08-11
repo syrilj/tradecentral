@@ -1,76 +1,98 @@
-# edge · instrument
+# TradeCentral Dashboard
 
-Vue 3 dashboard for the `edge/` research stack. Replaces the string-templated
-HTML that `edge/tools/render_dashboard.py` used to emit — that file is still the
-signal-aggregation engine, it just no longer builds markup.
+The TradeCentral dashboard is the Vue 3 and TypeScript operator interface for the local quantitative research and decision-support stack.
 
-## Run it
+This file is intentionally limited to frontend/runtime notes. System architecture lives in [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md), and the visual/interaction contract lives in [`../docs/DESIGN.md`](../docs/DESIGN.md).
+
+## Run
+
+From the workspace root, with this repository checked out as `edge/`:
 
 ```bash
-bash edge/tools/run_dashboard.sh          # build + serve on :8787
-bash edge/tools/run_dashboard.sh --dev    # Vite HMR on :5178 against the live API
-bash edge/tools/run_dashboard.sh --serve  # serve an existing build, no rebuild
+# Build the SPA and serve it with the local API on :8787
+bash edge/tools/run_dashboard.sh
+
+# Vite HMR on :5178, proxying /api to the Python server on :8787
+bash edge/tools/run_dashboard.sh --dev
+
+# Serve an existing build without rebuilding
+bash edge/tools/run_dashboard.sh --serve
 ```
 
-The build lands in `edge/runs/dashboard_dist/`, which `edge/tools/api_server.py`
-serves as its SPA root. Fonts are bundled via `@fontsource`, so the panel renders
-with the network down. The launcher also installs the pinned operational Python
-dependency in `edge/requirements-dashboard.txt`; this is kept separate from the
-frozen Vertex training environment. The API binds to `127.0.0.1` only because
-its trading context is unauthenticated and must not be exposed to the LAN.
+The production build is written to `edge/runs/dashboard_dist/` and served by `edge/tools/api_server.py`.
 
-## Views
+The backend binds to `127.0.0.1`. The current application is a single-operator local research surface and does not provide the authentication required for public/LAN exposure.
 
-| | | |
-|---|---|---|
-| `01` | **Desk** | Quick/Deep market activity scan, live LSE flow flags, PEAD ordinal flags, directional signals, capital interlock |
-| `02` | **Market** | Symbol search over the 558-name daily universe, price/growth trajectory with a drawdown underlay, factor loadings, rebased compare basket with a return-correlation matrix |
-| `03` | **Sectors** | Sector rotation, relative strength, and flow watch names |
-| `04` | **Sentiment** | Positioning, short-volume, and filing sentiment diagnostics |
-| `05` | **Anomalies** | Statistical outlier detection and cross-sectional anomaly context |
-| `06` | **Options** | Truth-preserving call/put activity overlay, GEX topology, noise audit, and risk-neutral implied ranges |
-| `07` | **Gates** | Every pre-registered gate, its verdict, and the individual bars it passed or failed |
-| `08` | **Cloud** | Vertex AI custom jobs, artifact storage, credit posture |
-| `09` | **Evolution** | Genetic algorithm lab: fitness trajectory, elites, confirmation survivors (research-only) |
+## Frontend stack
 
-`⌘K` opens symbol search from anywhere; number keys jump between views.
+- Vue 3
+- TypeScript
+- Vue Router
+- Vite
+- Vitest
+- Dependency-light SVG chart primitives under `src/charts/`
+- Three.js only where a surface genuinely requires 3D rendering
+- Locally bundled fonts via `@fontsource`
 
-## Design notes
+## Source layout
 
-The aesthetic is an instrument, not a product — oscilloscope graticules,
-printer's registration ticks instead of rounded cards, one phosphor accent that
-only ever means "measured now". Green and red are reserved for signed
-quantities and are never used for chrome, so a red cell always means a negative
-number rather than an error.
-
-Two conventions are load-bearing:
-
-- **Missing renders as `—`, never as `0.00`.** A zero that means "no data" is a
-  lie on a trading surface. See `src/format.ts`.
-- **A failed refresh keeps the last good data and marks it stale** rather than
-  blanking the panel. See `src/composables/useResource.ts`.
-- **The XNYS clock comes from exchange session data, not weekday arithmetic.**
-  Early closes, holidays, and DST are resolved by `exchange_calendars`; a
-  visibly labelled conservative fallback is available for stripped runtimes.
-
-The live-capital interlock sits at the top of the Desk on purpose. Every model
-in this stack is currently research-only, and showing candidate trades above
-that fact would be an invitation to act on them.
-
-## Layout
-
-```
+```text
 src/
-  api.ts                  typed client for edge/tools/api_server.py
-  format.ts               number/date formatting; missing-value discipline
-  router.ts
-  charts/                 dependency-free SVG scales, paths, statistics
-  composables/            polling resource primitive
-  components/             Panel, readouts, search, and dependency-free SVG charts
-  views/                  Desk, Market, Sectors, Sentiment, Anomalies, Options, Gates, Cloud
-  styles/tokens.css       the design system
+├── api.ts                  Typed client for tools/api_server.py
+├── App.vue                 Global shell, polling, navigation, market/readiness state
+├── router.ts               Route source of truth
+├── format.ts               Number/date formatting and missing-value discipline
+├── charts/                 SVG scales, path builders, and statistics
+├── composables/            Shared polling/resource behavior
+├── components/             Reusable instrument components
+├── styles/                 Design tokens and global styles
+└── views/                  Routed workspaces
 ```
 
-No charting library. `src/charts/` emits SVG path strings directly, which is
-both smaller than a chart dependency and means the traces inherit the same CSS
-variables as everything else.
+## Navigation
+
+The primary operator jobs are:
+
+- Desk
+- Market
+- Options
+- Flow
+- Research
+
+Specialist research/diagnostic surfaces are exposed through the secondary navigation. Do not duplicate the full route set into additional sidebars or top tab bars.
+
+`src/router.ts` is the source of truth for the current route inventory. Legacy URLs should redirect into their consolidated workspace when functionality is moved rather than keeping duplicate implementations alive.
+
+## Data behavior
+
+The dashboard follows four non-negotiable rules:
+
+1. Missing values render as `—`, never a fake numeric zero.
+2. Failed refreshes preserve the last good data and make stale/error state visible.
+3. Source/as-of/quality state must remain available when it affects interpretation.
+4. Expensive offline research is read from artifacts; a UI poll must not silently trigger a walk-forward, graph rebuild, or other heavy experiment.
+
+## Design behavior
+
+The UI is a dense institutional research instrument, not a consumer-finance dashboard.
+
+- Neutral dark surfaces
+- One restrained live/focus accent
+- Green/red reserved for signed quantities
+- Separate call/put colors for option identity
+- No neon glow, decorative gradients, or generic “AI” chrome
+- Tabular data typography for aligned numbers
+- Compact and comfortable density from shared tokens
+- Keyboard-first global symbol search
+
+See [`../docs/DESIGN.md`](../docs/DESIGN.md) before introducing new global navigation, colors, chart semantics, or component patterns.
+
+## Development
+
+```bash
+npm install
+npm test
+npm run build
+```
+
+The production build runs `vue-tsc --noEmit` before Vite compilation. A successful dashboard build validates frontend contracts only; it is not evidence that any research model or strategy is approved for live capital.
