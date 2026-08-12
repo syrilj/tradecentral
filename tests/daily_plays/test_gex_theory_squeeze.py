@@ -164,6 +164,23 @@ def test_no_fuel_means_no_squeeze_in_either_direction():
     assert d["bearish_score"] == 0
 
 
+def test_missing_adv_holds_theory_neutral_instead_of_inventing_liquidity():
+    rows = [
+        {"right": "call", "strike": 100, "gamma": 0.1, "open_interest": 100_000, "dte": 1},
+    ]
+    out = compute_theory_squeeze(
+        chain_rows=rows,
+        spot=100.0,
+        adv_notional=0.0,
+        call_imbalance=1.0,
+        momentum=0.05,
+    )
+    assert out["adv_available"] is False
+    assert out["measurable"] is False
+    assert out["squeeze_risk"] == 0.0
+    assert out["squeeze_score"] == 0.0
+
+
 def test_squeeze_risk_scales_with_neg_gex_atm_and_urgency():
     base = squeeze_risk(neg_gex_1pct_m=-100.0, adv_m=50.0, atm_share=0.5, weighted_dte=30.0)
     more_fuel = squeeze_risk(neg_gex_1pct_m=-200.0, adv_m=50.0, atm_share=0.5, weighted_dte=30.0)

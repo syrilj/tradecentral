@@ -1,7 +1,8 @@
 """Validate bullish/bearish gamma-squeeze theory scores against subsequent returns.
 
 Design goals (quant research hygiene):
-- Report **full theory score** hit rates (SR × imbalance × momentum).
+- Report the shipped **theory score** hit rates (short-gamma fuel × signed-flow
+  and/or momentum conviction).
 - Report **momentum-only** baseline (so we don't claim gamma edge that is just mom).
 - Report **SR-signed-by-momentum** (fuel × sign(mom)) to isolate short-gamma fuel.
 - Cross-sectional rank IC of scores vs forward returns when N is large enough.
@@ -24,7 +25,6 @@ import pandas as pd
 from edge.daily_plays.gex_core import (
     bs_gamma,
     compute_theory_squeeze,
-    dollar_gamma_1pct,
 )
 
 
@@ -190,12 +190,19 @@ def _forward_returns(prices: pd.DataFrame, asof: pd.Timestamp, horizons: tuple[i
 
 
 def _hit(score: float, fwd: float | None, threshold: float) -> bool | None:
-    if fwd is None or abs(score) < threshold:
+    try:
+        score_f = float(score)
+        fwd_f = float(fwd) if fwd is not None else float("nan")
+    except (TypeError, ValueError):
         return None
-    if score >= threshold:
-        return fwd > 0
-    if score <= -threshold:
-        return fwd < 0
+    # DataFrame row iteration turns missing optional returns into NaN. Treat
+    # them as censored observations, never as automatic misses.
+    if not math.isfinite(score_f) or not math.isfinite(fwd_f) or abs(score_f) < threshold:
+        return None
+    if score_f >= threshold:
+        return fwd_f > 0
+    if score_f <= -threshold:
+        return fwd_f < 0
     return None
 
 
@@ -263,7 +270,10 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
                 min_oi=cfg.min_open_interest,
             )
             tot_vol = call_vol + put_vol
-            call_imb = (call_vol - put_vol) / tot_vol if tot_vol > 0 else 0.0
+            contract_right_imb = (call_vol - put_vol) / tot_vol if tot_vol > 0 else 0.0
+            # Historical chain volume has contract identity but no aggressor.
+            # It cannot populate the shipped model's signed directional term.
+            signed_flow_imb = 0.0
 
             if not theory_rows:
                 records.append({"symbol": symbol, "asof": asof_str, "error": "no_theory_rows"})
@@ -272,8 +282,8 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
             theory = compute_theory_squeeze(
                 chain_rows=theory_rows,
                 spot=spot,
-                adv_notional=adv if adv > 0 else spot * 1_000_000.0,
-                call_imbalance=call_imb,
+                adv_notional=adv,
+                call_imbalance=signed_flow_imb,
                 momentum=momentum,
                 score_scale=cfg.score_scale,
             )
@@ -295,7 +305,9 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
                 "n_contracts": len(theory_rows),
                 "call_volume": call_vol,
                 "put_volume": put_vol,
-                "call_imbalance": call_imb,
+                "call_imbalance": signed_flow_imb,
+                "directional_flow_imbalance": signed_flow_imb,
+                "contract_right_imbalance": contract_right_imb,
                 "momentum": momentum,
                 "adv": adv,
                 "theory_score": score,
@@ -449,6 +461,7 @@ def _summarize(panel: pd.DataFrame, cfg: SqueezeValidationConfig) -> dict[str, A
         "OI snapshot is sparse historically (often single date); OI is assumed sticky for forward tests.",
         "Dealer inventory uses short-premium assumption q=−OI; true MM book is not observed.",
         "Theory score gates on momentum — always compare to momentum-only baseline hit rate / IC.",
+        "Historical chains have no aggressor side; call/put volume is retained as identity only and the signed-flow term is zero.",
         "On mega-cap liquid names |GEX|/ADV is tiny by construction — absolute squeeze labels rarely fire; use rank IC + amplification.",
         "Small N cross-section: treat hit rates as descriptive, not a GO gate alone.",
     ]

@@ -48,6 +48,39 @@ def test_compare_payload_uses_the_lazy_pandas_dependency(monkeypatch):
     assert payload["stats"]["AAA"]["change_basis"] == "last_two_observed_closes"
 
 
+def test_lite_trajectory_skips_full_market_qlib_context(monkeypatch):
+    prices = _prices()
+    monkeypatch.setattr(api_server, "_load_symbol_df", lambda _symbol: (prices, "core"))
+    monkeypatch.setattr(
+        api_server,
+        "_trajectory_qlib_context",
+        lambda _symbol: (_ for _ in ()).throw(AssertionError("qlib should be skipped")),
+    )
+
+    payload, status = api_server._trajectory_payload("AAA", "1m", include_qlib=False)
+
+    assert status == 200
+    assert payload["series"]
+    assert "qlib" not in payload
+    assert "qlib_score" not in payload
+
+
+def test_options_price_series_reads_one_symbol_and_preserves_volume(monkeypatch):
+    prices = _prices()
+    monkeypatch.setattr(api_server, "_load_symbol_df", lambda _symbol: (prices, "core"))
+    monkeypatch.setattr(
+        api_server,
+        "_trajectory_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trajectory should not run")),
+    )
+
+    series, spot = api_server._options_price_series("AAA", "1m")
+
+    assert spot == prices["close"].iloc[-1]
+    assert series[-1]["volume"] == 1_000_000
+    assert len(series) == 23
+
+
 def test_compare_change_does_not_use_forward_filled_overlap(monkeypatch):
     early = _prices().iloc[:20].copy()
     late = _prices().copy()

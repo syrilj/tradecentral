@@ -304,3 +304,41 @@ def test_unusual_flow_never_substitutes_local_activity_for_live_rows():
     assert result["coverage"]["live_with_activity"] == 0
     assert result["rows"] == []
     assert "routing_candidates" not in result
+
+
+def test_unusual_flow_reuses_daily_bar_context_between_provider_polls(tmp_path, monkeypatch):
+    import edge.daily_plays.live_activity as live_activity
+
+    data_dir = tmp_path / "1d"
+    data_dir.mkdir()
+    _bars().to_parquet(data_dir / "AAA.parquet")
+    live_activity._FLOW_LOCAL_CACHE.clear()
+    original = live_activity.scan_local_market_activity
+    calls = 0
+
+    def counted(**kwargs):
+        nonlocal calls
+        calls += 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(live_activity, "scan_local_market_activity", counted)
+
+    def flow_fetcher(**_):
+        return [{
+            "underlying": "AAA",
+            "contract_type": "call",
+            "premium": 100_000,
+            "ts": "2026-08-11T15:00:00Z",
+        }]
+
+    first = build_unusual_options_flow(
+        symbols=["AAA"], data_dirs=[data_dir], flow_fetcher=flow_fetcher,
+    )
+    second = build_unusual_options_flow(
+        symbols=["AAA"], data_dirs=[data_dir], flow_fetcher=flow_fetcher,
+    )
+
+    assert calls == 1
+    assert first["coverage"]["local_context_cache_hit"] is False
+    assert second["coverage"]["local_context_cache_hit"] is True
+    live_activity._FLOW_LOCAL_CACHE.clear()

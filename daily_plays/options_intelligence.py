@@ -645,6 +645,7 @@ def _flow_series(
         bucket = buckets.setdefault(key, {
             "t": key.isoformat(), "call_premium": 0.0, "put_premium": 0.0,
             "signed_net_premium": 0.0, "signed_premium_observations": 0,
+            "signed_gross_premium": 0.0,
             "print_count": 0, "unresolved_premium": 0.0,
         })
         bucket[f"{row['right']}_premium"] += row["premium"]
@@ -653,6 +654,7 @@ def _flow_series(
             bucket["unresolved_premium"] += row["premium"]
         else:
             bucket["signed_net_premium"] += row["signed_premium"]
+            bucket["signed_gross_premium"] += abs(float(row["signed_premium"]))
             bucket["signed_premium_observations"] += 1
 
     series = []
@@ -711,6 +713,7 @@ def _chain_activity_series(
         bucket = buckets.setdefault(key, {
             "t": key.isoformat(), "call_premium": 0.0, "put_premium": 0.0,
             "signed_net_premium": None, "signed_premium_observations": 0,
+            "signed_gross_premium": 0.0,
             "print_count": 0, "unresolved_premium": 0.0,
         })
         bucket[f"{right}_premium"] += premium
@@ -753,7 +756,7 @@ def _gex_map(
         gamma = _number(row.get("gamma"))
         source = "provider"
         years = max(float(dte or 0), 0.5) / 365.0
-        if gamma is None or gamma < 0:
+        if gamma is None or gamma <= 0:
             gamma = _bs_gamma(spot=spot, strike=strike or 0, years=years, iv=iv or 0, rate=rate)
             source = "black_scholes"
         right = row.get("right")
@@ -1149,7 +1152,7 @@ def _enrich_chain_for_theory(
         iv = _number(row.get("iv") or row.get("impliedVolatility") or row.get("implied_vol"))
         gamma = _number(row.get("gamma"))
         years = max(float(dte or 0), 0.5) / 365.0
-        if gamma is None or gamma < 0:
+        if gamma is None or gamma <= 0:
             gamma = _bs_gamma(spot=spot, strike=float(strike), years=years, iv=iv or 0, rate=rate)
         if gamma is None or gamma <= 0:
             continue
@@ -1167,11 +1170,10 @@ def _enrich_chain_for_theory(
     return out
 
 
-# A tape imbalance is only as trustworthy as the number of prints behind it.
-# Two surviving prints, both calls, produce a mechanical ±1.0 that would drive
-# the squeeze direction outright. Shrink toward neutral until the sample is big
-# enough to carry information.
+# A signed tape imbalance is only as trustworthy as the number of signed prints
+# behind it. Shrink toward neutral until the sample can carry information.
 IMBALANCE_FULL_CONFIDENCE_PRINTS = 8
+MOMENTUM_MAX_AGE_DAYS = 4
 
 
 def _imbalance_confidence(print_count: int) -> float:
@@ -1191,9 +1193,7 @@ def _squeeze_readout(
     horizon_days: float | None = None,
     chain_rows: Sequence[Mapping[str, Any]] | None = None,
     price_series: Sequence[Mapping[str, Any]] | None = None,
-    call_premium: float = 0.0,
-    put_premium: float = 0.0,
-    activity_imbalance: float | None = None,
+    directional_flow_imbalance: float | None = None,
     imbalance_confidence: float | None = None,
     asof: datetime | None = None,
     rate: float = 0.045,
@@ -1202,7 +1202,7 @@ def _squeeze_readout(
 
     Theory (primary):
       short dealer gamma (customer-long premium) × ATM/expiry urgency / ADV
-      × call/put imbalance × return momentum.
+      × explicitly signed directional flow and/or return momentum.
 
     Structure (secondary UI): wall proximity / OTM concentration factor boards.
     Diagnostic only — not a live trade ticket.
@@ -1284,24 +1284,37 @@ def _squeeze_readout(
 
     # --- Theory squeeze (primary direction) ---
     prices = list(price_series or [])
-    momentum = _price_momentum(prices, lookback=5)
-    adv = _adv_notional(prices, window=20)
-    if activity_imbalance is not None:
-        call_imb = float(activity_imbalance)
-    else:
-        tot_prem = float(call_premium) + float(put_premium)
-        call_imb = (
-            (float(call_premium) - float(put_premium)) / tot_prem if tot_prem > 0 else 0.0
-        )
-
     asof_dt = asof or datetime.now(timezone.utc)
+    price_times = [
+        observed
+        for row in prices
+        if isinstance(row, Mapping)
+        for observed in (_timestamp(_first(row, "t", "timestamp", "date", "d")),)
+        if observed is not None
+    ]
+    price_age_days = (
+        max(0, (asof_dt.date() - max(price_times).date()).days)
+        if price_times else None
+    )
+    momentum_fresh = price_age_days is not None and price_age_days <= MOMENTUM_MAX_AGE_DAYS
+    momentum = _price_momentum(prices, lookback=5) if momentum_fresh else 0.0
+    adv = _adv_notional(prices, window=20)
+    # Contract right is identity, not trade direction. Only an aggressor- or
+    # vendor-signed premium imbalance can move the directional flow term.
+    # Momentum may still identify the direction of an already-moving squeeze.
+    call_imb = (
+        float(directional_flow_imbalance)
+        if directional_flow_imbalance is not None
+        else 0.0
+    )
+
     theory_chain = _enrich_chain_for_theory(
         chain_rows or [], spot=spot, rate=rate, asof=asof_dt,
     )
     theory = compute_theory_squeeze(
         chain_rows=theory_chain,
         spot=spot,
-        adv_notional=adv if adv > 0 else max(spot * 1_000_000.0, 1.0),
+        adv_notional=adv,
         call_imbalance=call_imb,
         momentum=momentum,
         score_scale=40.0,
@@ -1315,7 +1328,9 @@ def _squeeze_readout(
         **components,
         "theory_squeeze_risk": theory_components.get("squeeze_risk"),
         "theory_momentum": theory_components.get("momentum"),
-        "theory_call_imbalance": theory_components.get("call_imbalance"),
+        "theory_momentum_fresh": momentum_fresh,
+        "theory_momentum_price_age_days": price_age_days,
+        "theory_directional_flow_imbalance": theory_components.get("directional_flow_imbalance"),
         "theory_atm_share": theory_components.get("atm_share"),
         "theory_weighted_dte": theory_components.get("weighted_dte"),
         "theory_liquidity_ratio": theory_components.get("liquidity_ratio"),
@@ -1359,7 +1374,7 @@ def _squeeze_readout(
     elif dampened:
         drivers.append("long_gamma_dampens")
     if abs(call_imb) >= 0.1:
-        drivers.append("call_put_imbalance" if call_imb > 0 else "put_call_imbalance")
+        drivers.append("signed_bullish_flow" if call_imb > 0 else "signed_bearish_flow")
     if momentum > 0.005:
         drivers.append("up_momentum")
     elif momentum < -0.005:
@@ -1421,7 +1436,7 @@ def _squeeze_readout(
         "drivers": drivers,
         "method": (
             "theory: short-premium dealer GEX × ATM/expiry urgency / ADV × "
-            "call-put imbalance × return momentum; structure boards secondary"
+            "signed directional flow / return momentum; structure boards secondary"
         ),
         "components": components,
         "scored_components": scored_components,
@@ -1433,8 +1448,12 @@ def _squeeze_readout(
             "bearish_ui": theory.get("bearish_ui"),
             "short_premium_gex_m": short_gex,
             "adv_m": theory.get("adv_m"),
-            "call_imbalance": theory.get("call_imbalance"),
+            "adv_available": theory.get("adv_available"),
+            "measurable": theory.get("measurable"),
+            "directional_flow_imbalance": theory.get("directional_flow_imbalance"),
             "momentum": theory.get("momentum"),
+            "momentum_fresh": momentum_fresh,
+            "momentum_price_age_days": price_age_days,
             "label": theory.get("squeeze_label"),
         },
         "structure_score": structure.get("squeeze_score"),
@@ -1656,6 +1675,8 @@ def build_options_intelligence(
     total_premium = call_premium + put_premium
     signed_values = [row["signed_net_premium"] for row in flow_series if row["signed_net_premium"] is not None]
     signed_net = sum(float(value) for value in signed_values) if signed_values else None
+    signed_gross = sum(float(row.get("signed_gross_premium") or 0.0) for row in flow_series)
+    signed_prints = sum(int(row.get("signed_premium_observations") or 0) for row in flow_series)
     unresolved = sum(float(row["unresolved_premium"]) for row in flow_series)
     observed_times = [
         value for value in [chain_observed, *(
@@ -1668,7 +1689,7 @@ def build_options_intelligence(
     caveats = [
         "Call/put activity is not bought/sold direction. Signed net flow requires an explicit provider aggressor.",
         "Charting GEX uses call-positive/put-negative wall convention; squeeze theory uses short-premium dealer inventory (q=−OI). True dealer inventory is not public.",
-        "Gamma squeeze direction comes from flow imbalance × price momentum; short gamma only sets feedback strength.",
+        "Gamma squeeze direction uses explicitly signed flow and/or price momentum; unsigned call/put identity never supplies trade direction.",
         "Open interest is generally a prior-session observation, so GEX is a positioning estimate rather than a live position ledger.",
         "Implied probabilities are risk-neutral diagnostics from IV, not calibrated forecasts of where the stock will trade.",
     ]
@@ -1718,17 +1739,13 @@ def build_options_intelligence(
         )
 
     anomaly_count = sum(bool(row.get("anomaly_flags")) for row in tape)
-    # summary.activity_imbalance below reports the tape as measured. The squeeze
-    # consumes a sample-size-shrunk copy so a 2-print tape cannot saturate the
-    # direction blend at ±1.0.
-    measured_imbalance = (
-        round((call_premium - put_premium) / total_premium, 6) if total_premium > 0 else None
-    )
-    included_prints = sum(int(row["print_count"]) for row in flow_series)
-    imbalance_confidence = _imbalance_confidence(included_prints)
-    activity_imbalance = (
-        round(measured_imbalance * imbalance_confidence, 6)
-        if measured_imbalance is not None
+    # summary.activity_imbalance below remains the observable call/put identity
+    # mix. The squeeze direction uses only signed premium and shrinks a thin
+    # signed sample toward neutral.
+    imbalance_confidence = _imbalance_confidence(signed_prints)
+    signed_flow_imbalance = (
+        round((float(signed_net) / signed_gross) * imbalance_confidence, 6)
+        if signed_net is not None and signed_gross > 0
         else None
     )
     squeeze = _squeeze_readout(
@@ -1742,13 +1759,24 @@ def build_options_intelligence(
         horizon_days=_number(probability.get("horizon_days")),
         chain_rows=filtered_chain,
         price_series=price_series,
-        call_premium=call_premium,
-        put_premium=put_premium,
-        activity_imbalance=activity_imbalance,
+        directional_flow_imbalance=signed_flow_imbalance,
         imbalance_confidence=imbalance_confidence,
         asof=chain_asof,
         rate=filters.risk_free_rate,
     )
+    squeeze_theory = squeeze.get("theory") if isinstance(squeeze.get("theory"), Mapping) else {}
+    if squeeze_theory.get("momentum_fresh") is False:
+        price_age = squeeze_theory.get("momentum_price_age_days")
+        output_warnings.append(
+            "Price momentum is stale"
+            + (f" ({price_age} calendar days old)" if price_age is not None else "")
+            + "; the squeeze direction excludes momentum until fresh bars arrive."
+        )
+    if squeeze_theory.get("adv_available") is False:
+        output_warnings.append(
+            "Average dollar volume is unavailable; squeeze fuel is unmeasured and "
+            "the theory score is held neutral instead of using a liquidity proxy."
+        )
 
     return {
         "schema_version": "edge-options-intelligence-v1",
@@ -1773,6 +1801,9 @@ def build_options_intelligence(
             "call_put_ratio": round(call_premium / put_premium, 4) if put_premium > 0 else None,
             "activity_imbalance": round((call_premium - put_premium) / total_premium, 6) if total_premium > 0 else None,
             "signed_net_premium": round(signed_net, 2) if signed_net is not None else None,
+            "signed_gross_premium": round(signed_gross, 2) if signed_gross > 0 else None,
+            "signed_flow_imbalance": signed_flow_imbalance,
+            "signed_flow_confidence": round(imbalance_confidence, 6),
             "unresolved_premium": round(unresolved, 2),
             "median_spread_pct": round(median_spread_pct, 6) if median_spread_pct is not None else None,
             **gex_summary,
@@ -1796,6 +1827,7 @@ def build_options_intelligence(
             "flow_prints_raw": len(flow_rows),
             "flow_prints_included": sum(int(row["print_count"]) for row in flow_series)
             if activity_basis == "trade_tape" else 0,
+            "signed_flow_prints": signed_prints,
             "flow_rejected": flow_rejected,
             "gamma_source": gamma_source,
             "anomaly_sample_size": len(tape),

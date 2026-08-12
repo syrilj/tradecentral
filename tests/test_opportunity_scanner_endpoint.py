@@ -154,6 +154,32 @@ def test_concurrent_unusual_flow_cache_misses_share_one_build(monkeypatch):
     assert calls == 1
 
 
+def test_cold_options_board_uses_lazy_thread_pool(monkeypatch):
+    api_server._OPTIONS_BOARD_CACHE.clear()
+    monkeypatch.setattr(
+        api_server,
+        "get_dashboard_data",
+        lambda **_: {"activity_scan": {}, "scan_summary": {"depth": "quick"}},
+    )
+    monkeypatch.setattr(api_server, "select_board_candidates", lambda **_: ([object()], 1))
+    monkeypatch.setattr(
+        api_server,
+        "_options_board_row",
+        lambda _candidate: {"available": True, "gex_measurable": True, "rank": 1},
+    )
+    monkeypatch.setattr(
+        api_server,
+        "_options_board_wire",
+        lambda **kwargs: {"rows": kwargs["rows"]},
+    )
+
+    payload = api_server._options_board_payload_impl(
+        limit=1, depth="quick", require_live_flow=False, force=True,
+    )
+
+    assert payload["rows"] == [{"available": True, "gex_measurable": True, "rank": 1}]
+
+
 def test_concurrent_forced_board_requests_share_the_newer_build(monkeypatch):
     api_server._OPTIONS_BOARD_CACHE.clear()
     api_server._OPTIONS_BOARD_BUILD_LOCKS.clear()

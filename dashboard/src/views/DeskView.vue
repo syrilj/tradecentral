@@ -91,7 +91,9 @@ async function probeSymbol(sym: string): Promise<void> {
   probing.value = true
   probeErr.value = null
   try {
-    const t = await api.trajectory(clean, '1m')
+    // The watchlist renders price/stats only. Skip the full-market qlib panel;
+    // Desk signals already carry the calibrated/ordinal model context used here.
+    const t = await api.trajectory(clean, '1m', { includeQlib: false })
     probeResults.value[clean] = t
     if (!customWatchlist.value.includes(clean)) {
       customWatchlist.value.push(clean)
@@ -111,7 +113,7 @@ async function probeWatchlist(force = false): Promise<void> {
   await Promise.all(
     targets.map(async (sym) => {
       try {
-        probeResults.value[sym] = await api.trajectory(sym, '1m')
+        probeResults.value[sym] = await api.trajectory(sym, '1m', { includeQlib: false })
       } catch {
         /* keep prior bar if present; retry on next refresh */
       }

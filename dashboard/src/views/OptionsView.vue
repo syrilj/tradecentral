@@ -94,7 +94,7 @@ const resource = useResource<OptionsIntelligence>(() => api.options({
 
 /**
  * Set true for exactly one refresh so a manual "SCAN LIVE FLOW" click bypasses the
- * backend's 90s cache (tools/api_server.py _UNUSUAL_FLOW_TTL_S). Flipped back to
+ * backend's short poll cache (tools/api_server.py _UNUSUAL_FLOW_TTL_S). Flipped back to
  * false right after — the passive on-mount fetch and the 120s auto-poll below must
  * keep respecting the server cache, or every poll would hammer the upstream feed.
  */
@@ -367,14 +367,13 @@ function setPreset(value: NoisePreset): void {
   maxSpreadPct.value = values.spread
   minDte.value = values.min
   maxDte.value = values.max
-  // Preset mutation is watched, but force a refresh so TUNE summary + feed update now.
-  void resource.refresh()
+  // The filter watcher coalesces these mutations into one request.
 }
 
 function clearDateFilters(): void {
   dateFrom.value = ''
   dateTo.value = ''
-  void resource.refresh()
+  // The filter watcher refreshes once after both fields settle.
 }
 
 /** Only trust payload when it matches the symbol currently selected — prevents

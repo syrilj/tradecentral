@@ -1407,7 +1407,15 @@ _PARQUET_LOCK = threading.Lock()
 # provider observation time so a cached read cannot masquerade as a new tick.
 _OPTIONS_CACHE: dict[tuple, tuple[float, dict]] = {}
 _OPTIONS_LOCK = threading.Lock()
+_OPTIONS_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
 _OPTIONS_CACHE_TTL_S = 20.0
+
+# Dated chains are immutable snapshots. Cache their decoded records by file
+# signature so one Options request does not decode the same parquet once while
+# discovering dates and again while building history. A newly written backfill
+# changes the signature and is picked up automatically.
+_OPTION_CHAIN_FILE_CACHE: dict[Path, tuple[tuple[int, int], list[dict[str, Any]]]] = {}
+_OPTION_CHAIN_FILE_LOCK = threading.Lock()
 
 # Market-wide unusual flow is one bounded provider request. Keep the immutable
 # cache just below the Flow workspace's 15s poll so every visible poll can
@@ -1873,7 +1881,12 @@ def _downsample(rows: list[dict], target: int = 1200) -> list[dict]:
     return out
 
 
-def _trajectory_payload(symbol: str, window: str) -> tuple[dict, int]:
+def _trajectory_payload(
+    symbol: str,
+    window: str,
+    *,
+    include_qlib: bool = True,
+) -> tuple[dict, int]:
     df_full, tier = _load_symbol_df(symbol)
     if df_full is None or df_full.empty:
         return {"error": f"symbol '{symbol}' not found", "endpoint": "/api/trajectory"}, 404
@@ -1913,11 +1926,6 @@ def _trajectory_payload(symbol: str, window: str) -> tuple[dict, int]:
     else:
         source_label = "live"
 
-    # Reuse the published full-catalog panel (deep scan or prior Market build).
-    # Do NOT pass this symbol's last bar as the cross-section asof — staggered
-    # data ends would re-cut the panel and disagree with deep ranks.
-    qlib_ctx = _trajectory_qlib_context(symbol)
-
     payload = {
         "symbol": symbol,
         "window": window,
@@ -1928,14 +1936,21 @@ def _trajectory_payload(symbol: str, window: str) -> tuple[dict, int]:
         "series": series,
         "stats": stats,
         "factors": _compute_factors(df_full),
-        "qlib": qlib_ctx,
-        "qlib_score": qlib_ctx.get("qlib_score"),
-        "qlib_rank": qlib_ctx.get("qlib_rank"),
-        "qlib_score_kind": qlib_ctx.get("score_kind") or QLIB_SCORE_KIND,
-        "qlib_source": qlib_ctx.get("source") or QLIB_SOURCE_ID,
-        "qlib_asof": qlib_ctx.get("asof"),
-        "qlib_quality": qlib_ctx.get("quality"),
     }
+    if include_qlib:
+        # Reuse the published full-catalog panel (deep scan or prior Market
+        # build). Do NOT pass this symbol's last bar as the cross-section asof:
+        # staggered data ends would re-cut the panel and disagree with deep ranks.
+        qlib_ctx = _trajectory_qlib_context(symbol)
+        payload.update({
+            "qlib": qlib_ctx,
+            "qlib_score": qlib_ctx.get("qlib_score"),
+            "qlib_rank": qlib_ctx.get("qlib_rank"),
+            "qlib_score_kind": qlib_ctx.get("score_kind") or QLIB_SCORE_KIND,
+            "qlib_source": qlib_ctx.get("source") or QLIB_SOURCE_ID,
+            "qlib_asof": qlib_ctx.get("asof"),
+            "qlib_quality": qlib_ctx.get("quality"),
+        })
     return payload, 200
 
 
@@ -2068,13 +2083,24 @@ def _options_price_series(
     price_window = {"1d": "1m", "5d": "1m", "1m": "3m", "3m": "6m"}.get(
         selected_range, "3m"
     )
-    trajectory, status = _trajectory_payload(symbol, price_window)
-    if status != 200:
+    # Options needs only OHLCV. Calling the full trajectory endpoint here used
+    # to cold-build the 576-name qlib cross-section before a single ticker's
+    # squeeze could render. Read the already cached symbol frame directly and
+    # preserve volume so ADV is measured instead of falling back to a proxy.
+    frame, _tier = _load_symbol_df(symbol)
+    if frame is None or frame.empty:
+        return [], None
+    win = _slice_window(frame, price_window)
+    if win.empty:
         return [], None
     series = [
-        {"t": f"{row['d']}T20:00:00+00:00", "close": row.get("c")}
-        for row in trajectory.get("series", [])
-        if row.get("d") and row.get("c") is not None
+        {
+            "t": f"{idx.strftime('%Y-%m-%d')}T20:00:00+00:00",
+            "close": _safe_round(row.get("close"), 4),
+            "volume": _safe_round(row.get("volume"), 6),
+        }
+        for idx, row in win.iterrows()
+        if row.get("close") is not None and math.isfinite(float(row.get("close")))
     ]
     if date_from or date_to:
         lower = date_from or "0000-01-01"
@@ -2085,7 +2111,31 @@ def _options_price_series(
         # extra anchor bar so a 1D selection still shows the day's move.
         keep = {"1d": 2, "5d": 6, "1m": 23, "3m": 66}.get(selected_range, 23)
         series = series[-keep:]
-    return series, trajectory.get("stats", {}).get("last_price")
+    return series, _safe_round(frame["close"].iloc[-1], 4)
+
+
+def _cached_option_chain_rows(path: Path) -> list[dict[str, Any]]:
+    """Decode one immutable chain snapshot once per (mtime, size)."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    signature = (stat.st_mtime_ns, stat.st_size)
+    with _OPTION_CHAIN_FILE_LOCK:
+        cached = _OPTION_CHAIN_FILE_CACHE.get(path)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+    try:
+        frame = _get_pd().read_parquet(path)
+        rows = [] if frame.empty else frame.to_dict("records")
+    except (OSError, ValueError):
+        rows = []
+    with _OPTION_CHAIN_FILE_LOCK:
+        _OPTION_CHAIN_FILE_CACHE[path] = (signature, rows)
+        if len(_OPTION_CHAIN_FILE_CACHE) > 512:
+            oldest = next(iter(_OPTION_CHAIN_FILE_CACHE))
+            _OPTION_CHAIN_FILE_CACHE.pop(oldest, None)
+    return rows
 
 
 def _option_chain_dates(symbol: str, *, limit: int = 93) -> list[str]:
@@ -2093,12 +2143,8 @@ def _option_chain_dates(symbol: str, *, limit: int = 93) -> list[str]:
     option_root = EDGE_DIR / "data" / "option_chains"
     dates: list[str] = []
     for path in sorted(option_root.glob(f"date=*/{symbol}.parquet"))[-limit:]:
-        try:
-            # Skip unreadable / empty files so "last good" is actually usable.
-            frame = _get_pd().read_parquet(path)
-        except (OSError, ValueError):
-            continue
-        if frame.empty:
+        # Skip unreadable / empty files so "last good" is actually usable.
+        if not _cached_option_chain_rows(path):
             continue
         dates.append(path.parent.name.removeprefix("date="))
     return dates
@@ -2124,13 +2170,7 @@ def _historical_option_rows(
         path = option_root / f"date={day}" / f"{symbol}.parquet"
         if not path.exists():
             continue
-        try:
-            frame = _get_pd().read_parquet(path)
-        except (OSError, ValueError):
-            continue
-        if frame.empty:
-            continue
-        rows.extend(frame.to_dict("records"))
+        rows.extend(_cached_option_chain_rows(path))
     return rows, selected, available
 
 
@@ -2138,9 +2178,45 @@ def _fetch_live_option_inputs(
     symbol: str, *, filters: OptionsFilters,
 ) -> tuple[list[dict], list[dict], float | None, str, list[str]]:
     warnings: list[str] = []
-    snapshot = LSEOptionsAdapter(
-        api_key=os.getenv("LSE_API_KEY"), min_dte=filters.min_dte, max_dte=filters.max_dte,
-    ).snapshot(symbol, asof_utc=datetime.now(timezone.utc))
+    request_clock = datetime.now(timezone.utc)
+
+    def fetch_chain() -> Mapping[str, Any]:
+        return LSEOptionsAdapter(
+            api_key=os.getenv("LSE_API_KEY"),
+            min_dte=filters.min_dte,
+            max_dte=filters.max_dte,
+        ).snapshot(symbol, asof_utc=request_clock)
+
+    def fetch_flow() -> list[dict]:
+        provider_src = ROOT / "TradingWork" / "src"
+        if str(provider_src) not in sys.path:
+            sys.path.insert(0, str(provider_src))
+        from lse_provider import fetch_lse_options_flow  # type: ignore[import-not-found]
+
+        # Fetch with a soft floor so strict UI filters can still be applied in
+        # options_intelligence without the vendor pre-emptying the tape.
+        fetch_floor = min(float(filters.min_premium), 10_000.0) if filters.min_premium > 0 else 0.0
+        return list(fetch_lse_options_flow(
+            symbol, min_premium=fetch_floor, limit=500, timeout=12,
+        ) or [])
+
+    # Chain and tape are independent network reads. Overlap them so live Options
+    # latency is bounded by the slower provider call rather than their sum.
+    futures = _get_concurrent_futures()
+    with futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="options-live") as pool:
+        chain_future = pool.submit(fetch_chain)
+        flow_future = pool.submit(fetch_flow)
+        try:
+            snapshot = chain_future.result()
+        except Exception as exc:  # noqa: BLE001 - history fallback remains available
+            snapshot = {}
+            warnings.append(f"Live chain unavailable: {type(exc).__name__}")
+        try:
+            flow_rows = flow_future.result()
+        except Exception as exc:  # noqa: BLE001 - live flow is optional evidence
+            flow_rows = []
+            warnings.append(f"Live flow unavailable: {type(exc).__name__}")
+
     chain_rows = list(snapshot.get("contracts") or [])
     underlying = snapshot.get("underlying", {})
     # A last-trade-derived spot without its own quote timestamp is not a live
@@ -2173,26 +2249,10 @@ def _fetch_live_option_inputs(
         else:
             open_interest_source = "unavailable"
 
-    flow_rows: list[dict] = []
-    try:
-        provider_src = ROOT / "TradingWork" / "src"
-        if str(provider_src) not in sys.path:
-            sys.path.insert(0, str(provider_src))
-        from lse_provider import fetch_lse_options_flow  # type: ignore[import-not-found]
-
-        # Fetch with a soft floor so strict UI filters can still be applied in
-        # options_intelligence without the vendor pre-emptying the tape.
-        fetch_floor = min(float(filters.min_premium), 10_000.0) if filters.min_premium > 0 else 0.0
-        observed = fetch_lse_options_flow(
-            symbol, min_premium=fetch_floor, limit=500, timeout=12,
+    if not flow_rows and not any(note.startswith("Live flow unavailable:") for note in warnings):
+        warnings.append(
+            "No recent trade-tape prints from LSE — try RAW noise filter or a more liquid name."
         )
-        flow_rows = list(observed or [])
-        if not flow_rows:
-            warnings.append(
-                "No recent trade-tape prints from LSE — try RAW noise filter or a more liquid name."
-            )
-    except Exception as exc:  # noqa: BLE001 - live flow is optional evidence
-        warnings.append(f"Live flow unavailable: {type(exc).__name__}")
     return chain_rows, flow_rows, spot, open_interest_source, warnings
 
 
@@ -2235,7 +2295,7 @@ def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
     }, 200
 
 
-def _options_payload(symbol: str, query: dict) -> tuple[dict, int]:
+def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
     mode = str(query.get("mode", ["live"])[0]).lower()
     mode = mode if mode in {"live", "history"} else "live"
     selected_range = str(query.get("range", ["5d"])[0]).lower()
@@ -2387,6 +2447,21 @@ def _options_payload(symbol: str, query: dict) -> tuple[dict, int]:
     return payload, 200
 
 
+def _options_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Coalesce identical cold Options requests from watchers/manual refreshes."""
+    request_key = (
+        symbol,
+        tuple(sorted(
+            (str(key), tuple(str(value) for value in values))
+            for key, values in query.items()
+        )),
+    )
+    with _OPTIONS_LOCK:
+        build_lock = _OPTIONS_BUILD_LOCKS.setdefault(request_key, threading.Lock())
+    with build_lock:
+        return _options_payload_impl(symbol, query)
+
+
 # ---------------------------------------------------------------------------
 # Conviction board: scan candidates -> live option chains.
 #
@@ -2509,7 +2584,8 @@ def _options_board_payload_impl(
     rows: list[dict] = []
     if candidates:
         workers = min(_OPTIONS_BOARD_MAX_WORKERS, len(candidates))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = _get_concurrent_futures()
+        with futures.ThreadPoolExecutor(max_workers=workers) as pool:
             rows = list(pool.map(_options_board_row, candidates))
     # Rank by structural conviction, but keep unavailable names on the board so
     # coverage is visible rather than quietly trimmed.
@@ -3290,7 +3366,12 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 window = query.get("window", [DEFAULT_WINDOW])[0]
-                payload, status = _trajectory_payload(sym_or_err, window)
+                include_qlib = str(query.get("include_qlib", ["1"])[0]).lower() not in {
+                    "0", "false", "no",
+                }
+                payload, status = _trajectory_payload(
+                    sym_or_err, window, include_qlib=include_qlib,
+                )
                 self._send_json(payload, status=status)
 
             elif path == "/api/options":

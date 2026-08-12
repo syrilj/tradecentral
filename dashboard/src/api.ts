@@ -603,6 +603,7 @@ export interface OptionsQuery {
 export interface OptionsPricePoint {
   t: string
   close: number
+  volume?: number | null
 }
 
 export interface OptionsFlowPoint {
@@ -610,6 +611,7 @@ export interface OptionsFlowPoint {
   call_premium: number
   put_premium: number
   signed_net_premium: number | null
+  signed_gross_premium?: number
   signed_premium_observations: number
   print_count: number
   unresolved_premium: number
@@ -1037,6 +1039,9 @@ export interface OptionsIntelligence {
     call_put_ratio: number | null
     activity_imbalance: number | null
     signed_net_premium: number | null
+    signed_gross_premium?: number | null
+    signed_flow_imbalance?: number | null
+    signed_flow_confidence?: number
     unresolved_premium: number
     total_gex_m: number
     call_gex_m?: number
@@ -1667,9 +1672,13 @@ export const api = {
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ).then(normalizeSearch),
 
-  trajectory: (symbol: string, window: TrajWindow = '1y') =>
+  trajectory: (
+    symbol: string,
+    window: TrajWindow = '1y',
+    opts?: { includeQlib?: boolean },
+  ) =>
     req<Trajectory>(
-      `/api/trajectory?symbol=${encodeURIComponent(symbol)}&window=${window}`,
+      `/api/trajectory?symbol=${encodeURIComponent(symbol)}&window=${window}${opts?.includeQlib === false ? '&include_qlib=0' : ''}`,
     ),
 
   compare: (symbols: string[], window: TrajWindow = '1y') =>

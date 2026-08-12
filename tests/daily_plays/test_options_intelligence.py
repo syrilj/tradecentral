@@ -34,7 +34,7 @@ def _payload(flow_rows):
         symbol="TEST",
         chain_rows=[_chain("call", 105), _chain("put", 95)],
         flow_rows=flow_rows,
-        price_series=[{"t": ASOF.isoformat(), "close": 100}],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
         mode_requested="live",
@@ -134,6 +134,97 @@ def test_call_put_identity_and_stale_quote_proxy_stay_unsigned():
     assert result["provider"]["signed_flow_available"] is False
     assert result["summary"]["signed_net_premium"] is None
     assert result["summary"]["unresolved_premium"] == 125_000
+
+
+def test_unsigned_call_put_mix_never_drives_squeeze_direction():
+    unsigned = _payload([
+        {
+            "contract_type": "call", "premium": 125_000, "volume": 10,
+            "timestamp": "2026-07-31T14:45:00Z",
+        },
+    ])
+    assert unsigned["summary"]["activity_imbalance"] == 1.0
+    assert unsigned["summary"]["signed_flow_imbalance"] is None
+    assert unsigned["summary"]["squeeze"]["theory"]["directional_flow_imbalance"] == 0.0
+
+
+def test_signed_flow_imbalance_is_sample_size_shrunk_for_squeeze():
+    signed = _payload([
+        {
+            "contract_type": "call", "premium": 125_000, "volume": 10,
+            "timestamp": "2026-07-31T14:45:00Z", "aggressor": "BUY",
+        },
+    ])
+    # One fully bullish signed print gets 1/8 confidence, not a saturated +1.
+    assert signed["summary"]["signed_flow_confidence"] == 0.125
+    assert signed["summary"]["signed_flow_imbalance"] == 0.125
+    assert signed["summary"]["squeeze"]["theory"]["directional_flow_imbalance"] == 0.125
+
+
+def test_squeeze_uses_observed_adv_instead_of_spot_proxy():
+    prices = [
+        {
+            "t": f"2026-07-{day:02d}T20:00:00+00:00",
+            "close": 100.0,
+            "volume": 2_000_000.0,
+        }
+        for day in range(1, 22)
+    ]
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[_chain("call", 105), _chain("put", 95)],
+        flow_rows=[],
+        price_series=prices,
+        spot=100,
+        filters=OptionsFilters(range="1m", min_premium=0, min_volume=0),
+        mode_requested="history",
+        mode_resolved="history",
+        chain_source="fixture",
+        flow_source="none",
+        asof_utc=ASOF,
+    )
+    assert result["summary"]["squeeze"]["theory"]["adv_m"] == 200.0
+
+
+def test_stale_price_bars_cannot_drive_live_squeeze_direction():
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[_chain("call", 105), _chain("put", 95)],
+        flow_rows=[],
+        price_series=[
+            {"t": "2026-07-15T20:00:00+00:00", "close": 90, "volume": 1_000_000},
+            {"t": "2026-07-20T20:00:00+00:00", "close": 100, "volume": 1_000_000},
+        ],
+        spot=100,
+        filters=OptionsFilters(range="1m", min_premium=0, min_volume=0),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="none",
+        asof_utc=ASOF,
+    )
+    theory = result["summary"]["squeeze"]["theory"]
+    assert theory["momentum"] == 0.0
+    assert theory["momentum_fresh"] is False
+    assert any("excludes momentum" in warning for warning in result["warnings"])
+
+
+def test_zero_provider_gamma_falls_back_to_black_scholes():
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[_chain("call", 105, gamma=0.0), _chain("put", 95, gamma=0.0)],
+        flow_rows=[],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=0, min_volume=0),
+        mode_requested="history",
+        mode_resolved="history",
+        chain_source="fixture",
+        flow_source="none",
+        asof_utc=ASOF,
+    )
+    assert result["quality"]["gamma_source"]["black_scholes"] == 2
+    assert result["summary"]["abs_gex_m"] > 0
 
 
 def test_gex_and_probability_are_explicitly_model_derived():
@@ -422,7 +513,7 @@ def _measurability_payload(*, open_interest: int, oi_source: str) -> dict:
         symbol="TEST",
         chain_rows=[call, put],
         flow_rows=[],
-        price_series=[{"t": ASOF.isoformat(), "close": 100}],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(
             range="1d", min_premium=0, min_volume=0, min_open_interest=0,

@@ -7,8 +7,8 @@ Two layers:
 
 2. **Theory squeeze** (direction-neutral short gamma + directional flow/momentum):
    A gamma squeeze is direction-neutral by itself. Short dealer gamma amplifies
-   whichever way price is already moving; direction comes from the initial shock
-   (call vs put flow imbalance × return momentum).
+   whichever way price is already moving; direction comes from explicitly
+   signed flow and/or return momentum.
 
    Core identities (dealer short-premium inventory assumption q = −OI):
 
@@ -27,10 +27,8 @@ Two layers:
 
        SR = |GEX⁻_1%| / ADV · exp(−c · T) · (ATM_γ / total_γ)
 
-   Directional scores:
-
-       bullish = SR · max(0, call_imbalance) · max(0, momentum)
-       bearish = SR · max(0, put_imbalance)  · max(0, −momentum)
+   Directional scores use explicitly signed flow (+ bullish / − bearish) and
+   price momentum. Unsigned call/put contract identity is not direction.
 """
 from __future__ import annotations
 
@@ -267,13 +265,13 @@ def directional_squeeze_scores(
     Directional scores (theory, fuel-scaled conviction blend):
 
         fuel_ui   = tanh(fuel_scale · SR)          ∈ [0, 1)
-        flow_call = max(0, call_imb)               ∈ [0, 1]
-        flow_put  = max(0, put_imb)                ∈ [0, 1]
+        flow_bull = max(0, signed_flow_imb)         ∈ [0, 1]
+        flow_bear = max(0, −signed_flow_imb)        ∈ [0, 1]
         mom_up    = clip(max(0, mom) / mom_ref, 1)
         mom_dn    = clip(max(0, −mom) / mom_ref, 1)
 
-        conv_bull = w · flow_call + (1 − w) · mom_up
-        conv_bear = w · flow_put  + (1 − w) · mom_dn
+        conv_bull = w · flow_bull + (1 − w) · mom_up
+        conv_bear = w · flow_bear + (1 − w) · mom_dn
 
         bullish = fuel_ui · conv_bull              ∈ [0, 1)
         bearish = fuel_ui · conv_bear              ∈ [0, 1)
@@ -283,11 +281,12 @@ def directional_squeeze_scores(
     multiplied the two directional gates, so any disagreement between them sent
     both legs to exactly zero — and since ``mom_up`` and ``mom_dn`` can never be
     positive together, ``bullish`` and ``bearish`` could never both be nonzero,
-    leaving the ``two_way`` readout unreachable. A call-dominated tape into a
-    falling price is one of the most common configurations on liquid names; it
-    is a loaded two-way condition, not an absence of one.
+    leaving the ``two_way`` readout unreachable. Bullishly signed flow into a
+    falling price is a loaded two-way condition, not an absence of one.
     """
     sr = max(0.0, float(squeeze_risk_value))
+    # ``call_imbalance`` is retained as a public parameter for compatibility;
+    # its required meaning is signed directional premium, not call-vs-put mix.
     c_imb = float(call_imbalance)
     if put_imbalance is None:
         p_imb = -c_imb
@@ -312,6 +311,7 @@ def directional_squeeze_scores(
         "bullish_score": bull,
         "bearish_score": bear,
         "call_imbalance": c_imb,
+        "directional_flow_imbalance": c_imb,
         "put_imbalance": p_imb,
         "momentum": mom,
         "mom_up_gate": mom_up,
@@ -341,18 +341,24 @@ def compute_theory_squeeze(
     Full theory squeeze readout.
 
     ``adv_notional`` is average daily dollar volume (not $M).
-    ``call_imbalance`` is (call − put) / (call + put) on premium, volume, or OI.
+    ``call_imbalance`` is retained for API compatibility and means signed
+    directional premium imbalance (+ bullish / − bearish). It must not be
+    populated from unsigned call-vs-put contract identity.
     ``momentum`` is a simple return (e.g. close/close_n − 1).
     """
     gex = short_premium_gex_1pct_m(chain_rows, spot=spot)
     adv_m = max(float(adv_notional), 0.0) / 1_000_000.0
+    adv_available = adv_m > 0
     neg_gex = gex["total_gex_m"]  # ≤ 0 under short-premium
-    sr = squeeze_risk(
-        neg_gex_1pct_m=neg_gex,
-        adv_m=adv_m if adv_m > 0 else 1.0,
-        atm_share=gex["atm_share"],
-        weighted_dte=gex["weighted_dte"],
-        urgency_c=urgency_c,
+    sr = (
+        squeeze_risk(
+            neg_gex_1pct_m=neg_gex,
+            adv_m=adv_m,
+            atm_share=gex["atm_share"],
+            weighted_dte=gex["weighted_dte"],
+            urgency_c=urgency_c,
+        )
+        if adv_available else 0.0
     )
     direction = directional_squeeze_scores(
         squeeze_risk_value=sr,
@@ -380,7 +386,7 @@ def compute_theory_squeeze(
         label = "neutral"
 
     return {
-        "method": "theory_short_premium_gex_flow_momentum",
+        "method": "theory_short_premium_gex_signed_flow_momentum",
         "squeeze_score": round(signed, 1),
         "squeeze_label": label,
         "bullish_ui": round(bull_ui, 2),
@@ -390,7 +396,10 @@ def compute_theory_squeeze(
         "bearish_score_raw": bear_raw,
         "short_premium_gex_m": gex,
         "adv_m": adv_m,
+        "adv_available": adv_available,
+        "measurable": adv_available and gex["abs_gex_m"] > 0,
         "call_imbalance": direction["call_imbalance"],
+        "directional_flow_imbalance": direction["directional_flow_imbalance"],
         "put_imbalance": direction["put_imbalance"],
         "momentum": direction["momentum"],
         "components": {
@@ -401,9 +410,11 @@ def compute_theory_squeeze(
             "weighted_dte": gex["weighted_dte"],
             "urgency": math.exp(-urgency_c * gex["weighted_dte"]),
             "liquidity_ratio": (abs(gex["total_gex_m"]) / adv_m) if adv_m > 0 else None,
+            "adv_available": adv_available,
             "squeeze_risk": sr,
             "fuel_ui": direction["fuel_ui"],
             "call_imbalance": direction["call_imbalance"],
+            "directional_flow_imbalance": direction["directional_flow_imbalance"],
             "put_imbalance": direction["put_imbalance"],
             "momentum": direction["momentum"],
             "mom_up_gate": direction["mom_up_gate"],

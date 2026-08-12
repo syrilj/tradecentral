@@ -17,6 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import math
 from pathlib import Path
+from threading import Lock
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
@@ -37,6 +39,14 @@ DEEP_LIVE_TARGET_LIMIT = 100
 ACTIVITY_ROW_LIMIT = 40
 # How many top qlib ranks to promote into live-target routing (deep only).
 QLIB_LIVE_PRIORITY_LIMIT = 40
+
+# Standalone Flow polls every 15 seconds, but its local context is built from
+# completed daily bars. Re-decoding 175 parquet files on every provider poll
+# adds roughly a second of avoidable latency and CPU churn. Keep that context
+# briefly while the market-wide provider tape remains fully live/fresh.
+_FLOW_LOCAL_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_FLOW_LOCAL_CACHE_LOCK = Lock()
+_FLOW_LOCAL_CACHE_TTL_S = 300.0
 
 
 def _symbol(value: Any) -> str:
@@ -223,6 +233,46 @@ def scan_local_market_activity(
         },
         "caveat": "Ordinal activity rank from completed daily bars; not a probability or entry signal.",
     }
+
+
+def _flow_local_context(
+    *,
+    symbols: Sequence[str],
+    data_dirs: Sequence[str | Path],
+    candle_loader: Callable[[str], Any] | None,
+    row_limit: int,
+) -> tuple[dict[str, Any], bool]:
+    """Return cached daily-bar context without caching injected test loaders."""
+    if candle_loader is not None:
+        return scan_local_market_activity(
+            symbols=symbols,
+            data_dirs=data_dirs,
+            candle_loader=candle_loader,
+            row_limit=row_limit,
+        ), False
+
+    key = (
+        tuple(str(Path(value).resolve()) for value in data_dirs),
+        tuple(symbols),
+        int(row_limit),
+    )
+    with _FLOW_LOCAL_CACHE_LOCK:
+        hit = _FLOW_LOCAL_CACHE.get(key)
+        if hit and time.time() - hit[0] < _FLOW_LOCAL_CACHE_TTL_S:
+            return hit[1], True
+        # Hold the keyed cache lock during the bounded local decode so two
+        # simultaneous page mounts cannot launch the same 175-file pass.
+        payload = scan_local_market_activity(
+            symbols=symbols,
+            data_dirs=data_dirs,
+            candle_loader=None,
+            row_limit=row_limit,
+        )
+        _FLOW_LOCAL_CACHE[key] = (time.time(), payload)
+        if len(_FLOW_LOCAL_CACHE) > 8:
+            oldest = min(_FLOW_LOCAL_CACHE, key=lambda item: _FLOW_LOCAL_CACHE[item][0])
+            _FLOW_LOCAL_CACHE.pop(oldest, None)
+        return payload, False
 
 
 def _context_side(row: Mapping[str, Any] | None) -> str | None:
@@ -441,7 +491,7 @@ def build_unusual_options_flow(
         or load_market_symbol_catalog(data_dirs=data_dirs)
         or list(_UNUSUAL_FLOW_SEED)
     ))
-    local_scan = scan_local_market_activity(
+    local_scan, local_cache_hit = _flow_local_context(
         symbols=catalog[:QUICK_LOCAL_LIMIT],
         data_dirs=data_dirs,
         candle_loader=candle_loader,
@@ -645,6 +695,8 @@ def build_unusual_options_flow(
             "market_universe": len(catalog),
             "local_scanned": int(local_scan["coverage"]["scanned"]),
             "local_flagged": int(local_scan["coverage"]["flagged"]),
+            "local_context_cache_hit": local_cache_hit,
+            "local_context_ttl_seconds": _FLOW_LOCAL_CACHE_TTL_S,
             # Legacy counters stay binary for older consumers. The standalone
             # feed performs one request, not a routed per-symbol fan-out.
             "live_requested": 1,
