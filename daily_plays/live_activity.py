@@ -21,7 +21,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
 
-from .adapters.flow import load_live_flow_activity
+from .adapters.flow import load_live_flow_activity, load_market_flow_activity
 from .qlib_scan_score import (
     SCORE_KIND as QLIB_SCORE_KIND,
     SOURCE_ID as QLIB_SOURCE_ID,
@@ -230,6 +230,23 @@ def _context_side(row: Mapping[str, Any] | None) -> str | None:
     return side if side in {"long", "short"} else None
 
 
+def _signal_alignment(pead_side: str | None, directional_side: str | None) -> str:
+    """Classify two differently-timed signals without pretending they are peers.
+
+    PEAD describes the observed opening-gap impulse.  The directional model is
+    a multi-session forecast.  They are allowed to disagree, but that conflict
+    must be explicit so a consumer never treats two opposing labels as two
+    independent trade recommendations.
+    """
+    if pead_side and directional_side:
+        return "agree" if pead_side == directional_side else "conflict"
+    if pead_side:
+        return "pead_only"
+    if directional_side:
+        return "directional_only"
+    return "none"
+
+
 def _sector_watch_symbols(sector_flow: Mapping[str, Any] | None) -> list[str]:
     flow = sector_flow if isinstance(sector_flow, Mapping) else {}
     values: list[Any] = []
@@ -324,9 +341,10 @@ def _merge_activity_rows(
 
         pead_side = _context_side(pead.get(symbol))
         model_side = _context_side(models.get(symbol))
+        signal_alignment = _signal_alignment(pead_side, model_side)
         context_side = (
-            "mixed" if pead_side and model_side and pead_side != model_side
-            else pead_side or model_side or "neutral"
+            "mixed" if signal_alignment == "conflict"
+            else model_side or pead_side or "neutral"
         )
         probability = (models.get(symbol) or {}).get("probability")
         calibrated_probability = (
@@ -349,6 +367,11 @@ def _merge_activity_rows(
             "activity_rank": 0,
             "flags": flags,
             "context_side": context_side,
+            "pead_side": pead_side,
+            "pead_horizon": "session_open" if pead_side else None,
+            "directional_side": model_side,
+            "directional_horizon": (models.get(symbol) or {}).get("horizon"),
+            "signal_alignment": signal_alignment,
             "calibrated_probability": calibrated_probability,
             "live": bool(flow_row),
             "live_asof": flow_row.get("asof_utc"),
@@ -356,6 +379,22 @@ def _merge_activity_rows(
             "print_count": int(evidence.get("alert_count") or 0),
             "call_print_count": int(evidence.get("call_print_count") or 0),
             "put_print_count": int(evidence.get("put_print_count") or 0),
+            "contract_count": int(evidence.get("contract_count") or 0),
+            "call_premium": _finite(evidence.get("call_premium")),
+            "put_premium": _finite(evidence.get("put_premium")),
+            "put_flow_pct": _finite(evidence.get("put_flow_pct")),
+            "otm_premium": _finite(evidence.get("otm_premium")),
+            "otm_flow_pct": _finite(evidence.get("otm_flow_pct")),
+            "average_otm_pct": _finite(evidence.get("average_otm_pct")),
+            "sweep_count": int(evidence.get("sweep_count") or 0),
+            "sweep_contracts": int(evidence.get("sweep_contracts") or 0),
+            "sweep_premium": _finite(evidence.get("sweep_premium")) or 0.0,
+            "sweep_otm_contracts": int(evidence.get("sweep_otm_contracts") or 0),
+            "sweep_otm_premium": _finite(evidence.get("sweep_otm_premium")) or 0.0,
+            "unusual_contracts": int(evidence.get("unusual_contracts") or 0),
+            "average_price": _finite(evidence.get("average_price")),
+            "average_dte": _finite(evidence.get("average_dte")),
+            "signed_print_count": int(evidence.get("signed_print_count") or 0),
             "ret_1d": local_row.get("ret_1d"),
             "volume_vs_20d_median": local_row.get("volume_vs_20d_median"),
             "price_impulse": local_row.get("price_impulse"),
@@ -370,8 +409,8 @@ def _merge_activity_rows(
     return rows[:max(1, int(limit))]
 
 
-# Liquid majors always included in the unusual-flow pass so the board is never
-# empty solely because local activity ranks thin names first.
+# Fallback local catalog used only when symbol files are unavailable. Provider
+# coverage for standalone Flow is market-wide and does not use this list.
 _UNUSUAL_FLOW_SEED = (
     "SPY", "QQQ", "IWM", "DIA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL",
     "TSLA", "AMD", "AVGO", "NFLX", "JPM", "XOM", "UNH", "V", "MA", "COST",
@@ -391,11 +430,11 @@ def build_unusual_options_flow(
     per_symbol_timeout_seconds: float = 3.0,
     max_workers: int = 12,
 ) -> dict[str, Any]:
-    """Market-wide unusual options-flow board (attention rank, not a signal).
+    """Build the standalone Flow board from one market-wide provider tape.
 
-    Ranks local price/volume activity, then pulls live LSE tape on the hottest
-    targets + liquid seeds. Rows with live premium / alerts surface as
-    unusual flow across the market for the Options Drift desk.
+    Local price/volume remains optional ranking context, but it no longer
+    decides which symbols the provider is allowed to return. ``live_target_limit``
+    and ``max_workers`` remain accepted for API compatibility and are ignored.
     """
     catalog = list(dict.fromkeys(
         [_symbol(s) for s in symbols if _symbol(s)]
@@ -408,41 +447,31 @@ def build_unusual_options_flow(
         candle_loader=candle_loader,
         row_limit=max(len(catalog[:QUICK_LOCAL_LIMIT]), row_limit),
     )
-    seeds = [s for s in _UNUSUAL_FLOW_SEED if s in set(catalog) or not symbols]
-    live_targets = _select_live_targets(
-        local_rows=local_scan["rows"],
-        pead_candidates=(),
-        directional_signals=(),
-        sector_flow=None,
-        allowed_symbols=set(catalog) | set(seeds),
-        limit=live_target_limit,
-    )
-    for seed in seeds:
-        if seed not in live_targets and len(live_targets) < live_target_limit:
-            live_targets.append(seed)
-
-    live_flow = load_live_flow_activity(
-        symbols=live_targets,
+    live_flow = load_market_flow_activity(
         fetcher=flow_fetcher,
-        per_symbol_timeout_seconds=per_symbol_timeout_seconds,
-        max_workers=max_workers,
+        min_premium=min_premium,
+        limit=500,
+        timeout_seconds=max(10.0, float(per_symbol_timeout_seconds)),
+        allowed_symbols={_symbol(value) for value in symbols} if symbols else None,
     )
     local_by = {_symbol(r.get("symbol")): r for r in local_scan["rows"]}
     flow_rows = list(live_flow.get("rows") or [])
-    max_premium = max(
-        (float((r.get("evidence") or {}).get("premium") or 0) for r in flow_rows),
-        default=0.0,
-    )
-
+    qualified_flow_rows = [
+        row
+        for row in flow_rows
+        if float(((row.get("evidence") or {}).get("premium") or 0.0)) >= float(min_premium)
+    ]
     board: list[dict[str, Any]] = []
-    for flow_row in flow_rows:
+    for flow_row in qualified_flow_rows:
         symbol = _symbol(flow_row.get("symbol"))
         if not symbol:
             continue
         evidence = flow_row.get("evidence") if isinstance(flow_row.get("evidence"), Mapping) else {}
         premium = _finite(evidence.get("premium")) or 0.0
         alerts = int(evidence.get("alert_count") or 0)
-        if premium < min_premium and alerts <= 0:
+        # The public threshold is a symbol-level aggregate premium floor.
+        # Missing/zero premium cannot prove that a row cleared the floor.
+        if premium < min_premium:
             continue
         call_n = int(evidence.get("call_print_count") or 0)
         put_n = int(evidence.get("put_print_count") or 0)
@@ -451,7 +480,14 @@ def build_unusual_options_flow(
         put_share = put_n / total_n
         imbalance = call_share - put_share  # + call heavy, − put heavy
         local = local_by.get(symbol, {})
-        premium_component = math.sqrt(premium / max_premium) if max_premium > 0 else 0.0
+        # Absolute, cohort-invariant premium transform: adding an unrelated
+        # whale must not change every existing row's score. $1M saturates the
+        # premium component; the result remains an attention rank, not a
+        # historical unusualness estimate or probability.
+        premium_component = min(
+            math.log1p(max(premium, 0.0)) / math.log1p(1_000_000.0),
+            1.0,
+        )
         local_score = float(local.get("activity_score") or 0.0)
         unusual_score = round(min(100.0, 55.0 * premium_component + 0.45 * local_score), 1)
 
@@ -468,6 +504,8 @@ def build_unusual_options_flow(
             if flag not in flags:
                 flags.append(flag)
 
+        direction_signed = bool(evidence.get("direction_signed"))
+        signed_side = _context_side(flow_row) if direction_signed else None
         board.append({
             "symbol": symbol,
             "unusual_score": unusual_score,
@@ -475,9 +513,9 @@ def build_unusual_options_flow(
             "score_kind": "ordinal_unusual_flow",
             "activity_rank": 0,
             "flags": flags[:5],
-            "context_side": (
-                "long" if imbalance >= 0.25 else "short" if imbalance <= -0.25 else "neutral"
-            ),
+            # Call/put identity is not aggressor side.  Only an explicitly
+            # signed provider observation may supply directional context.
+            "context_side": signed_side or "neutral",
             "calibrated_probability": None,
             "live": True,
             "live_asof": flow_row.get("asof_utc"),
@@ -486,69 +524,148 @@ def build_unusual_options_flow(
             "call_print_count": call_n,
             "put_print_count": put_n,
             "call_put_imbalance": round(imbalance, 4),
+            "contract_count": int(evidence.get("contract_count") or 0),
+            "call_premium": _finite(evidence.get("call_premium")),
+            "put_premium": _finite(evidence.get("put_premium")),
+            "put_flow_pct": _finite(evidence.get("put_flow_pct")),
+            "otm_premium": _finite(evidence.get("otm_premium")),
+            "otm_flow_pct": _finite(evidence.get("otm_flow_pct")),
+            "average_otm_pct": _finite(evidence.get("average_otm_pct")),
+            "sweep_count": int(evidence.get("sweep_count") or 0),
+            "sweep_contracts": int(evidence.get("sweep_contracts") or 0),
+            "sweep_premium": _finite(evidence.get("sweep_premium")) or 0.0,
+            "sweep_otm_contracts": int(evidence.get("sweep_otm_contracts") or 0),
+            "sweep_otm_premium": _finite(evidence.get("sweep_otm_premium")) or 0.0,
+            "unusual_contracts": int(evidence.get("unusual_contracts") or 0),
+            "average_price": _finite(evidence.get("average_price")),
+            "average_dte": _finite(evidence.get("average_dte")),
+            "signed_print_count": int(evidence.get("signed_print_count") or 0),
+            "premium_basis": str(evidence.get("premium_basis") or "provider_symbol_aggregate"),
             "ret_1d": local.get("ret_1d"),
             "volume_vs_20d_median": local.get("volume_vs_20d_median"),
             "price_impulse": local.get("price_impulse") or "flat",
-            "sources": ["LSE live flow"] + (["daily OHLCV"] if local else []),
+            "sources": ["LSE market flow"] + (["daily OHLCV"] if local else []),
             "decision_authorized": False,
             "note": "Unusual flow attention rank — not a directional trade recommendation.",
         })
-
-    # If live returned nothing, still surface hottest local activity so the
-    # board is never a silent empty shell (user can open those names for GEX).
-    if not board:
-        for local in local_scan["rows"][:row_limit]:
-            if not local.get("flags"):
-                continue
-            board.append({
-                "symbol": local["symbol"],
-                "unusual_score": float(local.get("activity_score") or 0),
-                "activity_score": float(local.get("activity_score") or 0),
-                "score_kind": "ordinal_unusual_flow",
-                "activity_rank": 0,
-                "flags": list(local.get("flags") or ["ACTIVITY RANK"]),
-                "context_side": "neutral",
-                "calibrated_probability": None,
-                "live": False,
-                "live_asof": None,
-                "premium": None,
-                "print_count": 0,
-                "call_print_count": 0,
-                "put_print_count": 0,
-                "call_put_imbalance": None,
-                "ret_1d": local.get("ret_1d"),
-                "volume_vs_20d_median": local.get("volume_vs_20d_median"),
-                "price_impulse": local.get("price_impulse") or "flat",
-                "sources": ["daily OHLCV"],
-                "decision_authorized": False,
-                "note": "Local price/volume activity only — live options tape unavailable.",
-            })
 
     board.sort(key=lambda r: (-float(r.get("unusual_score") or 0), -(r.get("premium") or 0), r["symbol"]))
     for rank, row in enumerate(board, start=1):
         row["activity_rank"] = rank
 
+    included_symbols = {str(row.get("symbol") or "") for row in board[:max(1, int(row_limit))]}
+    tape = [
+        dict(print_row)
+        for flow_row in flow_rows
+        if str(flow_row.get("symbol") or "") in included_symbols
+        for print_row in (flow_row.get("prints") or [])
+        if isinstance(print_row, Mapping)
+    ]
+    tape.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
+    tape_print_count = len(tape)
+    tape = tape[:max(100, min(500, int(row_limit) * 10))]
+
+    visible_board = board[:max(1, int(row_limit))]
+    total_premium = sum(float(row.get("premium") or 0.0) for row in board)
+    call_premium = sum(float(row.get("call_premium") or 0.0) for row in board)
+    put_premium = sum(float(row.get("put_premium") or 0.0) for row in board)
+    classified_premium = call_premium + put_premium
+    total_contracts = sum(int(row.get("contract_count") or 0) for row in board)
+    signed_prints = sum(int(row.get("signed_print_count") or 0) for row in board)
+    board_prints = sum(int(row.get("print_count") or 0) for row in board)
+    unusual_contracts = sum(int(row.get("unusual_contracts") or 0) for row in board)
+    premium_bases = {str(row.get("premium_basis") or "provider_symbol_aggregate") for row in board}
+    summary = {
+        "total_premium": round(total_premium, 2),
+        "call_premium": round(call_premium, 2),
+        "put_premium": round(put_premium, 2),
+        "unclassified_premium": round(max(0.0, total_premium - classified_premium), 2),
+        # Premium share, not print-count share. Unknown when the provider did
+        # not retain contract rights for the premium denominator.
+        "put_flow_pct": round(put_premium / classified_premium, 6) if classified_premium > 0 else None,
+        "call_flow_pct": round(call_premium / classified_premium, 6) if classified_premium > 0 else None,
+        "total_contracts": total_contracts,
+        "unusual_contracts": unusual_contracts,
+        "sweep_contracts": sum(int(row.get("sweep_contracts") or 0) for row in board),
+        "sweep_premium": round(sum(float(row.get("sweep_premium") or 0.0) for row in board), 2),
+        "tape_print_count": tape_print_count,
+        "visible_tape_print_count": len(tape),
+        "signed_print_count": signed_prints,
+        "signed_print_pct": round(signed_prints / board_prints, 6) if board_prints > 0 else None,
+        "tape_detail_available": bool(tape),
+        "premium_basis": (
+            next(iter(premium_bases))
+            if len(premium_bases) == 1
+            else "mixed_provider_basis"
+            if premium_bases
+            else "unavailable"
+        ),
+        "scope": "market_wide_provider_window",
+        "qualified_symbol_count": len(board),
+        "visible_symbol_count": len(visible_board),
+    }
+
     coverage = live_flow.get("coverage") if isinstance(live_flow.get("coverage"), Mapping) else {}
+    request_completed = int(coverage.get("request_completed") or 0)
+    provider_prints = int(coverage.get("provider_prints") or 0)
+    observed_symbols = int(coverage.get("observed_symbols") or 0)
+    live_with_activity = int(coverage.get("with_activity") or 0)
+    feed_status = (
+        "live"
+        if board
+        else "no_prints"
+        if request_completed > 0
+        else "unavailable"
+    )
+    warnings = list(live_flow.get("warnings") or [])
+    feed_reason = (
+        None
+        if feed_status == "live"
+        else "The market-wide provider request completed but no prints cleared the premium threshold."
+        if feed_status == "no_prints"
+        else "The market-wide provider request did not complete."
+    )
+    provider_asof = max(
+        (str(row.get("live_asof") or "") for row in board),
+        default="",
+    ) or None
+    generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     return {
         "schema_version": "unusual-options-flow-v1",
-        "asof": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "rows": board[:max(1, int(row_limit))],
+        # `asof` is the newest retained provider observation, never the request
+        # completion time. `generated_at` separately records snapshot creation.
+        "asof": provider_asof or generated_at,
+        "generated_at": generated_at,
+        "rows": visible_board,
+        "tape": tape,
+        "summary": summary,
+        "feed_status": feed_status,
+        "feed_reason": feed_reason,
         "coverage": {
             "market_universe": len(catalog),
             "local_scanned": int(local_scan["coverage"]["scanned"]),
             "local_flagged": int(local_scan["coverage"]["flagged"]),
-            "live_requested": int(coverage.get("requested") or 0),
-            "live_completed": int(coverage.get("completed") or 0),
-            "live_with_activity": int(coverage.get("with_activity") or 0),
+            # Legacy counters stay binary for older consumers. The standalone
+            # feed performs one request, not a routed per-symbol fan-out.
+            "live_requested": 1,
+            "live_completed": request_completed,
+            "live_with_activity": live_with_activity,
             "unusual_shown": min(len(board), int(row_limit)),
+            "provider_requests": 1,
+            "provider_requests_completed": request_completed,
+            "provider_prints": provider_prints,
+            "observed_symbols": observed_symbols,
         },
-        "warnings": list(live_flow.get("warnings") or []),
+        "warnings": warnings,
         "min_premium": min_premium,
         "decision_authorized": False,
         "score_kind": "ordinal_unusual_flow",
         "caveats": [
-            "Unusual score ranks live premium + local activity; not win probability.",
+            "The provider window is one market-wide recent-print request, not a routed symbol scan.",
+            "Attention score blends a fixed log-premium scale with optional local activity; it is not historical unusualness or win probability.",
             "Call/put print counts are identity only — not bought/sold direction.",
+            "Put flow percentage is put premium divided by classified call + put premium.",
+            "OTM distance is max(strike/spot−1, 0) for calls and max(1−strike/spot, 0) for puts.",
             "Click a row to open Options Drift / GEX for that symbol.",
         ],
     }
@@ -570,6 +687,7 @@ def build_market_activity_scan(
     row_limit: int = ACTIVITY_ROW_LIMIT,
     qlib_asof: str | None = None,
     enable_qlib_score: bool | None = None,
+    progress: Callable[[str, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Build the dashboard activity board; Deep adds live per-symbol flow.
 
@@ -577,6 +695,10 @@ def build_market_activity_scan(
     scanned catalog and uses top ranks as a live-target priority tier. Quick
     mode skips full-universe qlib inference (bounded work).
     """
+    def report(stage: str, percent: int, message: str) -> None:
+        if progress is not None:
+            progress(stage, max(0, min(100, int(percent))), message)
+
     mode = "deep" if str(depth).lower() == "deep" else "quick"
     requested = list(dict.fromkeys(_symbol(value) for value in symbols if _symbol(value)))
     local_symbols = requested if mode == "deep" else requested[:QUICK_LOCAL_LIMIT]
@@ -585,6 +707,11 @@ def build_market_activity_scan(
         data_dirs=data_dirs,
         candle_loader=candle_loader,
         row_limit=max(len(local_symbols), row_limit),
+    )
+    report(
+        "local_activity",
+        25,
+        f"Ranked {local_scan['coverage']['scanned']}/{len(local_symbols)} local histories.",
     )
 
     run_qlib = bool(enable_qlib_score) if enable_qlib_score is not None else mode == "deep"
@@ -637,6 +764,16 @@ def build_market_activity_scan(
             "warnings": ["qlib_score_skipped_quick_scan"] if mode == "quick" else [],
             "decision_authorized": False,
         }
+    qlib_coverage = qlib_panel.get("coverage") or {}
+    report(
+        "qlib" if run_qlib else "local_activity",
+        55,
+        (
+            f"Qlib ranked {int(qlib_coverage.get('scored') or 0)} cross-sectional names."
+            if run_qlib
+            else "Quick mode skipped full-catalog qlib inference."
+        ),
+    )
 
     qlib_priority = (
         qlib_priority_symbols(
@@ -663,6 +800,17 @@ def build_market_activity_scan(
         per_symbol_timeout_seconds=per_symbol_timeout_seconds,
         max_workers=max_workers,
     )
+    live_coverage = live_flow.get("coverage") or {}
+    report(
+        "live_flow" if mode == "deep" else "local_activity",
+        82,
+        (
+            f"Live flow completed {int(live_coverage.get('completed') or 0)}/"
+            f"{int(live_coverage.get('requested') or 0)} routed checks."
+            if mode == "deep"
+            else "Quick activity pass complete."
+        ),
+    )
     rows = _merge_activity_rows(
         local_rows=local_scan["rows"],
         live_flow=live_flow,
@@ -671,6 +819,7 @@ def build_market_activity_scan(
         limit=row_limit,
     )
     rows = merge_qlib_into_activity_rows(rows, qlib_panel)
+    report("merge", 96, f"Merged {len(rows)} ranked activity rows with model context.")
 
     # When qlib ranks are available, re-order the board so high research ranks
     # surface alongside activity without overwriting activity_score or

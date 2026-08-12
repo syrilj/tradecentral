@@ -21,6 +21,7 @@ import sys
 import time
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Callable
 import pandas as pd
 import numpy as np
 
@@ -151,6 +152,68 @@ def _priority_directional_symbols(
     return preferred[:limit]
 
 
+def reconcile_pead_directional_signals(
+    pead_candidates: list[dict],
+    directional_signals: list[dict],
+) -> dict:
+    """Explain overlap between a session gap event and a 5D forecast.
+
+    These streams are not interchangeable: PEAD is an observed opening-gap
+    flag and the directional sleeve is a multi-session model forecast.  The
+    explicit join prevents adjacent dashboard tables from implying that
+    unrelated symbols or horizons are competing recommendations.
+    """
+    pead_by = {
+        str(row.get("symbol") or "").upper(): row
+        for row in pead_candidates
+        if row.get("symbol")
+    }
+    directional_by = {
+        str(row.get("symbol") or "").upper(): row
+        for row in directional_signals
+        if row.get("symbol")
+    }
+    overlap = sorted(set(pead_by) & set(directional_by))
+    rows: list[dict] = []
+    for symbol in overlap:
+        pead = pead_by[symbol]
+        directional = directional_by[symbol]
+        pead_side = str(pead.get("side") or "").lower()
+        directional_side = str(directional.get("side") or "").lower()
+        relation = "agree" if pead_side == directional_side else "conflict"
+        rows.append({
+            "symbol": symbol,
+            "relation": relation,
+            "pead_side": pead_side,
+            "pead_strength": (pead.get("evidence") or {}).get("pead_score"),
+            "directional_side": directional_side,
+            "directional_probability": directional.get("probability"),
+            "directional_state": directional.get("state"),
+            "directional_horizon": directional.get("horizon"),
+        })
+    rows.sort(key=lambda row: (row["relation"] != "conflict", row["symbol"]))
+    agreements = sum(row["relation"] == "agree" for row in rows)
+    conflicts = sum(row["relation"] == "conflict" for row in rows)
+    return {
+        "schema_version": "pead-directional-reconciliation-v1",
+        "counts": {
+            "pead_flags": len(pead_by),
+            "directional_forecasts": len(directional_by),
+            "overlap": len(rows),
+            "agreements": agreements,
+            "conflicts": conflicts,
+            "pead_only": len(pead_by) - len(rows),
+            "directional_only": len(directional_by) - len(rows),
+        },
+        "rows": rows,
+        "decision_rule": "Conflict means no unified directional thesis; non-overlap is not disagreement.",
+        "semantics": {
+            "pead": "Observed opening-gap/volume event; ordinal and session-specific.",
+            "directional": "Frozen-domain multi-session forecast; normally displayed at the 5-day horizon.",
+        },
+    }
+
+
 def fetch_internal_directional_signals(
     *, candidate_limit: int = QUICK_DIRECTIONAL_LIMIT,
     diagnostics: dict | None = None,
@@ -176,6 +239,12 @@ def fetch_internal_directional_signals(
         if preferred_symbols:
             model_set = set(model_universe)
             selected_symbols = [s for s in preferred_symbols if s in model_set]
+            if sector_flow is not None and limit < len(model_universe):
+                for s in _priority_directional_symbols(
+                    model_universe, sector_flow, limit=limit,
+                ):
+                    if s not in selected_symbols:
+                        selected_symbols.append(s)
             for s in model_universe:
                 if s not in selected_symbols:
                     selected_symbols.append(s)
@@ -286,11 +355,20 @@ def fetch_sector_flow_signals() -> dict:
     """Fetches sector money flow heatmap, sector rankings, and money in/out focus names."""
     try:
         from tools.sector_money_flow import run_scan
-        report = run_scan()
+        # The shell calls this "rotation now", so prefer a current provider
+        # panel instead of accepting an old-but-present local ETF cache. If the
+        # network refresh cannot produce a report, fall back to the local/mixed
+        # panel and preserve its observed bar date for a visible STALE label.
+        report = run_scan(source="yfinance")
+        if not report.get("ok"):
+            report = run_scan(source="auto")
         money_in = [r.get("etf") or r.get("sector") for r in report.get("money_in", []) if r.get("etf")]
         money_out = [r.get("etf") or r.get("sector") for r in report.get("money_out", []) if r.get("etf")]
         sectors_ranked = report.get("sectors_ranked", [])
         return {
+            "asof": report.get("asof"),
+            "asof_bar": report.get("asof_bar"),
+            "source": report.get("source"),
             "money_in": money_in,
             "money_out": money_out,
             "sectors_ranked": sectors_ranked,
@@ -300,6 +378,9 @@ def fetch_sector_flow_signals() -> dict:
     except Exception as e:
         print(f"Warning fetching sector flow: {e}")
         return {
+            "asof": None,
+            "asof_bar": None,
+            "source": "unavailable",
             "money_in": ["XLC (Comm)", "XLE (Energy)", "QQQ (Tech)", "XLF (Fin)", "SMH (Semis)"],
             "money_out": ["IGV (Software)", "XLV (Health)", "SOXX", "XLY (Cons)"],
             "sectors_ranked": [],
@@ -692,10 +773,20 @@ def analyze_symbol_adhoc(symbol: str, *, qlib_panel: dict | None = None) -> dict
     }
 
 
-def get_dashboard_data(*, scan_depth: str = "quick") -> dict:
+def get_dashboard_data(
+    *,
+    scan_depth: str = "quick",
+    include_gcp_resources: bool = True,
+    progress: Callable[[str, int, str], None] | None = None,
+) -> dict:
     """Collects complete multi-engine dynamic payload for rendering or API delivery."""
     started = time.perf_counter()
     scan_depth = normalize_scan_depth(scan_depth)
+
+    def report(stage: str, percent: int, message: str) -> None:
+        if progress is not None:
+            progress(stage, max(0, min(100, int(percent))), message)
+
     asof_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     broad_universe = _load_broad_universe()
     market_universe = load_market_symbol_catalog(data_dirs=(
@@ -706,36 +797,77 @@ def get_dashboard_data(*, scan_depth: str = "quick") -> dict:
     if not market_universe:
         market_universe = list(dict.fromkeys(broad_universe))
     directional_universe = load_directional_model_universe()
+    report(
+        "catalog",
+        8,
+        f"Loaded {len(market_universe)} market names and {len(directional_universe)} modeled names.",
+    )
     directional_limit = (
         QUICK_DIRECTIONAL_LIMIT if scan_depth == "quick" else len(directional_universe)
     )
 
     # 1. Sector Money Flow first so the quick directional pass can prioritize
     # names from today's top sleeves instead of an arbitrary first-N slice.
+    report("sector_context", 12, "Reading sector leadership and routing context.")
     sector_flow = fetch_sector_flow_signals()
+    report("sector_context", 18, "Sector context ready.")
 
     # 2. PEAD-style gap/volume flags. Deep evaluates the full local catalog;
     # Quick retains the configured 175-name pass. These are ordinal flags,
     # not calibrated probabilities or authorized entries.
     pead_diagnostics: dict = {}
     pead_symbols = market_universe if scan_depth == "deep" else broad_universe
+    report("pead", 22, f"Evaluating gap and volume flags across {len(pead_symbols)} names.")
     pead_candidates = generate_pead_candidates(
         symbols=pead_symbols,
         diagnostics=pead_diagnostics,
     )
+    report("pead", 38, f"Qualified {len(pead_candidates)} ordinal PEAD activity flags.")
 
     # 3. Internal directional signals. Quick mode bounds latency and prefers
     # top-sector names; deep mode scores the complete frozen model domain.
     directional_diagnostics: dict = {}
+    report(
+        "directional",
+        42,
+        f"Scoring {directional_limit} names inside the calibrated serving domain.",
+    )
     directional_signals = fetch_internal_directional_signals(
         candidate_limit=directional_limit,
         diagnostics=directional_diagnostics,
+        preferred_symbols=(
+            [str(row.get("symbol") or "").upper() for row in pead_candidates]
+            if scan_depth == "quick"
+            else None
+        ),
         sector_flow=sector_flow if scan_depth == "quick" else None,
     )
+    report(
+        "directional",
+        55,
+        f"Scored {len(directional_signals)} directional names; calibration boundaries preserved.",
+    )
+    signal_reconciliation = reconcile_pead_directional_signals(
+        pead_candidates,
+        directional_signals,
+    )
+    reconciliation_counts = signal_reconciliation["counts"]
 
     # 4. Market-wide price/volume activity. Deep additionally routes the top
     # 100 observable names through live LSE flow. This board can flag attention
     # candidates but cannot authorize a direction or trade.
+    report(
+        "activity",
+        60,
+        "Ranking local activity" + (" and routing live flow." if scan_depth == "deep" else "."),
+    )
+
+    def activity_progress(stage: str, percent: int, message: str) -> None:
+        # The activity engine owns the longest Deep stages (full-catalog qlib
+        # and bounded live flow). Map its 0..100 range into this aggregator's
+        # 60..90 range so the client sees monotonic progress.
+        report(stage, 60 + round(max(0, min(100, percent)) * 0.30), message)
+
     activity_scan = build_market_activity_scan(
         symbols=market_universe,
         depth=scan_depth,
@@ -747,8 +879,10 @@ def get_dashboard_data(*, scan_depth: str = "quick") -> dict:
             ROOT / "edge" / "data" / "1d",
         ),
         live_target_limit=DEEP_LIVE_TARGET_LIMIT,
+        progress=activity_progress,
     )
     activity_coverage = activity_scan.get("coverage") or {}
+    report("activity", 90, "Market activity board assembled.")
 
     # 5. Volatility Complex
     vol_file = ROOT / "edge" / "data" / "vol_complex.csv"
@@ -788,11 +922,24 @@ def get_dashboard_data(*, scan_depth: str = "quick") -> dict:
         except Exception as exc:  # noqa: BLE001 - report, never substitute
             pead_metrics["reason"] = f"unreadable artifact: {type(exc).__name__}"
 
-    # 7. GCP Resources & Cost Breakdown
-    gcp_resources = get_all_gcp_resources()
+    # 7. GCP Resources & Cost Breakdown. The API status/scan path deliberately
+    # defers this network-backed inventory to /api/gcp. Credential refreshes can
+    # take minutes when Google is unreachable and are unrelated to market scan
+    # correctness. The legacy standalone HTML renderer still opts in.
+    report("supporting", 94, "Loading local gate and leaderboard artifacts.")
+    gcp_resources = (
+        get_all_gcp_resources()
+        if include_gcp_resources
+        else {
+            "available": False,
+            "deferred": True,
+            "reason": "Cloud inventory is loaded on demand from /api/gcp.",
+        }
+    )
     
     # 8. Model Leaderboard
     leaderboard = load_dynamic_leaderboard()
+    report("finalizing", 98, "Finalizing scan coverage and provenance.")
 
     return {
         "asof": asof_now,
@@ -814,6 +961,9 @@ def get_dashboard_data(*, scan_depth: str = "quick") -> dict:
             "directional_scored_symbols": len(directional_signals),
             "directional_failed_symbols": int(directional_diagnostics.get("failed_symbols", 0)),
             "directional_warning_count": int(directional_diagnostics.get("warning_count", 0)),
+            "signal_overlap_symbols": int(reconciliation_counts["overlap"]),
+            "signal_agreement_symbols": int(reconciliation_counts["agreements"]),
+            "signal_conflict_symbols": int(reconciliation_counts["conflicts"]),
             "activity_market_universe_symbols": int(activity_coverage.get("market_universe", len(market_universe))),
             "activity_local_scanned_symbols": int(activity_coverage.get("local_scanned", 0)),
             "activity_local_flagged_symbols": int(activity_coverage.get("local_flagged", 0)),
@@ -831,6 +981,7 @@ def get_dashboard_data(*, scan_depth: str = "quick") -> dict:
         },
         "pead_candidates": pead_candidates,
         "directional_signals": directional_signals,
+        "signal_reconciliation": signal_reconciliation,
         "activity_scan": activity_scan,
         "sector_flow": sector_flow,
         "latest_vol": latest_vol,

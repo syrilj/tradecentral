@@ -1,6 +1,39 @@
 from __future__ import annotations
 
+import sys
+import types
+
 from edge.tools import render_dashboard as dashboard
+
+
+def test_sector_flow_prefers_current_provider_and_preserves_freshness(monkeypatch):
+    calls: list[str] = []
+    module = types.ModuleType("tools.sector_money_flow")
+
+    def fake_run_scan(*, source: str):
+        calls.append(source)
+        return {
+            "ok": True,
+            "asof": "2026-08-11T14:32:00Z",
+            "asof_bar": "2026-08-11",
+            "source": "yfinance",
+            "money_in": [{"etf": "XLE"}],
+            "money_out": [{"etf": "XLP"}],
+            "sectors_ranked": [{"etf": "XLE", "flow_score": 0.024}],
+            "watch_names": [{"symbol": "XOM", "etf": "XLE"}],
+            "market_context": "Energy leadership",
+        }
+
+    module.run_scan = fake_run_scan  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tools.sector_money_flow", module)
+
+    payload = dashboard.fetch_sector_flow_signals()
+
+    assert calls == ["yfinance"]
+    assert payload["asof_bar"] == "2026-08-11"
+    assert payload["source"] == "yfinance"
+    assert payload["money_in"] == ["XLE"]
+    assert payload["money_out"] == ["XLP"]
 
 
 def test_scan_depth_is_bounded_and_deep_uses_complete_model_domain(monkeypatch):
@@ -117,6 +150,34 @@ def test_priority_directional_symbols_prefers_top_sector_watch_names():
     assert "OUTSIDE" not in picked
     assert len(picked) == 5
     assert set(picked) <= set(modeled)
+
+
+def test_pead_directional_reconciliation_only_compares_the_same_symbol():
+    payload = dashboard.reconcile_pead_directional_signals(
+        [
+            {"symbol": "AGREE", "side": "long", "evidence": {"pead_score": 1.4}},
+            {"symbol": "CLASH", "side": "short", "evidence": {"pead_score": -1.2}},
+            {"symbol": "GAP_ONLY", "side": "long", "evidence": {"pead_score": 0.9}},
+        ],
+        [
+            {"symbol": "AGREE", "side": "LONG", "probability": 0.61, "state": "WATCH", "horizon": "5 Days"},
+            {"symbol": "CLASH", "side": "LONG", "probability": 0.58, "state": "WATCH", "horizon": "5 Days"},
+            {"symbol": "MODEL_ONLY", "side": "SHORT", "probability": 0.57, "state": "WATCH", "horizon": "5 Days"},
+        ],
+    )
+
+    assert payload["counts"] == {
+        "pead_flags": 3,
+        "directional_forecasts": 3,
+        "overlap": 2,
+        "agreements": 1,
+        "conflicts": 1,
+        "pead_only": 1,
+        "directional_only": 1,
+    }
+    assert [row["symbol"] for row in payload["rows"]] == ["CLASH", "AGREE"]
+    assert payload["rows"][0]["relation"] == "conflict"
+    assert "non-overlap is not disagreement" in payload["decision_rule"]
 
 
 def test_analyze_symbol_attaches_shared_qlib_context_or_explicit_missing(monkeypatch, tmp_path):

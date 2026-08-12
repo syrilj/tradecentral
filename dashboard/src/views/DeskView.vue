@@ -7,6 +7,7 @@ import {
   type StatusPayload,
   type Readiness,
   type ScanDepth,
+  type ScanJob,
   type Trajectory,
 } from '@/api'
 import type { Resource } from '@/composables/useResource'
@@ -28,10 +29,21 @@ const router = useRouter()
 const scanning = ref(false)
 const scanDepth = ref<ScanDepth>('quick')
 const scanMsg = ref<string | null>(null)
+const scanJob = ref<ScanJob | null>(null)
+let scanPollToken = 0
 
 // Filtering state for dropdowns
-const peadFilter = ref<'all' | 'entered' | 'long' | 'short'>('all')
-const signalFilter = ref<'all' | 'entered' | 'long' | 'short'>('all')
+const peadFilter = ref<'all' | 'flagged' | 'long' | 'short'>('all')
+const signalFilter = ref<'all' | 'entered' | 'actionable' | 'long' | 'short'>('all')
+
+/**
+ * Confidence contract (must match tools/render_dashboard.py):
+ *  - ENTER authorization only when calibrated p ≥ 0.65
+ *  - 0.55–0.65 is WATCH / near coin-flip — never sold as high confidence
+ *  - PEAD is ordinal (gate-driven) and cannot authorize entries
+ */
+const ENTER_EDGE = 0.65
+const ACTIONABLE_EDGE = 0.55
 
 // Custom Watchlist & Ad-hoc probe
 const customTickerInput = ref('')
@@ -55,11 +67,13 @@ onMounted(() => {
     /* fallback to default */
   }
   void probeWatchlist(true)
+  void resumeScanJob()
   // Keep personal watchlist fresh even when the shared status asof is quiet.
   watchlistTimer = window.setInterval(() => void probeWatchlist(true), 60_000)
 })
 
 onUnmounted(() => {
+  scanPollToken += 1
   if (watchlistTimer !== undefined) clearInterval(watchlistTimer)
 })
 
@@ -92,15 +106,17 @@ async function probeSymbol(sym: string): Promise<void> {
 }
 
 async function probeWatchlist(force = false): Promise<void> {
-  for (const sym of customWatchlist.value) {
-    try {
-      if (force || !probeResults.value[sym]) {
+  const targets = customWatchlist.value.filter((sym) => force || !probeResults.value[sym])
+  if (!targets.length) return
+  await Promise.all(
+    targets.map(async (sym) => {
+      try {
         probeResults.value[sym] = await api.trajectory(sym, '1m')
+      } catch {
+        /* keep prior bar if present; retry on next refresh */
       }
-    } catch {
-      /* ignore individual ticker probe error; retry on next refresh */
-    }
-  }
+    }),
+  )
 }
 
 // When the shared status feed recovers after a backend outage, re-probe the
@@ -131,19 +147,69 @@ function watchPrice(sym: string): number | null {
   return last != null && Number.isFinite(last) ? last : null
 }
 
+function scanDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function applyCompletedScan(job: ScanJob): void {
+  const result = job.result
+  if (!result) return
+  status.data.value = result.data
+  status.error.value = null
+  status.fetchedAt.value = new Date().toISOString()
+  scanMsg.value = result.message
+}
+
+async function trackScanJob(initial: ScanJob, token: number): Promise<void> {
+  let current = initial
+  scanJob.value = current
+  scanDepth.value = current.depth
+  while (token === scanPollToken && (current.state === 'queued' || current.state === 'running')) {
+    await scanDelay(750)
+    if (token !== scanPollToken) return
+    const payload = await api.scanStatus(current.id)
+    if (!payload.job) throw new Error(payload.message)
+    current = payload.job
+    scanJob.value = current
+    scanMsg.value = current.message
+  }
+  if (token !== scanPollToken) return
+  if (current.state === 'completed') {
+    applyCompletedScan(current)
+  } else if (current.state === 'failed') {
+    scanMsg.value = current.error || current.message
+  }
+}
+
+async function resumeScanJob(): Promise<void> {
+  let token = scanPollToken
+  try {
+    const payload = await api.scanStatus()
+    if (!payload.job || !['queued', 'running'].includes(payload.job.state)) return
+    token = ++scanPollToken
+    scanning.value = true
+    scanMsg.value = payload.job.message
+    await trackScanJob(payload.job, token)
+  } catch {
+    // Resume is opportunistic; the normal status feed remains usable.
+  } finally {
+    if (token === scanPollToken) scanning.value = false
+  }
+}
+
 async function runScan(): Promise<void> {
+  const token = ++scanPollToken
   scanning.value = true
   scanMsg.value = null
   try {
-    const result = await api.triggerScan(scanDepth.value)
-    status.data.value = result.data
-    status.error.value = null
-    status.fetchedAt.value = new Date().toISOString()
-    scanMsg.value = result.message
+    const payload = await api.triggerScan(scanDepth.value)
+    if (!payload.job) throw new Error(payload.message)
+    scanMsg.value = payload.message
+    await trackScanJob(payload.job, token)
   } catch (e) {
     scanMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
-    scanning.value = false
+    if (token === scanPollToken) scanning.value = false
   }
 }
 
@@ -203,6 +269,10 @@ const activityCoverage = computed(() => d.value?.activity_scan?.coverage)
 const board = computed(() => (d.value?.leaderboard ?? []) as unknown as BoardRow[])
 const sectors = computed(() => (d.value?.sector_flow as any)?.sectors_ranked ?? [])
 const scan = computed(() => d.value?.scan_summary)
+const reconciliation = computed(() => d.value?.signal_reconciliation)
+const reconciledBySymbol = computed(() => new Map(
+  (reconciliation.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row]),
+))
 
 watch(
   () => scan.value?.depth,
@@ -212,10 +282,35 @@ watch(
   { immediate: true },
 )
 
-/* Filtering computed properties */
-const peadEntered = computed(() => pead.value.filter((p) => p.model?.state === 'ENTER').length)
+/* Filtering + confidence ranking */
+const peadFlagged = computed(() => pead.value.filter((p) => p.setup_ok || p.model?.state === 'FLAG').length)
 const sigEntered = computed(() => signals.value.filter((s) => s.state === 'ENTER').length)
+const sigHighConf = computed(() =>
+  signals.value.filter((s) => hasHighConfidence(s.probability, s.state)).length,
+)
+const sigActionable = computed(() =>
+  signals.value.filter((s) => hasActionableEdge(s.probability)).length,
+)
+const maxCalibratedEdge = computed(() => {
+  let max = 0
+  for (const s of signals.value) {
+    if (typeof s.probability === 'number' && Number.isFinite(s.probability) && s.probability > max) {
+      max = s.probability
+    }
+  }
+  return max > 0 ? max : null
+})
+/** Ranked high-confidence names only — empty is an honest desk state. */
+const highConfidenceQueue = computed(() =>
+  signals.value
+    .filter((s) => hasHighConfidence(s.probability, s.state))
+    .slice()
+    .sort(compareSignals),
+)
+const rankedSignals = computed(() => signals.value.slice().sort(compareSignals))
+const rankedPead = computed(() => pead.value.slice().sort(comparePead))
 const liveActivityCount = computed(() => activity.value.filter((row) => row.live).length)
+const peadGateVerdict = computed(() => String(scan.value?.pead_gate_verdict ?? 'UNKNOWN').toUpperCase())
 const peadMeta = computed(() => {
   const summary = scan.value
   return summary
@@ -224,9 +319,34 @@ const peadMeta = computed(() => {
 })
 const signalMeta = computed(() => {
   const summary = scan.value
-  return summary
-    ? `${sigEntered.value} entered · ${summary.directional_scored_symbols} scored / ${summary.directional_model_universe_symbols} modeled`
-    : `${sigEntered.value} entered · ${signals.value.length} scored`
+  const entered = sigEntered.value
+  const high = sigHighConf.value
+  const scored = summary?.directional_scored_symbols ?? signals.value.length
+  const domain = summary?.directional_model_universe_symbols ?? '—'
+  return `${entered} ENTER · ${high} high-conf · ${scored}/${domain} scored · bar ${pctFrac(ENTER_EDGE, 0)}`
+})
+const confidencePosture = computed(() => {
+  if (sigEntered.value > 0 || sigHighConf.value > 0) {
+    return {
+      label: 'HIGH CONFIDENCE',
+      tone: 'armed' as const,
+      detail: `${Math.max(sigEntered.value, sigHighConf.value)} name(s) at/above ENTER bar ${pctFrac(ENTER_EDGE, 0)}`,
+    }
+  }
+  if (sigActionable.value > 0) {
+    return {
+      label: 'WATCH ONLY',
+      tone: 'held' as const,
+      detail: `${sigActionable.value} moderate (≥${pctFrac(ACTIONABLE_EDGE, 0)}); max ${maxCalibratedEdge.value != null ? pctFrac(maxCalibratedEdge.value, 1) : DASH} — below ENTER`,
+    }
+  }
+  return {
+    label: 'NO EDGE',
+    tone: 'held' as const,
+    detail: maxCalibratedEdge.value != null
+      ? `Max calibrated ${pctFrac(maxCalibratedEdge.value, 1)} · nothing clears ${pctFrac(ACTIONABLE_EDGE, 0)} watch floor`
+      : 'No calibrated directional probabilities this session',
+  }
 })
 const activityMeta = computed(() => {
   const coverage = activityCoverage.value
@@ -239,6 +359,7 @@ const activityMeta = computed(() => {
 const livePassLabel = computed(() => {
   const coverage = activityCoverage.value
   if (!coverage?.live_requested) return 'DEEP REQUIRED FOR LIVE FLOW'
+  if (coverage.live_completed === 0) return 'LSE PASS UNAVAILABLE · OPEN FLOW TO RETRY'
   if (coverage.live_completed >= coverage.live_requested) return 'LSE PASS COMPLETE'
   return `LSE PARTIAL ${coverage.live_completed}/${coverage.live_requested}`
 })
@@ -247,28 +368,67 @@ const selectedScanLabel = computed(() =>
     ? `${scan.value?.activity_market_universe_symbols ?? d.value?.searchable_symbol_count ?? 576} + ${scan.value?.activity_live_requested_symbols || 100} LIVE`
     : `${Math.min(scan.value?.activity_market_universe_symbols ?? 175, 175)} LOCAL`,
 )
+const quickScopeCount = computed(() => Math.min(d.value?.broad_universe_count ?? 175, 175))
+const deepScopeCount = computed(() =>
+  scan.value?.activity_market_universe_symbols ?? d.value?.market_universe_count ?? d.value?.searchable_symbol_count ?? 576,
+)
+const selectedScanTitle = computed(() =>
+  scanDepth.value === 'deep' ? 'MARKET-WIDE + LIVE FLOW' : 'FAST LOCAL ACTIVITY',
+)
+const selectedScanDetail = computed(() =>
+  scanDepth.value === 'deep'
+    ? `Full ${deepScopeCount.value}-name activity + qlib cross-section, the complete calibrated model domain, and up to 100 bounded LSE flow checks.`
+    : `${quickScopeCount.value} local activity names and 25 priority names from the calibrated model domain; no live-provider fan-out.`,
+)
+const scanStageLabel = computed(() =>
+  String(scanJob.value?.stage || 'starting').replaceAll('_', ' ').toUpperCase(),
+)
 
 function confidenceBand(value: number | null | undefined): 'HIGH' | 'MODERATE' | 'LOW' | 'UNAVAILABLE' {
   if (value === null || value === undefined || !Number.isFinite(value)) return 'UNAVAILABLE'
-  if (value >= 0.65) return 'HIGH'
-  if (value >= 0.55) return 'MODERATE'
+  if (value >= ENTER_EDGE) return 'HIGH'
+  if (value >= ACTIONABLE_EDGE) return 'MODERATE'
   return 'LOW'
 }
 
-/** True edge for authorization chrome; weak probs still render dim for context. */
-function hasActionableEdge(value: number | null | undefined): boolean {
+/** Meets ENTER bar (p ≥ 0.65) or explicit ENTER state. */
+function hasHighConfidence(value: number | null | undefined, state?: string): boolean {
+  if (state === 'ENTER') return true
   if (value === null || value === undefined || !Number.isFinite(value)) return false
-  return value >= 0.55
+  return value >= ENTER_EDGE
 }
 
-function edgeTitle(value: number | null | undefined): string {
+/** Watch-tier edge (p ≥ 0.55). Not authorization. */
+function hasActionableEdge(value: number | null | undefined): boolean {
+  if (value === null || value === undefined || !Number.isFinite(value)) return false
+  return value >= ACTIONABLE_EDGE
+}
+
+function edgeTitle(value: number | null | undefined, state?: string): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return 'No calibrated probability — use momentum + state only.'
+    return 'No calibrated probability — use momentum + state only. Not authorization.'
   }
-  if (!hasActionableEdge(value)) {
-    return `${pctFrac(value, 1)} calibrated — near coin-flip; not authorization edge`
+  if (hasHighConfidence(value, state)) {
+    return `${pctFrac(value, 1)} HIGH — meets ENTER bar (≥${pctFrac(ENTER_EDGE, 0)})`
   }
-  return `${confidenceBand(value)} calibrated edge`
+  if (hasActionableEdge(value)) {
+    return `${pctFrac(value, 1)} MODERATE — above ${pctFrac(ACTIONABLE_EDGE, 0)} watch floor; below ENTER ${pctFrac(ENTER_EDGE, 0)}`
+  }
+  return `${pctFrac(value, 1)} LOW — near coin-flip; not authorization edge`
+}
+
+function compareSignals(a: SignalRow, b: SignalRow): number {
+  const aEnter = a.state === 'ENTER' ? 1 : 0
+  const bEnter = b.state === 'ENTER' ? 1 : 0
+  if (aEnter !== bEnter) return bEnter - aEnter
+  const ap = typeof a.probability === 'number' && Number.isFinite(a.probability) ? a.probability : -1
+  const bp = typeof b.probability === 'number' && Number.isFinite(b.probability) ? b.probability : -1
+  if (bp !== ap) return bp - ap
+  return Math.abs(b.momentum ?? 0) - Math.abs(a.momentum ?? 0)
+}
+
+function comparePead(a: PeadRow, b: PeadRow): number {
+  return Math.abs(b.evidence?.pead_score ?? 0) - Math.abs(a.evidence?.pead_score ?? 0)
 }
 
 function momentumBarPct(value: number | null | undefined): number {
@@ -280,6 +440,24 @@ function momentumBarPct(value: number | null | undefined): number {
 /** Join desk signals onto a watchlist symbol for edge / momentum chips. */
 function signalFor(sym: string): SignalRow | null {
   return signals.value.find((s) => s.symbol?.toUpperCase() === sym.toUpperCase()) ?? null
+}
+
+function peadFor(sym: string): PeadRow | null {
+  return pead.value.find((row) => row.symbol?.toUpperCase() === sym.toUpperCase()) ?? null
+}
+
+function relationFor(sym: string): 'agree' | 'conflict' | 'none' {
+  const relation = reconciledBySymbol.value.get(sym.toUpperCase())?.relation
+  if (relation === 'agree' || relation === 'conflict') return relation
+  const peadSide = peadFor(sym)?.side?.toLowerCase()
+  const directionalSide = signalFor(sym)?.side?.toLowerCase()
+  if (!peadSide || !directionalSide) return 'none'
+  return peadSide === directionalSide ? 'agree' : 'conflict'
+}
+
+function sideWord(value: string | null | undefined): string {
+  const side = String(value || '').toLowerCase()
+  return side === 'long' ? 'UP' : side === 'short' ? 'DOWN' : 'NONE'
 }
 
 const watchSparks = computed(() => {
@@ -294,8 +472,8 @@ const watchSparks = computed(() => {
 })
 
 const filteredPead = computed(() => {
-  return pead.value.filter((p) => {
-    if (peadFilter.value === 'entered') return p.model?.state === 'ENTER'
+  return rankedPead.value.filter((p) => {
+    if (peadFilter.value === 'flagged') return p.setup_ok || p.model?.state === 'FLAG'
     if (peadFilter.value === 'long') return p.side?.toLowerCase() === 'long'
     if (peadFilter.value === 'short') return p.side?.toLowerCase() === 'short'
     return true
@@ -303,8 +481,9 @@ const filteredPead = computed(() => {
 })
 
 const filteredSignals = computed(() => {
-  return signals.value.filter((s) => {
+  return rankedSignals.value.filter((s) => {
     if (signalFilter.value === 'entered') return s.state === 'ENTER'
+    if (signalFilter.value === 'actionable') return hasActionableEdge(s.probability)
     if (signalFilter.value === 'long') return s.side?.toLowerCase() === 'long'
     if (signalFilter.value === 'short') return s.side?.toLowerCase() === 'short'
     return true
@@ -373,14 +552,16 @@ function navTo(name: string): void {
         </span>
       </div>
 
-      <div class="kpi-card">
-        <span class="label kpi-label">Authorized Entries</span>
+      <div class="kpi-card" :class="confidencePosture.tone">
+        <span class="label kpi-label">Confidence Posture</span>
         <div class="kpi-val-row">
-          <span class="kpi-val fig pos">{{ sigEntered }}</span>
-          <span class="kpi-badge enter">ENTER SIGNAL</span>
+          <span class="kpi-val fig" :class="sigHighConf > 0 ? 'pos' : ''">{{ confidencePosture.label }}</span>
+          <span class="kpi-badge" :class="sigHighConf > 0 ? 'enter' : 'held'">
+            {{ sigEntered }} ENTER · {{ sigHighConf }} HIGH
+          </span>
         </div>
-        <span class="kpi-sub">
-          PEAD excluded · {{ sigEntered }} calibrated directional
+        <span class="kpi-sub" :title="confidencePosture.detail">
+          {{ confidencePosture.detail }}
         </span>
       </div>
 
@@ -420,13 +601,58 @@ function navTo(name: string): void {
       </button>
     </div>
 
+    <!-- High-confidence queue — empty is an explicit, honest state -->
+    <section class="confidence-queue w-full" aria-label="High confidence directional queue">
+      <div class="confidence-queue-head">
+        <div>
+          <span class="label">High-confidence queue</span>
+          <strong>Calibrated p ≥ {{ pctFrac(ENTER_EDGE, 0) }} or ENTER state</strong>
+          <p class="label queue-note">
+            PEAD ordinal flags never appear here. Moderate watches ({{ pctFrac(ACTIONABLE_EDGE, 0) }}–{{ pctFrac(ENTER_EDGE, 0) }}) stay in Directional Signals only.
+          </p>
+        </div>
+        <div class="confidence-queue-stats">
+          <span class="fig">{{ highConfidenceQueue.length }}</span>
+          <span class="label">NAMES</span>
+        </div>
+      </div>
+      <div v-if="highConfidenceQueue.length" class="confidence-queue-rows">
+        <button
+          v-for="s in highConfidenceQueue"
+          :key="`hc-${s.symbol}`"
+          type="button"
+          class="hc-row"
+          @click="open(s.symbol)"
+        >
+          <span class="fig sym">{{ s.symbol }}</span>
+          <span class="side-pill" :class="s.side === 'LONG' || s.side === 'long' ? 'pos' : 'neg'">
+            {{ (s.side ?? DASH).toUpperCase() }}
+          </span>
+          <span class="fig pos">{{ pctFrac(s.probability, 1) }}</span>
+          <span class="state label enter">{{ s.state }}</span>
+          <span class="label dim">{{ (s.horizon ?? '').replace(' Days', 'd') }}</span>
+        </button>
+      </div>
+      <p v-else class="note pad confidence-empty">
+        <template v-if="signals.length === 0">
+          No directional scores loaded — run a scan.
+        </template>
+        <template v-else>
+          No high-confidence authorizations this session.
+          Max calibrated edge
+          <strong class="fig">{{ maxCalibratedEdge != null ? pctFrac(maxCalibratedEdge, 1) : DASH }}</strong>
+          · ENTER bar <strong class="fig">{{ pctFrac(ENTER_EDGE, 0) }}</strong>
+          · {{ sigActionable }} moderate watch(es) only.
+        </template>
+      </p>
+    </section>
+
     <section class="scan-console" aria-label="Market scan depth">
       <div class="scan-console-head">
         <div class="scan-title-block">
           <span class="label scan-kicker">Scan scope</span>
-          <strong class="scan-title">
-            {{ scan?.depth === 'deep' ? 'MARKET-WIDE + LIVE FLOW' : 'FAST LOCAL ACTIVITY' }}
-          </strong>
+          <strong class="scan-title">{{ selectedScanTitle }}</strong>
+          <span class="last-scan label">LAST COMPLETE · {{ scan?.depth?.toUpperCase() ?? 'NONE' }}</span>
         </div>
 
         <div class="scan-readouts" aria-label="Latest scan coverage">
@@ -467,7 +693,7 @@ function navTo(name: string): void {
               :disabled="scanning"
               @click="scanDepth = 'quick'"
             >
-              QUICK <span>25</span>
+              QUICK <span>{{ quickScopeCount }} LOCAL</span>
             </button>
             <button
               class="depth-option label"
@@ -476,21 +702,43 @@ function navTo(name: string): void {
               :disabled="scanning"
               @click="scanDepth = 'deep'"
             >
-              DEEP <span>{{ scan?.activity_market_universe_symbols ?? d?.searchable_symbol_count ?? 576 }}</span>
+              DEEP <span>{{ deepScopeCount }} + LIVE</span>
             </button>
           </div>
           <button class="scan-run label" :disabled="scanning" @click="runScan">
             <span class="scan-pulse" aria-hidden="true" />
-            {{ scanning ? `SCANNING ${selectedScanLabel}…` : `RUN ${scanDepth.toUpperCase()} SCAN` }}
+            {{ scanning ? `${scanJob?.progress ?? 0}% · ${selectedScanLabel}` : `RUN ${scanDepth.toUpperCase()} SCAN` }}
           </button>
         </div>
       </div>
-      <div class="scan-explain">
-        <span v-if="scanMsg" class="scan-msg label">{{ scanMsg }}</span>
-        <span v-else class="label">
-          Quick ranks 175 local names. Deep ranks the full {{ scan?.activity_market_universe_symbols ?? d?.searchable_symbol_count ?? 576 }}-name catalog,
-          checks the top 100 against live LSE flow, and keeps confidence separate.
-        </span>
+      <div v-if="scanning && scanJob" class="scan-progress" role="status" aria-live="polite">
+        <div class="scan-progress-copy">
+          <span class="label">{{ scanJob.depth.toUpperCase() }} PASS · {{ scanStageLabel }}</span>
+          <strong>{{ scanJob.message }}</strong>
+          <small class="fig">{{ num(scanJob.elapsed_seconds, 1) }}s elapsed · the desk remains available</small>
+        </div>
+        <div
+          class="scan-progress-track"
+          role="progressbar"
+          aria-label="Scan completion"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="scanJob.progress"
+        >
+          <i :style="{ width: `${scanJob.progress}%` }" />
+        </div>
+      </div>
+      <div class="scan-explain" aria-live="polite">
+        <span v-if="scanMsg && !scanning" class="scan-msg label">{{ scanMsg }}</span>
+        <span v-else-if="!scanning" class="label">{{ selectedScanDetail }}</span>
+        <span v-else class="label">Selected scope is executing as a background job; leaving this view will not cancel it.</span>
+        <RouterLink
+          v-if="!scanning && scan?.depth === 'deep'"
+          :to="{ name: 'flow' }"
+          class="scan-flow-link label"
+        >
+          OPEN DEEP FLOW →
+        </RouterLink>
       </div>
     </section>
 
@@ -538,10 +786,14 @@ function navTo(name: string): void {
                 </div>
               </td>
               <td class="num fig">
-                <template v-if="row.qlib_rank != null">
+                <div
+                  v-if="row.qlib_rank != null"
+                  class="qlib-cell"
+                  :title="`Ordinal qlib cross-sectional rank · ${row.qlib_source ?? 'research source'} · ${row.qlib_asof ?? 'as-of unavailable'}`"
+                >
                   <strong>#{{ row.qlib_rank }}</strong>
-                  <small class="dim">{{ row.qlib_score != null ? num(row.qlib_score, 2) : DASH }} · research</small>
-                </template>
+                  <small class="dim">XS {{ row.qlib_score != null ? num(row.qlib_score, 2) : DASH }} · RSCH</small>
+                </div>
                 <span v-else class="dim">—</span>
               </td>
               <td>
@@ -556,20 +808,29 @@ function navTo(name: string): void {
                   <strong class="live-value">{{ row.premium == null ? DASH : usd(row.premium) }}</strong>
                   <small class="flow-count">{{ row.print_count }} prints · C{{ row.call_print_count }}/P{{ row.put_print_count }}</small>
                 </template>
-                <span v-else class="dim">NO PRINTS</span>
+                <span v-else class="dim">LOCAL ONLY</span>
               </td>
               <td class="fig num">
                 <span :class="tone((row.ret_1d ?? 0) * 100)">{{ signedPct((row.ret_1d ?? 0) * 100, 1) }}</span>
                 <small class="flow-count">{{ row.volume_vs_20d_median == null ? DASH : `${num(row.volume_vs_20d_median, 1)}× vol` }}</small>
               </td>
               <td>
-                <span class="side-pill" :class="row.context_side === 'long' ? 'pos' : row.context_side === 'short' ? 'neg' : 'neutral'">
-                  {{ row.context_side.toUpperCase() }}
-                </span>
-                <small v-if="row.calibrated_probability != null && hasActionableEdge(row.calibrated_probability)" class="context-edge">
-                  model {{ pctFrac(row.calibrated_probability, 1) }}
-                </small>
-                <small v-else class="context-edge dim">not authorized</small>
+                <div class="signal-context">
+                  <span v-if="row.pead_side" class="context-source label">GAP {{ sideWord(row.pead_side) }}</span>
+                  <span v-if="row.directional_side" class="context-source label">5D {{ sideWord(row.directional_side) }}</span>
+                  <span
+                    class="alignment-chip label"
+                    :class="row.signal_alignment || 'none'"
+                  >
+                    {{ row.signal_alignment === 'agree' ? 'AGREE'
+                      : row.signal_alignment === 'conflict' ? 'CONFLICT'
+                        : row.signal_alignment === 'pead_only' ? 'EVENT ONLY'
+                          : row.signal_alignment === 'directional_only' ? 'MODEL ONLY' : 'NO VIEW' }}
+                  </span>
+                  <small v-if="row.calibrated_probability != null && hasActionableEdge(row.calibrated_probability)" class="context-edge">
+                    model {{ pctFrac(row.calibrated_probability, 1) }}
+                  </small>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -582,6 +843,29 @@ function navTo(name: string): void {
         Activity score ranks observed price, volume, gaps, and live premium. It is not win probability; unsigned call/put flow never supplies trade direction.
       </p>
     </Panel>
+
+    <section class="signal-contract w-full" aria-label="PEAD and directional signal reconciliation">
+      <div class="signal-contract-copy">
+        <span class="label">Signal contract</span>
+        <strong>OPENING GAP EVENT ≠ 5-DAY FORECAST</strong>
+        <p>
+          PEAD records what happened at the open. Directional estimates the next multi-session move inside a smaller frozen model domain.
+          Only the same symbol can agree or conflict; different symbols are non-overlap, not disagreement.
+        </p>
+      </div>
+      <div class="reconciliation-stats" aria-label="Signal overlap counts">
+        <div><span class="label">Overlap</span><strong class="fig">{{ reconciliation?.counts.overlap ?? 0 }}</strong></div>
+        <div class="agree"><span class="label">Agree</span><strong class="fig">{{ reconciliation?.counts.agreements ?? 0 }}</strong></div>
+        <div class="conflict"><span class="label">Conflict</span><strong class="fig">{{ reconciliation?.counts.conflicts ?? 0 }}</strong></div>
+        <div><span class="label">Separate names</span><strong class="fig">{{ (reconciliation?.counts.pead_only ?? pead.length) + (reconciliation?.counts.directional_only ?? signals.length) }}</strong></div>
+      </div>
+      <div v-if="reconciliation?.counts.conflicts" class="conflict-strip label">
+        NO UNIFIED THESIS:
+        <span v-for="row in reconciliation.rows.filter((item) => item.relation === 'conflict')" :key="row.symbol">
+          {{ row.symbol }} · GAP {{ sideWord(row.pead_side) }} / 5D {{ sideWord(row.directional_side) }}
+        </span>
+      </div>
+    </section>
 
     <!-- ── 02 PEAD gap/volume flags ─────────────────────────────────────── -->
     <Panel
@@ -597,7 +881,7 @@ function navTo(name: string): void {
           <div class="select-wrap">
             <select v-model="peadFilter" class="filter-select label">
               <option value="all">ALL FLAGS ({{ pead.length }})</option>
-              <option value="entered">AUTHORIZED ONLY ({{ peadEntered }})</option>
+              <option value="flagged">SETUP OK ({{ peadFlagged }})</option>
               <option value="long">UP-GAP FLAGS</option>
               <option value="short">DOWN-GAP FLAGS</option>
             </select>
@@ -614,6 +898,7 @@ function navTo(name: string): void {
               <th class="label num">Strength</th>
               <th class="label num">Gap / ATR</th>
               <th class="label num">Volume</th>
+              <th class="label">5D Forecast</th>
               <th class="label">State</th>
               <th class="label">Options</th>
             </tr>
@@ -629,6 +914,16 @@ function navTo(name: string): void {
               <td class="fig num" :class="tone(c.evidence?.pead_score)">{{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}</td>
               <td class="fig num" :class="tone(c.evidence?.gap_std)">{{ num(c.evidence?.gap_std, 2) }}</td>
               <td class="fig num">{{ num(c.evidence?.vol_surge, 2) }}×</td>
+              <td>
+                <span
+                  v-if="signalFor(c.symbol)"
+                  class="alignment-chip label"
+                  :class="relationFor(c.symbol)"
+                >
+                  {{ relationFor(c.symbol) === 'agree' ? `AGREES ${sideWord(signalFor(c.symbol)?.side)}` : `CONFLICT ${sideWord(signalFor(c.symbol)?.side)}` }}
+                </span>
+                <span v-else class="coverage-chip label">NO 5D MODEL ROW</span>
+              </td>
               <td>
                 <span class="state label watch">
                   {{ c.model?.state ?? DASH }}
@@ -651,7 +946,10 @@ function navTo(name: string): void {
           {{ pead.length === 0 ? 'No gap/volume flags cleared the ordinal threshold this session.' : 'No flags match the selected filter.' }}
         </p>
       </div>
-      <p class="note tiny pad confidence-footnote">PEAD gate is NO-GO. Strength is ordinal and cannot authorize an entry or be read as confidence.</p>
+      <p class="note tiny pad confidence-footnote">
+        PEAD gate <strong>{{ peadGateVerdict }}</strong>.
+        Strength is ordinal (not probability) and cannot authorize an entry or be read as confidence.
+      </p>
     </Panel>
 
     <!-- ── 03 Directional Signals ──────────────────────────────────────── -->
@@ -667,10 +965,11 @@ function navTo(name: string): void {
         <div class="action-bar">
           <div class="select-wrap">
             <select v-model="signalFilter" class="filter-select label">
-              <option value="all">ALL SIGNALS ({{ signals.length }})</option>
-              <option value="entered">ENTER ONLY ({{ sigEntered }})</option>
-              <option value="long">LONG SIGNALS</option>
-              <option value="short">SHORT SIGNALS</option>
+              <option value="all">ALL (ranked by edge) · {{ signals.length }}</option>
+              <option value="entered">ENTER ONLY · {{ sigEntered }}</option>
+              <option value="actionable">≥{{ pctFrac(ACTIONABLE_EDGE, 0) }} WATCH · {{ sigActionable }}</option>
+              <option value="long">LONG</option>
+              <option value="short">SHORT</option>
             </select>
           </div>
         </div>
@@ -685,12 +984,18 @@ function navTo(name: string): void {
               <th class="label num">Edge</th>
               <th class="label num">Momentum</th>
               <th class="label num">Hz</th>
+              <th class="label">Gap Event</th>
               <th class="label">State</th>
               <th class="label">Options</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(s, i) in filteredSignals" :key="i" @click="open(s.symbol)">
+            <tr
+              v-for="s in filteredSignals"
+              :key="s.symbol + s.horizon"
+              :class="{ 'row-high': hasHighConfidence(s.probability, s.state) }"
+              @click="open(s.symbol)"
+            >
               <td class="fig sym">{{ s.symbol }}</td>
               <td>
                 <span class="side-pill" :class="s.side === 'LONG' || s.side === 'long' ? 'pos' : 'neg'">
@@ -699,21 +1004,27 @@ function navTo(name: string): void {
               </td>
               <td
                 class="fig num"
-                :title="edgeTitle(s.probability)"
+                :title="edgeTitle(s.probability, s.state)"
               >
                 <template v-if="s.probability != null && Number.isFinite(s.probability)">
-                  <div class="prob-cell" :class="{ weak: !hasActionableEdge(s.probability) }">
+                  <div
+                    class="prob-cell"
+                    :class="{
+                      weak: !hasActionableEdge(s.probability),
+                      high: hasHighConfidence(s.probability, s.state),
+                    }"
+                  >
                     <div class="prob-bar-wrap" aria-hidden="true">
                       <div
                         class="prob-bar"
-                        :class="s.state === 'ENTER' ? 'pos' : hasActionableEdge(s.probability) ? 'mod' : 'flat'"
+                        :class="hasHighConfidence(s.probability, s.state) ? 'pos' : hasActionableEdge(s.probability) ? 'mod' : 'flat'"
                         :style="{ width: `${Math.min(100, Math.max(0, (s.probability ?? 0) * 100))}%` }"
                       />
                     </div>
                     <span class="confidence-value">
                       {{ pctFrac(s.probability, 1) }}
                       <small :class="`confidence-${confidenceBand(s.probability).toLowerCase()}`">
-                        {{ hasActionableEdge(s.probability) ? confidenceBand(s.probability) : 'WEAK' }}
+                        {{ confidenceBand(s.probability) }}
                       </small>
                     </span>
                   </div>
@@ -727,6 +1038,16 @@ function navTo(name: string): void {
                 </div>
               </td>
               <td class="fig num dim">{{ (s.horizon ?? '').replace(' Days', 'd') }}</td>
+              <td>
+                <span
+                  v-if="peadFor(s.symbol)"
+                  class="alignment-chip label"
+                  :class="relationFor(s.symbol)"
+                >
+                  {{ relationFor(s.symbol) === 'agree' ? `AGREES ${sideWord(peadFor(s.symbol)?.side)}` : `CONFLICT ${sideWord(peadFor(s.symbol)?.side)}` }}
+                </span>
+                <span v-else class="coverage-chip label">NO GAP EVENT</span>
+              </td>
               <td>
                 <span class="state label" :class="s.state === 'ENTER' ? 'enter' : 'watch'">{{ s.state }}</span>
               </td>
@@ -744,9 +1065,14 @@ function navTo(name: string): void {
           </tbody>
         </table>
         <p v-else class="note pad">
-          {{ signals.length === 0 ? 'No directional signals emitted.' : 'No directional signals match the selected filter.' }}
+          {{ signals.length === 0 ? 'No directional signals emitted — run Quick or Deep scan.' : 'No directional signals match the selected filter.' }}
         </p>
       </div>
+      <p class="note tiny pad confidence-footnote">
+        Ranked by ENTER then calibrated probability.
+        HIGH ≥ {{ pctFrac(ENTER_EDGE, 0) }} · MODERATE ≥ {{ pctFrac(ACTIONABLE_EDGE, 0) }} · below that is WEAK.
+        Confidence kind must be calibrated_probability — ordinal PEAD is excluded.
+      </p>
     </Panel>
 
     <!-- ── 04 Custom Stock Watchlist & Ad-Hoc Signal Probe ─────────────── -->
@@ -808,10 +1134,22 @@ function navTo(name: string): void {
               <td class="fig num" :class="tone(probeResults[sym]?.stats?.chg_5d_pct)">
                 {{ signedPct(probeResults[sym]?.stats?.chg_5d_pct) }}
               </td>
-              <td class="fig num" :title="edgeTitle(signalFor(sym)?.probability)">
+              <td
+                class="fig num"
+                :title="edgeTitle(signalFor(sym)?.probability, signalFor(sym)?.state)"
+              >
                 <template v-if="signalFor(sym)?.probability != null">
-                  <span :class="hasActionableEdge(signalFor(sym)?.probability) ? 'pos' : 'dim'">
+                  <span
+                    :class="hasHighConfidence(signalFor(sym)?.probability, signalFor(sym)?.state)
+                      ? 'pos'
+                      : hasActionableEdge(signalFor(sym)?.probability) ? '' : 'dim'"
+                  >
                     {{ pctFrac(signalFor(sym)!.probability, 1) }}
+                    <small
+                      v-if="signalFor(sym)?.state"
+                      class="label"
+                      :class="signalFor(sym)?.state === 'ENTER' ? 'enter' : 'watch'"
+                    >{{ signalFor(sym)?.state }}</small>
                   </span>
                 </template>
                 <span v-else class="dim">—</span>
@@ -846,6 +1184,64 @@ function navTo(name: string): void {
 }
 .w-full { grid-column: 1 / -1; }
 .w-half { grid-column: span 2; }
+
+/* ---- high-confidence queue --------------------------------------------- */
+.confidence-queue {
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel);
+  min-width: 0;
+}
+.confidence-queue-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s3) var(--s4);
+  border-bottom: var(--hair) solid var(--rule);
+}
+.confidence-queue-head .label { color: var(--phosphor-dim); letter-spacing: 0.06em; }
+.confidence-queue-head strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--t-small);
+}
+.queue-note { margin-top: 4px; color: var(--ink-dim); max-width: 72ch; line-height: 1.4; }
+.confidence-queue-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.confidence-queue-stats .fig {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--phosphor);
+  line-height: 1;
+}
+.confidence-queue-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--s2);
+  padding: var(--s3);
+}
+.hc-row {
+  display: grid;
+  grid-template-columns: 5ch auto 1fr auto auto;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid color-mix(in srgb, var(--long) 35%, var(--rule));
+  background: color-mix(in srgb, var(--long) 8%, var(--panel));
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hc-row:hover { border-color: var(--long); background: color-mix(in srgb, var(--long) 14%, var(--panel)); }
+.confidence-empty { color: var(--ink-dim); line-height: 1.45; }
+.row-high td { background: color-mix(in srgb, var(--long) 6%, transparent); }
+.prob-cell.high .confidence-value { color: var(--long); font-weight: 700; }
 
 /* ---- workspace identity ------------------------------------------------- */
 .arena-head {
@@ -1026,6 +1422,7 @@ button.kpi-card {
   font-size: var(--t-body);
   letter-spacing: 0.02em;
 }
+.last-scan { color: var(--ink-ghost); font-size: 8px; }
 .scan-readouts { display: grid; grid-template-columns: repeat(4, minmax(105px, 1fr)); }
 .scan-readout {
   display: flex;
@@ -1079,6 +1476,22 @@ button.kpi-card {
 .scan-run:disabled .scan-pulse { animation: scan-blink 720ms steps(2, end) infinite; }
 @keyframes scan-blink { 50% { opacity: 0.2; } }
 
+.scan-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.45fr);
+  align-items: center;
+  gap: var(--s5);
+  padding: var(--s3) var(--s5);
+  border-top: var(--hair) solid var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
+.scan-progress-copy { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: var(--s3); min-width: 0; }
+.scan-progress-copy > .label { color: var(--phosphor); font-size: 9px; white-space: nowrap; }
+.scan-progress-copy > strong { overflow: hidden; color: var(--ink); font-size: var(--t-small); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.scan-progress-copy > small { color: var(--ink-dim); font-size: 9px; white-space: nowrap; }
+.scan-progress-track { height: 4px; overflow: hidden; border: var(--hair) solid var(--rule-hi); background: var(--void); }
+.scan-progress-track > i { display: block; height: 100%; background: var(--phosphor); transition: width var(--dur-standard) ease; }
+
 .scan-explain {
   display: flex;
   align-items: center;
@@ -1092,6 +1505,15 @@ button.kpi-card {
   font-size: 9px;
 }
 .scan-explain .scan-msg { padding: 0; color: var(--phosphor-dim); }
+.scan-flow-link {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 3px 7px;
+  color: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+  text-decoration: none;
+}
+.scan-flow-link:hover { color: var(--void); background: var(--phosphor); }
 .confidence-note { color: var(--warn); text-align: right; }
 
 /* ---- 01 Interlock -------------------------------------------------------- */
@@ -1242,12 +1664,37 @@ button.kpi-card {
 .activity-score > i { display: block; height: 3px; overflow: hidden; background: var(--rule); }
 .activity-score > i b { display: block; height: 100%; background: var(--warn); }
 .activity-score > small { grid-column: 1 / -1; text-align: right; color: var(--ink-ghost); font-size: 8px; }
+.qlib-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }
+.qlib-cell > strong { color: var(--ink); }
+.qlib-cell > small { color: var(--ink-ghost); font-family: var(--font-ui); font-size: 8px; letter-spacing: 0.04em; }
 .flag-stack { display: flex; flex-wrap: wrap; gap: 3px; max-width: 300px; }
 .flag-stack span { padding: 1px 5px; color: var(--ink-dim); background: var(--rule); font-size: 9px; font-weight: 700; letter-spacing: 0.03em; }
 .flag-stack span.live { color: var(--phosphor); background: var(--phosphor-wash); }
 .live-value { display: block; color: var(--phosphor); }
 .flow-count, .context-edge { display: block; margin-top: 2px; color: var(--ink-dim); font-family: var(--font-ui); font-size: 9px; white-space: nowrap; }
 .context-edge { color: var(--warn); }
+.signal-context { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; max-width: 210px; }
+.context-source, .coverage-chip { padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--panel-raise); font-size: 8px; white-space: nowrap; }
+.alignment-chip { display: inline-flex; min-height: 19px; align-items: center; padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); white-space: nowrap; }
+.alignment-chip.agree { color: var(--long); border-color: color-mix(in srgb, var(--long) 60%, var(--rule)); background: var(--long-wash); }
+.alignment-chip.conflict { color: var(--short); border-color: color-mix(in srgb, var(--short) 60%, var(--rule)); background: var(--short-wash); }
+.alignment-chip.pead_only, .alignment-chip.directional_only { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--rule)); }
+
+/* PEAD is a session event; Directional is a 5D model. Keep that contract
+   visible between the two panels so adjacent tables cannot read as two votes. */
+.signal-contract { display: grid; grid-template-columns: minmax(300px, 1fr) auto; gap: var(--s3) var(--s5); padding: var(--s4); border: var(--hair) solid var(--rule-hi); border-left: 3px solid var(--warn); background: var(--panel); }
+.signal-contract-copy > span { color: var(--warn); }
+.signal-contract-copy > strong { display: block; margin-top: 3px; color: var(--ink); font-family: var(--font-display); font-size: var(--t-small); letter-spacing: .03em; }
+.signal-contract-copy > p { max-width: 85ch; margin-top: 5px; color: var(--ink-dim); font-size: var(--t-small); line-height: 1.45; }
+.reconciliation-stats { display: grid; grid-template-columns: repeat(4, minmax(72px, 1fr)); border: var(--hair) solid var(--rule); }
+.reconciliation-stats > div { display: flex; flex-direction: column; justify-content: center; min-width: 78px; padding: var(--s2) var(--s3); border-right: var(--hair) solid var(--rule); }
+.reconciliation-stats > div:last-child { border-right: 0; }
+.reconciliation-stats span { color: var(--ink-ghost); font-size: 8px; }
+.reconciliation-stats strong { margin-top: 2px; color: var(--ink); font-size: var(--t-body); }
+.reconciliation-stats .agree strong { color: var(--long); }
+.reconciliation-stats .conflict strong { color: var(--short); }
+.conflict-strip { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); padding-top: var(--s3); border-top: var(--hair) solid var(--rule); color: var(--short); }
+.conflict-strip span { padding: 2px 6px; border: var(--hair) solid color-mix(in srgb, var(--short) 55%, var(--rule)); background: var(--short-wash); }
 
 .prob-cell { display: flex; align-items: center; justify-content: flex-end; gap: var(--s3); }
 .prob-bar-wrap { width: 48px; height: 4px; background: var(--rule); border-radius: 2px; overflow: hidden; }
@@ -1338,7 +1785,14 @@ button.kpi-card {
   .scan-controls { flex-wrap: wrap; justify-content: stretch; }
   .depth-switch, .scan-run { flex: 1 1 100%; }
   .depth-option { flex: 1; }
+  .scan-progress { grid-template-columns: 1fr; gap: var(--s3); }
+  .scan-progress-copy { grid-template-columns: 1fr auto; }
+  .scan-progress-copy > strong { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
   .scan-explain { align-items: flex-start; flex-direction: column; }
+  .signal-contract { grid-template-columns: 1fr; }
+  .reconciliation-stats { grid-template-columns: repeat(2, 1fr); }
+  .reconciliation-stats > div:nth-child(2) { border-right: 0; }
+  .reconciliation-stats > div:nth-child(-n + 2) { border-bottom: var(--hair) solid var(--rule); }
   .confidence-note { text-align: left; }
 }
 </style>

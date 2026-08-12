@@ -100,6 +100,12 @@ function updateCameraPosition() {
 function buildSurfaceModel() {
   if (!scene) return
 
+  const probability = props.probability
+  const spot = props.spot
+  const iv = probability?.atm_iv
+  const horizon = probability?.horizon_days
+  if (!probability?.available || !spot || !iv || !horizon) return
+
   // Remove existing meshes/lines except lights
   const toRemove: THREE.Object3D[] = []
   scene.children.forEach((c) => {
@@ -107,9 +113,6 @@ function buildSurfaceModel() {
   })
   toRemove.forEach((c) => scene?.remove(c))
 
-  const spot = props.spot || 100
-  const iv = props.probability?.atm_iv || 0.25
-  const horizon = props.probability?.horizon_days || 30
   const T = Math.max(horizon, 1) / 365
   const sigma = iv * Math.sqrt(T)
   const mu = Math.log(spot) - 0.5 * iv * iv * T
@@ -222,6 +225,12 @@ function onMouseMove(e: MouseEvent) {
     const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1
     const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1
 
+    const probability = props.probability
+    const spot = props.spot
+    const iv = probability?.atm_iv
+    const horizon = probability?.horizon_days
+    if (!probability?.available || !spot || !iv || !horizon) return
+
     const raycaster = new THREE.Raycaster()
     raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera)
 
@@ -230,14 +239,12 @@ function onMouseMove(e: MouseEvent) {
     if (intersects.length > 0) {
       const hit = intersects[0]
       if (hit.point) {
-        const spot = props.spot || 100
         const lowPrice = spot * 0.8
         const highPrice = spot * 1.2
         const u = (hit.point.x + 3) / 6
         const probedPrice = Math.max(lowPrice, Math.min(highPrice, lowPrice + u * (highPrice - lowPrice)))
 
-        const iv = props.probability?.atm_iv || 0.25
-        const T = Math.max(props.probability?.horizon_days || 30, 1) / 365
+        const T = Math.max(horizon, 1) / 365
         const sigma = iv * Math.sqrt(T)
         const d2 = (Math.log(spot / probedPrice) - 0.5 * sigma * sigma) / sigma
         const probAbove = cdfNormal(d2)

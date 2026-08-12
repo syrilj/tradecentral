@@ -214,16 +214,17 @@ def test_unusual_options_flow_ranks_live_premium_and_stays_unauthorized():
         "NVDA": _bars(jump=0.04, volume_multiple=3.0),
     }
 
-    def flow_fetcher(*, symbol, timeout):
-        premium = {"AAA": 400_000, "BBB": 80_000, "NVDA": 900_000}.get(symbol, 0)
-        if premium <= 0:
-            return []
-        return [{
-            "underlying": symbol,
-            "contract_type": "call" if symbol != "BBB" else "put",
-            "premium": premium,
-            "ts": "2026-08-03T15:00:00Z",
-        }]
+    def flow_fetcher(*, min_premium, **_):
+        return [
+            {
+                "underlying": symbol,
+                "contract_type": "call" if symbol != "BBB" else "put",
+                "premium": premium,
+                "ts": "2026-08-03T15:00:00Z",
+            }
+            for symbol, premium in {"AAA": 400_000, "BBB": 80_000, "NVDA": 900_000}.items()
+            if premium >= min_premium
+        ]
 
     result = build_unusual_options_flow(
         symbols=list(frames),
@@ -244,6 +245,62 @@ def test_unusual_options_flow_ranks_live_premium_and_stays_unauthorized():
         "$" in f for f in result["rows"][0]["flags"]
     )
     assert all(row["decision_authorized"] is False for row in result["rows"])
+    assert all(row["context_side"] == "neutral" for row in result["rows"])
     # Highest premium should rank at/near top
     symbols = [row["symbol"] for row in result["rows"]]
     assert "NVDA" in symbols
+
+
+def test_unusual_flow_threshold_is_monotonic_and_summary_uses_premium_share():
+    frames = {"AAA": _bars(jump=0.05), "BBB": _bars(jump=-0.05)}
+
+    def flow_fetcher(*, min_premium, **_):
+        return [
+            {
+                "id": symbol,
+                "underlying": symbol,
+                "contract_type": "call" if symbol == "AAA" else "put",
+                "premium": premium,
+                "volume": 10 if symbol == "AAA" else 40,
+                "ts": "2026-08-11T15:00:00Z",
+            }
+            for symbol, premium in {"AAA": 100_000, "BBB": 400_000}.items()
+            if premium >= min_premium
+        ]
+
+    low = build_unusual_options_flow(
+        symbols=list(frames), candle_loader=frames.__getitem__, flow_fetcher=flow_fetcher,
+        live_target_limit=2, row_limit=10, min_premium=25_000,
+    )
+    high = build_unusual_options_flow(
+        symbols=list(frames), candle_loader=frames.__getitem__, flow_fetcher=flow_fetcher,
+        live_target_limit=2, row_limit=10, min_premium=250_000,
+    )
+
+    assert {row["symbol"] for row in high["rows"]} <= {row["symbol"] for row in low["rows"]}
+    assert [row["symbol"] for row in high["rows"]] == ["BBB"]
+    assert low["summary"]["put_flow_pct"] == 0.8
+    assert low["summary"]["premium_basis"] == "provider_contract_tape"
+    assert low["summary"]["scope"] == "market_wide_provider_window"
+    assert 0 <= low["summary"]["signed_print_pct"] <= 1
+
+
+def test_unusual_flow_never_substitutes_local_activity_for_live_rows():
+    frames = {
+        "AAA": _bars(jump=0.12, volume_multiple=8.0),
+        "BBB": _bars(jump=-0.08, volume_multiple=4.0),
+    }
+
+    result = build_unusual_options_flow(
+        symbols=list(frames),
+        candle_loader=frames.__getitem__,
+        flow_fetcher=lambda **_: [],
+        live_target_limit=2,
+        row_limit=10,
+    )
+
+    assert result["feed_status"] == "no_prints"
+    assert result["coverage"]["live_completed"] == 1
+    assert result["coverage"]["live_with_activity"] == 0
+    assert result["rows"] == []
+    assert "routing_candidates" not in result

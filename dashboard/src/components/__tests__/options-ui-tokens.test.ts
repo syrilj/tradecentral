@@ -104,6 +104,25 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(src).toMatch(/\.curve\s*\{[^}]*stroke:\s*var\(--phosphor\)/s)
   })
 
+  it('only enables the 3D probability surface when measured inputs exist', () => {
+    const density = readSrc('components/ProbabilityDensityChart.vue')
+    const surface = readSrc('components/RiskNeutral3DModel.vue')
+    expect(density).toContain('const canRender3d = computed(() => model.value !== null)')
+    expect(density).toContain(':disabled="!canRender3d"')
+    expect(density).toContain("v-if=\"viewMode === '3d' && canRender3d\"")
+    expect(surface).not.toContain('props.spot || 100')
+    expect(surface).not.toContain('atm_iv || 0.25')
+    expect(surface).not.toContain('horizon_days || 30')
+  })
+
+  it('Options inherits the global instrument palette and labels setup status truthfully', () => {
+    const view = readSrc('views/OptionsView.vue')
+    expect(view).toMatch(/\.options-view\s*\{[^}]*background:\s*var\(--void\)/s)
+    expect(view).not.toMatch(/--(?:void|panel|phosphor|call|put|long|short|warn):\s*#/)
+    expect(view).toContain('SETUP WATCH')
+    expect(view).not.toContain('LONG IT')
+  })
+
   it('OptionsDriftChart call/put traces use token family', () => {
     const src = readSrc('components/OptionsDriftChart.vue')
     expect(src).toMatch(/\.flow-trace\.call\s*\{\s*stroke:\s*var\(--call/)
@@ -163,9 +182,10 @@ describe('Aura-farming instrument shell gate', () => {
     expect(src).toMatch(/\.scrim\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--void\)/s)
   })
 
-  it('FlowView opportunity emphasis is flat wash + inset rule, not a gradient fade', () => {
+  it('FlowView standalone market-tape shell stays flat and instrument-like', () => {
     const src = readSrc('views/FlowView.vue')
-    expect(src).toMatch(/\.opportunity-row\.highlighted\s*\{\s*background:\s*var\(--phosphor-wash\)/)
+    expect(src).toMatch(/\.flow-head\s*\{[^}]*border:\s*var\(--hair\) solid var\(--border-strong\)/s)
+    expect(src).not.toContain('opportunity-row')
     expect(src).not.toMatch(/feed-beacon::before/)
   })
 })

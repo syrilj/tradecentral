@@ -326,7 +326,7 @@ def _vendor_sentiment_bias(row: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _normalize_trade_class(row: Mapping[str, Any], *, volume: int, premium: float) -> str:
+def _normalize_trade_class(row: Mapping[str, Any], *, volume: int, premium: float) -> tuple[str, str]:
     """Classify print as sweep / block / single when the vendor does not tag it.
 
     LSE does not emit an explicit sweep flag. Vendor strings (if present) win;
@@ -340,18 +340,18 @@ def _normalize_trade_class(row: Mapping[str, Any], *, volume: int, premium: floa
     text = str(raw or "").strip().lower()
     if text:
         if "sweep" in text:
-            return "sweep"
+            return "sweep", "vendor"
         if "block" in text or "cross" in text:
-            return "block"
+            return "block", "vendor"
         if "split" in text or "multi" in text:
-            return "sweep"
+            return "sweep", "vendor"
         if "single" in text or "auto" in text or "regular" in text:
-            return "single"
-    # Heuristic: large notional = block; multi-leg size without tag stays single
-    # until cluster annotation (repeat_cluster) promotes it to sweep.
+            return "single", "vendor"
+    # A large print is observable, but calling it a block would imply venue /
+    # execution knowledge the provider did not supply.
     if premium >= 500_000.0 or volume >= 500:
-        return "block"
-    return "single"
+        return "large", "size_heuristic"
+    return "single", "unclassified"
 
 
 def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = None) -> dict[str, Any] | None:
@@ -360,13 +360,16 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     volume = _integer(_first(row, "volume", "volume_today", "size", "contracts", "quantity")) or 0
     price = _number(_first(row, "price", "last_price", "trade_price", "fill_price", "mid"))
     premium = _number(_first(row, "premium", "total_premium", "est_premium", "notional"))
+    multiplier = _integer(_first(row, "multiplier", "contract_multiplier"))
     estimated = False
-    if premium is None and price is not None and volume > 0:
-        premium = price * volume * 100.0
+    price_estimated = False
+    if premium is None and price is not None and volume > 0 and multiplier is not None:
+        premium = price * volume * multiplier
         estimated = True
-    if price is None and premium is not None and volume > 0:
-        # Back out per-contract fill when vendor only sent notional.
-        price = premium / (volume * 100.0)
+    if price is None and premium is not None and volume > 0 and multiplier is not None:
+        # Back out per-contract fill only when the contract multiplier is known.
+        price = premium / (volume * multiplier)
+        price_estimated = True
     if right is None or observed is None or premium is None or premium < 0:
         return None
     aggressor = _normalize_aggressor(row)
@@ -384,14 +387,30 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
         bias = vendor_bias
         bias_source = "vendor_sentiment"
         signed = premium if bias == "bullish" else -premium
-    # Extract stock/underlying price when trade occurred, falling back to session spot
+    # Extract stock/underlying price when trade occurred, falling back to session spot.
+    # OTM distance is a contract-identity measurement, not directional evidence:
+    # calls are OTM above spot and puts are OTM below spot. ITM/ATM contracts are
+    # reported as 0 rather than a negative "OTM" percentage.
     underlying_price = _number(_first(row, "underlying_price", "spot", "underlying_spot", "stock_price"))
     if underlying_price is None and fallback_spot is not None:
         underlying_price = fallback_spot
+    strike = _number(row.get("strike"))
+    expiry = _expiry(_first(row, "expiry", "expiration", "expiration_date"))
+    if expiry is not None and expiry < observed.date():
+        return None
+    dte = (expiry - observed.date()).days if expiry is not None else None
+    otm_pct: float | None = None
+    if strike is not None and underlying_price is not None and underlying_price > 0:
+        raw_otm = (
+            strike / underlying_price - 1.0
+            if right == "call"
+            else 1.0 - strike / underlying_price
+        )
+        otm_pct = max(0.0, raw_otm)
 
     # Always expose contract identity for the tape (CALL/PUT activity scan).
     activity_side = "call" if right == "call" else "put"
-    trade_class = _normalize_trade_class(row, volume=volume, premium=float(premium))
+    trade_class, trade_class_source = _normalize_trade_class(row, volume=volume, premium=float(premium))
     return {
         "timestamp": observed,
         "right": right,
@@ -399,16 +418,23 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
         "volume": volume,
         # contracts == volume for options tape (lot size = contract count).
         "contracts": volume,
+        "contract_multiplier": multiplier,
         "price": round(price, 4) if price is not None else None,
-        "strike": _number(row.get("strike")),
+        "price_estimated": price_estimated,
+        "strike": strike,
         "underlying_price": round(underlying_price, 4) if underlying_price is not None else None,
-        "expiry": _expiry(_first(row, "expiry", "expiration", "expiration_date")),
+        "expiry": expiry,
+        "dte": dte,
+        "otm_pct": round(otm_pct, 6) if otm_pct is not None else None,
+        "open_interest": _integer(_first(row, "open_interest", "oi")),
+        "implied_volatility": _number(_first(row, "implied_volatility", "iv")),
         "aggressor": aggressor,
         "signed_premium": signed,
         "bias": bias,
         "bias_source": bias_source,
         "activity_side": activity_side,
         "trade_class": trade_class,
+        "trade_class_source": trade_class_source,
         "premium_estimated": estimated,
     }
 
@@ -483,9 +509,11 @@ def _annotate_tape_anomalies(tape: list[dict[str, Any]]) -> None:
             flags.append("repeat_cluster")
         if id(row) in sweep_ids:
             flags.append("sweep_burst")
-            # Promote class only when vendor did not already name it.
-            if row.get("trade_class") in {None, "single", "block"}:
+            # Preserve explicit vendor execution classes. The inferred burst is
+            # still exposed as an anomaly flag and labeled by its own source.
+            if row.get("trade_class_source") != "vendor":
                 row["trade_class"] = "sweep"
+                row["trade_class_source"] = "burst_heuristic"
         row["anomaly_flags"] = flags
         row["anomaly_score"] = round(max(
             0.0,

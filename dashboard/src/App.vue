@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, provide, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type StatusPayload, type Readiness, type MarketClock } from '@/api'
+import { api, type StatusPayload, type Readiness, type MarketClock, type ComparePayload } from '@/api'
 import { useResource } from '@/composables/useResource'
-import { num, age } from '@/format'
+import { num, age, signedPct, tone, usd } from '@/format'
 import AppIcon from '@/components/AppIcon.vue'
 import SearchPalette from '@/components/SearchPalette.vue'
 
@@ -15,6 +15,11 @@ const router = useRouter()
 const status = useResource<StatusPayload>(() => api.status(), { intervalMs: 60_000 })
 const readiness = useResource<Readiness>(() => api.readiness(), { intervalMs: 120_000 })
 const marketClock = useResource<MarketClock>(() => api.marketClock(), { intervalMs: 30_000 })
+/** Benchmark tape for the strip — SPY, Nasdaq (QQQ), Dow (DIA), Oil/energy (XLE). */
+const tapeMarks = useResource<ComparePayload>(
+  () => api.compare(['SPY', 'QQQ', 'DIA', 'XLE'], '1m'),
+  { intervalMs: 120_000 },
+)
 
 provide('status', status)
 provide('readiness', readiness)
@@ -23,15 +28,18 @@ const primaryNav = [
   { name: 'desk', idx: '01', title: 'Desk', hint: 'Posture · queue · arena', icon: 'desk' },
   { name: 'market', idx: '02', title: 'Market', hint: 'Symbol research', icon: 'market' },
   { name: 'options', idx: '03', title: 'Options', hint: 'One underlier', icon: 'options' },
-  { name: 'flow', idx: '04', title: 'Flow', hint: 'Whole market', icon: 'flow' },
+  { name: 'flow', idx: '04', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
   { name: 'research', idx: '05', title: 'Research', hint: 'Methods · gates · models', icon: 'research' },
 ] as const
 
-const secondaryNav = [
+const marketTools = [
   { name: 'sectors', idx: 'M1', title: 'Sectors', hint: 'Rotation and leadership', icon: 'market' },
   { name: 'sentiment', idx: 'M2', title: 'Pulse', hint: 'Structure and outliers', icon: 'market' },
   { name: 'momentum', idx: 'M3', title: 'Momentum', hint: 'Five pillars scan', icon: 'market' },
   { name: 'fintel', idx: 'M4', title: 'Fintel', hint: 'Short, borrow, owners', icon: 'market' },
+] as const
+
+const researchTools = [
   { name: 'gates', idx: 'R1', title: 'Gates', hint: 'Pre-registered verdicts', icon: 'research' },
   { name: 'evolution', idx: 'R2', title: 'Evolution', hint: 'GA survivors lab', icon: 'research' },
   { name: 'adaptive', idx: 'R3', title: 'Live Blend', hint: 'Regime multi-stream', icon: 'research' },
@@ -40,45 +48,137 @@ const secondaryNav = [
   { name: 'cloud', idx: 'R6', title: 'Cloud', hint: 'Vertex AI training', icon: 'research' },
 ] as const
 
+const secondaryNav = [...marketTools, ...researchTools] as const
+
 const moreOpen = ref(false)
-const density = ref<'compact' | 'comfortable'>('compact')
 const stage = ref<HTMLElement | null>(null)
 
-const activeWorkspace = computed(() =>
-  [...primaryNav, ...secondaryNav].find((item) => item.name === route.name)?.title ?? 'Desk',
-)
-
 const vol = computed(() => status.data.value?.latest_vol)
-const cleared = computed(() => readiness.data.value?.cleared_for_live === true)
-const universe = computed(() => status.data.value?.broad_universe_count ?? null)
-const topSectorFlow = computed(() => {
-  const sectors = (status.data.value?.sector_flow as any)?.sectors_ranked ?? []
-  if (!sectors.length) return null
-  return sectors[0]
+
+interface SectorRow {
+  etf?: string
+  name?: string
+  flow_score?: number
+}
+interface SectorFlowPayload {
+  asof?: string | null
+  asof_bar?: string | null
+  source?: string | null
+  sectors_ranked?: SectorRow[]
+}
+const sectorFlow = computed(() =>
+  status.data.value?.sector_flow as SectorFlowPayload | undefined,
+)
+const sectorsRanked = computed((): SectorRow[] => {
+  const raw = sectorFlow.value?.sectors_ranked
+  return Array.isArray(raw) ? raw : []
+})
+const topRotations = computed(() => {
+  const ranked = [...sectorsRanked.value].filter((s) => s.etf)
+  if (!ranked.length) return { in: [] as SectorRow[], out: [] as SectorRow[] }
+  const sorted = ranked.sort((a, b) => Number(b.flow_score ?? 0) - Number(a.flow_score ?? 0))
+  return {
+    in: sorted.filter((s) => Number(s.flow_score ?? 0) > 0).slice(0, 2),
+    out: sorted.filter((s) => Number(s.flow_score ?? 0) < 0).slice(-2).reverse(),
+  }
 })
 
-/** Majors hedge funds pin risk to — warn pulse on rail when desk sees activity. */
-const MAJORS = new Set([
-  'SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD',
-])
-const majorHits = computed(() => {
-  const signals = (status.data.value?.directional_signals ?? []) as { symbol?: string; probability?: number }[]
-  const pead = (status.data.value?.pead_candidates ?? []) as { symbol?: string }[]
-  const hits = new Set<string>()
-  for (const s of signals) {
-    const sym = String(s.symbol || '').toUpperCase()
-    if (MAJORS.has(sym) && (s.probability ?? 0) >= 0.55) hits.add(sym)
-  }
-  for (const p of pead) {
-    const sym = String(p.symbol || '').toUpperCase()
-    if (MAJORS.has(sym)) hits.add(sym)
-  }
-  return [...hits].slice(0, 6)
+/** Strip tape marks: last observed price + change between observed closes. */
+const TAPE = [
+  { sym: 'SPY', label: 'S&P 500' },
+  { sym: 'QQQ', label: 'Nasdaq' },
+  { sym: 'DIA', label: 'Dow' },
+  { sym: 'XLE', label: 'Energy' },
+] as const
+
+function observedAgeDays(value: string | null | undefined): number | null {
+  if (!value) return null
+  const stamp = Date.parse(value.length <= 10 ? `${value}T00:00:00Z` : value)
+  if (!Number.isFinite(stamp)) return null
+  return Math.max(0, Math.floor((Date.now() - stamp) / 86_400_000))
+}
+
+function compactBarDate(value: string | null | undefined): string {
+  if (!value) return 'DATE —'
+  const stamp = new Date(value.length <= 10 ? `${value}T00:00:00Z` : value)
+  if (Number.isNaN(stamp.getTime())) return 'DATE —'
+  const day = String(stamp.getUTCDate()).padStart(2, '0')
+  const month = stamp.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase()
+  return `${day} ${month}`
+}
+
+function sparklinePath(points: { cum: number }[] | undefined): string {
+  const values = (points ?? [])
+    .map((point) => Number(point.cum))
+    .filter(Number.isFinite)
+    .slice(-20)
+  if (values.length < 2) return ''
+  const lo = Math.min(...values)
+  const hi = Math.max(...values)
+  const span = Math.max(hi - lo, Math.abs(hi) * 0.0005, 0.0001)
+  return values.map((value, index) => {
+    const x = (index / (values.length - 1)) * 48
+    const y = 14 - ((value - lo) / span) * 12
+    return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+}
+
+const tapeRows = computed(() => {
+  const stats = tapeMarks.data.value?.stats ?? {}
+  const series = tapeMarks.data.value?.series ?? {}
+  const err = tapeMarks.error.value
+  return TAPE.map((t) => {
+    const s = stats[t.sym]
+    const price = typeof s?.last_price === 'number' ? s.last_price : null
+    const chg1d = typeof s?.chg_1d_pct === 'number' ? s.chg_1d_pct : null
+    const chgWin = typeof s?.chg_window_pct === 'number' ? s.chg_window_pct : null
+    const asof = typeof s?.asof === 'string' ? s.asof : null
+    const ageDays = typeof s?.age_days === 'number' ? s.age_days : observedAgeDays(asof)
+    const quality = price == null
+      ? 'missing'
+      : s?.quality === 'stale' || ageDays == null || ageDays > 3
+        ? 'stale'
+        : 'current'
+    return {
+      ...t,
+      price,
+      chg: chg1d ?? chgWin,
+      changeBasis: chg1d != null ? '1D' : '1M',
+      asof,
+      asofLabel: compactBarDate(asof),
+      ageDays,
+      quality,
+      source: s?.source ?? null,
+      spark: sparklinePath(series[t.sym]),
+      loading: tapeMarks.loading.value && price == null,
+      fault: Boolean(err) && price == null,
+    }
+  })
 })
+
+const volAsOf = computed(() => vol.value?.date ?? null)
+const volAgeDays = computed(() => observedAgeDays(volAsOf.value))
+const volQuality = computed(() => {
+  if (!vol.value || vol.value.VIX == null) return 'missing'
+  return volAgeDays.value == null || volAgeDays.value > 3 ? 'stale' : 'current'
+})
+
+const rotationAsOf = computed(() => sectorFlow.value?.asof_bar ?? null)
+const rotationAgeDays = computed(() => observedAgeDays(rotationAsOf.value))
+const rotationQuality = computed(() => {
+  if (!sectorsRanked.value.length || !rotationAsOf.value) return 'missing'
+  return rotationAgeDays.value == null || rotationAgeDays.value > 3 ? 'stale' : 'current'
+})
+const rotationFreshness = computed(() => {
+  if (!rotationAsOf.value) return 'DATE UNKNOWN'
+  const suffix = rotationQuality.value === 'stale' ? ' · STALE' : ''
+  return `BAR ${compactBarDate(rotationAsOf.value)}${suffix}`
+})
+
 const volAlert = computed(() => {
   const v = vol.value
   if (!v) return false
-  return (v.tail_risk ?? 0) >= 1.5 || (v.VIX ?? 0) >= 25
+  return (v.VIX ?? 0) >= 25
 })
 const enterCount = computed(() => {
   const signals = (status.data.value?.directional_signals ?? []) as { state?: string }[]
@@ -89,14 +189,16 @@ const stripWarning = computed(() => {
   if (volAlert.value) {
     const v = vol.value
     if ((v?.VIX ?? 0) >= 25) return `VIX elevated ${Number(v?.VIX).toFixed(1)}`
-    if ((v?.tail_risk ?? 0) >= 1.5) return `Tail risk ${Number(v?.tail_risk).toFixed(2)}`
   }
   if (marketClock.data.value?.warning) return marketClock.data.value.warning
   return null
 })
 function navAlert(name: string): boolean {
-  if (name === 'desk' || name === 'market') return majorHits.value.length > 0 || enterCount.value > 0
-  if (name === 'flow') return volAlert.value || Boolean(topSectorFlow.value && Math.abs(Number((topSectorFlow.value as any).flow_score ?? 0)) > 0.02)
+  if (name === 'desk') return enterCount.value > 0
+  if (name === 'flow') {
+    const top = topRotations.value.in[0]
+    return volAlert.value || Boolean(top && Math.abs(Number(top.flow_score ?? 0)) > 0.02)
+  }
   if (name === 'options') return volAlert.value
   return false
 }
@@ -104,20 +206,14 @@ function navAlert(name: string): boolean {
 const secondaryActive = computed(() =>
   secondaryNav.some((n) => route.name === n.name)
 )
-function gaugeTone(kind: 'vix' | 'tail' | 'signals'): string {
-  if (kind === 'vix') {
-    const v = vol.value?.VIX ?? 0
-    if (v >= 25) return 'hot'
-    if (v >= 18) return 'warm'
-    return 'ok'
-  }
-  if (kind === 'tail') {
-    const t = vol.value?.tail_risk ?? 0
-    if (t >= 1.5) return 'hot'
-    if (t >= 1.0) return 'warm'
-    return 'ok'
-  }
-  return enterCount.value > 0 ? 'hot' : 'ok'
+function gaugeTone(): string {
+  const v = vol.value?.VIX ?? 0
+  if (v >= 25) return 'hot'
+  if (v >= 18) return 'warm'
+  return 'ok'
+}
+function chgTone(v: number | null | undefined): string {
+  return tone(v)
 }
 
 /* Wall clock, UTC — the only timezone a multi-venue desk should trust. */
@@ -181,16 +277,15 @@ function isTypingTarget(target: EventTarget | null): boolean {
     || (target instanceof HTMLElement && target.isContentEditable)
 }
 
-function toggleDensity(): void {
-  density.value = density.value === 'compact' ? 'comfortable' : 'compact'
-}
-
 function onKey(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault()
     paletteOpen.value = true
   }
-  if (e.key === 'Escape') paletteOpen.value = false
+  if (e.key === 'Escape') {
+    paletteOpen.value = false
+    moreOpen.value = false
+  }
   if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !isTypingTarget(e.target)) {
     e.preventDefault()
     paletteOpen.value = true
@@ -198,8 +293,8 @@ function onKey(e: KeyboardEvent): void {
 }
 
 onMounted(() => {
-  const savedDensity = window.localStorage.getItem('edge-density')
-  if (savedDensity === 'compact' || savedDensity === 'comfortable') density.value = savedDensity
+  /* Default density stays compact; no user toggle — layout is fixed. */
+  document.documentElement.dataset.density = 'compact'
   tick = window.setInterval(() => (clock.value = utcNow()), 1000)
   window.addEventListener('keydown', onKey)
 })
@@ -207,11 +302,6 @@ onUnmounted(() => {
   if (tick !== undefined) clearInterval(tick)
   window.removeEventListener('keydown', onKey)
 })
-
-watch(density, (value) => {
-  document.documentElement.dataset.density = value
-  window.localStorage.setItem('edge-density', value)
-}, { immediate: true })
 
 watch(() => route.fullPath, async () => {
   moreOpen.value = false
@@ -221,16 +311,30 @@ watch(() => route.fullPath, async () => {
 
 function openSymbol(sym: string): void {
   paletteOpen.value = false
-  const clean = sym.trim().toUpperCase()
+  const clean = sym.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
   if (!clean) return
   const currentName = String(route.name || '')
+  /* Flow is market-wide; a symbol search belongs on Options for one underlier. */
   if (currentName === 'flow' || currentName === 'flowstate') {
     void router.push({ name: 'options', query: { symbol: clean } })
     return
   }
-  const symbolViews = new Set(['market', 'options', 'changepoints', 'sentiment', 'momentum'])
+  /* Always land on Market for symbol research when not already on a symbol workspace. */
+  const symbolViews = new Set(['market', 'options', 'changepoints', 'sentiment', 'momentum', 'fintel'])
   const targetRouteName = symbolViews.has(currentName) ? currentName : 'market'
-  void router.push({ name: targetRouteName, query: { ...route.query, symbol: clean } })
+  void router.push({ name: targetRouteName, query: { symbol: clean } })
+}
+
+function openMark(sym: string): void {
+  void router.push({ name: 'market', query: { symbol: sym } })
+}
+
+function openRotation(): void {
+  void router.push({ name: 'sectors' })
+}
+
+function openVol(): void {
+  void router.push({ name: 'sentiment' })
 }
 </script>
 
@@ -239,13 +343,7 @@ function openSymbol(sym: string): void {
     <a class="skip-link" href="#main-content">Skip to workspace</a>
     <!-- ── left rail ────────────────────────────────────────────────────── -->
     <nav class="rail" aria-label="Primary">
-      <!-- Profile / armed state block -->
-      <div class="profile-block" :class="cleared ? 'armed' : 'safe'" :title="cleared ? 'Live armed — cleared for trading' : 'Research only — not cleared for live'">
-        <span class="profile-dot" aria-hidden="true" />
-        <span class="profile-label label">{{ cleared ? 'LIVE' : 'RSCH' }}</span>
-      </div>
-
-      <RouterLink to="/" class="mark" aria-label="Edge instrument home">
+      <RouterLink to="/" class="mark" aria-label="Overview home">
         <span class="mark-e">E</span>
         <span class="mark-rule" aria-hidden="true" />
       </RouterLink>
@@ -257,7 +355,7 @@ function openSymbol(sym: string): void {
             class="nav-item"
             :class="{ on: route.name === n.name, alert: navAlert(n.name) }"
             :title="navAlert(n.name)
-              ? `${n.title} · ${n.hint} · alert: ${majorHits.join(' ') || 'elevated regime'}`
+              ? `${n.title} · ${n.hint} · attention`
               : `${n.title} · ${n.hint}`"
           >
             <AppIcon class="nav-icon" :name="n.icon" :size="18" />
@@ -282,11 +380,39 @@ function openSymbol(sym: string): void {
         <div v-if="moreOpen" class="more-panel" role="menu" aria-label="Market and research tools">
           <button class="more-search" type="button" role="menuitem" @click="moreOpen = false; paletteOpen = true">
             <AppIcon name="search" :size="16" />
-            <span class="more-title label">Search</span>
+            <span class="more-title label">Search symbol</span>
             <span class="more-idx fig">⌘K</span>
           </button>
           <RouterLink
-            v-for="n in secondaryNav"
+            to="/"
+            class="more-item"
+            :class="{ on: route.name === 'landing' }"
+            title="Instrument overview and readiness"
+            role="menuitem"
+            @click="moreOpen = false"
+          >
+            <AppIcon name="desk" :size="16" />
+            <span class="more-title label">Overview</span>
+            <span class="more-idx fig">HOME</span>
+          </RouterLink>
+          <div class="more-group label">Market</div>
+          <RouterLink
+            v-for="n in marketTools"
+            :key="n.name"
+            :to="{ name: n.name }"
+            class="more-item"
+            :class="{ on: route.name === n.name }"
+            :title="n.hint"
+            role="menuitem"
+            @click="moreOpen = false"
+          >
+            <AppIcon :name="n.icon" :size="16" />
+            <span class="more-title label">{{ n.title }}</span>
+            <span class="more-idx fig">{{ n.idx }}</span>
+          </RouterLink>
+          <div class="more-group label">Research</div>
+          <RouterLink
+            v-for="n in researchTools"
             :key="n.name"
             :to="{ name: n.name }"
             class="more-item"
@@ -302,75 +428,87 @@ function openSymbol(sym: string): void {
         </div>
       </div>
 
-      <button class="find" type="button" @click="paletteOpen = true" title="Search symbols and workspaces (⌘K)">
-        <AppIcon name="search" :size="18" />
-        <span class="label find-label">Search</span>
-        <span class="label find-key">⌘K</span>
-      </button>
     </nav>
 
     <!-- ── instrument strip ─────────────────────────────────────────────── -->
     <header class="strip">
-      <div class="lamp-block" :class="cleared ? 'armed' : 'safe'">
-        <span class="lamp" aria-hidden="true" />
-        <div class="lamp-txt">
-          <span class="label lamp-lab">{{ cleared ? 'Live armed' : 'Research only' }}</span>
-          <span class="label lamp-sub">
-            {{ readiness.data.value ? `${readiness.data.value.blocking_reasons.length} blocking` : 'n/a' }}
-          </span>
-        </div>
-      </div>
-
-      <span class="div" aria-hidden="true" />
-
-      <div class="workspace-context">
-        <span class="label">Workspace</span>
-        <span class="fig workspace-name">{{ activeWorkspace }}</span>
-      </div>
-
-      <div class="gauges">
-        <div
-          class="gauge"
-          :class="gaugeTone('vix')"
-          :title="`VIX ${num(vol?.VIX, 2)} — implied vol index priced from the options chain. Backward propagation computes sensitivity and realized-variance premia backward across dealer books; forward propagation marks where new hedges will print next. Elevated ≥25 signals tail-risk hedging demand and compressed carry.`"
+      <div class="gauges" aria-label="Benchmark tape and sector rotation">
+        <button
+          type="button"
+          class="gauge gauge-btn gauge-vol"
+          :class="[gaugeTone(), `quality-${volQuality}`]"
+          :title="`VIX ${num(vol?.VIX, 2)} · observed ${volAsOf || 'date unavailable'} · open volatility context`"
+          @click="openVol"
         >
-          <span class="label">VIX</span>
-          <span class="fig g-val">{{ num(vol?.VIX, 2) }}</span>
-          <span class="g-spark" aria-hidden="true"><i :style="{ width: `${Math.min(100, ((vol?.VIX ?? 0) / 40) * 100)}%` }" /></span>
-        </div>
-        <div class="gauge">
-          <span class="label">Term slope</span>
-          <span class="fig g-val">{{ num(vol?.term_slope, 4) }}</span>
-        </div>
-        <div class="gauge" :class="gaugeTone('tail')">
-          <span class="label">Tail risk</span>
-          <span class="fig g-val">{{ num(vol?.tail_risk, 2) }}</span>
-          <span class="g-spark" aria-hidden="true"><i :style="{ width: `${Math.min(100, ((vol?.tail_risk ?? 0) / 2.5) * 100)}%` }" /></span>
-        </div>
-        <div class="gauge">
-          <span class="label">Universe</span>
-          <span class="fig g-val">{{ universe ?? 'n/a' }}</span>
-        </div>
-        <div class="gauge" :class="gaugeTone('signals')" :title="`${enterCount} ENTER · ${status.data.value?.directional_signals?.length ?? 0} scored`">
-          <span class="label">Signals</span>
-          <span class="fig g-val">
-            <template v-if="status.data.value?.directional_signals">
-              {{ enterCount }}<span class="g-sub">/{{ status.data.value.directional_signals.length }}</span>
-            </template>
-            <template v-else>n/a</template>
+          <span class="g-head">
+            <span class="label g-symbol">VIX</span>
+            <span class="label g-date" :class="volQuality">{{ compactBarDate(volAsOf) }}</span>
           </span>
-        </div>
-        <div class="gauge" :title="topSectorFlow ? `${topSectorFlow.name || topSectorFlow.etf}` : ''">
-          <span class="label">Top Sector</span>
-          <span class="fig g-val">{{ topSectorFlow ? `${topSectorFlow.etf}` : 'n/a' }}</span>
-        </div>
-        <div v-if="majorHits.length" class="gauge gauge-alert" :title="`Major names flagged: ${majorHits.join(', ')}`">
-          <span class="label">Majors</span>
-          <span class="fig g-val alert-val">{{ majorHits.slice(0, 3).join(' ') }}</span>
-        </div>
+          <span class="g-body">
+            <span class="fig g-val">{{ num(vol?.VIX, 2) }}</span>
+            <span class="label g-context" :class="volQuality">{{ volQuality === 'stale' ? 'STALE' : 'VOL' }}</span>
+          </span>
+        </button>
+        <button
+          v-for="m in tapeRows"
+          :key="m.sym"
+          type="button"
+          class="gauge gauge-btn gauge-mark"
+          :class="[
+            `quality-${m.quality}`,
+            `mark-${m.sym.toLowerCase()}`,
+            { loading: m.loading, fault: m.fault, 'primary-mark': m.sym === 'SPY' },
+          ]"
+          :title="`${m.label} (${m.sym}) · observed ${m.asof || 'date unavailable'} · ${m.source || 'source unavailable'} · open in Market`"
+          @click="openMark(m.sym)"
+        >
+          <span class="g-head">
+            <span class="label g-symbol">{{ m.sym }}</span>
+            <span class="label g-name">{{ m.label }}</span>
+            <span class="label g-date" :class="m.quality">
+              {{ m.quality === 'stale' ? `${m.asofLabel} · STALE` : m.asofLabel }}
+            </span>
+          </span>
+          <span class="g-body">
+            <span class="fig g-val">
+              <template v-if="m.price != null">{{ usd(m.price) }}</template>
+              <template v-else-if="m.loading">SYNC</template>
+              <template v-else>NO DATA</template>
+            </span>
+            <svg v-if="m.spark" class="g-spark" :class="chgTone(m.chg)" viewBox="0 0 48 16" preserveAspectRatio="none" aria-hidden="true">
+              <path :d="m.spark" />
+            </svg>
+            <span class="fig g-chg" :class="chgTone(m.chg)">{{ signedPct(m.chg, 2) }}</span>
+            <span class="label g-basis">{{ m.changeBasis }}</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          class="gauge gauge-btn gauge-rot"
+          :class="`quality-${rotationQuality}`"
+          :title="topRotations.in.length || topRotations.out.length
+            ? `Top sector rotation · observed ${rotationAsOf || 'date unavailable'} · in ${topRotations.in.map((s) => s.etf).join(' ')} · out ${topRotations.out.map((s) => s.etf).join(' ')} · open rotation workspace`
+            : 'Sector rotation unavailable until status scan finishes'"
+          @click="openRotation"
+        >
+          <span class="g-head">
+            <span class="label g-symbol">ROTATION</span>
+            <span class="label g-date" :class="rotationQuality">{{ rotationFreshness }}</span>
+          </span>
+          <span v-if="topRotations.in.length || topRotations.out.length" class="rot-pair">
+            <span v-if="topRotations.in[0]" class="rot-leg rot-in">
+              <span class="fig">{{ topRotations.in[0].etf }}</span>
+              <small class="fig">{{ signedPct(Number(topRotations.in[0].flow_score || 0) * 100, 1) }}</small>
+            </span>
+            <span class="rot-arrow label">LEADS / LAGS</span>
+            <span v-if="topRotations.out[0]" class="rot-leg rot-out">
+              <span class="fig">{{ topRotations.out[0].etf }}</span>
+              <small class="fig">{{ signedPct(Number(topRotations.out[0].flow_score || 0) * 100, 1) }}</small>
+            </span>
+          </span>
+          <span v-else class="fig g-val">NO ROTATION DATA</span>
+        </button>
       </div>
-
-      <span class="spacer" />
 
       <div
         v-if="stripWarning"
@@ -393,17 +531,25 @@ function openSymbol(sym: string): void {
         <span class="fig market-next">{{ marketTransition }}</span>
       </div>
 
-
-
       <button
-        class="density-control"
         type="button"
-        :title="`Density: ${density}. Toggle compact and comfortable layouts.`"
-        @click="toggleDensity"
+        class="strip-search"
+        title="Search symbols and workspaces (⌘K)"
+        aria-label="Search symbols and workspaces"
+        @click="paletteOpen = true"
       >
-        <AppIcon name="density" :size="15" />
-        <span class="label">{{ density === 'compact' ? 'Compact' : 'Comfort' }}</span>
+        <AppIcon name="search" :size="15" />
+        <span class="label">SEARCH</span>
+        <kbd class="fig">⌘K</kbd>
       </button>
+
+      <span
+        class="mobile-market-state label"
+        :class="marketSessionClass"
+        :title="marketClockTitle"
+      >
+        {{ marketSessionLabel }}
+      </span>
 
       <div class="clock">
         <span class="fig clock-val">{{ clock }}</span>
@@ -525,33 +671,6 @@ function openSymbol(sym: string): void {
   background: var(--rule-hi);
 }
 
-/* ---- profile block ------------------------------------------------------- */
-.profile-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: var(--s2) 0 var(--s1);
-  cursor: default;
-}
-.profile-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-.safe .profile-dot { background: var(--warn); }
-.armed .profile-dot {
-  background: var(--phosphor);
-}
-.profile-label {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-}
-.safe .profile-label { color: var(--warn); }
-.armed .profile-label { color: var(--phosphor); }
-
 /* ---- nav ------------------------------------------------------------------ */
 .nav {
   list-style: none;
@@ -609,13 +728,6 @@ function openSymbol(sym: string): void {
 
 .nav-icon { color: currentColor; }
 .nav-title { color: inherit; font-size: var(--t-micro); font-weight: 700; }
-.gauge-alert .alert-val {
-  color: var(--warn);
-  max-width: 14ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* ---- more dropdown ------------------------------------------------------- */
 .more-wrap {
@@ -668,114 +780,142 @@ function openSymbol(sym: string): void {
 .more-idx { font-size: var(--t-micro); opacity: 0.85; font-weight: 700; min-width: 2.5ch; }
 .more-idx { margin-left: auto; color: var(--ink-ghost); text-align: right; }
 .more-title { font-size: var(--t-micro); font-weight: 700; }
-
-/* ---- find ---------------------------------------------------------------- */
-.find {
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  min-height: 48px;
-  padding: var(--s2) var(--s1);
-  color: var(--ink-dim);
-  transition: color var(--dur-fast) var(--ease-out);
+.more-group {
+  padding: var(--s2) var(--s3) var(--s1);
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-top: var(--hair) solid var(--rule);
+  background: var(--panel);
 }
-.find:hover { color: var(--phosphor); }
-.find-label { color: inherit; font-size: 9px; }
-.find-key { color: var(--ink-ghost); font-size: 8px; }
 
 /* ---- strip --------------------------------------------------------------- */
 .strip {
   grid-area: strip;
   display: flex;
   align-items: center;
-  gap: var(--s4);
-  padding: 0 var(--s5) 0 var(--s4);
-  border-bottom: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-  z-index: var(--z-strip);
-}
-
-.lamp-block {
-  display: flex;
-  align-items: center;
   gap: var(--s3);
-  flex: 0 0 auto;
-}
-
-.lamp {
-  position: relative;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  overflow: hidden;
-  flex: 0 0 auto;
-}
-
-/* Not-cleared is the truthful resting state */
-.safe .lamp { background: var(--warn); }
-.armed .lamp { background: var(--phosphor); }
-
-.armed .lamp::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.9), transparent);
-  animation: sweep 1.8s var(--ease-in-out) infinite;
-}
-
-.lamp-txt { display: flex; flex-direction: column; gap: 1px; }
-.lamp-lab { color: var(--ink); font-weight: 700; }
-.safe .lamp-lab { color: var(--warn); }
-.armed .lamp-lab { color: var(--phosphor); }
-.lamp-sub { color: var(--ink-dim); font-size: var(--t-micro); }
-
-.div {
-  width: var(--hair);
-  height: 28px;
-  background: var(--rule);
-  flex: 0 0 auto;
-}
-
-.workspace-context {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex: 0 0 auto;
-  min-width: 72px;
-}
-.workspace-name {
-  color: var(--ink);
-  font-size: var(--t-small);
-  font-weight: 600;
+  padding: 0 var(--s4);
+  border-bottom: var(--hair) solid var(--rule);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--phosphor) 4%, transparent), transparent 24%),
+    var(--void-lift);
+  z-index: var(--z-strip);
+  min-width: 0;
 }
 
 .gauges {
   display: flex;
-  align-items: center;
-  gap: var(--s5);
+  align-items: stretch;
+  gap: 0;
   min-width: 0;
+  flex: 1 1 auto;
+  align-self: stretch;
   overflow: hidden;
 }
 
-.gauge { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.g-val { font-size: var(--t-small); color: var(--ink); font-weight: 600; }
-.g-sub { color: var(--ink-ghost); font-weight: 500; font-size: 0.85em; }
-.g-spark {
-  display: block;
-  width: 48px;
-  height: 2px;
-  margin-top: 3px;
-  background: var(--rule);
-  overflow: hidden;
+.gauge {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 145px;
+  padding: 0 12px;
+  border-right: var(--hair) solid var(--rule);
 }
-.g-spark i { display: block; height: 100%; background: var(--phosphor-dim); }
+.gauge::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 1px;
+  background: var(--rule-hi);
+  opacity: 0.45;
+}
+.gauge.quality-current::after { background: var(--phosphor-dim); opacity: 0.8; }
+.gauge.quality-stale::after { background: var(--warn); opacity: 0.9; }
+.gauge.quality-missing::after,
+.gauge.fault::after { background: var(--short); opacity: 0.75; }
+.gauge-vol { flex: 0 0 118px; }
+.gauge-rot { flex: 1.4 1 225px; }
+.gauge:last-child { border-right: none; }
+.gauge-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.gauge-btn:hover { background: var(--panel-hi); }
+.gauge-btn:hover::after { height: 2px; background: var(--phosphor); opacity: 1; }
+.gauge-btn:hover .g-val { color: var(--phosphor); }
+.gauge-btn.loading .g-val { color: var(--ink-dim); }
+.gauge-btn.fault .g-val { color: var(--warn); }
+.g-head,
+.g-body {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.g-head { gap: 6px; }
+.g-body { gap: 7px; }
+.gauge .label,
+.strip-search .label {
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.g-symbol { color: var(--ink) !important; }
+.g-name { overflow: hidden; color: var(--ink-ghost) !important; font-size: 8px !important; text-overflow: ellipsis; }
+.g-date {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--ink-ghost) !important;
+  font-size: 8px !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.g-date.stale { color: var(--warn) !important; }
+.g-date.missing { color: var(--short) !important; }
+.g-val { flex: 0 0 auto; color: var(--ink); font-size: var(--t-small); font-weight: 700; line-height: 1.15; white-space: nowrap; }
+.g-chg { margin-left: auto; font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
+.g-chg.pos { color: var(--long); }
+.g-chg.neg { color: var(--short); }
+.g-chg.flat { color: var(--ink-dim); }
+.g-basis { color: var(--ink-ghost) !important; font-size: 8px !important; }
+.g-context { margin-left: auto; color: var(--ink-ghost) !important; font-size: 8px !important; }
+.g-context.stale { color: var(--warn) !important; }
+.g-spark {
+  width: 48px;
+  height: 16px;
+  overflow: visible;
+  color: var(--ink-dim);
+}
+.g-spark path { fill: none; stroke: currentColor; stroke-width: 1.35; vector-effect: non-scaling-stroke; }
+.g-spark.pos { color: var(--long); }
+.g-spark.neg { color: var(--short); }
+.rot-pair {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.rot-leg { display: flex; align-items: baseline; gap: 5px; min-width: 0; font-weight: 700; }
+.rot-leg small { font-size: 8px; }
+.rot-in { color: var(--long); }
+.rot-out { color: var(--short); }
+.rot-arrow { overflow: hidden; color: var(--ink-ghost) !important; font-size: 8px !important; text-overflow: ellipsis; white-space: nowrap; }
 .gauge.warm .g-val { color: var(--warn); }
-.gauge.warm .g-spark i { background: var(--warn); }
 .gauge.hot .g-val { color: var(--short); }
-.gauge.hot .g-spark i { background: var(--short); }
-.gauge.ok .g-spark i { background: var(--phosphor-dim); }
 
 .strip-warn {
   display: flex;
@@ -792,8 +932,6 @@ function openSymbol(sym: string): void {
   background: var(--warn-wash);
   flex: 0 0 auto;
 }
-
-.spacer { flex: 1 1 auto; }
 
 .market-clock {
   display: flex;
@@ -812,21 +950,28 @@ function openSymbol(sym: string): void {
 .market-clock.closed .market-state,
 .market-clock.early .market-state,
 .market-clock.unknown .market-state { color: var(--warn); }
+.mobile-market-state { display: none; }
 
-/* feed moved to .foot */
-
-.density-control {
-  display: inline-flex;
+.strip-search {
+  display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
-  padding: 4px 7px;
-  border: var(--hair) solid var(--rule-hi);
+  min-height: 34px;
+  padding: 0 9px;
   color: var(--ink-dim);
-  background: var(--panel);
-  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  border-left: var(--hair) solid var(--rule);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
-.density-control:hover { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--panel-hi); }
+.strip-search:hover { color: var(--phosphor); background: var(--phosphor-wash); }
+.strip-search .label { color: inherit; }
+.strip-search kbd {
+  padding: 1px 4px;
+  color: var(--ink-ghost);
+  border: var(--hair) solid var(--rule);
+  font-size: 8px;
+}
+
+/* feed moved to .foot */
 
 .clock { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .clock-val {
@@ -844,7 +989,6 @@ function openSymbol(sym: string): void {
   overflow: auto;
   padding: var(--s5);
 }
-.stage:focus { outline: none; }
 
 /* ---- footer (feed + clock — always visible) ------------------------------ */
 .foot {
@@ -878,10 +1022,16 @@ function openSymbol(sym: string): void {
   letter-spacing: 0.04em;
 }
 
-@media (max-width: 1100px) {
-  .gauges { gap: var(--s4); }
-  .gauge:nth-child(n + 5) { display: none; }
-  .workspace-context { display: none; }
+@media (max-width: 1180px) {
+  .gauge-rot { display: none; }
+  .strip-search { min-width: 34px; padding: 0 8px; }
+  .strip-search .label,
+  .strip-search kbd { display: none; }
+}
+@media (max-width: 1080px) {
+  .mark-dia,
+  .mark-xle { display: none; }
+  .strip-warn { display: none; }
 }
 
 @media (max-width: 780px) {
@@ -903,8 +1053,8 @@ function openSymbol(sym: string): void {
     overflow-x: auto;
     overflow-y: hidden;
   }
-  .profile-block, .mark { display: none; }
-  .nav li:nth-child(5), .find { display: none; }
+  .mark { display: none; }
+  .nav li:nth-child(5) { display: none; }
   .nav { flex: 1 1 auto; flex-direction: row; gap: 0; min-width: 0; overflow-x: auto; }
   .nav li { display: flex; flex: 1 0 52px; }
   .nav-item {
@@ -916,19 +1066,36 @@ function openSymbol(sym: string): void {
   }
   .nav-item.on::after { top: auto; right: 18%; bottom: 0; left: 18%; width: auto; height: 2px; }
   .nav-pulse { top: 8px; right: calc(50% - 15px); }
-  .more-wrap, .find { flex: 0 0 52px; width: 52px; margin-top: 0; }
-  .more-btn, .find { min-height: 64px; height: 64px; }
+  .more-wrap { flex: 0 0 52px; width: 52px; margin-top: 0; }
+  .more-btn { min-height: 64px; height: 64px; }
   .more-panel { top: auto; right: 0; bottom: calc(100% + 2px); left: auto; }
   .foot { display: none; }
-  .gauges { display: none; }
+  .gauges { display: flex; flex: 1 1 auto; }
+  .gauge-vol,
+  .gauge-rot,
+  .gauge-mark:not(.primary-mark) { display: none; }
+  .gauge-mark.primary-mark { display: grid; flex: 1 1 auto; max-width: 178px; padding: 0 9px; border-right: 0; }
+  .gauge-mark.primary-mark .g-date,
+  .gauge-mark.primary-mark .g-name { display: none; }
+  .gauge-mark.primary-mark .g-basis { display: none; }
+  .gauge-mark.primary-mark .g-body { gap: 5px; }
+  .gauge-mark.primary-mark .g-spark { width: 40px; }
   .stage { padding: var(--s3); }
   .nav-title { font-size: 8px; }
-  .find-label { font-size: 8px; }
-  .find-key { display: none; }
-  .density-control { padding: 6px; }
-  .density-control .label, .clock { display: none; }
-  .lamp-txt, .strip-warn { display: none; }
-  .strip { gap: var(--s3); padding: 0 var(--s3); }
+  .clock { display: none; }
+  .strip-warn { display: none; }
+  .strip { gap: var(--s2); padding: 0 var(--s3); overflow: hidden; }
+  .market-clock { display: none; }
+  .strip-search { min-width: 34px; padding: 0 8px; border-left: 0; }
+  .strip-search .label,
+  .strip-search kbd { display: none; }
+  .mobile-market-state {
+    display: block;
+    margin-left: auto;
+    color: var(--phosphor);
+  }
+  .mobile-market-state.closed,
+  .mobile-market-state.unknown { color: var(--warn); }
   .more-panel { left: calc(100% + 1px); }
 }
 </style>

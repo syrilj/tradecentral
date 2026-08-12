@@ -98,6 +98,9 @@ export interface ScanSummary {
   directional_scored_symbols: number
   directional_failed_symbols: number
   directional_warning_count: number
+  signal_overlap_symbols?: number
+  signal_agreement_symbols?: number
+  signal_conflict_symbols?: number
   activity_market_universe_symbols: number
   activity_local_scanned_symbols: number
   activity_local_flagged_symbols: number
@@ -114,6 +117,35 @@ export interface ScanSummary {
   qlib_quality?: string
 }
 
+export type ScanJobState = 'queued' | 'running' | 'completed' | 'failed'
+
+export interface ScanJobResult {
+  status: 'ok'
+  message: string
+  asof?: string
+  data: StatusPayload
+}
+
+export interface ScanJob {
+  id: string
+  depth: ScanDepth
+  state: ScanJobState
+  stage: string
+  progress: number
+  message: string
+  started_at: string | null
+  updated_at: string | null
+  elapsed_seconds: number
+  error: string | null
+  result?: ScanJobResult
+}
+
+export interface ScanJobPayload {
+  status: ScanJobState | 'idle' | 'missing'
+  message: string
+  job: ScanJob | null
+}
+
 export interface ActivityFlagRow {
   symbol: string
   activity_score: number
@@ -121,6 +153,11 @@ export interface ActivityFlagRow {
   activity_rank: number
   flags: string[]
   context_side: 'long' | 'short' | 'mixed' | 'neutral' | string
+  pead_side?: 'long' | 'short' | null
+  pead_horizon?: 'session_open' | string | null
+  directional_side?: 'long' | 'short' | null
+  directional_horizon?: string | null
+  signal_alignment?: 'agree' | 'conflict' | 'pead_only' | 'directional_only' | 'none' | string
   calibrated_probability: number | null
   live: boolean
   live_asof: string | null
@@ -128,6 +165,22 @@ export interface ActivityFlagRow {
   print_count: number
   call_print_count: number
   put_print_count: number
+  contract_count?: number
+  call_premium?: number | null
+  put_premium?: number | null
+  put_flow_pct?: number | null
+  otm_premium?: number | null
+  otm_flow_pct?: number | null
+  average_otm_pct?: number | null
+  sweep_count?: number
+  sweep_contracts?: number
+  sweep_premium?: number
+  sweep_otm_contracts?: number
+  sweep_otm_premium?: number
+  unusual_contracts?: number
+  average_price?: number | null
+  average_dte?: number | null
+  signed_print_count?: number
   ret_1d: number | null
   volume_vs_20d_median: number | null
   price_impulse: 'up' | 'down' | 'flat' | string
@@ -179,7 +232,8 @@ export interface ActivityScan {
 }
 
 /** Market-wide unusual options flow board (`/api/unusual-flow`). */
-export interface UnusualFlowRow extends ActivityFlagRow {
+export interface UnusualFlowRow extends Omit<ActivityFlagRow, 'score_kind'> {
+  score_kind: 'ordinal_unusual_flow' | string
   unusual_score?: number
   call_put_imbalance?: number | null
 }
@@ -187,7 +241,12 @@ export interface UnusualFlowRow extends ActivityFlagRow {
 export interface UnusualFlowPayload {
   schema_version: string
   asof: string
+  generated_at?: string
   rows: UnusualFlowRow[]
+  tape?: MarketFlowPrint[]
+  summary?: UnusualFlowSummary
+  feed_status?: 'live' | 'no_prints' | 'unavailable' | string
+  feed_reason?: string | null
   coverage: {
     market_universe: number
     local_scanned: number
@@ -196,12 +255,55 @@ export interface UnusualFlowPayload {
     live_completed: number
     live_with_activity: number
     unusual_shown: number
+    provider_requests?: number
+    provider_requests_completed?: number
+    provider_prints?: number
+    observed_symbols?: number
   }
   warnings: string[]
+  notes?: string[]
   min_premium: number
   decision_authorized: false
   score_kind: 'ordinal_unusual_flow' | string
+  source_snapshot?: 'market_flow' | string
+  cache?: {
+    hit?: boolean
+    source?: string
+    age_seconds?: number
+    ttl_seconds?: number
+    refresh_hint?: string
+  }
   caveats: string[]
+}
+
+export interface UnusualFlowSummary {
+  total_premium: number
+  call_premium: number
+  put_premium: number
+  unclassified_premium: number
+  put_flow_pct: number | null
+  call_flow_pct: number | null
+  total_contracts: number
+  unusual_contracts: number | null
+  sweep_contracts: number
+  sweep_premium: number
+  tape_print_count: number
+  visible_tape_print_count?: number
+  signed_print_count: number
+  signed_print_pct: number | null
+  tape_detail_available: boolean
+  premium_basis: 'provider_contract_tape' | 'provider_symbol_aggregate' | string
+  scope?: string
+  qualified_symbol_count?: number
+  visible_symbol_count?: number
+}
+
+export interface MarketFlowPrint extends OptionsTapeRow {
+  symbol: string | null
+  dte?: number | null
+  otm_pct?: number | null
+  open_interest?: number | null
+  implied_volatility?: number | null
 }
 
 /** Genetic algorithm evolution lab (`/api/ga`). Research-only. */
@@ -300,6 +402,30 @@ export interface StatusPayload {
   scan_summary: ScanSummary
   pead_candidates: PeadCandidate[]
   directional_signals: DirectionalSignal[]
+  signal_reconciliation?: {
+    schema_version: string
+    counts: {
+      pead_flags: number
+      directional_forecasts: number
+      overlap: number
+      agreements: number
+      conflicts: number
+      pead_only: number
+      directional_only: number
+    }
+    rows: Array<{
+      symbol: string
+      relation: 'agree' | 'conflict' | string
+      pead_side: string
+      pead_strength: number | null
+      directional_side: string
+      directional_probability: number | null
+      directional_state: string | null
+      directional_horizon: string | null
+    }>
+    decision_rule: string
+    semantics: { pead: string; directional: string }
+  }
   activity_scan: ActivityScan
   sector_flow: Record<string, unknown>
   latest_vol: VolReadout
@@ -386,10 +512,22 @@ export interface Trajectory {
   qlib_quality?: string
 }
 
+export interface CompareStat extends Partial<TrajectoryStats> {
+  /** Last observed market bar; never the request timestamp. */
+  asof?: string | null
+  age_days?: number | null
+  quality?: 'current' | 'stale' | 'missing' | string
+  source?: string | null
+  change_basis?: 'last_two_observed_closes' | string
+}
+
 export interface ComparePayload {
   window: string
+  asof?: string | null
+  oldest_asof?: string | null
+  generated_at?: string | null
   series: Record<string, { d: string; cum: number }[]>
-  stats: Record<string, Partial<TrajectoryStats>>
+  stats: Record<string, CompareStat>
   correlation: Record<string, Record<string, number>>
 }
 
@@ -487,12 +625,19 @@ export interface OptionsTapeRow {
   volume: number
   /** Contract count (= volume on options tape). */
   contracts?: number
+  /** OCC contract multiplier when the provider supplies it; never assumed. */
+  contract_multiplier?: number | null
   /** Per-contract fill price when known or back-solved from premium. */
   price?: number | null
+  price_estimated?: boolean
   strike: number | null
   /** Underlying stock price when trade occurred or session spot. */
   underlying_price?: number | null
   expiry: string | null
+  dte?: number | null
+  otm_pct?: number | null
+  open_interest?: number | null
+  implied_volatility?: number | null
   aggressor: 'buy' | 'sell' | null
   /** BUY / SELL / NO SIDE — always set for display. */
   aggressor_label?: string
@@ -504,6 +649,7 @@ export interface OptionsTapeRow {
   activity_side?: 'call' | 'put' | string
   /** sweep | block | single (vendor tag or size/cluster heuristic). */
   trade_class?: 'sweep' | 'block' | 'single' | string
+  trade_class_source?: 'vendor' | 'size_heuristic' | 'burst_heuristic' | 'unclassified' | string
   /** BULL / BEAR when signed; CALL / PUT activity when not. */
   edge_label?: string
   premium_estimated: boolean
@@ -1597,7 +1743,7 @@ export const api = {
     return req<OptionsBoard>(`/api/options/board${qs ? `?${qs}` : ''}`)
   },
 
-  /** Market-wide unusual options flow (live LSE on hot names). */
+  /** Standalone market-wide options-flow window (one live LSE request). */
   unusualFlow: (opts?: { limit?: number; minPremium?: number; force?: boolean }) => {
     const q = new URLSearchParams()
     if (opts?.limit != null) q.set('limit', String(opts.limit))
@@ -1611,7 +1757,7 @@ export const api = {
    * Live opportunities (`/api/options/opportunities`): composite board+flow
    * ranking, z-blended per symbol. Ordinal only — see `caveats`.
    *
-   * Pass `force` to bypass the server's 90s cache and recompute now.
+   * Pass `force` to bypass the server cache and recompute now.
    */
   liveOpportunities: (opts?: { limit?: number; force?: boolean }) => {
     const q = new URLSearchParams()
@@ -1689,9 +1835,14 @@ export const api = {
     req<Record<string, unknown>>(`/api/analyze?symbol=${encodeURIComponent(symbol)}`),
 
   triggerScan: (depth: ScanDepth = 'quick') =>
-    req<{ status: string; message: string; asof?: string; data: StatusPayload }>(
+    req<ScanJobPayload>(
       `/api/trigger_scan?depth=${depth}`,
       { method: 'POST' },
+    ),
+
+  scanStatus: (jobId?: string) =>
+    req<ScanJobPayload>(
+      `/api/scan_status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
     ),
 }
 

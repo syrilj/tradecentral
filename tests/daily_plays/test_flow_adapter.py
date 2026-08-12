@@ -5,10 +5,48 @@ import time
 from edge.daily_plays.adapters.flow import (
     load_live_flow_activity,
     load_live_forward_flow,
+    load_market_flow_activity,
     lse_circuit_is_open,
     normalize_flow_payload,
     reset_lse_circuit,
 )
+
+
+def test_market_flow_uses_one_provider_window_and_groups_underlyings():
+    calls = 0
+
+    def fetcher(*, min_premium, limit, timeout):
+        nonlocal calls
+        calls += 1
+        assert min_premium == 25_000
+        assert limit == 500
+        assert timeout == 10
+        return [
+            {
+                "id": "a1", "underlying": "AAA", "contract_type": "call",
+                "premium": 100_000, "volume": 10, "ts": "2026-08-11T15:00:00Z",
+            },
+            {
+                "id": "b1", "underlying": "BBB", "contract_type": "put",
+                "premium": 200_000, "volume": 20, "ts": "2026-08-11T15:00:01Z",
+            },
+        ]
+
+    result = load_market_flow_activity(
+        fetcher=fetcher,
+        min_premium=25_000,
+        limit=500,
+        timeout_seconds=10,
+    )
+
+    assert calls == 1
+    assert {row["symbol"] for row in result["rows"]} == {"AAA", "BBB"}
+    assert result["coverage"] == {
+        "request_completed": 1,
+        "provider_prints": 2,
+        "observed_symbols": 2,
+        "with_activity": 2,
+    }
 
 
 def test_normalizes_live_uoa_alert_as_non_decisive_evidence():
@@ -107,6 +145,47 @@ def test_actual_lse_prints_are_aggregated_but_remain_direction_neutral():
     assert result["evidence"]["call_print_count"] == 1
     assert result["evidence"]["put_print_count"] == 1
     assert result["evidence"]["direction_signed"] is False
+
+
+def test_print_metrics_deduplicate_and_keep_otm_distance_separate_from_share():
+    alert = {
+        "id": "trade-1", "underlying": "SPY", "contract_type": "call",
+        "premium": 200_000, "volume": 20, "price": 100,
+        "strike": 600, "underlying_price": 500,
+        "expiry": "2026-09-18", "ts": "2026-08-11T15:00:00Z",
+    }
+    result = normalize_flow_payload({"symbol": "SPY", "alerts": [alert, dict(alert)]})
+
+    assert result["evidence"]["alert_count"] == 1
+    assert result["evidence"]["premium"] == 200_000
+    assert result["evidence"]["contract_count"] == 20
+    assert result["evidence"]["otm_flow_pct"] == 1.0
+    assert result["evidence"]["average_otm_pct"] == 0.2
+    assert result["evidence"]["premium_basis"] == "provider_contract_tape"
+    assert len(result["prints"]) == 1
+
+
+def test_signed_direction_and_coverage_use_explicit_aggressors_only():
+    result = normalize_flow_payload({
+        "symbol": "QQQ",
+        "alerts": [
+            {
+                "id": "c1", "underlying": "QQQ", "contract_type": "call",
+                "premium": 300_000, "volume": 30, "aggressor": "BUY",
+                "ts": "2026-08-11T15:00:00Z",
+            },
+            {
+                "id": "p1", "underlying": "QQQ", "contract_type": "put",
+                "premium": 100_000, "volume": 10,
+                "ts": "2026-08-11T15:00:01Z",
+            },
+        ],
+    })
+
+    assert result["direction"] == "long"
+    assert result["evidence"]["direction_signed"] is True
+    assert result["evidence"]["signed_net_premium"] == 300_000
+    assert result["evidence"]["signed_premium_coverage"] == 0.75
 
 
 def test_broad_flow_activity_ranks_routed_names_without_authorizing_direction():

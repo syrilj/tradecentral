@@ -30,7 +30,7 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'sectors', title: 'Sectors', idx: '03', hint: 'Sector rotation & flow' },
   { name: 'sentiment', title: 'Pulse', idx: '04', hint: 'Structure · COT · outliers' },
   { name: 'options', title: 'Options', idx: '05', hint: 'Flow · gamma · density' },
-  { name: 'flow', title: 'Flow', idx: '04', hint: 'Whole-market options activity' },
+  { name: 'flow', title: 'Flow', idx: '04', hint: 'Market-wide options tape' },
   { name: 'gates', title: 'Gates', idx: '06', hint: 'Pre-registered verdicts' },
   { name: 'cloud', title: 'Cloud', idx: '07', hint: 'Vertex AI training' },
   { name: 'evolution', title: 'Evolution', idx: '08', hint: 'GA survivors lab' },
@@ -250,7 +250,7 @@ function commit(): void {
   min-width: 0;
 }
 .input::placeholder { color: var(--ink-ghost); font-family: var(--font-ui); letter-spacing: 0; }
-.input:focus-visible { outline: none; }
+.input:focus-visible { outline: var(--hair) solid var(--phosphor); outline-offset: 2px; }
 
 .state { color: var(--ink-faint); flex: 0 0 auto; }
 

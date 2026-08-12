@@ -300,3 +300,13 @@ class TestPayload:
         assert payload["decision_authorized"] is False
         assert payload["score_kind"] == "ordinal_structure"
         assert any("not an edge" in c for c in payload["caveats"])
+        # Board placement is routing only — investment use requires a separate GO.
+        assert any("routing" in c.lower() for c in payload["caveats"])
+        assert set(payload["selection_basis_notes"]) == {
+            "pead_ordinal",
+            "live_options_flow",
+            "activity_ordinal",
+            "directional_model",
+        }
+        for basis, note in payload["selection_basis_notes"].items():
+            assert note, f"{basis} must surface an honesty note"

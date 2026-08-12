@@ -262,6 +262,13 @@ const focus = computed(() => {
 })
 
 const viewMode = ref<'2d' | '3d'>('2d')
+// A 3D surface must be based on the same measured inputs as the 2D density.
+// Do not let an unavailable chain turn into a plausible-looking model.
+const canRender3d = computed(() => model.value !== null)
+
+watch(canRender3d, (available) => {
+  if (!available && viewMode.value === '3d') viewMode.value = '2d'
+})
 </script>
 
 <template>
@@ -269,7 +276,14 @@ const viewMode = ref<'2d' | '3d'>('2d')
     <div class="head">
       <div class="mode-toggle mini-segment">
         <button type="button" class="label" :class="{ on: viewMode === '2d' }" @click="viewMode = '2d'">2D DEN</button>
-        <button type="button" class="label" :class="{ on: viewMode === '3d' }" @click="viewMode = '3d'">3D MODEL</button>
+        <button
+          type="button"
+          class="label"
+          :class="{ on: viewMode === '3d' }"
+          :disabled="!canRender3d"
+          :title="canRender3d ? 'Inspect the measured 3D risk-neutral surface' : 'Need ATM IV + expiry for a 3D model'"
+          @click="viewMode = '3d'"
+        >3D MODEL</button>
       </div>
 
       <div class="facts" v-if="model">
@@ -292,7 +306,7 @@ const viewMode = ref<'2d' | '3d'>('2d')
 
     <!-- 3D Surface Model view -->
     <RiskNeutral3DModel
-      v-if="viewMode === '3d'"
+      v-if="viewMode === '3d' && canRender3d"
       :probability="probability"
       :spot="spot"
       :call-wall="callWall"
@@ -678,5 +692,10 @@ const viewMode = ref<'2d' | '3d'>('2d')
   color: var(--phosphor);
   background: var(--phosphor-wash);
   box-shadow: inset 0 -2px var(--phosphor);
+}
+.pdf-chart .mode-toggle button:disabled {
+  cursor: not-allowed;
+  color: var(--ink-ghost);
+  background: var(--panel);
 }
 </style>

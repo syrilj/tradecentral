@@ -49,7 +49,7 @@ def test_signed_flow_requires_explicit_provider_aggressor():
     result = _payload([
         {
             "contract_type": "call", "premium": 100_000, "volume": 10,
-            "timestamp": "2026-07-31T14:45:00Z", "aggressor": "BUY",
+            "timestamp": "2026-07-31T14:45:00Z", "aggressor": "BUY", "multiplier": 100,
         },
         {
             "contract_type": "put", "premium": 150_000, "volume": 12,
@@ -71,20 +71,42 @@ def test_signed_flow_requires_explicit_provider_aggressor():
     assert tape["put"]["aggressor_label"] == "BUY"
 
 
-def test_tape_back_solves_price_and_classifies_block():
+def test_tape_back_solves_price_with_multiplier_and_preserves_vendor_block():
     result = _payload([
         {
             "contract_type": "call", "premium": 750_000, "volume": 50,
-            "timestamp": "2026-07-31T14:45:00Z",
+            "timestamp": "2026-07-31T14:45:00Z", "multiplier": 100,
+            "trade_class": "block",
         },
     ])
     row = result["flow_tape"][0]
     assert row["price"] == 150.0
     assert row["contracts"] == 50
     assert row["trade_class"] == "block"
+    assert row["trade_class_source"] == "vendor"
     assert row["bias"] is None
     assert row["edge_label"] == "CALL"  # activity identity when unsigned
     assert row["aggressor_label"] == "NO SIDE"
+
+
+def test_large_untagged_print_is_not_certified_as_vendor_block():
+    result = _payload([{
+        "contract_type": "call", "premium": 750_000, "volume": 50,
+        "timestamp": "2026-07-31T14:45:00Z",
+    }])
+    row = result["flow_tape"][0]
+    assert row["price"] is None
+    assert row["trade_class"] == "large"
+    assert row["trade_class_source"] == "size_heuristic"
+
+
+def test_expired_print_is_rejected_instead_of_clamped_to_zero_dte():
+    result = _payload([{
+        "contract_type": "call", "premium": 100_000, "volume": 10,
+        "expiry": "2026-07-30", "timestamp": "2026-07-31T14:45:00Z",
+    }])
+    assert result["flow_tape"] == []
+    assert result["quality"]["flow_rejected"]["invalid"] == 1
 
 
 def test_sweep_burst_promotes_trade_class():

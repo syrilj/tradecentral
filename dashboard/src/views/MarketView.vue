@@ -31,12 +31,19 @@ const basket = ref<string[]>([])
 const cmp = ref<ComparePayload | null>(null)
 const cmpErr = ref<string | null>(null)
 
-// Ensure route query changes update active symbol
+// Ensure route query / strip / palette navigation updates the active symbol
 watch(
   () => route.query.symbol,
   (newSym) => {
-    if (newSym && typeof newSym === 'string' && newSym !== symbol.value) {
-      symbol.value = newSym
+    if (newSym && typeof newSym === 'string') {
+      const s = cleanTicker(newSym)
+      if (s && s !== symbol.value) {
+        symbol.value = s
+        q.value = s
+        const rest = basket.value.filter((b) => b !== s && b !== 'SPY')
+        basket.value = [...new Set(s === 'SPY' ? ['SPY', 'QQQ', ...rest] : [s, 'SPY', ...rest])].slice(0, 8)
+        void loadCompare()
+      }
     }
   },
   { immediate: true }
@@ -107,9 +114,16 @@ async function loadCompare(): Promise<void> {
 function select(sym: string): void {
   const s = cleanTicker(sym)
   if (!s) return
+  const changed = s !== symbol.value
   symbol.value = s
   q.value = s
+  /* Seed compare with active name + SPY so the panel is never an empty dead end. */
+  const rest = basket.value.filter((b) => b !== s && b !== 'SPY')
+  const next = s === 'SPY' ? ['SPY', 'QQQ', ...rest] : [s, 'SPY', ...rest]
+  basket.value = [...new Set(next)].slice(0, 8)
+  void loadCompare()
   void router.replace({ query: { ...route.query, symbol: s } })
+  if (!changed) void loadTrajectory()
 }
 
 function onSearchKey(e: KeyboardEvent): void {
@@ -118,12 +132,26 @@ function onSearchKey(e: KeyboardEvent): void {
     const typed = cleanTicker(q.value)
     if (typed) select(typed)
   }
+  if (e.key === 'ArrowDown' && hits.value.length) {
+    e.preventDefault()
+    const idx = Math.max(0, hits.value.findIndex((h) => h.symbol === symbol.value))
+    const next = hits.value[Math.min(hits.value.length - 1, idx + 1)]
+    if (next) select(next.symbol)
+  }
+  if (e.key === 'ArrowUp' && hits.value.length) {
+    e.preventDefault()
+    const idx = Math.max(0, hits.value.findIndex((h) => h.symbol === symbol.value))
+    const prev = hits.value[Math.max(0, idx - 1)]
+    if (prev) select(prev.symbol)
+  }
 }
 
 function toggleBasket(sym: string): void {
-  const i = basket.value.indexOf(sym)
+  const clean = cleanTicker(sym)
+  if (!clean) return
+  const i = basket.value.indexOf(clean)
   if (i >= 0) basket.value.splice(i, 1)
-  else if (basket.value.length < 8) basket.value.push(sym)
+  else if (basket.value.length < 8) basket.value.push(clean)
   void loadCompare()
 }
 
@@ -131,7 +159,14 @@ watch([symbol, win], () => void loadTrajectory())
 watch(win, () => void loadCompare())
 onMounted(() => {
   void loadTrajectory()
-  runSearch('')
+  /* Open with active symbol vs SPY so compare is never an empty dead panel. */
+  if (symbol.value && symbol.value !== 'SPY') {
+    basket.value = [symbol.value, 'SPY']
+  } else {
+    basket.value = ['SPY', 'QQQ']
+  }
+  void loadCompare()
+  runSearch(symbol.value || '')
 })
 
 const s = computed(() => traj.value?.stats)
@@ -287,30 +322,38 @@ const factorRows = computed(() => {
         <span v-if="searching" class="label busy">···</span>
       </div>
 
-      <ul class="hits">
+      <ul class="hits" role="listbox" :aria-label="`Search results for ${symbol}`">
         <li
           v-for="h in hits"
           :key="h.symbol + String(h.n_bars)"
-          class="hit"
-          :class="{ on: h.symbol === symbol, free: !h.n_bars }"
-          @click="select(h.symbol)"
         >
-          <span class="h-sym fig">{{ h.symbol }}</span>
-          <span class="h-span label">
-            <template v-if="h.n_bars">{{ shortDate(h.first_date) }} → {{ shortDate(h.last_date) }}</template>
-            <template v-else>not in local cache</template>
-          </span>
+          <button
+            type="button"
+            class="hit"
+            role="option"
+            :aria-selected="h.symbol === symbol"
+            :class="{ on: h.symbol === symbol, free: !h.n_bars }"
+            @click="select(h.symbol)"
+          >
+            <span class="h-sym fig">{{ h.symbol }}</span>
+            <span class="h-span label">
+              <template v-if="h.n_bars">{{ shortDate(h.first_date) }} → {{ shortDate(h.last_date) }}</template>
+              <template v-else>open live / uncached</template>
+            </span>
+          </button>
           <button
             class="h-add label"
+            type="button"
             :class="{ in: basket.includes(h.symbol) }"
-            :title="basket.includes(h.symbol) ? 'Remove from basket' : 'Add to compare basket'"
-            :disabled="!h.n_bars"
+            :title="basket.includes(h.symbol) ? 'Remove from compare' : 'Add to compare'"
             @click.stop="toggleBasket(h.symbol)"
           >
             {{ basket.includes(h.symbol) ? '−' : '+' }}
           </button>
         </li>
-        <li v-if="!hits.length && !searching" class="empty label">Type a ticker and press Enter</li>
+        <li v-if="!hits.length && !searching" class="empty label">
+          Type a ticker and press Enter — works even if not in local cache
+        </li>
       </ul>
     </Panel>
 
@@ -480,104 +523,109 @@ const factorRows = computed(() => {
       </template>
     </Panel>
 
-    <!-- ── factors ──────────────────────────────────────────────────────── -->
-    <Panel label="Factor Loadings" index="—" meta="factor_probe.py" :delay="120" class="col-fac">
-      <p class="note">
-        Cross-sectional factors registered in <code>factor_probe.py</code> evaluated at the latest bar.
-      </p>
-
-      <ul class="facs">
-        <li v-for="f in factorRows" :key="f.k" class="fac">
-          <div class="f-top">
-            <span class="label f-lab" :title="f.desc">{{ f.label }}</span>
-            <div class="f-val-wrap">
-              <span class="fig f-val" :class="f.toneClass">{{ f.formatted }}</span>
-              <span v-if="f.sub" class="f-sub label">{{ f.sub }}</span>
+    <!-- ── factors + compare (side-by-side under trajectory) ─────────────── -->
+    <div class="col-side">
+      <Panel label="Factor loadings" index="—" :meta="symbol" :delay="120" class="col-fac">
+        <p class="note">
+          Cross-section factors at the latest bar for <strong>{{ symbol }}</strong>.
+        </p>
+        <p v-if="trajBusy && !traj" class="wait label">Loading factors…</p>
+        <p v-else-if="trajErr" class="err">{{ trajErr }}</p>
+        <p v-else-if="traj && factorRows.every((f) => f.v == null)" class="note">
+          No factor values for this symbol/window — open a name with local bars or run live scan.
+        </p>
+        <ul v-else class="facs">
+          <li v-for="f in factorRows" :key="f.k" class="fac">
+            <div class="f-top">
+              <span class="label f-lab" :title="f.desc">{{ f.label }}</span>
+              <div class="f-val-wrap">
+                <span class="fig f-val" :class="f.toneClass">{{ f.formatted }}</span>
+                <span v-if="f.sub" class="f-sub label">{{ f.sub }}</span>
+              </div>
             </div>
-          </div>
-          <span class="f-bar" aria-hidden="true">
-            <i
-              :style="{
-                width: `${f.barPct}%`,
-                background: f.k === 'liq' ? 'var(--phosphor)' : (Number(f.v ?? 0) >= 0 ? 'var(--long)' : 'var(--short)'),
-              }"
-            />
-          </span>
-        </li>
-      </ul>
-    </Panel>
-
-    <!-- ── compare basket ───────────────────────────────────────────────── -->
-    <Panel
-      label="Compare Basket"
-      index="—"
-      :meta="basket.length ? `${basket.length}/8 · rebased` : 'add 2+ symbols'"
-      :delay="180"
-      class="col-cmp"
-    >
-      <p v-if="cmpErr" class="err">{{ cmpErr }}</p>
-      <p v-else-if="basket.length < 2" class="note">
-        Add symbols with <strong>+</strong> in search. Curves rebase to 1.00 for like-for-like correlation comparison.
-      </p>
-
-      <template v-else-if="cmp">
-        <ul class="legend">
-          <li v-for="sym in cmpSyms" :key="sym" class="leg">
-            <button class="leg-sym fig" @click="select(sym)">{{ sym }}</button>
-            <svg class="spark" viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true">
-              <path
-                v-if="cmpSparks[sym]"
-                :d="cmpSparks[sym]"
-                fill="none"
-                stroke-width="1.25"
-                vector-effect="non-scaling-stroke"
-                :stroke="(cmp.stats[sym]?.chg_window_pct ?? 0) >= 0 ? 'var(--long)' : 'var(--short)'"
+            <span class="f-bar" aria-hidden="true">
+              <i
+                :style="{
+                  width: `${f.barPct}%`,
+                  background: f.k === 'liq' ? 'var(--phosphor)' : (Number(f.v ?? 0) >= 0 ? 'var(--long)' : 'var(--short)'),
+                }"
               />
-            </svg>
-            <span class="fig leg-ret" :class="tone(cmp.stats[sym]?.chg_window_pct)">
-              {{ signedPct(cmp.stats[sym]?.chg_window_pct, 1) }}
             </span>
-            <span class="fig leg-sh">{{ cmp.stats[sym]?.sharpe == null ? DASH : num(cmp.stats[sym]?.sharpe, 2) }}</span>
-            <span class="fig leg-dd neg">{{ pct(cmp.stats[sym]?.max_drawdown_pct, 0) }}</span>
-            <button class="leg-x label" title="Remove" @click="toggleBasket(sym)">×</button>
           </li>
         </ul>
-        <div class="leg-head label">
-          <span>symbol</span><span>trace</span><span>window</span><span>sharpe</span><span>max dd</span><span />
-        </div>
+      </Panel>
 
-        <h3 class="sub-lab label">Return Correlation</h3>
-        <div class="corr" :style="{ '--n': cmpSyms.length }">
-          <span />
-          <span v-for="c in cmpSyms" :key="`ch${c}`" class="label corr-h">{{ c }}</span>
-          <template v-for="r in cmpSyms" :key="`row${r}`">
-            <span class="label corr-h">{{ r }}</span>
-            <span
-              v-for="c in cmpSyms"
-              :key="`${r}-${c}`"
-              class="fig corr-c"
-              :style="corrStyle(cmp.correlation[r]?.[c] ?? NaN)"
-            >
-              {{ num(cmp.correlation[r]?.[c], 2) }}
-            </span>
-          </template>
-        </div>
-        <p class="note tiny">
-          Red indicates co-movement, green indicates divergence/offset.
+      <Panel
+        label="Compare"
+        index="—"
+        :meta="basket.length ? `${basket.length}/8 · vs peers` : 'add 2+ symbols'"
+        :delay="180"
+        class="col-cmp"
+      >
+        <p v-if="cmpErr" class="err">{{ cmpErr }}</p>
+        <p v-else-if="basket.length < 2" class="note">
+          Add symbols with <strong>+</strong> in search (or pick a ticker — SPY is seeded automatically).
         </p>
-      </template>
-    </Panel>
+        <p v-else-if="!cmp" class="wait label">Loading compare…</p>
+
+        <template v-else-if="cmp">
+          <div class="leg-head label">
+            <span>symbol</span><span>trace</span><span>window</span><span>sharpe</span><span>max dd</span><span />
+          </div>
+          <ul class="legend">
+            <li v-for="sym in cmpSyms" :key="sym" class="leg">
+              <button type="button" class="leg-sym fig" @click="select(sym)">{{ sym }}</button>
+              <svg class="spark" viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true">
+                <path
+                  v-if="cmpSparks[sym]"
+                  :d="cmpSparks[sym]"
+                  fill="none"
+                  stroke-width="1.25"
+                  vector-effect="non-scaling-stroke"
+                  :stroke="(cmp.stats[sym]?.chg_window_pct ?? 0) >= 0 ? 'var(--long)' : 'var(--short)'"
+                />
+              </svg>
+              <span class="fig leg-ret" :class="tone(cmp.stats[sym]?.chg_window_pct)">
+                {{ signedPct(cmp.stats[sym]?.chg_window_pct, 1) }}
+              </span>
+              <span class="fig leg-sh">{{ cmp.stats[sym]?.sharpe == null ? DASH : num(cmp.stats[sym]?.sharpe, 2) }}</span>
+              <span class="fig leg-dd neg">{{ pct(cmp.stats[sym]?.max_drawdown_pct, 0) }}</span>
+              <button type="button" class="leg-x label" title="Remove" @click="toggleBasket(sym)">×</button>
+            </li>
+          </ul>
+
+          <h3 class="sub-lab label">Return correlation</h3>
+          <div class="corr" :style="{ '--n': cmpSyms.length }">
+            <span />
+            <span v-for="c in cmpSyms" :key="`ch${c}`" class="label corr-h">{{ c }}</span>
+            <template v-for="r in cmpSyms" :key="`row${r}`">
+              <span class="label corr-h">{{ r }}</span>
+              <span
+                v-for="c in cmpSyms"
+                :key="`${r}-${c}`"
+                class="fig corr-c"
+                :style="corrStyle(cmp.correlation[r]?.[c] ?? NaN)"
+              >
+                {{ num(cmp.correlation[r]?.[c], 2) }}
+              </span>
+            </template>
+          </div>
+          <p class="note tiny">
+            Warm = co-movement · cool = divergence. Window matches the chart control above.
+          </p>
+        </template>
+      </Panel>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .market {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 300px;
-  grid-template-rows: auto auto;
+  grid-template-columns: 240px minmax(0, 1fr);
   grid-template-areas:
-    'search traj fac'
-    'search traj cmp';
+    'search traj'
+    'search side';
   gap: var(--s4);
   align-items: start;
 }
@@ -591,9 +639,16 @@ const factorRows = computed(() => {
   flex-direction: column;
   overflow: hidden;
 }
-.col-traj { grid-area: traj; }
-.col-fac { grid-area: fac; }
-.col-cmp { grid-area: cmp; }
+.col-traj { grid-area: traj; min-width: 0; }
+.col-side {
+  grid-area: side;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: var(--s4);
+  align-items: start;
+  min-width: 0;
+}
+.col-fac, .col-cmp { min-width: 0; }
 
 /* ---- Data Audit Strip --------------------------------------------------- */
 .data-audit-strip {
@@ -668,7 +723,7 @@ const factorRows = computed(() => {
 .glyph { color: var(--phosphor); }
 .q { flex: 1 1 auto; font-family: var(--font-data); font-size: var(--t-small); color: var(--ink); min-width: 0; }
 .q::placeholder { color: var(--ink-dim); }
-.q:focus-visible { outline: none; }
+.q:focus-visible { outline: var(--hair) solid var(--phosphor); outline-offset: 2px; }
 .busy { color: var(--phosphor); }
 
 .hits {
@@ -677,32 +732,45 @@ const factorRows = computed(() => {
   overflow-y: auto;
   scrollbar-width: thin;
 }
+.hits > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: stretch;
+  border-bottom: var(--hair) solid var(--rule-faint);
+}
 .hit {
   display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas: 'sym add' 'span add';
-  gap: 2px var(--s2);
-  padding: var(--s3) var(--s4);
+  grid-template-columns: 1fr;
+  grid-template-areas: 'sym' 'span';
+  gap: 2px;
+  width: 100%;
+  padding: var(--s3) var(--s3) var(--s3) var(--s4);
   cursor: pointer;
+  border: none;
   border-left: 2px solid transparent;
+  background: transparent;
+  text-align: left;
+  color: inherit;
   transition: background var(--dur-fast) var(--ease-out);
 }
 .hit:hover { background: var(--panel-raise); }
 .hit.on { background: var(--phosphor-wash); border-left-color: var(--phosphor); }
-.hit.free .h-sym { color: var(--ink-dim); }
+.hit:focus-visible { outline: var(--hair) solid var(--phosphor); outline-offset: -2px; }
+.hit.free .h-sym { color: var(--ink-soft); }
 .hit.free .h-span { color: var(--warn); }
 .h-sym { grid-area: sym; font-size: var(--t-small); font-weight: 700; color: var(--ink); }
 .hit.on .h-sym { color: var(--phosphor); }
 .h-span { grid-area: span; color: var(--ink-dim); font-size: var(--t-micro); }
 .h-add {
-  grid-area: add;
   align-self: center;
+  justify-self: center;
   width: 22px; height: 22px;
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-dim);
   font-size: var(--t-small);
   font-weight: 700;
   line-height: 1;
+  background: transparent;
 }
 .h-add:hover { color: var(--phosphor); border-color: var(--phosphor); background: var(--phosphor-wash); }
 .h-add.in { color: var(--phosphor); border-color: var(--phosphor); background: var(--phosphor-wash); }
@@ -898,14 +966,14 @@ const factorRows = computed(() => {
 .wait { color: var(--ink-dim); padding: var(--s6) 0; text-align: center; }
 .empty { padding: var(--s5); text-align: center; color: var(--ink-dim); }
 
-@media (max-width: 1280px) {
-  .market {
-    grid-template-columns: 230px minmax(0, 1fr);
-    grid-template-areas: 'search traj' 'search fac' 'search cmp';
-  }
+@media (max-width: 1100px) {
+  .col-side { grid-template-columns: 1fr; }
 }
 @media (max-width: 860px) {
-  .market { grid-template-columns: 1fr; grid-template-areas: 'search' 'traj' 'fac' 'cmp'; }
+  .market {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'search' 'traj' 'side';
+  }
   .col-search { position: static; max-height: 320px; }
   .hits { max-height: 220px; }
 }

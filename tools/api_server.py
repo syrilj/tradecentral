@@ -22,9 +22,13 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
   GET  /api/analyze?symbol=X
       -> analyze_symbol_adhoc(symbol) verbatim.
 
-  GET|POST /api/trigger_scan?depth=<quick|deep>
-      -> re-runs the 25-name quick scan or complete frozen-domain deep scan
-         and returns {status, message, asof, data}.
+  POST /api/trigger_scan?depth=<quick|deep>
+      -> starts a bounded background scan and returns its job immediately.
+
+  GET  /api/scan_status[?job_id=<id>]
+      -> current/recent scan progress; completed jobs include the refreshed
+         status payload. This keeps long Deep passes from monopolizing one
+         browser request or making the desk appear frozen.
 
   GET  /api/search?q=<str>&limit=<int=25>
       -> symbol search over the union of edge/data/1d_wide + edge/data/1d.
@@ -35,9 +39,13 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
          The key endpoint: OHLCV + derived series/stats/factors for one symbol.
 
   GET  /api/compare?symbols=A,B,C&window=<same>
-      -> {window, series: {SYM:[{d,cum}]}, stats: {SYM:{...}}, correlation: {SYM:{SYM:r}}}
+      -> {window, asof, generated_at, series: {SYM:[{d,cum}]},
+          stats: {SYM:{last_price, chg_1d_pct, asof, age_days, quality, source, ...}},
+          correlation: {SYM:{SYM:r}}}
          Up to 8 symbols, all rebased to 1.0 at the first date common to every
          requested symbol; correlation is Pearson on daily returns over that window.
+         Shell benchmarks may use a cached yfinance refresh when the checked-in
+         daily frame is stale. Freshness always refers to the observed bar date.
 
   GET  /api/options?symbol=X&mode=<live|history>&range=<1d|5d|1m|3m>
       -> truth-preserving call/put activity, stock overlay, gamma-by-strike,
@@ -70,7 +78,7 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
          status, next transition, and the calendar source used.
 
   GET  /api/health
-      -> {ok, ts, symbols_indexed, uptime_s}
+      -> {ok, ts, symbols_indexed, uptime_s, flow_feed_contract}
 
   GET  /api/sentiment[?symbol=X]
       -> Accuracy-first desk sentiment: vol complex, CFTC COT, FINRA short
@@ -81,9 +89,9 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
       -> Statistical outliers: price/volume z-scores, FINRA short extremes,
          options P/C extremes, SEC filing activity. Thresholded + source-tagged.
 
-  GET  /api/unusual-flow[?limit=40&min_premium=25000]
-      -> Market-wide unusual options-flow board (live LSE tape on hot names +
-         liquid seeds). Ordinal attention rank — not a trade signal.
+  GET  /api/unusual-flow[?limit=80&min_premium=25000]
+      -> Standalone market-wide recent options-flow tape (one LSE request;
+         never reuses Deep routing or local candidates).
 
   GET  /api/ga[?run_id=X]
       -> Genetic evolution lab: list of runs under runs/ga/, optional detail
@@ -181,10 +189,11 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, urlparse
 
 # Lazy imports for heavy dependencies - imported on first use
@@ -325,6 +334,13 @@ _OPTIONS_BOARD_TTL_S = 300.0
 _OPTIONS_BOARD_LOCK = threading.Lock()
 _OPTIONS_BOARD_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
 _OPTIONS_BOARD_MAX_WORKERS = 6
+# The shell's four benchmark marks may need a fresher daily frame than the
+# checked-in parquet catalog. Cache those bounded refreshes so a 2-minute UI
+# poll never turns into four unconditional network downloads.
+_COMPARE_BENCHMARKS = frozenset({"SPY", "QQQ", "DIA", "XLE"})
+_COMPARE_REFRESH_CACHE: dict[str, tuple[float, Any | None]] = {}
+_COMPARE_REFRESH_TTL_S = 300.0
+_COMPARE_REFRESH_LOCK = threading.Lock()
 
 load_project_environment(paths=(EDGE_DIR / ".env", ROOT / "TradingWork" / ".env"))
 
@@ -1151,7 +1167,11 @@ def _scan_depth(value: str | None) -> str:
 
 
 def get_dashboard_data(
-    *, force: bool = False, scan_depth: str | None = None, activate: bool = False,
+    *,
+    force: bool = False,
+    scan_depth: str | None = None,
+    activate: bool = False,
+    progress: Callable[[str, int, str], None] | None = None,
 ) -> dict:
     """Thread-safe, TTL-cached wrapper around render_dashboard.get_dashboard_data."""
     global _ACTIVE_SCAN_DEPTH
@@ -1175,13 +1195,171 @@ def get_dashboard_data(
         ):
             data = _STATUS_CACHE[depth]
         else:
-            data = _get_dashboard_data_uncached(scan_depth=depth)
+            data = _get_dashboard_data_uncached(
+                scan_depth=depth,
+                include_gcp_resources=False,
+                progress=progress,
+            )
             data["searchable_symbol_count"] = len(SYMBOL_INDEX)
             _STATUS_CACHE[depth] = data
             _STATUS_CACHE_TS[depth] = time.time()
         if activate:
             _ACTIVE_SCAN_DEPTH = depth
         return data
+
+
+# Scan jobs keep the operator request short even when a provider is degraded or
+# the full catalog needs rebuilding. Jobs are process-local by design: this is a
+# loopback, single-operator workstation, not a distributed queue.
+_SCAN_JOB_LOCK = threading.Lock()
+_SCAN_JOBS: dict[str, dict[str, Any]] = {}
+_ACTIVE_SCAN_JOB_ID: str | None = None
+_SCAN_JOB_HISTORY_LIMIT = 8
+
+
+def _scan_job_snapshot(job: Mapping[str, Any]) -> dict[str, Any]:
+    elapsed_end = float(job.get("finished_monotonic") or time.perf_counter())
+    payload = {
+        "id": str(job.get("id") or ""),
+        "depth": _scan_depth(str(job.get("depth") or "quick")),
+        "state": str(job.get("state") or "queued"),
+        "stage": str(job.get("stage") or "queued"),
+        "progress": int(job.get("progress") or 0),
+        "message": str(job.get("message") or "Scan queued."),
+        "started_at": job.get("started_at"),
+        "updated_at": job.get("updated_at"),
+        "elapsed_seconds": round(
+            max(0.0, elapsed_end - float(job.get("started_monotonic") or elapsed_end)),
+            1,
+        ),
+        "error": job.get("error"),
+    }
+    if job.get("state") == "completed" and isinstance(job.get("result"), Mapping):
+        payload["result"] = job["result"]
+    return payload
+
+
+def _update_scan_job(job_id: str, **changes: Any) -> None:
+    with _SCAN_JOB_LOCK:
+        job = _SCAN_JOBS.get(job_id)
+        if job is None:
+            return
+        job.update(changes)
+        job["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _run_scan_job(job_id: str, depth: str) -> None:
+    global _ACTIVE_SCAN_JOB_ID
+
+    def on_progress(stage: str, percent: int, message: str) -> None:
+        _update_scan_job(
+            job_id,
+            state="running",
+            stage=stage,
+            progress=max(1, min(99, int(percent))),
+            message=message,
+        )
+
+    try:
+        on_progress("starting", 1, f"Starting {depth} scan.")
+        data = get_dashboard_data(
+            force=True,
+            scan_depth=depth,
+            activate=True,
+            progress=on_progress,
+        )
+        summary = data.get("scan_summary") or {}
+        message = (
+            f"{depth.title()} scan complete: "
+            f"{summary.get('activity_local_scanned_symbols', 0)}/"
+            f"{summary.get('activity_market_universe_symbols', 0)} market names ranked; "
+            f"{summary.get('activity_live_completed_symbols', 0)}/"
+            f"{summary.get('activity_live_requested_symbols', 0)} live flow checks; "
+            f"{summary.get('directional_scored_symbols', 0)}/"
+            f"{summary.get('directional_model_universe_symbols', 0)} modeled names scored."
+        )
+        _update_scan_job(
+            job_id,
+            state="completed",
+            stage="complete",
+            progress=100,
+            message=message,
+            finished_monotonic=time.perf_counter(),
+            result={
+                "status": "ok",
+                "message": message,
+                "asof": data.get("asof"),
+                "data": data,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - job failure must remain inspectable
+        _update_scan_job(
+            job_id,
+            state="failed",
+            stage="failed",
+            message=f"{depth.title()} scan failed.",
+            error=f"{type(exc).__name__}: {exc}",
+            finished_monotonic=time.perf_counter(),
+        )
+    finally:
+        with _SCAN_JOB_LOCK:
+            if _ACTIVE_SCAN_JOB_ID == job_id:
+                _ACTIVE_SCAN_JOB_ID = None
+
+
+def _start_scan_job(depth: str) -> tuple[dict[str, Any], bool]:
+    """Start one scan or return the already-running job without duplicating work."""
+    global _ACTIVE_SCAN_JOB_ID
+    normalized = _scan_depth(depth)
+    with _SCAN_JOB_LOCK:
+        if _ACTIVE_SCAN_JOB_ID:
+            active = _SCAN_JOBS.get(_ACTIVE_SCAN_JOB_ID)
+            if active and active.get("state") in {"queued", "running"}:
+                return _scan_job_snapshot(active), False
+
+        job_id = uuid.uuid4().hex[:12]
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        job = {
+            "id": job_id,
+            "depth": normalized,
+            "state": "queued",
+            "stage": "queued",
+            "progress": 0,
+            "message": f"{normalized.title()} scan queued.",
+            "started_at": now,
+            "updated_at": now,
+            "started_monotonic": time.perf_counter(),
+            "error": None,
+        }
+        _SCAN_JOBS[job_id] = job
+        _ACTIVE_SCAN_JOB_ID = job_id
+        # Retain only a small operator-visible history plus the new active job.
+        for stale_id in list(_SCAN_JOBS)[:-_SCAN_JOB_HISTORY_LIMIT]:
+            if stale_id != _ACTIVE_SCAN_JOB_ID:
+                _SCAN_JOBS.pop(stale_id, None)
+        snapshot = _scan_job_snapshot(job)
+
+    threading.Thread(
+        target=_run_scan_job,
+        args=(job_id, normalized),
+        daemon=True,
+        name=f"scan-{normalized}-{job_id}",
+    ).start()
+    return snapshot, True
+
+
+def _scan_status_payload(job_id: str | None = None) -> tuple[dict[str, Any], int]:
+    with _SCAN_JOB_LOCK:
+        resolved = job_id or _ACTIVE_SCAN_JOB_ID
+        if resolved is None and _SCAN_JOBS:
+            resolved = next(reversed(_SCAN_JOBS))
+        job = _SCAN_JOBS.get(str(resolved or ""))
+        if job is None:
+            if job_id:
+                return {"status": "missing", "message": "Unknown scan job.", "job": None}, 404
+            return {"status": "idle", "message": "No scan has been started.", "job": None}, 200
+        snapshot = _scan_job_snapshot(job)
+    return {"status": snapshot["state"], "message": snapshot["message"], "job": snapshot}, 200
 
 
 # --------------------------------------------------------------------------
@@ -1231,12 +1409,13 @@ _OPTIONS_CACHE: dict[tuple, tuple[float, dict]] = {}
 _OPTIONS_LOCK = threading.Lock()
 _OPTIONS_CACHE_TTL_S = 20.0
 
-# Market-wide unusual flow is multi-symbol live work — cache longer than a
-# single-name options pull so the desk can re-open the board without re-taxing LSE.
+# Market-wide unusual flow is one bounded provider request. Keep the immutable
+# cache just below the Flow workspace's 15s poll so every visible poll can
+# advance the provider window without stacking concurrent reads.
 _UNUSUAL_FLOW_CACHE: dict[tuple, tuple[float, dict]] = {}
 _UNUSUAL_FLOW_LOCK = threading.Lock()
 _UNUSUAL_FLOW_BUILD_LOCKS: dict[tuple, threading.Lock] = {}
-_UNUSUAL_FLOW_TTL_S = 90.0
+_UNUSUAL_FLOW_TTL_S = 12.0
 
 
 def _symbol_path(symbol: str, tier: str) -> Path:
@@ -1343,6 +1522,79 @@ def _fetch_yfinance_ohlcv(symbol: str) -> "_get_pd().DataFrame" | None:
     return _normalize_ohlcv_df(raw)
 
 
+def _frame_asof_date(frame: Any) -> str | None:
+    """Last observed bar date for an OHLCV frame, never the request time."""
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    try:
+        return _get_pd().Timestamp(frame.index[-1]).date().isoformat()
+    except (TypeError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def _frame_age_days(frame: Any, *, now: datetime | None = None) -> int | None:
+    asof = _frame_asof_date(frame)
+    if asof is None:
+        return None
+    observed = datetime.fromisoformat(asof).date()
+    today = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
+    return max(0, (today - observed).days)
+
+
+def _refresh_stale_compare_frames(
+    loaded: dict[str, Any],
+    sources: dict[str, str],
+) -> None:
+    """Refresh only stale shell benchmarks, degrading to labelled local bars.
+
+    The comparison endpoint is also used for arbitrary research symbols. It
+    must not make those requests network-bound, so on-demand refresh is scoped
+    to the four marks permanently displayed by the application shell.
+    """
+    stale = [
+        symbol
+        for symbol, frame in loaded.items()
+        if symbol in _COMPARE_BENCHMARKS
+        and (_frame_age_days(frame) is None or int(_frame_age_days(frame) or 0) > 3)
+    ]
+    if not stale:
+        return
+
+    now = time.time()
+    refreshed: dict[str, Any | None] = {}
+    misses: list[str] = []
+    with _COMPARE_REFRESH_LOCK:
+        for symbol in stale:
+            cached = _COMPARE_REFRESH_CACHE.get(symbol)
+            if cached is not None and now - cached[0] < _COMPARE_REFRESH_TTL_S:
+                refreshed[symbol] = cached[1]
+            else:
+                misses.append(symbol)
+
+    if misses:
+        futures = _get_concurrent_futures()
+        with futures.ThreadPoolExecutor(max_workers=min(4, len(misses))) as executor:
+            pending = {executor.submit(_fetch_yfinance_ohlcv, symbol): symbol for symbol in misses}
+            for future in futures.as_completed(pending):
+                symbol = pending[future]
+                try:
+                    frame = future.result()
+                except Exception:
+                    frame = None
+                refreshed[symbol] = frame
+                with _COMPARE_REFRESH_LOCK:
+                    _COMPARE_REFRESH_CACHE[symbol] = (now, frame)
+
+    for symbol, frame in refreshed.items():
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        local_asof = _frame_asof_date(loaded.get(symbol)) or ""
+        live_asof = _frame_asof_date(frame) or ""
+        if live_asof >= local_asof:
+            loaded[symbol] = frame
+            sources[symbol] = "yfinance_refresh"
+
+
 def _load_symbol_df(symbol: str) -> tuple["_get_pd().DataFrame | None, str | None"]:
     """Load a symbol's full OHLCV parquet, cached by (symbol, tier, mtime).
 
@@ -1444,6 +1696,7 @@ def _asof_chg_pct(close: "_get_pd().Series", months: int = 0, years: int = 0):
 def _ytd_chg_pct(close: "_get_pd().Series"):
     if close.empty:
         return None
+    pd = _get_pd()
     last_date = close.index[-1]
     year_start = pd.Timestamp(year=last_date.year, month=1, day=1)
     sub = close.loc[close.index < year_start]
@@ -1521,6 +1774,7 @@ def _atr_adv(df_full: pd.DataFrame):
     """20-day ATR, ATR%% of price, and 20-day average dollar volume at the
     last bar -- always computed from the FULL series so short windows still
     get a correct rolling value."""
+    pd = _get_pd()
     high = df_full["high"].astype(float)
     low = df_full["low"].astype(float)
     close = df_full["close"].astype(float)
@@ -1546,6 +1800,7 @@ def _compute_factors(df_full: pd.DataFrame) -> dict:
     formulas and signs registered in edge/tools/factor_probe.py. Computed
     from the full history so shift/rolling windows have enough data even
     when the requested trajectory window is short."""
+    pd = _get_pd()
     close = df_full["close"].astype(float)
     volume = df_full["volume"].astype(float)
     ret1 = close.pct_change()
@@ -1721,23 +1976,32 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
     if window not in WINDOW_OFFSETS:
         window = DEFAULT_WINDOW
 
-    loaded: dict[str, pd.Series] = {}
+    pd = _get_pd()
+    loaded: dict[str, pd.DataFrame] = {}
+    sources: dict[str, str] = {}
     for sym in symbols:
-        df_full, _tier = _load_symbol_df(sym)
+        df_full, tier = _load_symbol_df(sym)
         if df_full is None or df_full.empty:
             continue
+        loaded[sym] = df_full
+        sources[sym] = tier or "unknown"
+
+    _refresh_stale_compare_frames(loaded, sources)
+
+    windowed: dict[str, pd.Series] = {}
+    for sym, df_full in loaded.items():
         win = _slice_window(df_full, window)
         if win.empty:
             continue
-        loaded[sym] = win["close"].astype(float)
+        windowed[sym] = win["close"].astype(float)
 
-    if not loaded:
+    if not windowed:
         return {"error": "none of the requested symbols have data in this window",
                 "endpoint": "/api/compare"}, 404
 
     # Common window = intersection of trading dates across requested symbols,
     # forward/backward-filled for small date boundary mismatches so comparison is robust.
-    raw_df = pd.DataFrame(loaded)
+    raw_df = pd.DataFrame(windowed)
     joint = raw_df.ffill().bfill().dropna(how="any")
     if joint.empty:
         joint = raw_df.dropna(how="all").ffill().bfill()
@@ -1757,13 +2021,29 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
             {"d": idx.strftime("%Y-%m-%d"), "cum": _safe_round(v, 6)}
             for idx, v in s.items()
         ]
-        wstats = _window_stats(joint[sym])
+        # Price/change/freshness come from the symbol's own observed closes,
+        # not the forward-filled comparison matrix. Otherwise an older QQQ
+        # series becomes a fake 0.00% move merely because SPY has a later bar.
+        closes = windowed[sym].dropna()
+        wstats = _window_stats(closes)
+        last_px = float(closes.iloc[-1])
+        prev_px = float(closes.iloc[-2]) if len(closes) > 1 else last_px
+        chg_1d = ((last_px / prev_px) - 1.0) * 100.0 if prev_px else None
+        asof_date = _frame_asof_date(loaded.get(sym))
+        age_days = _frame_age_days(loaded.get(sym))
         stats_out[sym] = {
+            "last_price": _safe_round(last_px, 4),
+            "chg_1d_pct": _safe_round(chg_1d, 4) if chg_1d is not None else None,
             "ann_return_pct": wstats["ann_return_pct"],
             "ann_vol_pct": wstats["ann_vol_pct"],
             "sharpe": wstats["sharpe"],
             "max_drawdown_pct": wstats["max_drawdown_pct"],
-            "chg_window_pct": _safe_round(_pct(joint[sym].iloc[0], joint[sym].iloc[-1]), 4),
+            "chg_window_pct": _safe_round(_pct(closes.iloc[0], closes.iloc[-1]), 4),
+            "asof": asof_date,
+            "age_days": age_days,
+            "quality": "stale" if age_days is None or age_days > 3 else "current",
+            "source": sources.get(sym, "unknown"),
+            "change_basis": "last_two_observed_closes",
         }
 
     correlation_out = {
@@ -1773,6 +2053,9 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
 
     return {
         "window": window,
+        "asof": max((row.get("asof") or "" for row in stats_out.values()), default="") or None,
+        "oldest_asof": min((row.get("asof") or "" for row in stats_out.values()), default="") or None,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "series": series_out,
         "stats": stats_out,
         "correlation": correlation_out,
@@ -2326,11 +2609,11 @@ def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = 
     data_dirs = [p for p in (DATA_WIDE_DIR, DATA_CORE_DIR) if p.is_dir()]
     payload = build_unusual_options_flow(
         data_dirs=data_dirs,
-        live_target_limit=min(60, max(24, limit + 12)),
         row_limit=limit,
         min_premium=min_premium,
     )
     payload = dict(payload)
+    payload["source_snapshot"] = "market_flow"
     payload["cache"] = {
         "hit": False,
         "age_seconds": 0.0,
@@ -2797,6 +3080,9 @@ def _health_payload() -> dict:
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "symbols_indexed": len(SYMBOL_INDEX),
         "uptime_s": round(time.time() - SERVER_START_TS, 3),
+        # Startup scripts use this to reject a still-running pre-market-wide
+        # Flow process that happens to expose the same route names.
+        "flow_feed_contract": "market-wide-v1",
     }
 
 
@@ -2977,24 +3263,21 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/trigger_scan":
                 depth = _scan_depth(query.get("depth", ["quick"])[0])
-                data = get_dashboard_data(force=True, scan_depth=depth, activate=True)
-                summary = data.get("scan_summary") or {}
-                self._send_json({
-                    "status": "ok",
-                    "message": (
-                        f"{depth.title()} scan complete: "
-                        f"{summary.get('activity_local_scanned_symbols', 0)}/"
-                        f"{summary.get('activity_market_universe_symbols', 0)} market names activity-ranked; "
-                        f"{summary.get('activity_live_completed_symbols', 0)}/"
-                        f"{summary.get('activity_live_requested_symbols', 0)} live flow checks completed; "
-                        f"{summary.get('directional_scored_symbols', 0)}/"
-                        f"{summary.get('directional_model_universe_symbols', 0)} directional symbols scored; "
-                        f"{summary.get('pead_qualified_symbols', 0)}/"
-                        f"{summary.get('pead_attempted_symbols', 0)} PEAD activity flags."
-                    ),
-                    "asof": data["asof"],
-                    "data": data,
-                })
+                job, created = _start_scan_job(depth)
+                message = (
+                    f"{depth.title()} scan started."
+                    if created
+                    else f"A {job['depth']} scan is already running; attached to that job."
+                )
+                self._send_json(
+                    {"status": job["state"], "message": message, "job": job},
+                    status=202,
+                )
+
+            elif path == "/api/scan_status":
+                job_id = (query.get("job_id", [None])[0] or None)
+                payload, status = _scan_status_payload(job_id)
+                self._send_json(payload, status=status)
 
             elif path == "/api/search":
                 q = query.get("q", [""])[0]

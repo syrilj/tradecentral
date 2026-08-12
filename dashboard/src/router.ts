@@ -5,7 +5,11 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     name: 'landing',
     component: () => import('@/views/LandingView.vue'),
-    meta: { title: 'Markets', public: true },
+    meta: { title: 'About', public: true },
+  },
+  {
+    path: '/about',
+    redirect: { name: 'landing' },
   },
   {
     path: '/desk',

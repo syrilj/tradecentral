@@ -20,6 +20,17 @@ if [ -z "$PYTHON_BIN" ]; then
   fi
 fi
 
+# Vite 6 needs Node 18+ with Web Crypto. Prefer the current Homebrew runtime
+# when macOS still has an older /usr/local Node earlier on PATH.
+if [ -x /opt/homebrew/bin/node ]; then
+  export PATH="/opt/homebrew/bin:$PATH"
+fi
+NODE_MAJOR="$(node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0)"
+if [ "$NODE_MAJOR" -lt 18 ]; then
+  echo "[deps] Node 18+ is required (found $(node --version 2>/dev/null || echo none))." >&2
+  exit 1
+fi
+
 cleanup() {
   if [ -n "$API_PID" ] && kill -0 "$API_PID" 2>/dev/null; then
     echo
@@ -29,30 +40,45 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [ ! -d "$ROOT/dashboard/node_modules" ]; then
+# Install (or repair) frontend deps. An incomplete node_modules can leave the
+# directory present while .bin/vite is a dangling symlink → "vite: command not found".
+if [ ! -d "$ROOT/dashboard/node_modules" ] || [ ! -x "$ROOT/dashboard/node_modules/.bin/vite" ] \
+  || [ ! -e "$ROOT/dashboard/node_modules/vite/bin/vite.js" ]; then
   echo "[deps] installing dashboard dependencies"
   (cd "$ROOT/dashboard" && npm install)
 fi
 
-# Prefer a backend that includes current routes. An old api_server left running
-# from a prior session will pass /api/health but 404 new endpoints.
-# Require the current research routes plus Flow State. A prior backend can
-# answer /api/health while leaving the Flow workspace on a permanent 404.
+# Prefer a backend that includes current routes and the standalone market-wide
+# Flow contract. A prior process can expose every route while still returning
+# the retired Deep-scan payload, so route checks alone are insufficient.
 backend_is_current() {
-  curl -fsS "${API_URL}/api/health" >/dev/null 2>&1 || return 1
-  local code path
-  for path in /api/ga /api/factors /api/graph /api/changepoints /api/flow-state; do
+  local code path health
+  health="$(curl -fsS "${API_URL}/api/health" 2>/dev/null)" || return 1
+  case "$health" in
+    *'"flow_feed_contract": "market-wide-v1"'*) ;;
+    *) return 1 ;;
+  esac
+  for path in /api/ga /api/factors /api/graph /api/changepoints /api/flow-state /api/scan_status; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' "${API_URL}${path}" 2>/dev/null || echo 000)"
     [ "$code" = "200" ] || return 1
   done
   return 0
 }
 
+frontend_is_current() {
+  local html
+  html="$(curl -fsS "http://127.0.0.1:${FRONTEND_PORT}/" 2>/dev/null)" || return 1
+  case "$html" in
+    *'/@vite/client'*'/src/main.ts'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if backend_is_current; then
   echo "[backend] already running at ${API_URL} (routes current)"
 else
   if curl -fsS "${API_URL}/api/health" >/dev/null 2>&1; then
-    echo "[backend] stale API on :${API_PORT} (missing current routes) — restarting"
+    echo "[backend] stale API on :${API_PORT} (old routes or Flow contract) — restarting"
     # Best-effort kill of whatever is bound to the API port on loopback.
     if command -v lsof >/dev/null 2>&1; then
       lsof -tiTCP:"${API_PORT}" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
@@ -81,6 +107,16 @@ else
   fi
 fi
 
-echo "[frontend] http://localhost:${FRONTEND_PORT}"
 echo "[backend]  ${API_URL}"
+if frontend_is_current; then
+  echo "[frontend] already running at http://localhost:${FRONTEND_PORT} (Vite current)"
+  if [ -n "$API_PID" ]; then
+    # This invocation owns the newly started backend. Keep it alive while the
+    # already-running Vite process continues to proxy requests to it.
+    wait "$API_PID"
+  fi
+  exit 0
+fi
+
+echo "[frontend] http://localhost:${FRONTEND_PORT}"
 npm --prefix "$ROOT/dashboard" run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort

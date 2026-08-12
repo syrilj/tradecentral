@@ -1014,9 +1014,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           class="cell screener-cell"
         >
           <template #action>
-            <button class="long-it-btn label" type="button" title="Setup attention only — not an order">
-              LONG IT <span class="info-icon">INFO</span>
-            </button>
+            <span class="long-it-btn label" title="Setup attention only — not an order">
+              SETUP WATCH <span class="info-icon">INFO</span>
+            </span>
           </template>
           <LoadingState v-if="loadingSymbol && !squeeze" label="Calculating" compact />
           <div v-else-if="!gexMeasurable" class="unmeasured">
@@ -1602,64 +1602,31 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 
 <style scoped>
 .options-view {
-  /* This page intentionally reads as a dedicated options workstation. The
-     inherited token override carries the reference's blue-black palette into
-     every nested chart without changing the rest of the application. */
-  --void: #03111d;
-  --void-lift: #061724;
-  --panel: #081c2a;
-  --panel-hi: #0b2638;
-  --panel-raise: #0e2d42;
-  --rule: #173449;
-  --rule-hi: #2a536d;
-  --rule-faint: #10293a;
-  --grid: rgba(78, 151, 190, 0.065);
-  --ink: #e5f0f7;
-  --ink-soft: #c0d4df;
-  --ink-dim: #8ea9b9;
-  --ink-faint: #6e8a9c;
-  --ink-ghost: #5c788a;
-  --phosphor: #25d493;
-  --phosphor-dim: #169568;
-  --phosphor-wash: rgba(37, 212, 147, 0.10);
-  --long: #29ca8a;
-  --long-wash: rgba(41, 202, 138, 0.13);
-  --short: #ff5e66;
-  --short-wash: rgba(255, 94, 102, 0.13);
-  --call: #45a6f8;
-  --call-hi: #7ac4ff;
-  --call-wash: rgba(69, 166, 248, 0.13);
-  --put: #f6a83d;
-  --put-hi: #ffc36c;
-  --put-wash: rgba(246, 168, 61, 0.13);
-  --warn: #f4ba45;
-  --warn-wash: rgba(244, 186, 69, 0.13);
+  /* Options is a primary workspace, so it inherits the shell's shared
+     semantic palette. Call/put colors retain their meaning across routes. */
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--s3);
   min-height: calc(100% + (var(--s5) * 2));
   margin: calc(var(--s5) * -1);
-  padding: 16px 16px 32px;
+  padding: var(--s4) var(--s4) var(--s6);
   min-width: 0;
-  background:
-    radial-gradient(circle at 52% 2%, rgba(37, 212, 147, 0.055), transparent 32%),
-    linear-gradient(180deg, #041521 0%, #03111d 58%, #020d16 100%);
+  background: var(--void);
 }
 
 .options-view :deep(.panel) {
   border: 1px solid var(--rule);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 0;
   overflow: hidden;
-  background: linear-gradient(180deg, rgba(10, 35, 52, 0.98), rgba(5, 24, 37, 0.98));
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
+  background: var(--panel);
 }
 .options-view :deep(.panel:hover) { border-color: var(--rule-hi); }
 .options-view :deep(.panel > .head) {
   min-height: 36px;
   padding: 7px 11px;
   border-bottom: 1px solid var(--rule);
-  background: rgba(4, 21, 33, 0.72);
+  background: var(--void-lift);
 }
 .options-view :deep(.panel > .head .idx) { color: var(--phosphor); }
 
