@@ -191,9 +191,9 @@ import time
 import traceback
 import uuid
 import webbrowser
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import parse_qs, urlparse
 
 # Lazy imports for heavy dependencies - imported on first use
@@ -1409,6 +1409,12 @@ _OPTIONS_CACHE: dict[tuple, tuple[float, dict]] = {}
 _OPTIONS_LOCK = threading.Lock()
 _OPTIONS_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
 _OPTIONS_CACHE_TTL_S = 20.0
+# Live equity last used as Options SPOT when the chain lacks a timestamped
+# underlying quote. Local 1d parquet can lag multi-day; without this the KPI
+# freezes on the last checked-in close (e.g. SPY stuck at $771.33).
+_LSE_EQUITY_SPOT_CACHE: dict[str, tuple[float, float | None, str | None]] = {}
+_LSE_EQUITY_SPOT_TTL_S = 20.0
+_LSE_EQUITY_SPOT_LOCK = threading.Lock()
 
 # Dated chains are immutable snapshots. Cache their decoded records by file
 # signature so one Options request does not decode the same parquet once while
@@ -2114,6 +2120,162 @@ def _options_price_series(
     return series, _safe_round(frame["close"].iloc[-1], 4)
 
 
+def _fetch_lse_equity_spot(symbol: str) -> tuple[float | None, str | None]:
+    """Latest equity last from LSE candles (5m → 1d fallback).
+
+    Used as Options SPOT when the live chain lacks a timestamped underlying
+    quote. Local daily parquet is often multi-day stale; LSE candles are the
+    same provider as the live options chain.
+    """
+    key = symbol.upper()
+    now = time.time()
+    with _LSE_EQUITY_SPOT_LOCK:
+        cached = _LSE_EQUITY_SPOT_CACHE.get(key)
+        if cached is not None and now - cached[0] < _LSE_EQUITY_SPOT_TTL_S:
+            return cached[1], cached[2]
+
+    spot: float | None = None
+    asof: str | None = None
+    try:
+        provider_src = ROOT / "TradingWork" / "src"
+        if str(provider_src) not in sys.path:
+            sys.path.insert(0, str(provider_src))
+        from lse_provider import fetch_lse_candles  # type: ignore[import-not-found]
+
+        end = datetime.now(timezone.utc).replace(tzinfo=None)
+        start = end - timedelta(days=5)
+        frame = None
+        for timeframe in ("5m", "15m", "1h", "1d"):
+            try:
+                frame = fetch_lse_candles(
+                    key,
+                    start=start,
+                    end=end,
+                    timeframe=timeframe,
+                    use_cache=False,
+                    refresh=True,
+                    timeout=8,
+                )
+            except Exception:  # noqa: BLE001 - try coarser timeframe
+                frame = None
+            if frame is not None and not getattr(frame, "empty", True):
+                break
+        if frame is not None and not getattr(frame, "empty", True) and "close" in frame.columns:
+            close = float(frame["close"].iloc[-1])
+            if math.isfinite(close) and close > 0:
+                spot = _safe_round(close, 4)
+                try:
+                    ts = _get_pd().Timestamp(frame.index[-1])
+                    if ts.tzinfo is None:
+                        asof = ts.tz_localize("UTC").isoformat()
+                    else:
+                        asof = ts.tz_convert("UTC").isoformat()
+                except (TypeError, ValueError, AttributeError):
+                    asof = None
+    except Exception:  # noqa: BLE001 - equity spot is a soft dependency
+        spot, asof = None, None
+
+    with _LSE_EQUITY_SPOT_LOCK:
+        _LSE_EQUITY_SPOT_CACHE[key] = (now, spot, asof)
+        if len(_LSE_EQUITY_SPOT_CACHE) > 256:
+            oldest = min(_LSE_EQUITY_SPOT_CACHE, key=lambda sym: _LSE_EQUITY_SPOT_CACHE[sym][0])
+            _LSE_EQUITY_SPOT_CACHE.pop(oldest, None)
+    return spot, asof
+
+
+def _spot_from_flow_rows(flow_rows: Sequence[Mapping[str, Any]]) -> tuple[float | None, str | None]:
+    """Most recent tape print that carries an underlying price."""
+    best_ts: datetime | None = None
+    best_price: float | None = None
+    best_asof: str | None = None
+    for row in flow_rows:
+        raw_price = row.get("underlying_price")
+        if raw_price is None:
+            raw_price = row.get("spot")
+        try:
+            price = float(raw_price) if raw_price is not None else None
+        except (TypeError, ValueError):
+            price = None
+        if price is None or not math.isfinite(price) or price <= 0:
+            continue
+        raw_ts = row.get("ts") or row.get("timestamp") or row.get("asof_utc") or row.get("time")
+        observed: datetime | None = None
+        if raw_ts is not None:
+            try:
+                text = str(raw_ts).replace("Z", "+00:00")
+                observed = datetime.fromisoformat(text)
+                if observed.tzinfo is None:
+                    observed = observed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                observed = None
+        if best_price is None:
+            best_price = _safe_round(price, 4)
+            best_ts = observed
+            best_asof = observed.isoformat() if observed is not None else (
+                str(raw_ts) if raw_ts is not None else None
+            )
+            continue
+        # Prefer a timestamped print over an untimestamped one; among
+        # timestamped prints keep the most recent observation.
+        if observed is None:
+            continue
+        if best_ts is None or observed >= best_ts:
+            best_price = _safe_round(price, 4)
+            best_ts = observed
+            best_asof = observed.isoformat()
+    return best_price, best_asof
+
+
+def _augment_price_series_with_live(
+    series: list[dict],
+    live_spot: float | None,
+    live_asof: str | None,
+) -> list[dict]:
+    """Keep the stock overlay honest when local daily bars lag the session."""
+    if live_spot is None or not series:
+        return series
+    out = list(series)
+    ts = live_asof or datetime.now(timezone.utc).isoformat()
+    last_t = str(out[-1].get("t") or "")
+    point = {"t": ts, "close": live_spot, "volume": out[-1].get("volume")}
+    if last_t[:10] and last_t[:10] < ts[:10]:
+        out.append(point)
+    else:
+        out[-1] = {**out[-1], "close": live_spot, "t": ts}
+    return out
+
+
+def _resolve_live_options_spot(
+    *,
+    chain_spot: float | None,
+    equity_spot: float | None,
+    equity_asof: str | None,
+    flow_spot: float | None,
+    flow_asof: str | None,
+    price_spot: float | None,
+    price_asof: str | None,
+    warnings: list[str],
+) -> tuple[float | None, str | None]:
+    """Prefer timestamped live sources over multi-day local closes."""
+    if chain_spot is not None:
+        return chain_spot, "chain_underlying_quote"
+    if equity_spot is not None:
+        return equity_spot, f"lse_equity_candles:{equity_asof or 'unknown'}"
+    if flow_spot is not None:
+        warnings.append(
+            "Spot from latest options-tape underlying print — equity candles unavailable."
+        )
+        return flow_spot, f"lse_flow_underlying:{flow_asof or 'unknown'}"
+    if price_spot is not None:
+        warnings.append(
+            "Spot is last local daily close"
+            + (f" ({price_asof[:10]})" if price_asof else "")
+            + "; live equity quote unavailable — levels may lag the session."
+        )
+        return price_spot, f"local_daily_close:{price_asof or 'unknown'}"
+    return None, None
+
+
 def _cached_option_chain_rows(path: Path) -> list[dict[str, Any]]:
     """Decode one immutable chain snapshot once per (mtime, size)."""
     try:
@@ -2176,9 +2338,10 @@ def _historical_option_rows(
 
 def _fetch_live_option_inputs(
     symbol: str, *, filters: OptionsFilters,
-) -> tuple[list[dict], list[dict], float | None, str, list[str]]:
+) -> tuple[list[dict], list[dict], float | None, str, list[str], str | None]:
     warnings: list[str] = []
     request_clock = datetime.now(timezone.utc)
+    spot_source: str | None = None
 
     def fetch_chain() -> Mapping[str, Any]:
         return LSEOptionsAdapter(
@@ -2200,12 +2363,14 @@ def _fetch_live_option_inputs(
             symbol, min_premium=fetch_floor, limit=500, timeout=12,
         ) or [])
 
-    # Chain and tape are independent network reads. Overlap them so live Options
-    # latency is bounded by the slower provider call rather than their sum.
+    # Chain, tape, and equity last are independent network reads. Overlap them
+    # so live Options latency is bounded by the slowest provider call rather
+    # than their sum — and so SPOT is not stuck on a multi-day local close.
     futures = _get_concurrent_futures()
-    with futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="options-live") as pool:
+    with futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="options-live") as pool:
         chain_future = pool.submit(fetch_chain)
         flow_future = pool.submit(fetch_flow)
+        equity_future = pool.submit(_fetch_lse_equity_spot, symbol)
         try:
             snapshot = chain_future.result()
         except Exception as exc:  # noqa: BLE001 - history fallback remains available
@@ -2216,12 +2381,35 @@ def _fetch_live_option_inputs(
         except Exception as exc:  # noqa: BLE001 - live flow is optional evidence
             flow_rows = []
             warnings.append(f"Live flow unavailable: {type(exc).__name__}")
+        try:
+            equity_spot, equity_asof = equity_future.result()
+        except Exception:  # noqa: BLE001 - equity last is a soft dependency
+            equity_spot, equity_asof = None, None
 
     chain_rows = list(snapshot.get("contracts") or [])
-    underlying = snapshot.get("underlying", {})
+    underlying = snapshot.get("underlying", {}) if isinstance(snapshot, Mapping) else {}
     # A last-trade-derived spot without its own quote timestamp is not a live
-    # underlying quote. Let the latest verified stock close supply the spot.
-    spot = underlying.get("price") if underlying.get("quote_asof_utc") else None
+    # underlying quote. Prefer LSE equity candles, then recent tape prints,
+    # before falling back to the (often multi-day-stale) local daily close.
+    chain_spot: float | None = None
+    if underlying.get("quote_asof_utc") is not None and underlying.get("price") is not None:
+        try:
+            candidate = float(underlying.get("price"))
+        except (TypeError, ValueError):
+            candidate = None
+        if candidate is not None and math.isfinite(candidate) and candidate > 0:
+            chain_spot = _safe_round(candidate, 4)
+    flow_spot, flow_asof = _spot_from_flow_rows(flow_rows)
+    spot, spot_source = _resolve_live_options_spot(
+        chain_spot=chain_spot,
+        equity_spot=equity_spot,
+        equity_asof=equity_asof,
+        flow_spot=flow_spot,
+        flow_asof=flow_asof,
+        price_spot=None,
+        price_asof=None,
+        warnings=warnings,
+    )
     open_interest_source = "lse_live"
 
     if chain_rows and not any(int(row.get("open_interest") or 0) > 0 for row in chain_rows):
@@ -2253,7 +2441,7 @@ def _fetch_live_option_inputs(
         warnings.append(
             "No recent trade-tape prints from LSE — try RAW noise filter or a more liquid name."
         )
-    return chain_rows, flow_rows, spot, open_interest_source, warnings
+    return chain_rows, flow_rows, spot, open_interest_source, warnings, spot_source
 
 
 def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
@@ -2343,10 +2531,12 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
     price_series, price_spot = _options_price_series(
         symbol, selected_range, date_from=filters.date_from, date_to=filters.date_to,
     )
+    price_asof = str(price_series[-1].get("t")) if price_series else None
     warnings: list[str] = []
     chain_rows: list[dict] = []
     flow_rows: list[dict] = []
     live_spot: float | None = None
+    live_spot_source: str | None = None
     mode_resolved = mode
     chain_source = "lse_live"
     flow_source = "lse_live_trade_tape"
@@ -2362,12 +2552,46 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
 
     if mode == "live":
         try:
-            chain_rows, flow_rows, live_spot, open_interest_source, live_warnings = _fetch_live_option_inputs(
+            (
+                chain_rows,
+                flow_rows,
+                live_spot,
+                open_interest_source,
+                live_warnings,
+                live_spot_source,
+            ) = _fetch_live_option_inputs(
                 symbol, filters=filters,
             )
             warnings.extend(live_warnings)
         except Exception as exc:  # noqa: BLE001 - fall back visibly, never silently
             warnings.append(f"Live chain unavailable: {type(exc).__name__}")
+        if live_spot is None and price_spot is not None:
+            live_spot, live_spot_source = _resolve_live_options_spot(
+                chain_spot=None,
+                equity_spot=None,
+                equity_asof=None,
+                flow_spot=None,
+                flow_asof=None,
+                price_spot=price_spot,
+                price_asof=price_asof,
+                warnings=warnings,
+            )
+        if live_spot is not None:
+            # Align the stock overlay with session-current spot when local
+            # daily bars lag (otherwise SPOT and the chart disagree).
+            equity_asof = None
+            if live_spot_source and live_spot_source.startswith("lse_equity_candles:"):
+                equity_asof = live_spot_source.split(":", 1)[1]
+                if equity_asof == "unknown":
+                    equity_asof = None
+            elif live_spot_source and live_spot_source.startswith("lse_flow_underlying:"):
+                equity_asof = live_spot_source.split(":", 1)[1]
+                if equity_asof == "unknown":
+                    equity_asof = None
+            if live_spot_source and not live_spot_source.startswith("local_daily_close"):
+                price_series = _augment_price_series_with_live(
+                    price_series, live_spot, equity_asof,
+                )
 
     if mode == "history" or not chain_rows:
         # Prefer an explicit `to` date when it matches a dated snapshot; otherwise
@@ -2426,7 +2650,9 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
         price_series=price_series,
         # A dated chain must use the spot captured with that chain, not the
         # latest daily close. Mixing observation clocks distorts every Greek.
-        spot=(live_spot or price_spot) if mode_resolved == "live" else None,
+        # Live mode prefers timestamped equity last (LSE candles / tape) over
+        # multi-day-stale local parquet closes.
+        spot=live_spot if mode_resolved == "live" else None,
         filters=filters,
         mode_requested=mode,
         mode_resolved=mode_resolved,
@@ -2439,6 +2665,8 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
     )
     if isinstance(payload, dict):
         payload["history"] = history_meta
+        if mode_resolved == "live" and live_spot_source:
+            payload["spot_source"] = live_spot_source
     with _OPTIONS_LOCK:
         _OPTIONS_CACHE[cache_key] = (time.time(), payload)
         if len(_OPTIONS_CACHE) > 128:
@@ -2505,7 +2733,14 @@ def _options_board_row(candidate) -> dict:
         # Last local bar timestamp — compared against the chain clock so a live
         # chain scored on stale bars is flagged, not silently rendered.
         price_asof = str(price_series[-1].get("t")) if price_series else None
-        chain_rows, flow_rows, live_spot, oi_source, warnings = _fetch_live_option_inputs(
+        (
+            chain_rows,
+            flow_rows,
+            live_spot,
+            oi_source,
+            warnings,
+            live_spot_source,
+        ) = _fetch_live_option_inputs(
             symbol, filters=filters,
         )
         chain_source = "lse_live"
@@ -2523,14 +2758,39 @@ def _options_board_row(candidate) -> dict:
             oi_source = chain_source
             mode_resolved = "history_fallback"
             live_spot = None
+            live_spot_source = None
             warnings.append("Live chain unavailable; showing the latest dated chain.")
+        if mode_resolved == "live" and live_spot is None and price_spot is not None:
+            live_spot, live_spot_source = _resolve_live_options_spot(
+                chain_spot=None,
+                equity_spot=None,
+                equity_asof=None,
+                flow_spot=None,
+                flow_asof=None,
+                price_spot=price_spot,
+                price_asof=price_asof,
+                warnings=warnings,
+            )
+        if mode_resolved == "live" and live_spot is not None and live_spot_source and (
+            not live_spot_source.startswith("local_daily_close")
+        ):
+            asof_hint = None
+            if ":" in live_spot_source:
+                asof_hint = live_spot_source.split(":", 1)[1]
+                if asof_hint == "unknown":
+                    asof_hint = None
+            price_series = _augment_price_series_with_live(
+                price_series, live_spot, asof_hint,
+            )
+            if price_series:
+                price_asof = str(price_series[-1].get("t"))
 
         intel = build_options_intelligence(
             symbol=symbol,
             chain_rows=chain_rows,
             flow_rows=flow_rows,
             price_series=price_series,
-            spot=(live_spot or price_spot) if mode_resolved == "live" else None,
+            spot=live_spot if mode_resolved == "live" else None,
             filters=filters,
             mode_requested="live",
             mode_resolved=mode_resolved,
