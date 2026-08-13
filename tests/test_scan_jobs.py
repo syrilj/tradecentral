@@ -78,6 +78,50 @@ def test_scan_job_reports_progress_and_publishes_completed_result(monkeypatch):
     assert api_server._ACTIVE_SCAN_JOB_ID is None
 
 
+def test_status_poll_does_not_recompute_or_replace_an_activated_scan(monkeypatch):
+    api_server._STATUS_CACHE.clear()
+    api_server._STATUS_CACHE_TS.clear()
+    api_server._ACTIVE_SCAN_DEPTH = "quick"
+    builds: list[str] = []
+
+    def build(**kwargs):
+        depth = kwargs.get("scan_depth") or "quick"
+        builds.append(depth)
+        return _status_payload(depth)
+
+    monkeypatch.setattr(api_server, "_get_dashboard_data_uncached", build)
+
+    deep = api_server.get_dashboard_data(force=True, scan_depth="deep", activate=True)
+    assert deep["scan_summary"]["depth"] == "deep"
+    assert builds == ["deep"]
+
+    polled = api_server.get_dashboard_data()
+    stale = api_server.get_dashboard_data(scan_depth="quick")
+    assert polled["scan_summary"]["depth"] == "deep"
+    assert stale["scan_summary"]["depth"] == "deep"
+    assert builds == ["deep"]
+
+
+def test_quotes_payload_prefers_live_spot(monkeypatch):
+    import pandas as pd
+
+    frame = pd.DataFrame({"close": [98.0, 100.0]}, index=pd.to_datetime(["2026-08-11", "2026-08-12"]))
+    monkeypatch.setattr(api_server, "_load_symbol_df", lambda symbol: (frame, "wide"))
+    monkeypatch.setattr(api_server, "_frame_asof_date", lambda _frame: "2026-08-12")
+    monkeypatch.setattr(
+        api_server,
+        "_fetch_lse_equity_spot",
+        lambda symbol: (101.5, "2026-08-13T14:00:00+00:00"),
+    )
+
+    payload = api_server._quotes_payload(["aapl", "AAPL", "bad symbol!!", "MSFT"])
+    assert payload["count"] == 2
+    assert payload["rows"][0]["symbol"] == "AAPL"
+    assert payload["rows"][0]["last"] == 101.5
+    assert payload["rows"][0]["quality"] == "live"
+    assert payload["rows"][0]["source"] == "lse_equity_candles"
+
+
 def test_standalone_flow_never_reads_the_legacy_deep_snapshot(monkeypatch):
     api_server._UNUSUAL_FLOW_CACHE.clear()
 

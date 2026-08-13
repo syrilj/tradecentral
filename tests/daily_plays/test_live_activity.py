@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from edge.daily_plays.live_activity import (
+    _activity_lean,
     build_market_activity_scan,
     build_unusual_options_flow,
     scan_local_market_activity,
@@ -283,6 +285,70 @@ def test_unusual_flow_threshold_is_monotonic_and_summary_uses_premium_share():
     assert low["summary"]["premium_basis"] == "provider_contract_tape"
     assert low["summary"]["scope"] == "market_wide_provider_window"
     assert 0 <= low["summary"]["signed_print_pct"] <= 1
+
+
+def test_activity_lean_reports_bullish_or_bearish():
+    bull = _activity_lean(call_premium=80_000, put_premium=20_000, price_impulse="up")
+    assert bull["activity_lean"] == "bullish"
+    assert bull["activity_lean_label"] == "BULLISH"
+
+    bear = _activity_lean(call_premium=10_000, put_premium=90_000, price_impulse="down")
+    assert bear["activity_lean"] == "bearish"
+
+    signed = _activity_lean(
+        signed_net_premium=-50_000,
+        signed_print_count=3,
+        call_premium=90_000,
+        put_premium=10_000,
+    )
+    assert signed["activity_lean"] == "bearish"
+    assert signed["activity_lean_source"] == "signed_flow"
+
+    # Call-heavy premium still reads bullish even if spot is down that day.
+    conflict = _activity_lean(call_premium=80_000, put_premium=20_000, price_impulse="down")
+    assert conflict["activity_lean"] == "bullish"
+    assert conflict["activity_lean_source"] == "call_put_premium_vs_price"
+
+
+def test_call_put_imbalance_uses_premium_not_print_counts():
+    """Many small calls must not flip C/P identity when puts dominate notional."""
+    frames = {"MIX": _bars(jump=0.01)}
+
+    def flow_fetcher(*, min_premium, **_):
+        prints = [
+            {
+                "id": f"call-{i}",
+                "underlying": "MIX",
+                "contract_type": "call",
+                "premium": 20_000,
+                "volume": 5,
+                "ts": f"2026-08-11T15:0{i}:00Z",
+            }
+            for i in range(5)
+        ]
+        prints.append({
+            "id": "put-whale",
+            "underlying": "MIX",
+            "contract_type": "put",
+            "premium": 400_000,
+            "volume": 40,
+            "ts": "2026-08-11T15:09:00Z",
+        })
+        return [row for row in prints if row["premium"] >= min_premium]
+
+    result = build_unusual_options_flow(
+        symbols=list(frames),
+        candle_loader=frames.__getitem__,
+        flow_fetcher=flow_fetcher,
+        live_target_limit=1,
+        row_limit=5,
+        min_premium=10_000,
+    )
+    row = next(item for item in result["rows"] if item["symbol"] == "MIX")
+    # 5×$20k calls vs 1×$400k put → put share ~0.8, imbalance negative.
+    assert row["put_flow_pct"] == pytest.approx(0.8, abs=1e-3)
+    assert row["call_put_imbalance"] == pytest.approx(-0.6, abs=1e-3)
+    assert row["call_put_imbalance"] < 0  # put-heavy by premium, not call-heavy by count
 
 
 def test_unusual_flow_never_substitutes_local_activity_for_live_rows():

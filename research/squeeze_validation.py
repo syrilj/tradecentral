@@ -26,6 +26,7 @@ from edge.daily_plays.gex_core import (
     bs_gamma,
     compute_theory_squeeze,
 )
+from edge.research.flow_shift import current_flow_after_shift, signed_observations_from_bars
 
 
 EDGE_ROOT = Path(__file__).resolve().parents[1]
@@ -271,9 +272,41 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
             )
             tot_vol = call_vol + put_vol
             contract_right_imb = (call_vol - put_vol) / tot_vol if tot_vol > 0 else 0.0
-            # Historical chain volume has contract identity but no aggressor.
-            # It cannot populate the shipped model's signed directional term.
+            # Historical chains have no aggressor. Score the shipped directional
+            # term on a causal bar signed-volume proxy and keep only post-shift mass.
             signed_flow_imb = 0.0
+            flow_shift_payload = None
+            bar_hist = hist
+            hourly_path = EDGE_ROOT / "data" / "1h" / f"{symbol}.parquet"
+            if hourly_path.exists():
+                try:
+                    hdf = pd.read_parquet(hourly_path)
+                    if not isinstance(hdf.index, pd.DatetimeIndex):
+                        for col in ("Date", "date", "timestamp"):
+                            if col in hdf.columns:
+                                hdf = hdf.set_index(col)
+                                break
+                    hdf.index = pd.to_datetime(hdf.index).tz_localize(None)
+                    end = asof.normalize() + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+                    hdf = hdf.loc[hdf.index <= end]
+                    cols = {c.lower(): c for c in hdf.columns}
+                    hdf = hdf.rename(columns={cols[w]: w for w in ("open", "high", "low", "close", "volume") if w in cols})
+                    if len(hdf) >= 8 and all(c in hdf.columns for c in ("open", "high", "low", "close", "volume")):
+                        bar_hist = hdf
+                except Exception:
+                    bar_hist = hist
+            try:
+                if all(col in bar_hist.columns for col in ("open", "high", "low", "close", "volume")):
+                    obs = signed_observations_from_bars(bar_hist)
+                    if obs:
+                        last_bar = pd.Timestamp(bar_hist.index.max())
+                        age_days = float((asof.normalize() - last_bar.normalize()).days)
+                        flow = current_flow_after_shift(obs, last_age=age_days, max_fresh_age=2.0)
+                        signed_flow_imb = float(flow.effective_imbalance)
+                        flow_shift_payload = flow.to_dict()
+            except (KeyError, ValueError):
+                signed_flow_imb = 0.0
+                flow_shift_payload = None
 
             if not theory_rows:
                 records.append({"symbol": symbol, "asof": asof_str, "error": "no_theory_rows"})
@@ -307,6 +340,8 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
                 "put_volume": put_vol,
                 "call_imbalance": signed_flow_imb,
                 "directional_flow_imbalance": signed_flow_imb,
+                "flow_shift": flow_shift_payload,
+                "confidence_band": (flow_shift_payload or {}).get("confidence_band"),
                 "contract_right_imbalance": contract_right_imb,
                 "momentum": momentum,
                 "adv": adv,
@@ -332,12 +367,45 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
 
     panel = pd.DataFrame.from_records(records)
     summary = _summarize(panel, cfg)
+    train_oos = None
+    try:
+        from edge.research.squeeze_flow_eval import (
+            SqueezeFlowEvalConfig,
+            evaluate_train_oos,
+        )
+
+        scored = panel[panel["error"].isna()].copy() if "error" in panel.columns else panel.copy()
+        if not scored.empty and "theory_score" in scored.columns and "fwd_1d" in scored.columns:
+            eval_panel = scored.rename(columns={"theory_score": "eval_score"})
+            if "asof" in eval_panel.columns:
+                eval_panel["asof"] = pd.to_datetime(eval_panel["asof"])
+            if "confidence_band" not in eval_panel.columns:
+                eval_panel["confidence_band"] = "medium"
+            if "label_end" not in eval_panel.columns:
+                eval_panel["label_end"] = eval_panel["asof"] + pd.tseries.offsets.BDay(max(cfg.forward_horizons))
+            train_oos = evaluate_train_oos(
+                eval_panel,
+                cfg=SqueezeFlowEvalConfig(
+                    label_horizon=max(cfg.forward_horizons),
+                    initial_train_dates=max(2, eval_panel["asof"].nunique() // 3),
+                    validation_dates=max(2, eval_panel["asof"].nunique() // 3),
+                    embargo_dates=1,
+                    include_partial_final=True,
+                    min_partial_validation_dates=1,
+                    min_threshold_n=1,
+                ),
+            )
+            summary["train"] = train_oos.get("train")
+            summary["oos"] = train_oos.get("oos")
+    except Exception:
+        train_oos = None
     return {
         "config": asdict(cfg),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "n_records": int(len(panel)),
         "n_errors": int(panel["error"].notna().sum()) if "error" in panel.columns else 0,
         "summary": summary,
+        "train_oos": train_oos,
         "panel": panel,
     }
 
@@ -461,7 +529,7 @@ def _summarize(panel: pd.DataFrame, cfg: SqueezeValidationConfig) -> dict[str, A
         "OI snapshot is sparse historically (often single date); OI is assumed sticky for forward tests.",
         "Dealer inventory uses short-premium assumption q=−OI; true MM book is not observed.",
         "Theory score gates on momentum — always compare to momentum-only baseline hit rate / IC.",
-        "Historical chains have no aggressor side; call/put volume is retained as identity only and the signed-flow term is zero.",
+        "Historical chains have no aggressor; signed flow is a causal 1h/1d signed-volume proxy with post-shift detection, never reconstructed tape.",
         "On mega-cap liquid names |GEX|/ADV is tiny by construction — absolute squeeze labels rarely fire; use rank IC + amplification.",
         "Small N cross-section: treat hit rates as descriptive, not a GO gate alone.",
     ]

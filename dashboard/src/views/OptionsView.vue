@@ -23,7 +23,9 @@ import SqueezeScreener from '@/components/SqueezeScreener.vue'
 import ProbabilityDensityChart from '@/components/ProbabilityDensityChart.vue'
 import OptionsFlowContext from '@/components/OptionsFlowContext.vue'
 import OptionsConvictionBoard from '@/components/OptionsConvictionBoard.vue'
+import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
 import LoadingState from '@/components/LoadingState.vue'
+import { buildOptionsDirection } from '@/optionsDirection'
 
 type NoisePreset = 'strict' | 'balanced' | 'raw'
 type TapeView = 'near' | 'all' | 'whales' | 'anomalies' | 'calls' | 'puts' | 'sweeps' | 'blocks' | 'itm'
@@ -52,7 +54,8 @@ const maxSpreadPct = ref(0.25)
 const minDte = ref(0)
 /** Full chain window for multi-expiry GEX (IF uses all listed expiries). */
 const maxDte = ref(365)
-const tapeLimit = ref(100)
+/** Match backend default so the list and print counts stay aligned. */
+const tapeLimit = ref(500)
 /** Default to near-dated signed flow so actionable prints show first.
  *  User can switch to 'all' to see the full tape without DTE restriction. */
 const tapeView = ref<TapeView>('near')
@@ -68,6 +71,12 @@ const unusualOpen = ref(false)
 const focusStrike = ref<number | null>(null)
 /** Prevents feedback loop when History auto-fills dateTo from the response. */
 const historyAsOfSyncing = ref(false)
+/**
+ * Suppresses the filter watcher while a symbol load resets expiry/focus.
+ * Without this, first open / ticker change fires a second debounced refresh
+ * that can supersede the chain request and leave the map blank.
+ */
+const symbolLoadSyncing = ref(false)
 const PREMIUM_FLOORS: PremiumFloor[] = [0, 25_000, 50_000, 100_000, 250_000]
 
 /* Market-style search typeahead */
@@ -184,6 +193,34 @@ function imbalanceTone(v: number | null | undefined): 'call' | 'put' | 'flat' {
 }
 
 /**
+ * C/P premium from the returned tape when present so the KPI matches the flow
+ * list. Falls back to summary window aggregates only when the tape is empty.
+ */
+const flowPremSplit = computed(() => {
+  const tape = d.value?.flow_tape ?? []
+  let call = 0
+  let put = 0
+  if (tape.length) {
+    for (const row of tape) {
+      const prem = Number(row.premium)
+      if (!Number.isFinite(prem) || prem < 0) continue
+      if (row.right === 'call') call += prem
+      else if (row.right === 'put') put += prem
+    }
+  }
+  if (call + put <= 0) {
+    call = s.value?.call_premium ?? 0
+    put = s.value?.put_premium ?? 0
+  }
+  const ratio = put > 0 ? call / put : null
+  return {
+    call: call > 0 ? call : null,
+    put: put > 0 ? put : null,
+    ratio,
+  }
+})
+
+/**
  * composite_score is an unbounded z-blend — clamp the METER (not the printed
  * figure) to ±3 so one outlier symbol can't flatten every other bar to a
  * sliver. The exact value is always shown as text alongside it.
@@ -226,7 +263,7 @@ const refreshDebounced = debounce(() => void resource.refresh(), 240)
 watch(
   [mode, selectedRange, selectedExpiry, tapeLimit, dateFrom, dateTo, minPremium, minVolume, minOpenInterest, maxSpreadPct, minDte, maxDte],
   () => {
-    if (historyAsOfSyncing.value) return
+    if (historyAsOfSyncing.value || symbolLoadSyncing.value) return
     refreshDebounced()
   },
 )
@@ -236,14 +273,22 @@ function cleanTicker(term: string): string {
 }
 
 /**
- * Load a symbol and ALWAYS refresh options intelligence.
- * Clears prior payload first so the UI cannot paint the previous underlier's
- * squeeze/GEX under the new ticker while the request is in flight.
+ * Load a symbol and refresh options intelligence.
+ *
+ * Wrong-underlier paint is prevented by `payloadMatches` (data only surfaces
+ * when `data.symbol === symbol`). We only blank cached data when the ticker
+ * actually changes — a same-symbol reload keeps the last good chain visible
+ * so a failed refresh cannot make the map permanently disappear.
  */
 function loadSymbol(raw: string, { pushRoute = true } = {}): void {
   const clean = cleanTicker(raw)
   if (!clean) return
   const changed = clean !== symbol.value
+  // Same ticker already in flight — do not stack a second request that can
+  // clear/supersede the first and leave the chain empty.
+  if (!changed && resource.loading.value) return
+
+  symbolLoadSyncing.value = true
   symbol.value = clean
   symbolInput.value = clean
   searchOpen.value = false
@@ -254,8 +299,11 @@ function loadSymbol(raw: string, { pushRoute = true } = {}): void {
   if (pushRoute) {
     void router.replace({ query: { ...route.query, symbol: clean } })
   }
-  // Always clear+fetch — even when reloading the same ticker.
-  void resource.refresh({ clear: true })
+  void resource.refresh({ clear: changed }).finally(() => {
+    // Allow filter mutations after this tick so expiry reset does not queue
+    // a second /api/options call behind the symbol load.
+    queueMicrotask(() => { symbolLoadSyncing.value = false })
+  })
 }
 
 const runSearch = debounce(async (term: string) => {
@@ -344,7 +392,7 @@ watch(symbol, (next, prev) => {
   if (!next || next === prev) return
   // loadSymbol already refreshes; this catches external mutations only.
   if (resource.data.value?.symbol === next) return
-  if (resource.loading.value) return
+  if (resource.loading.value || symbolLoadSyncing.value) return
   void resource.refresh({ clear: true })
 })
 
@@ -387,7 +435,15 @@ const p = computed(() => d.value?.probability)
 const expiry = computed(() => d.value?.chain_context)
 const historyMeta = computed(() => d.value?.history)
 const historyDays = computed(() => historyMeta.value?.available_dates ?? [])
-const loadingSymbol = computed(() => resource.loading.value || !payloadMatches.value)
+/**
+ * True only while a network request is in flight.
+ * Previously this also required `payloadMatches`, so a failed first load
+ * (or a ticker switch that cleared data) left the UI stuck on "CALCULATING"
+ * forever with no chain — even though loading had finished.
+ */
+const loadingSymbol = computed(() => resource.loading.value)
+/** First paint / post-error empty: no matching payload and nothing in flight. */
+const chainMissing = computed(() => !payloadMatches.value && !resource.loading.value)
 
 const unusualRows = computed<UnusualFlowRow[]>(() => unusual.data.value?.rows ?? [])
 const unusualLiveCount = computed(() => unusualRows.value.filter((r) => r.live).length)
@@ -419,7 +475,8 @@ const squeeze = computed(() => (payloadMatches.value ? s.value?.squeeze : null))
  */
 const gexMeasurable = computed(() => {
   const q = d.value?.quality as { gex_measurable?: boolean } | undefined
-  if (!d.value) return true
+  // No payload yet — do not claim measurable (avoids empty chart flash).
+  if (!d.value) return false
   if (q?.gex_measurable !== undefined) return q.gex_measurable
   return (s.value?.call_oi ?? 0) + (s.value?.put_oi ?? 0) > 0
 })
@@ -624,9 +681,20 @@ function formatLag(seconds: number | null | undefined): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
 }
 
+/** Wall-clock age from an ISO stamp (preferred over baked-in age_seconds). */
+function ageFromAsOf(asof: string | null | undefined, fallback: number | null | undefined): number | null {
+  if (asof) {
+    const ms = Date.parse(asof)
+    if (Number.isFinite(ms)) return Math.max(0, (Date.now() - ms) / 1000)
+  }
+  return fallback ?? null
+}
+
 /**
  * Live lag indicator for this underlier's options tape — not generic "connected".
  * Distinguishes real trade tape vs chain-volume proxy vs history.
+ * Feed age (any provider print) drives LIVE/STALE; qualified-tape lag is secondary
+ * so high min-$ filters do not falsely mark a live name as 19h stale.
  */
 const tapeHealth = computed(() => {
   if (loadingSymbol.value && !d.value) {
@@ -649,12 +717,24 @@ const tapeHealth = computed(() => {
       detail: '',
     }
   }
-  const age = d.value.freshness?.age_seconds ?? null
+  const freshness = d.value.freshness
+  const feedAge = ageFromAsOf(
+    freshness?.feed_asof ?? d.value.observed_at,
+    freshness?.feed_age_seconds ?? freshness?.age_seconds ?? null,
+  )
+  const tapeAge = ageFromAsOf(
+    freshness?.tape_asof,
+    freshness?.tape_age_seconds ?? null,
+  )
+  // Prefer feed liveness for the lamp; fall back to qualified tape age.
+  const age = feedAge ?? tapeAge
   const basis = d.value.provider?.activity_basis
   const printsIn = d.value.quality?.flow_prints_included ?? 0
   const printsRaw = d.value.quality?.flow_prints_raw ?? 0
   const tapeN = d.value.flow_tape?.length ?? 0
   const lag = formatLag(age)
+  const tapeLag = formatLag(tapeAge)
+  const rejectedBelow = Number(d.value.quality?.flow_rejected?.below_premium ?? 0)
 
   if (d.value.mode_resolved === 'history' || d.value.mode_resolved === 'history_fallback') {
     return {
@@ -667,19 +747,36 @@ const tapeHealth = computed(() => {
     }
   }
 
-  if (basis === 'trade_tape' && tapeN > 0) {
-    const live = age != null && age <= 90
-    const soft = age != null && age <= 300
+  if (basis === 'trade_tape' && (tapeN > 0 || printsRaw > 0)) {
+    const live = age != null && age <= 120
+    const soft = age != null && age <= 600
+    const qualifiedStale = tapeAge != null && tapeAge > 600 && (feedAge == null || feedAge <= 120)
+    if (tapeN === 0) {
+      return {
+        status: live ? 'warm' as const : 'stale' as const,
+        lamp: live ? 'stale' : 'stale',
+        title: live ? 'FEED LIVE · NO QUALIFIED PRINTS' : 'TAPE EMPTY',
+        sub: live
+          ? `Provider is live (${lag}) but min $ / filters excluded all ${printsRaw} prints`
+          : `No qualifying prints · feed lag ${lag}`,
+        lag,
+        detail: `0 shown · 0/${printsRaw} prints · try RAW or lower Min $`,
+      }
+    }
     return {
       status: live ? 'live' as const : soft ? 'warm' as const : 'stale' as const,
       lamp: live ? 'live' : soft ? 'stale' : 'stale',
-      title: live ? 'LIVE TAPE' : soft ? 'TAPE WARM' : 'TAPE STALE',
+      title: live
+        ? (qualifiedStale ? 'LIVE FEED · THIN WHALES' : 'LIVE TAPE')
+        : soft ? 'TAPE WARM' : 'TAPE STALE',
       sub: live
-        ? `Streaming prints for ${d.value.symbol}`
+        ? (qualifiedStale
+          ? `Feed live · qualified ≥$${compact(minPremium.value)} prints lag ${tapeLag}${rejectedBelow > 0 ? ` · ${rejectedBelow} below min $` : ''}`
+          : `Streaming prints for ${d.value.symbol}`)
         : soft
-          ? `Last print lag ${lag} — still usable`
+          ? `Last feed lag ${lag} — still usable`
           : `Last observation lag ${lag} — not fresh`,
-      lag,
+      lag: live && qualifiedStale ? tapeLag : lag,
       detail: `${tapeN} shown · ${printsIn}/${printsRaw} prints · ${signedFlowAvailable.value ? 'side on' : 'no side'}`,
     }
   }
@@ -705,8 +802,13 @@ const tapeHealth = computed(() => {
   }
 })
 
+/** One honest direction read for the whole workspace. Call/put identity is
+ * deliberately excluded. The builder accepts signed flow, a fired squeeze,
+ * or fresh underlying momentum — and recomputes on every 60s Options poll. */
+const directionRead = computed(() => buildOptionsDirection(s.value, tapeHealth.value.status))
+
 const filterSummary = computed(() =>
-  `≥$${compact(minPremium.value)} · vol≥${minVolume.value} · OI≥${minOpenInterest.value} · spr≤${num(maxSpreadPct.value * 100, 0)}% · ${minDte.value}–${maxDte.value}d`,
+  `TAPE ≥$${compact(minPremium.value)} · VOL ≥${minVolume.value} · GEX OI ≥${minOpenInterest.value} · SPREAD ≤${num(maxSpreadPct.value * 100, 0)}% · ${minDte.value}–${maxDte.value}D`,
 )
 
 function setPremiumFloor(v: PremiumFloor): void {
@@ -845,7 +947,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <div class="live-meta label" v-if="tapeHealth.detail">{{ tapeHealth.detail }}</div>
 
       <div class="quick-filters">
-        <span class="qf-lab label">MIN PREM</span>
+        <span class="qf-lab label">TAPE MIN $</span>
         <button
           v-for="floor in PREMIUM_FLOORS"
           :key="floor"
@@ -855,7 +957,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           @click="setPremiumFloor(floor)"
         >{{ floorLabel(floor) }}</button>
         <span class="qf-sep" aria-hidden="true" />
-        <span class="qf-lab label">NOISE</span>
+        <span class="qf-lab label">FILTER PRESET</span>
         <button
           v-for="item in (['strict','balanced','raw'] as NoisePreset[])"
           :key="`qf-${item}`"
@@ -869,16 +971,19 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
     </section>
 
     <section v-if="filtersOpen" class="filter-deck rise">
+      <p class="filter-deck-intro">
+        These controls change the displayed tape and GEX map. A preset resets the bundle; the fields below are manual overrides.
+      </p>
       <div class="filters">
-        <label><span class="label">From</span><input v-model="dateFrom" type="date" /></label>
-        <label><span class="label">{{ mode === 'history' ? 'Chain day' : 'To' }}</span><input v-model="dateTo" type="date" /></label>
-        <label><span class="label">Min $</span><input v-model.number="minPremium" type="number" min="0" step="5000" /></label>
-        <label><span class="label">Min vol</span><input v-model.number="minVolume" type="number" min="0" step="1" /></label>
-        <label><span class="label">Min OI</span><input v-model.number="minOpenInterest" type="number" min="0" step="25" /></label>
-        <label><span class="label">Max spr%</span><input :value="maxSpreadPct * 100" type="number" min="0.1" max="200" step="1" @input="maxSpreadPct = Number(($event.target as HTMLInputElement).value) / 100" /></label>
-        <label><span class="label">Min DTE</span><input v-model.number="minDte" type="number" min="0" max="730" /></label>
-        <label><span class="label">Max DTE</span><input v-model.number="maxDte" type="number" min="0" max="730" /></label>
-        <label><span class="label">Tape n</span>
+        <label><span class="label">Tape from</span><input v-model="dateFrom" type="date" /></label>
+        <label><span class="label">{{ mode === 'history' ? 'Historical chain day' : 'Tape to' }}</span><input v-model="dateTo" type="date" /></label>
+        <label><span class="label">Tape minimum $</span><input v-model.number="minPremium" type="number" min="0" step="5000" /></label>
+        <label><span class="label">Minimum contracts</span><input v-model.number="minVolume" type="number" min="0" step="1" /></label>
+        <label><span class="label">GEX minimum OI</span><input v-model.number="minOpenInterest" type="number" min="0" step="25" /></label>
+        <label><span class="label">Maximum spread %</span><input :value="maxSpreadPct * 100" type="number" min="0.1" max="200" step="1" @input="maxSpreadPct = Number(($event.target as HTMLInputElement).value) / 100" /></label>
+        <label><span class="label">Minimum DTE</span><input v-model.number="minDte" type="number" min="0" max="730" /></label>
+        <label><span class="label">Maximum DTE</span><input v-model.number="maxDte" type="number" min="0" max="730" /></label>
+        <label><span class="label">Tape rows</span>
           <select v-model.number="tapeLimit" class="label">
             <option :value="50">50</option>
             <option :value="100">100</option>
@@ -923,7 +1028,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
     <div v-if="resource.error.value" class="fault-strip">
       <span class="label">FEED ERROR</span>
       {{ resource.error.value }}
-      <button class="label" type="button" @click="void resource.refresh({ clear: true })">RETRY</button>
+      <button class="label" type="button" @click="void resource.refresh({ clear: !d })">RETRY</button>
     </div>
 
     <div v-if="loadingSymbol && !d" class="fault-strip loading-strip">
@@ -933,6 +1038,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
     <div v-else-if="loadingSymbol && d" class="fault-strip loading-strip soft">
       <span class="label">REFRESHING {{ symbol }}</span>
       Recomputing squeeze and structure…
+    </div>
+    <div v-else-if="chainMissing && !resource.error.value" class="fault-strip">
+      <span class="label">NO CHAIN</span>
+      No options payload for <strong class="fig">{{ symbol }}</strong> yet.
+      <button class="label" type="button" @click="void resource.refresh({ clear: true })">LOAD CHAIN</button>
     </div>
 
     <section v-if="dataNotes.length" class="data-notes" :class="{ open: notesOpen }">
@@ -946,6 +1056,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       </ul>
       <span v-else class="notes-preview label">{{ dataNotes[0] }}</span>
     </section>
+
+    <OptionsDirectionBrief
+      :symbol="symbol"
+      :read="directionRead"
+    />
 
     <!-- Dense structure KPI rail -->
     <section class="kpi-rail rise">
@@ -982,11 +1097,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <div class="kpi">
         <span class="label">C/P PREM</span>
         <strong class="fig">
-          <span class="call">{{ s?.call_premium != null ? `$${compact(s.call_premium)}` : DASH }}</span>
+          <span class="call">{{ flowPremSplit.call != null ? `$${compact(flowPremSplit.call)}` : DASH }}</span>
           <span class="dim">/</span>
-          <span class="put">{{ s?.put_premium != null ? `$${compact(s.put_premium)}` : DASH }}</span>
+          <span class="put">{{ flowPremSplit.put != null ? `$${compact(flowPremSplit.put)}` : DASH }}</span>
         </strong>
-        <em class="label">RATIO {{ s?.call_put_ratio == null ? DASH : num(s.call_put_ratio, 2) }}</em>
+        <em class="label">RATIO {{ flowPremSplit.ratio == null ? DASH : num(flowPremSplit.ratio, 2) }}</em>
       </div>
       <div class="kpi squeeze-kpi">
         <span class="label">SQUEEZE</span>
@@ -1018,6 +1133,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             </span>
           </template>
           <LoadingState v-if="loadingSymbol && !squeeze" label="Calculating" compact />
+          <div v-else-if="chainMissing" class="unmeasured">
+            <p class="unmeasured-head label">CHAIN NOT LOADED</p>
+            <p class="unmeasured-body">
+              Squeeze needs a matching options payload for {{ symbol }}. Use LOAD CHAIN if this panel stays empty.
+            </p>
+          </div>
           <div v-else-if="!gexMeasurable" class="unmeasured">
             <p class="unmeasured-head label">SQUEEZE UNMEASURED</p>
             <p class="unmeasured-body">
@@ -1056,6 +1177,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             </div>
           </template>
           <LoadingState v-if="loadingSymbol && !d" label="Loading GEX" compact />
+          <div v-else-if="chainMissing" class="unmeasured">
+            <p class="unmeasured-head label">CHAIN NOT LOADED</p>
+            <p class="unmeasured-body">
+              Waiting for a matching options payload for {{ symbol }}. If this sticks,
+              hit LOAD CHAIN above or retry after the feed recovers.
+            </p>
+          </div>
           <div v-else-if="!gexMeasurable" class="unmeasured">
             <p class="unmeasured-head label">GAMMA UNMEASURED</p>
             <p class="unmeasured-body">
@@ -1076,6 +1204,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               </span>
             </div>
           </div>
+          <div v-else-if="!(d?.gex_by_strike?.length)" class="unmeasured">
+            <p class="unmeasured-head label">NO STRIKES IN WINDOW</p>
+            <p class="unmeasured-body">
+              {{ chainRawCount }} contracts were fetched but none cleared the current
+              DTE / OI / spread filters. Widen TUNE (lower Min OI, raise Max DTE) or
+              switch expiry to ALL.
+            </p>
+          </div>
           <template v-else>
             <GammaExposureMap
               :rows="d?.gex_by_strike ?? []"
@@ -1090,7 +1226,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         </Panel>
 
         <Panel
-          label="FLOW SENTIMENT"
+          label="FLOW EVIDENCE"
           index="03"
           flush
           class="cell flow-context-cell"
@@ -1102,6 +1238,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             :signed-flow-available="signedFlowAvailable"
             :tape-status="tapeHealth.status"
             :tape-title="tapeHealth.title"
+            :direction="directionRead"
           />
         </Panel>
       </div>
@@ -1464,8 +1601,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   {{ row.ret_1d == null ? DASH : signedPct((row.ret_1d ?? 0) * 100, 1) }}
                 </td>
                 <td>
-                  <span class="side-pill" :class="row.context_side === 'long' ? 'pos' : row.context_side === 'short' ? 'neg' : 'neutral'">
-                    {{ (row.context_side || 'neutral').toUpperCase() }}
+                  <span
+                    class="side-pill"
+                    :class="row.activity_lean === 'bullish' || row.context_side === 'long' ? 'pos'
+                      : row.activity_lean === 'bearish' || row.context_side === 'short' ? 'neg'
+                        : row.activity_lean === 'mixed' ? 'warn' : 'neutral'"
+                    :title="row.activity_lean_source ? `Activity lean · ${row.activity_lean_source}` : 'Activity lean'"
+                  >
+                    {{ (row.activity_lean_label || row.activity_lean || row.context_side || 'NEUTRAL').toUpperCase() }}
                   </span>
                 </td>
               </tr>
@@ -1478,7 +1621,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </p>
         </div>
         <p class="note tiny pad">
-          Click a row to load that underlier. C/P counts are identity only — not bought/sold direction.
+          Click a row to load that underlier. Lean is bullish/bearish activity detection (premium + price); signed buy/sell is separate when the feed provides it.
         </p>
       </div>
     </section>
@@ -1605,10 +1748,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
      semantic palette. Call/put colors retain their meaning across routes. */
   display: flex;
   flex-direction: column;
-  gap: var(--s3);
+  gap: var(--s4);
   min-height: calc(100% + (var(--s5) * 2));
   margin: calc(var(--s5) * -1);
-  padding: var(--s4) var(--s4) var(--s6);
+  padding: var(--s5) var(--s5) var(--s7);
   min-width: 0;
   background: var(--void);
 }
@@ -1622,8 +1765,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .options-view :deep(.panel:hover) { border-color: var(--rule-hi); }
 .options-view :deep(.panel > .head) {
-  min-height: 36px;
-  padding: 7px 11px;
+  min-height: 38px;
+  padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--rule);
   background: var(--void-lift);
 }
@@ -1657,11 +1800,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .market-flow-link {
   display: inline-flex;
   align-items: center;
-  min-height: 32px;
-  padding: 5px 11px;
+  min-height: 34px;
+  padding: var(--s2) var(--s3);
   color: var(--call-hi);
   border: 1px solid color-mix(in srgb, var(--call) 42%, var(--rule));
-  border-radius: 4px;
   background: var(--call-wash);
   text-decoration: none;
 }
@@ -1676,14 +1818,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .command {
   display: flex;
   align-items: center;
-  gap: 8px 10px;
+  gap: var(--s2) var(--s3);
   flex-wrap: wrap;
-  min-height: 58px;
-  padding: 8px 10px;
+  min-height: 64px;
+  padding: var(--s3) var(--s4);
   border: 1px solid var(--rule-hi);
-  border-radius: 6px;
-  background: linear-gradient(180deg, #0a2537, #071b29);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  border-left: 3px solid var(--phosphor-dim);
+  background-color: var(--panel);
 }
 .identity {
   display: flex;
@@ -1692,12 +1833,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-width: 0;
   margin-right: 4px;
 }
-.symbol-lockup { display: flex; align-items: baseline; gap: 6px; line-height: 1; }
-.active-symbol { font-size: 1.75rem; font-weight: 700; letter-spacing: -.055em; color: var(--ink); }
+.symbol-lockup { display: grid; align-items: start; gap: var(--s1); line-height: 1; }
+.active-symbol { font-size: 1.7rem; font-weight: 720; letter-spacing: -.05em; color: var(--ink); }
 .slash { font: 300 1rem var(--font-display); color: var(--rule-hi); }
 .view-name { font: 700 0.85rem var(--font-display); letter-spacing: .1em; color: var(--ink-dim); }
-.observed { color: var(--ink-ghost); font-size: 9px; white-space: nowrap; }
-.symbol-form { position: relative; flex: 0 1 140px; min-width: 110px; }
+.observed { color: var(--ink-ghost); font-size: var(--t-micro); white-space: nowrap; }
+.symbol-form { position: relative; flex: 0 1 120px; min-width: 110px; }
 .mode-seg, .range-seg { flex: 0 0 auto; }
 .history-day-bar {
   display: flex;
@@ -1730,9 +1871,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .focus-note { color: var(--phosphor); font-weight: 650; }
 .symbol-entry {
   display: flex;
-  height: 32px;
+  height: 34px;
   border: 1px solid var(--rule-hi);
-  border-radius: 4px;
   overflow: hidden;
   background: var(--void-lift);
 }
@@ -1745,12 +1885,15 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   text-transform: uppercase;
 }
 .load-btn {
-  min-width: 48px;
+  min-width: 52px;
   padding: 0 8px;
-  color: var(--phosphor);
-  border-left: var(--hair) solid var(--rule);
-  font-size: 10px;
+  color: var(--void);
+  border-left: var(--hair) solid var(--phosphor);
+  background: var(--phosphor);
+  font-size: var(--t-micro);
+  font-weight: 800;
 }
+.load-btn:hover:not(:disabled) { background: var(--ink); }
 .load-btn:disabled { opacity: 0.5; }
 .search-hits {
   position: absolute;
@@ -1779,8 +1922,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .search-hits li:hover,
 .search-hits li.on { background: var(--phosphor-wash); color: var(--ink); }
-.search-hits .tier { color: var(--ink-ghost); font-size: 9px; }
-.search-hits .bars { color: var(--ink-faint); font-size: 9px; }
+.search-hits .tier { color: var(--ink-ghost); font-size: var(--t-micro); }
+.search-hits .bars { color: var(--ink-faint); font-size: var(--t-micro); }
 
 .loading-strip { border-color: var(--phosphor-dim); color: var(--ink-soft); background: var(--phosphor-wash); }
 .loading-strip.soft { opacity: 0.9; }
@@ -1870,6 +2013,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .side-pill.pos { color: var(--call); border-color: color-mix(in srgb, var(--call) 40%, var(--rule)); }
 .side-pill.neg { color: var(--put); border-color: color-mix(in srgb, var(--put) 40%, var(--rule)); }
+.side-pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--rule)); }
 .side-pill.neutral { color: var(--ink-ghost); }
 
 /* ---- Live Opportunities: composite board+flow ranking ------------------ */
@@ -1918,33 +2062,31 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .note.tiny { font-size: 11px; color: var(--ink-faint); }
 .note.pad { padding: var(--s3) var(--s4); }
 .cov { color: var(--ink-ghost); }
-.segment { display: flex; border: 1px solid var(--rule-hi); border-radius: 4px; height: 32px; overflow: hidden; background: var(--void-lift); }
-.seg { padding: 0 9px; color: var(--ink-faint); border-right: var(--hair) solid var(--rule); font-size: 10px; }
+.segment { display: flex; border: 1px solid var(--rule-hi); height: 34px; overflow: hidden; background: var(--void-lift); }
+.seg { padding: 0 var(--s2); color: var(--ink-faint); border-right: var(--hair) solid var(--rule); font-size: var(--t-micro); }
 .seg:last-child { border-right: 0; }
 .seg:hover { color: var(--ink); background: var(--panel-hi); }
-.seg.on { color: #022015; background: var(--phosphor); font-weight: 800; }
+.seg.on { color: var(--void); background: var(--phosphor); font-weight: 800; }
 .expiry-select {
-  height: 32px;
+  height: 34px;
   min-width: 120px;
-  max-width: 180px;
+  max-width: 160px;
   padding: 0 22px 0 8px;
   color: var(--ink);
   border: 1px solid var(--rule-hi);
-  border-radius: 4px;
   background: var(--panel-hi);
-  font-size: 10px;
+  font-size: var(--t-micro);
 }
 /* ---- live lag badge + quick filters (always visible) ------------------- */
 .live-filter-bar {
   display: flex;
   align-items: center;
-  gap: 6px 10px;
+  gap: var(--s2) var(--s3);
   flex-wrap: wrap;
-  min-height: 34px;
-  padding: 3px 8px;
+  min-height: 46px;
+  padding: var(--s2) var(--s3);
   border: 1px solid var(--rule-hi);
-  border-radius: 6px;
-  background: linear-gradient(90deg, rgba(8, 29, 43, 0.98), rgba(5, 23, 36, 0.98));
+  background: var(--panel);
   overflow: hidden;
 }
 .live-filter-bar.live {
@@ -2009,7 +2151,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .live-badge.live .live-title { color: var(--phosphor); }
 .live-badge.stale .live-title { color: var(--warn); }
 .live-sub {
-  font-size: 10px;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -2026,34 +2168,38 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--void-lift);
   min-width: 52px;
 }
-.live-lag .label { color: var(--ink-faint); font-size: 8px; }
-.live-lag .fig { font-size: 12px; color: var(--ink); font-weight: 700; }
+.live-lag .label { color: var(--ink-faint); font-size: var(--t-micro); }
+.live-lag .fig { font-size: var(--t-tiny); color: var(--ink); font-weight: 700; }
 .live-meta {
   color: var(--ink-ghost);
-  font-size: 10px;
-  flex: 0 1 auto;
+  font-size: var(--t-micro);
+  flex: 1 1 120px;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .quick-filters {
   display: flex;
   align-items: center;
   gap: 3px;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   margin-left: auto;
 }
 .qf-lab {
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: var(--t-micro);
   margin-right: 2px;
   letter-spacing: 0.06em;
 }
 .qf-chip {
-  min-height: 24px;
-  padding: 0 7px;
+  min-height: 28px;
+  padding: 0 var(--s2);
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-dim);
   background: var(--void-lift);
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 700;
   cursor: pointer;
 }
@@ -2073,12 +2219,19 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .filter-deck {
   border: var(--hair) solid var(--rule);
   background: var(--void-lift);
-  padding: 6px 8px 8px;
+  padding: var(--s3);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--s3);
 }
-.filter-summary { color: var(--ink-dim); font-size: 10px; }
+.filter-deck-intro {
+  max-width: 88ch;
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
+  line-height: 1.45;
+}
+.filter-summary { color: var(--ink-dim); font-size: var(--t-micro); }
 .filter-foot {
   display: flex;
   align-items: center;
@@ -2087,17 +2240,16 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .raw-btn.inline {
   margin-top: 0;
-  padding: 3px 8px;
-  font-size: 9px;
+  padding: var(--s1) var(--s2);
+  font-size: var(--t-micro);
 }
 .tune {
   color: var(--phosphor);
-  padding: 0 11px;
-  height: 32px;
+  padding: 0 var(--s3);
+  height: 34px;
   border: 1px solid var(--phosphor-dim);
-  border-radius: 4px;
   background: var(--phosphor-wash);
-  font-size: 10px;
+  font-size: var(--t-micro);
 }
 .tune.on { background: var(--phosphor-wash); }
 .filters {
@@ -2138,8 +2290,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 28px;
   padding: 4px var(--s3);
   border: 1px solid var(--rule);
-  border-radius: 6px;
-  background: rgba(8, 28, 42, 0.94);
+  background: var(--panel);
   color: var(--ink-dim);
   font-size: var(--t-tiny);
 }
@@ -2183,9 +2334,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .kpi-rail {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 8px;
-  background: transparent;
-  border: 0;
+  gap: 1px;
+  padding: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
   overflow: visible;
 }
 .kpi .dim { color: var(--ink-ghost); margin: 0 2px; }
@@ -2195,14 +2347,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   justify-content: center;
   gap: 4px;
   min-width: 0;
-  min-height: 78px;
-  padding: 10px 11px;
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  background: linear-gradient(145deg, rgba(12, 39, 56, 0.98), rgba(6, 25, 38, 0.98));
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+  min-height: 82px;
+  padding: var(--s3) var(--s4);
+  border: 0;
+  background: var(--panel);
 }
-.kpi .label { color: var(--ink-faint); font-size: 9px; letter-spacing: 0.08em; line-height: 1.2; font-weight: 700; }
+.kpi .label { color: var(--ink-faint); font-size: var(--t-micro); letter-spacing: 0.08em; line-height: 1.2; font-weight: 700; }
 .kpi strong {
   font-size: 1.08rem;
   font-weight: 700;
@@ -2215,10 +2365,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .kpi em {
   font-style: normal;
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: var(--t-micro);
   line-height: 1.15;
 }
-.kpi.spot { border-color: color-mix(in srgb, var(--phosphor) 36%, var(--rule)); background: linear-gradient(145deg, rgba(18, 64, 70, 0.82), rgba(6, 27, 40, 0.98)); }
+.kpi.spot { box-shadow: inset 3px 0 var(--phosphor); background: var(--phosphor-wash); }
 .kpi.spot strong { font-size: 1.28rem; color: var(--ink); font-weight: 750; }
 .kpi.positive { border-color: color-mix(in srgb, var(--long) 32%, var(--rule)); }
 .kpi.negative { border-color: color-mix(in srgb, var(--short) 32%, var(--rule)); }
@@ -2237,7 +2387,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid color-mix(in srgb, var(--warn) 55%, var(--rule));
   background: var(--warn-wash);
   color: var(--warn);
-  font-size: 8px;
+  font-size: var(--t-micro);
   font-weight: 700;
 }
 
@@ -2287,11 +2437,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .gex-meta-badge.flip { color: var(--warn); }
 
 .view-label {
-  font-size: 9px;
+  font-size: var(--t-micro);
   color: var(--phosphor-dim);
   font-weight: 700;
   letter-spacing: 0.12em;
-  margin-left: 6px;
+  margin-left: 0;
   white-space: nowrap;
 }
 
@@ -2302,10 +2452,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   margin-left: auto;
 }
 .scope-chip {
-  padding: 6px 9px;
+  padding: var(--s2) var(--s3);
   color: var(--phosphor);
   border: 1px solid color-mix(in srgb, var(--phosphor) 38%, var(--rule));
-  border-radius: 4px;
   background: var(--phosphor-wash);
 }
 
@@ -2314,14 +2463,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid color-mix(in srgb, var(--call) 50%, var(--rule));
   background: color-mix(in srgb, var(--call) 12%, transparent);
   color: var(--call);
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 700;
   display: flex;
   align-items: center;
   gap: 4px;
 }
 .long-it-btn .info-icon {
-  font-size: 9px;
+  font-size: var(--t-micro);
   opacity: 0.8;
 }
 
@@ -2356,7 +2505,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 
 .gex-meta-badge {
-  font-size: 9px;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   font-family: var(--font-data);
   margin-left: 6px;
@@ -2428,7 +2577,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-toolbar {
   display: flex;
   flex-direction: column;
-  min-height: 28px;
+  min-height: 36px;
   border-block: var(--hair) solid var(--rule);
   background: var(--void-lift);
 }
@@ -2436,7 +2585,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-toolbar-main {
   display: flex;
   align-items: stretch;
-  min-height: 28px;
+  min-height: 36px;
 }
 .tape-toolbar-right {
   display: flex;
@@ -2473,7 +2622,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 0 4px;
   background: var(--panel-raise);
   color: var(--ink-ghost);
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 700;
   vertical-align: middle;
 }
@@ -2495,12 +2644,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border-left: var(--hair) solid var(--rule-hi);
 }
 .near-dte-chip {
-  min-height: 20px;
+  min-height: 26px;
   padding: 0 6px;
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-faint);
   background: transparent;
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 700;
   cursor: pointer;
   letter-spacing: 0.05em;
@@ -2512,16 +2661,16 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--call-wash);
 }
 .sort-control { display: flex; align-items: center; gap: var(--s2); }
-.sort-control select { min-height: 22px; padding: 0 18px 0 6px; color: var(--ink); border: var(--hair) solid var(--rule-hi); background: var(--panel); font-size: 10px; }
-.anomaly-method { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-dim); font: 9px var(--font-display); letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+.sort-control select { min-height: 26px; padding: 0 18px 0 6px; color: var(--ink); border: var(--hair) solid var(--rule-hi); background: var(--panel); font-size: var(--t-micro); }
+.anomaly-method { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-dim); font: var(--t-micro) var(--font-display); letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
 .anomaly-method i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); flex: 0 0 auto; }
 .anomaly-method i.live { background: var(--phosphor); }
 .anomaly-method i.stale { background: var(--warn); }
 .anomaly-method i.history { background: var(--ink-dim); }
 .table-scroll { overflow: auto; max-height: 420px; }
 table { width: 100%; border-collapse: collapse; font-size: var(--t-tiny); }
-th, td { padding: 3px 8px; border-bottom: var(--hair) solid var(--rule); text-align: left; white-space: nowrap; }
-th { position: sticky; top: 0; background: var(--panel); z-index: 1; color: var(--ink-dim); }
+th, td { padding: var(--s2) var(--s3); border-bottom: var(--hair) solid var(--rule); text-align: left; white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--panel-hi); z-index: 1; color: var(--ink-dim); }
 td.fig, th.num-col, td.num-col { font-size: var(--t-small); }
 .flag-col { min-width: 80px; }
 /* One consistent anomaly-flag treatment. The abbreviation (PRM/VOL/CLU/SWP)
@@ -2568,8 +2717,8 @@ tr.isMegaWhale {
 tr.anomalous td, tr.isWhale td, tr.isMegaWhale td { color: var(--ink); }
 .num-col { text-align: right; }
 .dim { color: var(--ink-dim); }
-.tape-table th { font-size: 9px; letter-spacing: 0.06em; border-bottom: var(--hair) solid var(--rule-hi); }
-.tape-table td { padding: 5px 8px; font-size: var(--t-tiny); }
+.tape-table th { font-size: var(--t-micro); letter-spacing: 0.06em; border-bottom: var(--hair) solid var(--rule-hi); }
+.tape-table td { padding: var(--s2) var(--s3); font-size: var(--t-tiny); }
 /* Row states: hover lifts the surface; anomalous rows keep their warn wash
    underneath so the flag cue never gets washed out by the hover state. */
 .tape-table tbody tr { transition: background var(--dur-fast) var(--ease-out); }
@@ -2600,7 +2749,7 @@ tr.anomalous td, tr.isWhale td, tr.isMegaWhale td { color: var(--ink); }
   text-align: center;
   border: var(--hair) solid var(--rule-hi);
   background: var(--panel-hi);
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: 0.05em;
 }
@@ -2610,7 +2759,7 @@ td.call { color: var(--call); }
 td.put { color: var(--put); }
 .agg.buy { color: var(--long); background: var(--long-wash); border-color: color-mix(in srgb, var(--long) 40%, var(--rule)); font-weight: 800; }
 .agg.sell { color: var(--short); background: var(--short-wash); border-color: color-mix(in srgb, var(--short) 40%, var(--rule)); font-weight: 800; }
-.agg.unknown { color: var(--ink-faint); font-size: 9px; }
+.agg.unknown { color: var(--ink-faint); font-size: var(--t-micro); }
 .bias-chip.bull, .edge-chip.bull { color: var(--call); border-color: color-mix(in srgb, var(--call) 50%, var(--rule)); background: var(--call-wash); }
 .bias-chip.bear, .edge-chip.bear { color: var(--put); border-color: color-mix(in srgb, var(--put) 50%, var(--rule)); background: var(--put-wash); }
 .bias-chip.call { color: var(--call); border-color: color-mix(in srgb, var(--call) 40%, var(--rule)); background: var(--call-wash); }
@@ -2623,7 +2772,7 @@ td.put { color: var(--put); }
 .class-chip.sweep { color: var(--ink); border-color: var(--ink-faint); background: var(--panel-raise); font-weight: 800; }
 .class-chip.block { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--rule)); background: var(--warn-wash); font-weight: 800; }
 .class-chip.single { color: var(--ink-dim); background: transparent; }
-.est { color: var(--ink-faint); margin-left: 2px; font-size: 9px; }
+.est { color: var(--ink-faint); margin-left: 2px; font-size: var(--t-micro); }
 /* Notes always scannable — denser strip for power-user desk */
 .data-notes {
   min-height: 32px;
@@ -2685,7 +2834,7 @@ td.put { color: var(--put); }
   .anomaly-method { width: 100%; margin-left: 0; max-width: none; }
   .unusual-meta { display: none; }
   .live-sub { max-width: 50vw; }
-  .quick-filters { margin-left: 0; width: 100%; }
+  .quick-filters { margin-left: 0; width: 100%; flex-wrap: wrap; }
 }
 
 @media (max-width: 840px) {
@@ -2696,6 +2845,18 @@ td.put { color: var(--put); }
   .unusual-head { flex-direction: column; align-items: stretch; }
   .unusual-actions { margin-left: 0; padding: 0 8px 8px; }
   .tune { margin-left: 0; }
+}
+
+@media (max-width: 560px) {
+  .command-right {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    margin-left: 0;
+  }
+  .command-right .scope-chip { grid-column: 1 / -1; }
+  .market-flow-link,
+  .tune { width: 100%; justify-content: center; }
 }
 /* Absent-measurement state. Deliberately reads as a warning, not an empty
    state: "no data" and "a calm market" must never look alike. */
@@ -2798,7 +2959,7 @@ tr.isMegaWhale:hover {
 
 /* Tape Stalker Cards View */
 .tape-cards-container {
-  padding: 10px;
+  padding: var(--s3);
   background: var(--void);
   max-height: min(60vh, 560px);
   overflow-y: auto;
@@ -2806,13 +2967,13 @@ tr.isMegaWhale:hover {
 .tape-cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
+  gap: var(--s3);
 }
 .tape-stalker-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: var(--s2);
+  padding: var(--s3);
   background: var(--panel);
   border: var(--hair) solid var(--rule);
   transition: background var(--dur-fast) var(--ease-out);

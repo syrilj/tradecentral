@@ -9,9 +9,15 @@ Run with:
 
 Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Allow-Origin: *`):
 
-  GET  /api/status
-      -> get_dashboard_data() verbatim (PEAD candidates, directional signals,
-         sector flow, vol complex, PEAD gate metrics, GCP resources, leaderboard).
+  GET  /api/status[?depth=quick|deep]
+      -> latest cached desk board (PEAD candidates, directional signals,
+         sector flow, vol complex, PEAD gate metrics, leaderboard). Polls do
+         not rebuild; POST /api/trigger_scan is the rebuild path.
+
+  GET  /api/quotes?symbols=A,B,C
+      -> live marks for up to 40 tickers. Prefers LSE equity candles, falls
+         back to the local daily close. {asof, rows:[{symbol,last,chg_1d_pct,
+         asof,source,quality}]}
 
   GET  /api/leaderboard
       -> {asof, leaderboard}
@@ -1166,6 +1172,17 @@ def _scan_depth(value: str | None) -> str:
     return "deep" if str(value or "").strip().lower() == "deep" else "quick"
 
 
+def _status_cache_ttl(depth: str) -> float:
+    return _DEEP_STATUS_CACHE_TTL_S if depth == "deep" else _STATUS_CACHE_TTL_S
+
+
+def _status_cache_fresh(depth: str, now: float | None = None) -> bool:
+    stamp = _STATUS_CACHE_TS.get(depth)
+    if stamp is None or depth not in _STATUS_CACHE:
+        return False
+    return ((now if now is not None else time.time()) - stamp) < _status_cache_ttl(depth)
+
+
 def get_dashboard_data(
     *,
     force: bool = False,
@@ -1173,27 +1190,44 @@ def get_dashboard_data(
     activate: bool = False,
     progress: Callable[[str, int, str], None] | None = None,
 ) -> dict:
-    """Thread-safe, TTL-cached wrapper around render_dashboard.get_dashboard_data."""
+    """Thread-safe, TTL-cached wrapper around render_dashboard.get_dashboard_data.
+
+    `/api/status` polls must not rebuild PEAD/directional boards. A concurrent
+    status poll during a Deep scan used to wait on this lock, then recompute
+    the Quick snapshot and overwrite the desk's two model tables. Trigger-scan
+    is the only path that force-rebuilds.
+    """
     global _ACTIVE_SCAN_DEPTH
-    depth = _scan_depth(scan_depth) if scan_depth is not None else _ACTIVE_SCAN_DEPTH
+    requested = _scan_depth(scan_depth) if scan_depth is not None else None
+    depth = requested if requested is not None else _ACTIVE_SCAN_DEPTH
     now = time.time()
-    cache_ttl = _DEEP_STATUS_CACHE_TTL_S if depth == "deep" else _STATUS_CACHE_TTL_S
-    if (
-        not force
-        and depth in _STATUS_CACHE
-        and (now - _STATUS_CACHE_TS.get(depth, 0.0)) < cache_ttl
-    ):
+    if not force and _status_cache_fresh(depth, now):
         if activate:
             _ACTIVE_SCAN_DEPTH = depth
         return _STATUS_CACHE[depth]
+    # Idle polls serve the latest activated board even after TTL. Never launch
+    # a competing rebuild that can replace a just-completed scan.
+    if not force and not activate:
+        fallback = _STATUS_CACHE.get(depth) or _STATUS_CACHE.get(_ACTIVE_SCAN_DEPTH)
+        if fallback is not None:
+            return fallback
     with _STATUS_LOCK:
         now = time.time()
-        if (
-            not force
-            and depth in _STATUS_CACHE
-            and (now - _STATUS_CACHE_TS.get(depth, 0.0)) < cache_ttl
-        ):
-            data = _STATUS_CACHE[depth]
+        depth = requested if requested is not None else _ACTIVE_SCAN_DEPTH
+        cached = _STATUS_CACHE.get(depth)
+        if not force and _status_cache_fresh(depth, now):
+            data = cached
+        elif not force and not activate:
+            data = cached or _STATUS_CACHE.get(_ACTIVE_SCAN_DEPTH)
+            if data is None:
+                data = _get_dashboard_data_uncached(
+                    scan_depth=depth,
+                    include_gcp_resources=False,
+                    progress=progress,
+                )
+                data["searchable_symbol_count"] = len(SYMBOL_INDEX)
+                _STATUS_CACHE[depth] = data
+                _STATUS_CACHE_TS[depth] = time.time()
         else:
             data = _get_dashboard_data_uncached(
                 scan_depth=depth,
@@ -1932,13 +1966,42 @@ def _trajectory_payload(
     else:
         source_label = "live"
 
+    last_bar_date = win.index[-1].strftime("%Y-%m-%d")
+    live_spot, live_asof = _fetch_lse_equity_spot(symbol)
+    last_source = source_label
+    last_asof = last_bar_date
+    quality = "local"
+    if live_spot is not None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        session_close = close_full.iloc[-1]
+        prior_close = close_full.iloc[-2] if len(close_full) > 1 else session_close
+        base = prior_close if last_bar_date >= today else session_close
+        stats["last_price"] = live_spot
+        stats["chg_1d_pct"] = _safe_round(_pct(base, live_spot), 4)
+        last_source = "lse_equity_candles"
+        last_asof = live_asof or last_bar_date
+        quality = "live"
+        if series:
+            last_bar = dict(series[-1])
+            last_bar["c"] = live_spot
+            high = last_bar.get("h")
+            low = last_bar.get("l")
+            if isinstance(high, (int, float)):
+                last_bar["h"] = _safe_round(max(float(high), live_spot), 4)
+            if isinstance(low, (int, float)):
+                last_bar["l"] = _safe_round(min(float(low), live_spot), 4)
+            series[-1] = last_bar
+
     payload = {
         "symbol": symbol,
         "window": window,
         "n_bars": int(len(win)),
         "first_date": win.index[0].strftime("%Y-%m-%d"),
-        "last_date": win.index[-1].strftime("%Y-%m-%d"),
+        "last_date": last_bar_date,
         "source": source_label,
+        "last_source": last_source,
+        "last_asof": last_asof,
+        "quality": quality,
         "series": series,
         "stats": stats,
         "factors": _compute_factors(df_full),
@@ -2118,6 +2181,69 @@ def _options_price_series(
         keep = {"1d": 2, "5d": 6, "1m": 23, "3m": 66}.get(selected_range, 23)
         series = series[-keep:]
     return series, _safe_round(frame["close"].iloc[-1], 4)
+
+
+def _symbol_quote(symbol: str) -> dict:
+    """One live mark for the desk boards. LSE last when available, else local close."""
+    frame, tier = _load_symbol_df(symbol)
+    local_last = None
+    local_prev = None
+    local_asof = None
+    if frame is not None and not getattr(frame, "empty", True) and "close" in frame.columns:
+        closes = frame["close"].astype(float).dropna()
+        if len(closes):
+            local_last = _safe_round(float(closes.iloc[-1]), 4)
+            local_asof = _frame_asof_date(frame)
+        if len(closes) > 1:
+            local_prev = _safe_round(float(closes.iloc[-2]), 4)
+    live_spot, live_asof = _fetch_lse_equity_spot(symbol)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if live_spot is not None:
+        last = live_spot
+        if local_asof and str(local_asof)[:10] >= today:
+            prev = local_prev
+        else:
+            prev = local_last
+        source = "lse_equity_candles"
+        quality = "live"
+        asof = live_asof or local_asof
+    else:
+        last = local_last
+        prev = local_prev
+        source = tier or "local"
+        quality = "local"
+        asof = local_asof
+    chg = _pct(prev, last) if prev is not None and last is not None else None
+    return {
+        "symbol": symbol,
+        "last": last,
+        "prev_close": prev,
+        "chg_1d_pct": _safe_round(chg, 4) if chg is not None else None,
+        "asof": asof,
+        "source": source,
+        "quality": quality,
+    }
+
+
+def _quotes_payload(symbols: list[str]) -> dict:
+    cleaned: list[str] = []
+    for raw in symbols:
+        ok, sym = _sanitize_symbol(raw)
+        if ok and sym not in cleaned:
+            cleaned.append(sym)
+        if len(cleaned) >= 40:
+            break
+    rows: list[dict] = []
+    if cleaned:
+        futures = _get_concurrent_futures()
+        workers = min(8, len(cleaned))
+        with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            rows = list(pool.map(_symbol_quote, cleaned))
+    return {
+        "asof": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "rows": rows,
+        "count": len(rows),
+    }
 
 
 def _fetch_lse_equity_spot(symbol: str) -> tuple[float | None, str | None]:
@@ -2356,9 +2482,13 @@ def _fetch_live_option_inputs(
             sys.path.insert(0, str(provider_src))
         from lse_provider import fetch_lse_options_flow  # type: ignore[import-not-found]
 
-        # Fetch with a soft floor so strict UI filters can still be applied in
-        # options_intelligence without the vendor pre-emptying the tape.
-        fetch_floor = min(float(filters.min_premium), 10_000.0) if filters.min_premium > 0 else 0.0
+        # Pull a wide premium band so mid-cap names with many small recent
+        # prints still prove the feed is live. UI min_premium still filters
+        # the displayed tape; using min(min_premium, 10k) previously dropped
+        # sub-$10k prints and left only day-old whales → false "TAPE STALE".
+        fetch_floor = 0.0
+        if float(filters.min_premium) > 0:
+            fetch_floor = min(float(filters.min_premium), 1_000.0)
         return list(fetch_lse_options_flow(
             symbol, min_premium=fetch_floor, limit=500, timeout=12,
         ) or [])
@@ -2431,9 +2561,6 @@ def _fetch_live_option_inputs(
                 matched += 1
         if matched:
             open_interest_source = f"cached_chain_exact_occ:{latest_label or 'unknown'}"
-            warnings.append(
-                f"OI from dated chain snapshot ({matched} OCC matches) — LSE live quotes omit OI."
-            )
         else:
             open_interest_source = "unavailable"
 
@@ -2517,7 +2644,10 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
         min_dte=min_dte,
         max_dte=max_dte,
         expiry=selected_expiry,
-        tape_limit=_safe_int(query.get("tape_limit", ["100"])[0], 100, 1, 500),
+        # Default matches the LSE flow fetch cap so the tape list and C/P
+        # summary share the same print set (a 100-row slice was hiding most
+        # of the window and made the ratio disagree with the visible tape).
+        tape_limit=_safe_int(query.get("tape_limit", ["500"])[0], 500, 1, 500),
         date_from=(query.get("from", [None])[0] or None),
         date_to=(query.get("to", [None])[0] or None),
         risk_free_rate=q_float("rate", 0.045, -0.05, 0.25),
@@ -3511,7 +3641,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
@@ -3553,7 +3683,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
     def do_GET(self):
@@ -3582,6 +3712,17 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
             if path == "/api/status":
                 requested_depth = query.get("depth", [None])[0]
                 self._send_json(get_dashboard_data(scan_depth=requested_depth))
+
+            elif path == "/api/quotes":
+                raw = query.get("symbols", [""])[0]
+                symbols = [tok.strip() for tok in str(raw).split(",") if tok.strip()]
+                if not symbols:
+                    self._send_json(
+                        {"error": "symbols query param is required", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                self._send_json(_quotes_payload(symbols))
 
             elif path == "/api/leaderboard":
                 data = get_dashboard_data()
@@ -3995,9 +4136,9 @@ def main():
     args = parser.parse_args()
 
     port = args.port
-    # This dashboard exposes research artifacts and provider-derived trading
-    # context without authentication. Keep it on loopback; publishing it to a
-    # LAN requires a separate authenticated reverse proxy, not a wider bind.
+    # Clerk authenticates the dashboard operator. This API still binds to
+    # loopback. Publishing it to a LAN requires a separately authenticated
+    # reverse proxy, not a wider bind.
     server = ThreadedHTTPServer((LOOPBACK_HOST, port), ApiRequestHandler)
     url = f"http://localhost:{port}"
 

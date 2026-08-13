@@ -4,6 +4,7 @@ import pytest
 
 from edge.daily_plays.options_intelligence import (
     OptionsFilters,
+    _best_observation_time,
     _imbalance_confidence,
     build_options_intelligence,
 )
@@ -146,6 +147,13 @@ def test_unsigned_call_put_mix_never_drives_squeeze_direction():
     assert unsigned["summary"]["activity_imbalance"] == 1.0
     assert unsigned["summary"]["signed_flow_imbalance"] is None
     assert unsigned["summary"]["squeeze"]["theory"]["directional_flow_imbalance"] == 0.0
+    # Unsigned tape still gets a live activity-shift readout (call+/put−),
+    # which must not leak into the signed squeeze term.
+    activity = unsigned["summary"]["activity_shift"]
+    assert activity is not None
+    assert activity["kind"] == "contract_activity"
+    assert activity["n"] >= 1
+    assert activity["signed_imbalance"] > 0
 
 
 def test_signed_flow_imbalance_is_sample_size_shrunk_for_squeeze():
@@ -159,6 +167,61 @@ def test_signed_flow_imbalance_is_sample_size_shrunk_for_squeeze():
     assert signed["summary"]["signed_flow_confidence"] == 0.125
     assert signed["summary"]["signed_flow_imbalance"] == 0.125
     assert signed["summary"]["squeeze"]["theory"]["directional_flow_imbalance"] == 0.125
+    assert signed["summary"]["signed_flow_confidence_band"] != "high"
+
+
+def _signed_prints(n, *, side, start_hour=12):
+    right = "call" if side == "buy_call" else "put"
+    aggressor = "BUY"
+    rows = []
+    for i in range(n):
+        minute = (i * 4) % 60
+        hour = start_hour + (i * 4) // 60
+        rows.append({
+            "contract_type": right,
+            "premium": 125_000,
+            "volume": 10,
+            "timestamp": f"2026-07-31T{hour:02d}:{minute:02d}:00Z",
+            "aggressor": aggressor,
+        })
+    return rows
+
+
+def test_mid_tape_reversal_updates_live_squeeze_instead_of_locking_pre_shift():
+    prices = [
+        {"t": f"2026-07-{day:02d}T20:00:00+00:00", "close": 90.0 + day, "volume": 2_000_000.0}
+        for day in range(1, 22)
+    ]
+    chain = [
+        _chain("call", 101, gamma=0.08) | {"open_interest": 50_000},
+        _chain("put", 99, gamma=0.02) | {"open_interest": 5_000},
+    ]
+    common = dict(
+        symbol="TEST",
+        chain_rows=chain,
+        price_series=prices,
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+    stable = build_options_intelligence(flow_rows=_signed_prints(12, side="buy_call"), **common)
+    flipped = build_options_intelligence(
+        flow_rows=_signed_prints(8, side="buy_call") + _signed_prints(8, side="buy_put", start_hour=13),
+        **common,
+    )
+    assert stable["summary"]["signed_flow_imbalance"] > 0
+    assert flipped["summary"]["signed_flow_imbalance"] < 0
+    assert flipped["summary"]["squeeze"]["score"] != stable["summary"]["squeeze"]["score"]
+    assert flipped["summary"]["flow_shift"]["last_shift_index"] is not None
+    # Just after a long one-sided run the locked cumulative would still be
+    # bullish; post-shift flow must not keep that sign.
+    locked_net = 8 * 125_000 - 8 * 125_000
+    assert locked_net == 0
+    assert flipped["summary"]["signed_flow_imbalance"] != 0.0
 
 
 def test_squeeze_uses_observed_adv_instead_of_spot_proxy():
@@ -489,6 +552,59 @@ def test_tape_anomalies_use_robust_observable_rules_and_respect_depth_limit():
     assert "volume_outlier" in outlier["anomaly_flags"]
     assert result["anomalies"]["count"] == 1
     assert "MAD" in result["anomalies"]["method"]
+
+
+def test_best_observation_time_prefers_precise_clocks_over_midnight_buckets():
+    midnight = datetime(2026, 8, 12, 0, 0, tzinfo=timezone.utc)
+    precise = datetime(2026, 8, 12, 15, 18, tzinfo=timezone.utc)
+    older_precise = datetime(2026, 8, 11, 19, 0, tzinfo=timezone.utc)
+    assert _best_observation_time([midnight, precise, older_precise]) == precise
+    assert _best_observation_time([midnight, None]) == midnight
+    assert _best_observation_time([None, None]) is None
+
+
+def test_freshness_tracks_feed_even_when_min_premium_filters_recent_prints():
+    """Small live prints must keep the feed lamp live under a high min $ floor."""
+    flow_rows = [
+        {
+            "contract_type": "call",
+            "premium": 500,  # below $50k floor
+            "volume": 2,
+            "strike": 100,
+            "timestamp": "2026-07-31T15:00:00Z",
+        },
+        {
+            "contract_type": "put",
+            "premium": 80_000,
+            "volume": 20,
+            "strike": 95,
+            "timestamp": "2026-07-30T20:00:00Z",  # day-old whale
+        },
+    ]
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[_chain("call", 105), _chain("put", 95)],
+        flow_rows=flow_rows,
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
+        spot=100,
+        filters=OptionsFilters(range="5d", min_premium=50_000, min_volume=1),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+    assert result["provider"]["activity_basis"] == "trade_tape"
+    assert len(result["flow_tape"]) == 1
+    assert result["flow_tape"][0]["premium"] == 80_000
+    freshness = result["freshness"]
+    # Feed age follows the small live print, not the filtered-out whale lag alone.
+    assert freshness["feed_asof"] is not None
+    assert "2026-07-31T15:00:00" in str(freshness["feed_asof"])
+    assert freshness["age_seconds"] is not None
+    assert freshness["age_seconds"] < 60  # asof is 15:00, feed stamp 15:00
+    assert freshness["tape_age_seconds"] is not None
+    assert freshness["tape_age_seconds"] > freshness["age_seconds"]
 
 
 def test_imbalance_confidence_shrinks_thin_tape():

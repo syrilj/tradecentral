@@ -614,6 +614,7 @@ class AdaptiveSignalInputs:
     sector_context: Mapping[str, Any] | None = None
     market_sentiment: Mapping[str, Any] | None = None
     fundamental_context: Mapping[str, Any] | None = None
+    options_context: Mapping[str, Any] | None = None
     stream_performance: Mapping[str, float] | None = None
 
 
@@ -631,6 +632,27 @@ def score_symbol(inputs: AdaptiveSignalInputs) -> dict[str, Any]:
     sector = score_sector(technical_score=tech_score, sector_context=inputs.sector_context)
     sentiment = score_sentiment(inputs.market_sentiment)
     fundamental = score_fundamental(frame, fundamental_context=inputs.fundamental_context)
+
+    # Options structure and dealer gamma conditioning
+    options = dict(inputs.options_context or {})
+    gex_regime = str(options.get("gex_regime") or options.get("dealer_gamma") or "").lower()
+    squeeze_score = _finite(options.get("squeeze_score"))
+    long_gamma_dampened = bool(options.get("long_gamma_dampened") or "long" in gex_regime or "positive" in gex_regime)
+
+    # If market makers are long gamma, breakout moves are dampened by liquidity hedging
+    if long_gamma_dampened and tech_score is not None:
+        tech_score = tech_score * 0.75
+        technical["score"] = round(tech_score, 4)
+        technical.setdefault("reasons", []).append("gex:long_gamma_dampened")
+
+    # If market makers are short gamma with active squeeze risk, directional alignment amplifies the setup
+    squeeze_amplified = False
+    if ("short" in gex_regime or "negative" in gex_regime or (squeeze_score is not None and abs(squeeze_score) >= 10.0)) and tech_score is not None:
+        if squeeze_score is not None and ((squeeze_score > 0 and tech_score > 0) or (squeeze_score < 0 and tech_score < 0)):
+            squeeze_amplified = True
+            tech_score = _clip(tech_score * 1.25)
+            technical["score"] = round(tech_score, 4)
+            technical.setdefault("reasons", []).append("gex:squeeze_amplified")
 
     streams = {
         "technical": technical,
@@ -670,6 +692,10 @@ def score_symbol(inputs: AdaptiveSignalInputs) -> dict[str, Any]:
         reasons.append("stream_conflict")
     if regime.get("quality") != "ok":
         reasons.append("regime_degraded")
+    if long_gamma_dampened:
+        reasons.append("dealer_long_gamma_dampened")
+    if squeeze_amplified:
+        reasons.append("dealer_short_gamma_amplified")
 
     bar_meta = infer_bar_meta(frame)
     return {
@@ -690,6 +716,12 @@ def score_symbol(inputs: AdaptiveSignalInputs) -> dict[str, Any]:
         "n_bars": bar_meta["n_bars"],
         "streams": streams,
         "stream_scores": stream_scores,
+        "options_context": {
+            "gex_regime": gex_regime or None,
+            "squeeze_score": squeeze_score,
+            "long_gamma_dampened": long_gamma_dampened,
+            "squeeze_amplified": squeeze_amplified,
+        },
         "stream_performance_used": {
             name: _finite((inputs.stream_performance or {}).get(name))
             for name in STREAM_NAMES
@@ -718,12 +750,14 @@ def scan_adaptive_signals(
     sector_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
     market_sentiment: Mapping[str, Any] | None = None,
     fundamental_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
+    options_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
     stream_performance: Mapping[str, float] | None = None,
     row_limit: int = 40,
 ) -> dict[str, Any]:
     """Rank a universe by |composite_score| for desk attention."""
     sector_map = dict(sector_by_symbol or {})
     fund_map = dict(fundamental_by_symbol or {})
+    opt_map = dict(options_by_symbol or {})
     rows: list[dict[str, Any]] = []
     failures = 0
     requested = list(dict.fromkeys(_symbol(s) for s in symbols if _symbol(s)))
@@ -737,6 +771,7 @@ def scan_adaptive_signals(
                     sector_context=sector_map.get(symbol),
                     market_sentiment=market_sentiment,
                     fundamental_context=fund_map.get(symbol),
+                    options_context=opt_map.get(symbol),
                     stream_performance=stream_performance,
                 )
             )

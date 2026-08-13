@@ -198,45 +198,6 @@ const focusBar = computed(() => {
   )
 })
 
-const hoverBreakdown = computed(() => {
-  if (!focusBar.value) return null
-  const fb = focusBar.value
-  const callVal = fb.callVal
-  const putVal = fb.putVal
-  const total = callVal + putVal
-  const callPct = total > 0 ? (callVal / total) * 100 : 50
-  const putPct = total > 0 ? (putVal / total) * 100 : 50
-  const isPutDominant = putVal > callVal * 1.15
-  const isCallDominant = callVal > putVal * 1.15
-
-  const sumVal = bars.value.reduce((s, b) => s + b.callVal + b.putVal, 0)
-  const avg = sumVal / Math.max(1, bars.value.length * 2)
-  const callOverflow = avg > 0 ? callVal / avg : 0
-  const putOverflow = avg > 0 ? putVal / avg : 0
-
-  let overflowLabel = ''
-  if (callOverflow >= 1.5) overflowLabel = `CALL OVERFLOW ${callOverflow.toFixed(1)}x`
-  else if (putOverflow >= 1.5) overflowLabel = `PUT OVERFLOW ${putOverflow.toFixed(1)}x`
-
-  return {
-    strike: fb.strike,
-    callVal,
-    putVal,
-    net: fb.net,
-    callOi: fb.call_oi,
-    putOi: fb.put_oi,
-    callGex: fb.call_gex_m,
-    putGex: Math.abs(fb.put_gex_m),
-    total,
-    callPct,
-    putPct,
-    isPutDominant,
-    isCallDominant,
-    overflowLabel,
-    cx: fb.cx,
-  }
-})
-
 function xOfPrice(price: number): number | null {
   const rows = orderedRows.value
   if (!rows.length) return null
@@ -362,26 +323,34 @@ function barAriaLabel(bar: Bar): string {
         <span class="label">NET TOTAL</span>
         <strong class="fig">{{ metricValue(totalNet, true) }}</strong>
       </div>
-      <div v-if="focusBar" class="strike-focus">
-        <span class="label">
-          {{
-            hoverStrike != null ? 'HOVER'
-              : focusStrike != null ? 'LOCKED'
-                : 'SPOT'
-          }}
-        </span>
-        <strong class="fig">${{ strikeLabel(focusBar.strike) }}</strong>
-        <div class="focus-split">
-          <span class="pos">C {{ metric === 'gex' ? metricValue(focusBar.call_gex_m) : compact(focusBar.call_oi) }}</span>
-          <span class="neg">P {{ metric === 'gex' ? metricValue(Math.abs(focusBar.put_gex_m)) : compact(focusBar.put_oi) }}</span>
-          <span class="net-tag" :class="focusBar.net >= 0 ? 'pos' : 'neg'">NET {{ metricValue(focusBar.net, true) }}</span>
-          <button
-            v-if="focusStrike != null"
-            type="button"
-            class="clear-lock label"
-            @click="clearLock"
-          >CLR</button>
+      <div v-if="focusBar" class="strike-focus" :class="{ locked: focusStrike != null }">
+        <div class="focus-strike">
+          <span class="label">
+            {{ hoverStrike != null ? 'INSPECTING' : focusStrike != null ? 'LOCKED STRIKE' : 'NEAREST SPOT' }}
+          </span>
+          <strong class="fig">${{ strikeLabel(focusBar.strike) }}</strong>
         </div>
+        <div class="focus-metric call">
+          <span class="label">CALL {{ metric === 'gex' ? 'GEX' : 'OI' }}</span>
+          <strong class="fig">{{ metricValue(focusBar.callVal) }}</strong>
+          <small>OI {{ compact(focusBar.call_oi) }}</small>
+        </div>
+        <div class="focus-metric put">
+          <span class="label">PUT {{ metric === 'gex' ? 'GEX' : 'OI' }}</span>
+          <strong class="fig">{{ metricValue(focusBar.putVal) }}</strong>
+          <small>OI {{ compact(focusBar.put_oi) }}</small>
+        </div>
+        <div class="focus-metric net" :class="focusBar.net >= 0 ? 'positive' : 'negative'">
+          <span class="label">NET {{ metric === 'gex' ? 'GEX' : 'OI' }}</span>
+          <strong class="fig">{{ metricValue(focusBar.net, true) }}</strong>
+          <small>click a bar to lock</small>
+        </div>
+        <button
+          v-if="focusStrike != null"
+          type="button"
+          class="clear-lock label"
+          @click="clearLock"
+        >CLEAR</button>
       </div>
     </div>
 
@@ -390,47 +359,6 @@ function barAriaLabel(bar: Bar): string {
       class="plot-scroll"
       :class="{ scrollable }"
     >
-      <!-- Hover breakdown card print overlay -->
-      <div
-        v-if="hoverBreakdown"
-        class="strike-hover-card"
-        :class="{ 'put-dom': hoverBreakdown.isPutDominant, 'call-dom': hoverBreakdown.isCallDominant }"
-      >
-        <div class="card-hdr">
-          <span class="card-strike">${{ strikeLabel(hoverBreakdown.strike) }}</span>
-          <span v-if="hoverBreakdown.overflowLabel" class="overflow-badge">{{ hoverBreakdown.overflowLabel }}</span>
-          <span
-            class="dom-badge label"
-            :class="hoverBreakdown.isPutDominant ? 'put' : hoverBreakdown.isCallDominant ? 'call' : 'neutral'"
-          >
-            {{ hoverBreakdown.isPutDominant ? `${hoverBreakdown.putPct.toFixed(0)}% PUT DOMINANCE` : hoverBreakdown.isCallDominant ? `${hoverBreakdown.callPct.toFixed(0)}% CALL DOMINANCE` : 'BALANCED' }}
-          </span>
-        </div>
-        <div class="card-grid">
-          <div class="card-col call">
-            <span class="label">CALL GEX</span>
-            <strong class="fig">${{ num(hoverBreakdown.callGex, 2) }}M</strong>
-            <span class="sub">OI {{ compact(hoverBreakdown.callOi) }}</span>
-          </div>
-          <div class="card-col put">
-            <span class="label">PUT GEX</span>
-            <strong class="fig">${{ num(hoverBreakdown.putGex, 2) }}M</strong>
-            <span class="sub">OI {{ compact(hoverBreakdown.putOi) }}</span>
-          </div>
-          <div class="card-col net">
-            <span class="label">NET GEX</span>
-            <strong class="fig" :class="hoverBreakdown.net >= 0 ? 'call' : 'put'">
-              {{ hoverBreakdown.net >= 0 ? '+' : '' }}${{ num(hoverBreakdown.net, 2) }}M
-            </strong>
-            <span class="sub">TOTAL {{ hoverBreakdown.callPct.toFixed(0) }}% / {{ hoverBreakdown.putPct.toFixed(0) }}%</span>
-          </div>
-        </div>
-        <div class="card-bar">
-          <i class="bar-call" :style="{ width: `${hoverBreakdown.callPct}%` }" />
-          <i class="bar-put" :style="{ width: `${hoverBreakdown.putPct}%` }" />
-        </div>
-      </div>
-
       <svg
         :viewBox="`0 0 ${W} ${H}`"
         :style="{ height: `${H}px`, width: `${W}px`, minWidth: '100%' }"
@@ -470,7 +398,7 @@ function barAriaLabel(bar: Bar): string {
           <line :x1="lockX!" :x2="lockX!" :y1="top" :y2="plotBottom" />
         </g>
 
-        <!-- DUAL BARS: Call GEX (UP / VIBRANT GREEN) & Put GEX (DOWN / VIBRANT RED) + Net Dot -->
+        <!-- DUAL BARS: Call GEX up, Put GEX down, Net dot. -->
         <g v-if="rows.length" class="bars">
           <g
             v-for="bar in bars"
@@ -645,7 +573,7 @@ function barAriaLabel(bar: Bar): string {
 
 .exposure-head {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.8fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(260px, 2.2fr);
   gap: 1px;
   flex: 0 0 auto;
   background: var(--rule);
@@ -693,33 +621,36 @@ function barAriaLabel(bar: Bar): string {
 .exposure-total.net { color: var(--phosphor); }
 .exposure-total.net.negative { color: var(--put-hi); }
 .strike-focus {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(80px, .8fr) repeat(3, minmax(76px, 1fr)) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   background: var(--panel-raise);
   padding: 8px 12px;
 }
-.strike-focus > .label {
+.focus-strike, .focus-metric {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.focus-strike > .label,
+.focus-metric > .label {
   color: var(--phosphor);
   font: 700 9px var(--font-display);
   letter-spacing: 0.08em;
 }
-.strike-focus > strong {
+.focus-strike > strong {
   font: 700 1rem var(--font-data);
   color: var(--ink);
   white-space: nowrap;
 }
-.focus-split {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font: 600 10px var(--font-data);
-}
-.focus-split .pos { color: var(--call-hi); }
-.focus-split .neg { color: var(--put-hi); }
-.focus-split .net-tag.pos { color: var(--call-hi); }
-.focus-split .net-tag.neg { color: var(--put-hi); }
+.focus-metric strong { overflow: hidden; font: 700 11px var(--font-data); text-overflow: ellipsis; white-space: nowrap; }
+.focus-metric small { color: var(--ink-ghost); font: 500 9px var(--font-data); white-space: nowrap; }
+.focus-metric.call strong { color: var(--call-hi); }
+.focus-metric.put strong { color: var(--put-hi); }
+.focus-metric.net.positive strong { color: var(--call-hi); }
+.focus-metric.net.negative strong { color: var(--put-hi); }
 
 .plot-scroll {
   position: relative;
@@ -732,86 +663,6 @@ function barAriaLabel(bar: Bar): string {
   min-height: 280px;
   background: var(--void);
 }
-
-/* Hover breakdown card */
-.strike-hover-card {
-  position: absolute;
-  top: var(--s2);
-  right: var(--s2);
-  z-index: 15;
-  width: 248px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--void) 94%, transparent);
-  border: var(--hair) solid var(--rule-hi);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  pointer-events: none;
-}
-.strike-hover-card.call-dom { border-color: color-mix(in srgb, var(--call) 55%, var(--rule)); }
-.strike-hover-card.put-dom { border-color: color-mix(in srgb, var(--put) 55%, var(--rule)); }
-.card-hdr {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.card-strike {
-  font: 700 14px var(--font-data);
-  color: var(--ink);
-}
-.overflow-badge {
-  font: 700 9px var(--font-display);
-  color: var(--warn);
-  background: var(--warn-wash);
-  border: var(--hair) solid color-mix(in srgb, var(--warn) 50%, var(--rule));
-  padding: 1px 5px;
-}
-.dom-badge {
-  font: 700 9px var(--font-display);
-  padding: 2px 6px;
-}
-.dom-badge.call {
-  color: var(--call-hi);
-  background: var(--call-wash);
-  border: var(--hair) solid color-mix(in srgb, var(--call) 45%, var(--rule));
-}
-.dom-badge.put {
-  color: var(--put-hi);
-  background: var(--put-wash);
-  border: var(--hair) solid color-mix(in srgb, var(--put) 45%, var(--rule));
-}
-.dom-badge.neutral {
-  color: var(--ink-dim);
-  background: var(--panel);
-  border: var(--hair) solid var(--rule);
-}
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-.card-col {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.card-col .label { font: 700 8px var(--font-display); color: var(--ink-dim); }
-.card-col .fig { font: 700 11px var(--font-data); color: var(--ink); }
-.card-col.call .fig { color: var(--call-hi); }
-.card-col.put .fig { color: var(--put-hi); }
-.card-col.net .fig.call { color: var(--call-hi); }
-.card-col.net .fig.put { color: var(--put-hi); }
-.card-col .sub { font: 500 9px var(--font-data); color: var(--ink-faint); }
-.card-bar {
-  display: flex;
-  height: 4px;
-  overflow: hidden;
-  background: var(--rule);
-}
-.bar-call { background: var(--call); height: 100%; }
-.bar-put { background: var(--put); height: 100%; }
 
 svg { display: block; background: var(--void); overflow: visible; }
 .plot-frame {
@@ -945,5 +796,10 @@ svg { display: block; background: var(--void); overflow: visible; }
   .coverage { width: 100%; margin-left: 0; }
   .exposure-head { grid-template-columns: repeat(2, 1fr); }
   .strike-focus { grid-column: 1 / -1; }
+}
+
+@media (max-width: 620px) {
+  .strike-focus { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .clear-lock { justify-self: start; }
 }
 </style>

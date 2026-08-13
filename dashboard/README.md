@@ -21,7 +21,7 @@ bash edge/tools/run_dashboard.sh --serve
 
 The production build is written to `edge/runs/dashboard_dist/` and served by `edge/tools/api_server.py`.
 
-The backend binds to `127.0.0.1`. The current application is a single-operator local research surface and does not provide the authentication required for public/LAN exposure.
+The backend binds to `127.0.0.1`. Clerk authenticates the dashboard operator on `/auth`. That is a workstation session lock, not the authentication required to expose the API on a public or LAN address.
 
 ## Frontend stack
 
@@ -33,6 +33,7 @@ The backend binds to `127.0.0.1`. The current application is a single-operator l
 - Dependency-light SVG chart primitives under `src/charts/`
 - Three.js only where a surface genuinely requires 3D rendering
 - Locally bundled fonts via `@fontsource`
+- Clerk (`@clerk/vue`) for the `/auth` operator session
 
 ## Source layout
 

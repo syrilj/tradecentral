@@ -12,6 +12,12 @@ const routes: RouteRecordRaw[] = [
     redirect: { name: 'landing' },
   },
   {
+    path: '/auth/:pathMatch(.*)*',
+    name: 'auth',
+    component: () => import('@/views/AuthView.vue'),
+    meta: { title: 'Operator access', public: true },
+  },
+  {
     path: '/desk',
     name: 'desk',
     component: () => import('@/views/DeskView.vue'),
@@ -127,7 +133,13 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 })
 
+export function safeRedirect(value: unknown, fallback = '/flow'): string {
+  if (typeof value !== 'string') return fallback
+  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/auth')) return fallback
+  return value
+}
+
 router.afterEach((to) => {
   const t = to.meta.title as string | undefined
-  document.title = t ? `EDGE · ${t.toUpperCase()}` : 'EDGE · INSTRUMENT'
+  document.title = t ? `TradeCentral · ${t}` : 'TradeCentral · Research instrument'
 })

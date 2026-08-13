@@ -37,7 +37,7 @@ BUCKET_URI = f"gs://{BUCKET_NAME}"
 PACKAGE_URI = f"{BUCKET_URI}/packages/edge_ga_evolve_v1.tar.gz"
 RESULT_PREFIX = "results/ga_evolve_v1"
 CONTAINER_URI = "us-docker.pkg.dev/vertex-ai/training/tf-cpu.2-12.py310:latest"
-PACKAGE_PATH = Path("/tmp/edge_ga_evolve_v1.tar.gz")
+PACKAGE_PATH = EDGE_ROOT / "runs" / "packages" / "edge_ga_evolve_v1.tar.gz"
 PACKAGE_INCLUDE = (
     "edge/__init__.py",
     "edge/research",
@@ -54,6 +54,7 @@ def build_package() -> Path:
             return None
         return info
 
+    PACKAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
     PACKAGE_PATH.unlink(missing_ok=True)
     with tarfile.open(PACKAGE_PATH, "w:gz") as archive:
         for relative in PACKAGE_INCLUDE:

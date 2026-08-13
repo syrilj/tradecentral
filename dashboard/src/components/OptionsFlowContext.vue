@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { OptionsIntelligence, OptionsTapeRow } from '@/api'
+import type { OptionsDirectionRead } from '@/optionsDirection'
 import { compact, num, pctFrac, usd, DASH } from '@/format'
 
 const props = defineProps<{
@@ -10,19 +11,31 @@ const props = defineProps<{
   signedFlowAvailable: boolean
   tapeStatus: string
   tapeTitle: string
+  direction: OptionsDirectionRead
 }>()
 
 const premium = computed(() => {
-  let call = props.summary?.call_premium ?? 0
-  let put = props.summary?.put_premium ?? 0
+  // Always sum the tape this panel is paired with. Summary aggregates can
+  // include prints truncated off the returned tape (tape_limit), which made
+  // C/P ratio disagree with the actual flow list on screen.
+  let call = 0
+  let put = 0
+  let fromTape = false
 
-  // The summary covers the complete filtered window; only fall back to the
-  // visible tape when the provider did not publish aggregate premiums.
-  if (call + put <= 0 && props.tape.length) {
+  if (props.tape.length) {
+    fromTape = true
     for (const row of props.tape) {
-      if (row.right === 'call') call += row.premium
-      if (row.right === 'put') put += row.premium
+      const prem = Number(row.premium)
+      if (!Number.isFinite(prem) || prem < 0) continue
+      if (row.right === 'call') call += prem
+      else if (row.right === 'put') put += prem
     }
+  }
+
+  if (!fromTape || call + put <= 0) {
+    call = props.summary?.call_premium ?? 0
+    put = props.summary?.put_premium ?? 0
+    fromTape = false
   }
 
   const total = call + put
@@ -31,6 +44,13 @@ const premium = computed(() => {
   const dominantPct = Math.max(callPct, putPct)
   const tone = callPct >= 58 ? 'call' : putPct >= 58 ? 'put' : 'neutral'
   const conviction = dominantPct >= 72 ? 'HIGH' : dominantPct >= 62 ? 'MED' : 'LOW'
+  const ratio = put > 0 ? call / put : null
+
+  const label = tone === 'call'
+    ? 'CALL-HEAVY ACTIVITY'
+    : tone === 'put'
+      ? 'PUT-HEAVY ACTIVITY'
+      : total > 0 ? 'BALANCED ACTIVITY' : 'NO ACTIVITY MIX'
 
   return {
     call,
@@ -38,9 +58,11 @@ const premium = computed(() => {
     total,
     callPct,
     putPct,
+    ratio,
+    fromTape,
     tone,
     conviction,
-    label: tone === 'call' ? 'CALL FLOW DOMINANT' : tone === 'put' ? 'PUT FLOW DOMINANT' : 'BALANCED FLOW',
+    label,
   }
 })
 
@@ -79,19 +101,78 @@ const putWallDistance = computed(() => {
   if (spot == null || wall == null || spot === 0) return null
   return (wall - spot) / spot
 })
+
+/**
+ * Concrete research next-step for this underlier. Descriptive only —
+ * never execution authorization.
+ */
+const deskAction = computed(() => {
+  const direction = props.direction.state
+  const regime = String(props.summary?.regime || 'unknown').toLowerCase()
+  const callDist = callWallDistance.value
+  const putDist = putWallDistance.value
+  const flipDist = flipDistance.value
+  const anomalies = props.anomalyCount
+  const signed = props.signedFlowAvailable && (signedCoverage.value ?? 0) >= 0.25
+
+  let priority: 'now' | 'soon' | 'watch' = 'watch'
+  if (props.tapeStatus === 'stale' || props.tapeStatus === 'warm') priority = 'watch'
+  else if (direction === 'bullish' || direction === 'bearish') priority = anomalies > 0 || signed ? 'now' : 'soon'
+  else if (direction === 'mixed') priority = 'soon'
+
+  const levels: string[] = []
+  if (callDist != null && Math.abs(callDist) <= 0.03) levels.push(`call wall ${pctFrac(callDist, 1)} away`)
+  if (putDist != null && Math.abs(putDist) <= 0.03) levels.push(`put wall ${pctFrac(putDist, 1)} away`)
+  if (flipDist != null && Math.abs(flipDist) <= 0.02) levels.push(`near gamma flip`)
+
+  let title = 'No clear lean — map walls, then wait for signed side'
+  let body = 'Use put/call walls and net GEX as structure context. Do not invent direction from identity alone.'
+
+  if (direction === 'bullish') {
+    title = signed
+      ? 'Bullish read — confirm call liquidity and upside wall'
+      : 'Bullish momentum read — wait for signed flow confirmation'
+    body = levels.length
+      ? `Focus: ${levels.join(' · ')}. Confirm liquidity at the call wall before acting on the read.`
+      : regime === 'positive'
+        ? 'Positive GEX regime often pins toward the call wall; confirm that wall and expected move first.'
+        : 'Map nearest liquid calls and the call wall; treat lean as triage, not a fill signal.'
+  } else if (direction === 'bearish') {
+    title = signed
+      ? 'Bearish read — confirm put liquidity and downside wall'
+      : 'Bearish momentum read — wait for signed flow confirmation'
+    body = levels.length
+      ? `Focus: ${levels.join(' · ')}. Confirm liquidity at the put wall before acting on the read.`
+      : regime === 'negative'
+        ? 'Negative GEX can amplify moves; confirm put wall and invalidation above flip.'
+        : 'Map nearest liquid puts and the put wall; treat lean as triage, not a fill signal.'
+  } else if (direction === 'mixed') {
+    title = 'Mixed direction — reconcile signed flow and momentum'
+    body = levels.length
+      ? `Structure still matters: ${levels.join(' · ')}. Prefer watch until one side dominates.`
+      : 'Directional inputs disagree. Prefer research-only until signed flow and momentum align.'
+  }
+
+  if (anomalies > 0) {
+    body = `${body} ${anomalies} anomaly print${anomalies === 1 ? '' : 's'} flagged — inspect those strikes first.`
+  }
+
+  return { priority, title, body, direction }
+})
 </script>
 
 <template>
   <div class="flow-context" :class="premium.tone">
     <section class="flow-hero">
       <div class="flow-hero-copy">
-        <span class="label eyebrow">FLOW SENTIMENT</span>
-        <strong class="fig dominant">{{ premium.label }}</strong>
+        <span class="label eyebrow">DISPLAYED TAPE · CONTRACT MIX</span>
+        <strong class="fig dominant" :class="premium.tone">{{ premium.label }}</strong>
+        <small class="label identity-note">CALL = BLUE · PUT = AMBER · IDENTITY, NOT DIRECTION</small>
         <span class="label feed-state" :class="tapeStatus">
           <i aria-hidden="true" />{{ tapeTitle }}
         </span>
       </div>
-      <span class="label conviction" :class="premium.tone">{{ premium.conviction }}</span>
+      <span class="label conviction" :class="premium.tone">{{ premium.conviction }} SKEW</span>
     </section>
 
     <section class="premium-section">
@@ -120,7 +201,8 @@ const putWallDistance = computed(() => {
     <section class="metric-grid">
       <div class="metric">
         <span class="label">C / P RATIO</span>
-        <strong class="fig">{{ summary?.call_put_ratio == null ? DASH : num(summary.call_put_ratio, 2) }}</strong>
+        <strong class="fig">{{ premium.ratio == null ? DASH : num(premium.ratio, 2) }}</strong>
+        <small class="label">{{ premium.fromTape ? 'DISPLAYED TAPE' : 'TAPE SUMMARY' }}</small>
       </div>
       <div class="metric">
         <span class="label">QUALIFIED</span>
@@ -128,14 +210,14 @@ const putWallDistance = computed(() => {
         <small class="label">PRINTS</small>
       </div>
       <div class="metric">
-        <span class="label">SIGNED COVER</span>
+        <span class="label">BUY / SELL SIDE</span>
         <strong class="fig">{{ signedCoverage == null ? DASH : pctFrac(signedCoverage, 0) }}</strong>
-        <small class="label">{{ signedFlowAvailable ? 'FEED SIDE' : 'LIMITED' }}</small>
+        <small class="label">{{ signedFlowAvailable ? 'PROVIDER COVERAGE' : 'NOT SUPPLIED' }}</small>
       </div>
       <div class="metric">
-        <span class="label">ANOMALIES</span>
+        <span class="label">TAPE FLAGS</span>
         <strong class="fig" :class="{ warn: anomalyCount > 0 }">{{ anomalyCount }}</strong>
-        <small class="label">FLAGGED</small>
+        <small class="label">{{ anomalyCount > 0 ? 'HEURISTIC FLAGS' : 'NONE FLAGGED' }}</small>
       </div>
     </section>
 
@@ -174,6 +256,16 @@ const putWallDistance = computed(() => {
       </div>
     </section>
 
+    <section class="desk-action" :class="[deskAction.direction, deskAction.priority]">
+      <div class="section-head label">
+        <span>DESK NEXT STEP</span>
+        <span class="priority-tag">{{ deskAction.priority.toUpperCase() }}</span>
+      </div>
+      <strong class="fig action-title">{{ deskAction.title }}</strong>
+      <p>{{ deskAction.body }}</p>
+      <small class="label">Research triage · not order authorization</small>
+    </section>
+
   </div>
 </template>
 
@@ -184,35 +276,45 @@ const putWallDistance = computed(() => {
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
+  overflow: auto;
   background: var(--panel);
   color: var(--ink);
 }
 .flow-context.call { --flow-tone: var(--call); }
 .flow-context.put { --flow-tone: var(--put); }
+.flow-context.bullish { --flow-tone: var(--long, var(--call)); }
+.flow-context.bearish { --flow-tone: var(--short, var(--put)); }
+.flow-context.mixed, .flow-context.neutral { --flow-tone: var(--ink); }
+.dominant.bullish { color: var(--long, var(--call)); }
+.dominant.bearish { color: var(--short, var(--put)); }
+.dominant.mixed, .dominant.neutral { color: var(--ink); }
+.conviction.bullish { color: var(--long, var(--call)); }
+.conviction.bearish { color: var(--short, var(--put)); }
+.identity-note { overflow: visible; color: var(--ink-ghost); font-size: var(--t-micro); white-space: normal; text-overflow: clip; }
 
 .flow-hero {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--s2);
-  padding: 12px;
+  gap: var(--s3);
+  padding: var(--s4);
   border-left: 3px solid var(--flow-tone);
   border-bottom: var(--hair) solid var(--rule-hi);
   background: color-mix(in srgb, var(--flow-tone) 7%, var(--void-lift));
 }
 .flow-hero-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.eyebrow { color: var(--ink-faint); font-size: 8px; }
-.dominant { color: var(--flow-tone); font-size: 0.95rem; line-height: 1.2; letter-spacing: -0.02em; }
-.feed-state { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-ghost); font-size: 8px; }
+.eyebrow { color: var(--ink-faint); font-size: var(--t-micro); }
+.dominant { color: var(--flow-tone); font-size: var(--t-lead); line-height: 1.2; letter-spacing: -0.02em; }
+.feed-state { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-ghost); font-size: var(--t-micro); }
 .feed-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-ghost); }
 .feed-state.live i { background: var(--phosphor); }
 .feed-state.stale i, .feed-state.warm i { background: var(--warn); }
-.conviction { padding: 2px 6px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: 8px; }
+.conviction { padding: var(--s1) var(--s2); border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: var(--t-micro); }
 .conviction.call { color: var(--call-hi); border-color: color-mix(in srgb, var(--call) 50%, var(--rule)); }
 .conviction.put { color: var(--put-hi); border-color: color-mix(in srgb, var(--put) 50%, var(--rule)); }
 
-.premium-section, .structure-section { padding: 10px 12px; border-bottom: var(--hair) solid var(--rule); }
-.section-head { display: flex; justify-content: space-between; gap: 8px; color: var(--ink-faint); font-size: 8px; }
+.premium-section, .structure-section { padding: var(--s3) var(--s4); border-bottom: var(--hair) solid var(--rule); }
+.section-head { display: flex; justify-content: space-between; gap: var(--s2); color: var(--ink-faint); font-size: var(--t-micro); }
 .section-head b { color: var(--ink-soft); }
 .premium-track { display: flex; height: 8px; margin: 8px 0 7px; overflow: hidden; background: var(--rule); border: var(--hair) solid var(--rule-hi); }
 .premium-track i { height: 100%; }
@@ -222,14 +324,14 @@ const putWallDistance = computed(() => {
 .premium-side { display: grid; grid-template-columns: auto auto; align-items: baseline; gap: 1px 5px; }
 .premium-side:last-child { justify-items: end; }
 .premium-side strong { font-size: 0.95rem; }
-.premium-side small { grid-column: 1 / -1; color: var(--ink-dim); font-size: 9px; }
+.premium-side small { grid-column: 1 / -1; color: var(--ink-dim); font-size: var(--t-micro); }
 .premium-side.call strong { color: var(--call-hi); }
 .premium-side.put strong { color: var(--put-hi); }
 
 .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--rule); border-bottom: var(--hair) solid var(--rule); }
-.metric { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 2px 6px; min-width: 0; padding: 8px 10px; background: var(--void-lift); }
-.metric .label { color: var(--ink-faint); font-size: 8px; }
-.metric strong { color: var(--ink-soft); font-size: 0.85rem; }
+.metric { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: var(--s1) var(--s2); min-width: 0; padding: var(--s3); background: var(--void-lift); }
+.metric .label { color: var(--ink-faint); font-size: var(--t-micro); }
+.metric strong { color: var(--ink-soft); font-size: var(--t-body); }
 .metric small { grid-column: 1 / -1; }
 .metric .warn { color: var(--warn); }
 
@@ -241,15 +343,57 @@ const putWallDistance = computed(() => {
 .structure-primary strong.positive { color: var(--call-hi); }
 .structure-primary strong.negative { color: var(--put-hi); }
 .level-list { display: flex; flex-direction: column; }
-.level-row { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto 46px; align-items: center; gap: 6px; min-height: 24px; border-bottom: var(--hair) solid var(--rule-faint); }
+.level-row { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto 46px; align-items: center; gap: var(--s2); min-height: 28px; border-bottom: var(--hair) solid var(--rule-faint); }
 .level-row:last-child { border-bottom: 0; }
-.level-row .label { color: var(--ink-dim); font-size: 8px; }
-.level-row strong { color: var(--ink-soft); font-size: 10px; }
-.level-row small { color: var(--ink-ghost); font-size: 9px; text-align: right; }
+.level-row .label { color: var(--ink-dim); font-size: var(--t-micro); }
+.level-row strong { color: var(--ink-soft); font-size: var(--t-small); }
+.level-row small { color: var(--ink-ghost); font-size: var(--t-micro); text-align: right; }
 .level-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
 .level-dot.call { background: var(--call); }
 .level-dot.put { background: var(--put); }
 .level-dot.flip { background: var(--warn); }
 .level-dot.spot { background: var(--ink); }
+
+.desk-action {
+  --action-tone: var(--ink-dim);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-left: 3px solid var(--action-tone);
+  background: color-mix(in srgb, var(--action-tone) 6%, var(--void-lift));
+}
+.desk-action.bullish { --action-tone: var(--long, var(--call)); }
+.desk-action.bearish { --action-tone: var(--short, var(--put)); }
+.desk-action.mixed { --action-tone: var(--warn); }
+.desk-action .section-head { margin-bottom: 2px; }
+.priority-tag {
+  padding: 1px 5px;
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--ink-dim);
+  font-weight: 750;
+  letter-spacing: 0.05em;
+}
+.desk-action.now .priority-tag {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 50%, var(--rule));
+}
+.desk-action.soon .priority-tag {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--rule));
+}
+.action-title {
+  color: var(--ink);
+  font-size: var(--t-body);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.desk-action p {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.45;
+}
+.desk-action > small { color: var(--ink-ghost); font-size: var(--t-micro); }
 
 </style>

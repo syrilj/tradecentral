@@ -46,6 +46,53 @@ withDefaults(defineProps<{
       <path d="M10 3v6.5L4.6 18a2.2 2.2 0 0 0 1.9 3.3h11a2.2 2.2 0 0 0 1.9-3.3L14 9.5V3" />
       <path d="M8 16h8" />
     </template>
+    <template v-else-if="name === 'home'">
+      <path d="m3.5 10.5 8.5-7 8.5 7" />
+      <path d="M5.5 9v11h13V9M9.5 20v-6h5v6" />
+    </template>
+    <template v-else-if="name === 'sectors'">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 3.5V12h8.5M12 12l-6 6" />
+    </template>
+    <template v-else-if="name === 'pulse'">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M4.5 12H8l2-4.5 3.2 9 2.1-4.5h4.2" />
+    </template>
+    <template v-else-if="name === 'momentum'">
+      <path d="M4 20V15M9 20V11M14 20V7" />
+      <path d="m5 10 5-5 3 3 6-6M15 2h4v4" />
+    </template>
+    <template v-else-if="name === 'fintel'">
+      <path d="M3 20h18M5 20V9h14v11M8 20v-7M12 20v-7M16 20v-7" />
+      <path d="m4 9 8-5 8 5" />
+    </template>
+    <template v-else-if="name === 'evolution'">
+      <circle cx="5" cy="12" r="2" />
+      <circle cx="19" cy="6" r="2" />
+      <circle cx="19" cy="18" r="2" />
+      <path d="M7 12h3a4 4 0 0 0 4-4 2 2 0 0 1 2-2h1M7 12h3a4 4 0 0 1 4 4 2 2 0 0 0 2 2h1" />
+    </template>
+    <template v-else-if="name === 'adaptive'">
+      <path d="M4 6h6M14 6h6M4 12h10M18 12h2M4 18h3M11 18h9" />
+      <circle cx="12" cy="6" r="2" />
+      <circle cx="16" cy="12" r="2" />
+      <circle cx="9" cy="18" r="2" />
+    </template>
+    <template v-else-if="name === 'graph'">
+      <circle cx="5" cy="12" r="2" />
+      <circle cx="12" cy="5" r="2" />
+      <circle cx="19" cy="9" r="2" />
+      <circle cx="15" cy="19" r="2" />
+      <path d="m6.5 10.5 4-4M14 5.8l3.2 2.4M18.3 10.8l-2.6 6.3M6.8 13.3l6.4 4.4" />
+    </template>
+    <template v-else-if="name === 'changepoints'">
+      <path d="M3 18h18M5 15l4-4 3 2M15 10l4-5" />
+      <path d="M13.5 4v14" stroke-dasharray="2 2" />
+    </template>
+    <template v-else-if="name === 'cloud'">
+      <path d="M7 18h10a4 4 0 0 0 .7-7.9A6 6 0 0 0 6.2 9 4.5 4.5 0 0 0 7 18Z" />
+      <path d="m9.5 13 2.5-2.5 2.5 2.5M12 10.5V17" />
+    </template>
     <template v-else-if="name === 'more'">
       <circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" />
       <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
@@ -70,6 +117,59 @@ withDefaults(defineProps<{
       <path d="M14 4h6v6" />
       <path d="m20 4-9 9" />
       <path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6" />
+    </template>
+    <template v-else-if="name === 'arrow-right'">
+      <path d="M4 12h16" />
+      <path d="m14 6 6 6-6 6" />
+    </template>
+    <template v-else-if="name === 'arrow-left'">
+      <path d="M20 12H4" />
+      <path d="m10 6-6 6 6 6" />
+    </template>
+    <template v-else-if="name === 'arrow-down'">
+      <path d="M12 4v16" />
+      <path d="m6 14 6 6 6-6" />
+    </template>
+    <template v-else-if="name === 'lock'">
+      <rect x="4" y="10" width="16" height="11" rx="1.5" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+      <path d="M12 14v3" />
+    </template>
+    <template v-else-if="name === 'session'">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7v5l3.5 2" />
+    </template>
+    <template v-else-if="name === 'shield'">
+      <path d="M12 3 20 6v5c0 5-3 8.2-8 10-5-1.8-8-5-8-10V6l8-3Z" />
+      <path d="m8.5 12 2.2 2.2 4.8-5" />
+    </template>
+    <template v-else-if="name === 'eye'">
+      <path d="M2.5 12s3.2-6 9.5-6 9.5 6 9.5 6-3.2 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </template>
+    <template v-else-if="name === 'eye-off'">
+      <path d="m4 4 16 16" />
+      <path d="M9.8 6.3A9.7 9.7 0 0 1 12 6c6.3 0 9.5 6 9.5 6a13.5 13.5 0 0 1-2.4 3.1" />
+      <path d="M6.2 7.2C3.7 9 2.5 12 2.5 12s3.2 6 9.5 6c1 0 1.9-.2 2.7-.4" />
+    </template>
+    <template v-else-if="name === 'signout'">
+      <path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5" />
+      <path d="M14 8l4 4-4 4" />
+      <path d="M8 12h10" />
+    </template>
+    <template v-else-if="name === 'database'">
+      <ellipse cx="12" cy="5.5" rx="8" ry="3" />
+      <path d="M4 5.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+      <path d="M4 11.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+    </template>
+    <template v-else-if="name === 'gate'">
+      <path d="M5 21V6l7-3 7 3v15" />
+      <path d="M9 21v-8h6v8M3 21h18" />
+    </template>
+    <template v-else-if="name === 'radar'">
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 12 18.5 5.5M12 3v2M21 12h-2M12 21v-2M3 12h2" />
     </template>
     <template v-else>
       <circle cx="12" cy="12" r="8" />

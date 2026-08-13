@@ -5,11 +5,25 @@ import { fileURLToPath } from 'node:url'
 
 const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const routerSource = readFileSync(join(srcRoot, 'router.ts'), 'utf8')
+const appSource = readFileSync(join(srcRoot, 'App.vue'), 'utf8')
 
-describe('operator entry route', () => {
-  it('opens the public overview at / and keeps the Desk one click away at /desk', () => {
+describe('public entry and operator routing', () => {
+  it('keeps the product overview public and gives access its own route', () => {
     expect(routerSource).toMatch(/path:\s*'\/'\s*,\s*name:\s*'landing'/s)
     expect(routerSource).toMatch(/path:\s*'\/about'\s*,\s*redirect:\s*\{\s*name:\s*'landing'\s*\}/s)
-    expect(routerSource).toMatch(/path:\s*'\/desk'\s*,\s*name:\s*'desk'/s)
+    expect(routerSource).toMatch(/path:\s*'\/auth\/:pathMatch\(\.\*\)\*'\s*,\s*name:\s*'auth'/s)
+  })
+
+  it('guards non-public workspace routes and preserves the deep link', () => {
+    expect(appSource).toContain('route.meta.public !== true')
+    expect(appSource).toContain("name: 'auth'")
+    expect(appSource).toContain('query: { redirect: route.fullPath }')
+  })
+
+  it('sanitizes redirect targets and returns signed-in operators to Flow', () => {
+    expect(routerSource).toContain("value.startsWith('//')")
+    expect(routerSource).toContain("value.startsWith('/auth')")
+    expect(routerSource).toContain("return fallback")
+    expect(routerSource).toContain("fallback = '/flow'")
   })
 })

@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import type { OptionsProbability } from '@/api'
 import { useChartSize } from '@/composables/useChartSize'
 import { num, pctFrac, usd } from '@/format'
-import RiskNeutral3DModel from '@/components/RiskNeutral3DModel.vue'
+
+// Three.js is only needed after an operator explicitly opens the measured 3D
+// surface. Keeping it out of the default Options route removes the heaviest
+// dependency from the initial workspace download.
+const RiskNeutral3DModel = defineAsyncComponent(
+  () => import('@/components/RiskNeutral3DModel.vue'),
+)
 
 /**
  * 2D risk-neutral lognormal PDF of terminal price f(S_T).

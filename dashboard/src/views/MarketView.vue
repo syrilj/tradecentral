@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch, onMounted } from 'vue'
+import { computed, inject, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, WINDOWS, type SearchHit, type Trajectory, type ComparePayload, type TrajWindow, type StatusPayload } from '@/api'
 import type { Resource } from '@/composables/useResource'
@@ -157,6 +157,9 @@ function toggleBasket(sym: string): void {
 
 watch([symbol, win], () => void loadTrajectory())
 watch(win, () => void loadCompare())
+
+let trajTimer: number | undefined
+
 onMounted(() => {
   void loadTrajectory()
   /* Open with active symbol vs SPY so compare is never an empty dead panel. */
@@ -167,26 +170,47 @@ onMounted(() => {
   }
   void loadCompare()
   runSearch(symbol.value || '')
+  trajTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    void loadTrajectory()
+    void loadCompare()
+  }, 30_000)
+})
+
+onUnmounted(() => {
+  if (trajTimer !== undefined) clearInterval(trajTimer)
 })
 
 const s = computed(() => traj.value?.stats)
 
+function observedAgeDays(value: string | null | undefined): number | null {
+  if (!value) return null
+  const stamp = Date.parse(value.length <= 10 ? `${value}T00:00:00Z` : value)
+  if (!Number.isFinite(stamp)) return null
+  return Math.max(0, Math.floor((Date.now() - stamp) / 86_400_000))
+}
+
 /** Data availability & integrity status computation */
 const dataAudit = computed(() => {
   if (!traj.value) return null
-  const lastDate = traj.value.last_date
+  const lastDate = traj.value.last_asof || traj.value.last_date
   const firstDate = traj.value.first_date
   const nBars = traj.value.n_bars
-  const source = traj.value.source
+  const source = traj.value.last_source || traj.value.source
   const advUsd = s.value?.adv_20_usd
-  const isFresh = Boolean(lastDate && (lastDate.startsWith('2026-07') || lastDate.startsWith('2026-08')))
+  const ageDays = observedAgeDays(lastDate)
+  const isLive = traj.value.quality === 'live'
+  const isFresh = isLive || (ageDays != null && ageDays <= 3)
   return {
     lastDate,
     firstDate,
+    barDate: traj.value.last_date,
     nBars,
     source,
     advUsd,
     isFresh,
+    isLive,
+    ageDays,
   }
 })
 
@@ -371,11 +395,11 @@ const factorRows = computed(() => {
             type="button"
             class="mkt-refresh-btn label"
             :disabled="trajBusy"
-            title="Run live scan and reload trajectory"
+            title="Refresh live mark and trajectory"
             @click="loadTrajectory"
           >
             <span class="refresh-icon" :class="{ spinning: trajBusy }">↻</span>
-            {{ trajBusy ? 'SCANNING…' : 'RUN LIVE SCAN' }}
+            {{ trajBusy ? 'REFRESHING…' : 'REFRESH MARK' }}
           </button>
 
           <div class="seg">
@@ -423,10 +447,11 @@ const factorRows = computed(() => {
       <div v-if="dataAudit" class="data-audit-strip label">
         <span class="audit-item">
           <b class="audit-dot" :class="dataAudit.isFresh ? 'fresh' : 'stale'" />
-          {{ dataAudit.isFresh ? 'DATA AS OF' : 'HISTORICAL AS OF' }} {{ shortDate(dataAudit.lastDate) }}
+          {{ dataAudit.isLive ? 'LIVE MARK' : dataAudit.isFresh ? 'DATA AS OF' : 'STALE AS OF' }}
+          {{ shortDate(dataAudit.lastDate) }}
         </span>
-        <span class="audit-item dim">{{ dataAudit.nBars }} bars ({{ shortDate(dataAudit.firstDate) }} → {{ shortDate(dataAudit.lastDate) }})</span>
-        <span class="audit-item source-badge">{{ dataAudit.source.toUpperCase() }} TIER</span>
+        <span class="audit-item dim">{{ dataAudit.nBars }} bars ({{ shortDate(dataAudit.firstDate) }} → {{ shortDate(dataAudit.barDate) }})</span>
+        <span class="audit-item source-badge">{{ dataAudit.source.toUpperCase() }}</span>
         <span v-if="dataAudit.advUsd" class="audit-item dim">ADV: {{ compact(dataAudit.advUsd) }}</span>
 
         <div class="desk-quick-nav label">

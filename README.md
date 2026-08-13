@@ -170,6 +170,18 @@ bash edge/tools/run_dashboard.sh --serve
 
 The API binds to `127.0.0.1`. That is deliberate: the current operator surface is not an authenticated multi-user web service and should not be exposed directly to a LAN or public interface.
 
+### Local operator access
+
+The first protected workspace route opens `/auth` and asks you to create one
+browser-local operator profile. TradeCentral derives a verifier with
+PBKDF2-SHA-256 and stores it in local browser storage; the unlocked state lives
+only in session storage. Protected deep links return to their original route
+after access is verified, and the shell's **Lock** action ends the session.
+
+This is a workstation lock for the routed interface, not server-side or
+multi-user authentication. It does not change the network trust boundary: keep
+the API on `127.0.0.1` and do not expose it directly to a LAN or the internet.
+
 ## Configuration and credentials
 
 Copy the example environment file and add only the credentials required by the providers you intend to use.

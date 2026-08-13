@@ -7,7 +7,17 @@
  * render the error, not swallow it.
  */
 
-const BASE = import.meta.env.DEV ? '' : ''
+const BASE = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+
+type AuthTokenProvider = () => Promise<string | null>
+let authTokenProvider: AuthTokenProvider | null = null
+
+/** Clerk is initialized in App.vue, after this module is evaluated. Keeping
+ * the token callback injectable avoids importing a Vue composable into the
+ * transport layer and works for both same-origin and split-domain GCP setups. */
+export function configureApiAuth(provider: AuthTokenProvider): void {
+  authTokenProvider = provider
+}
 
 export class ApiError extends Error {
   constructor(
@@ -23,9 +33,14 @@ export class ApiError extends Error {
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
+    const headers = new Headers(init?.headers)
+    headers.set('Accept', 'application/json')
+    const token = authTokenProvider ? await authTokenProvider() : null
+    if (token) headers.set('Authorization', `Bearer ${token}`)
     res = await fetch(`${BASE}${path}`, {
-      headers: { Accept: 'application/json' },
       ...init,
+      credentials: 'include',
+      headers,
     })
   } catch (e) {
     throw new ApiError(
@@ -49,6 +64,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
       (!detail || detail === 'Internal Server Error' || detail === 'Bad Gateway')
     ) {
       detail = `API ${res.status} on ${path} — is edge/tools/api_server.py running on :8787?`
+    }
+    if (res.status === 401) {
+      detail = detail || 'Your Clerk session is missing or expired. Sign in again.'
     }
     throw new ApiError(detail, res.status, path)
   }
@@ -158,6 +176,10 @@ export interface ActivityFlagRow {
   directional_side?: 'long' | 'short' | null
   directional_horizon?: string | null
   signal_alignment?: 'agree' | 'conflict' | 'pead_only' | 'directional_only' | 'none' | string
+  /** Descriptive activity lean for the desk (bullish/bearish/mixed/neutral). */
+  activity_lean?: 'bullish' | 'bearish' | 'mixed' | 'neutral' | string
+  activity_lean_source?: string
+  activity_lean_label?: string
   calibrated_probability: number | null
   live: boolean
   live_asof: string | null
@@ -168,6 +190,7 @@ export interface ActivityFlagRow {
   contract_count?: number
   call_premium?: number | null
   put_premium?: number | null
+  call_put_imbalance?: number | null
   put_flow_pct?: number | null
   otm_premium?: number | null
   otm_flow_pct?: number | null
@@ -499,6 +522,9 @@ export interface Trajectory {
   first_date: string
   last_date: string
   source: string
+  last_source?: string
+  last_asof?: string | null
+  quality?: 'live' | 'local' | string
   series: TrajectoryBar[]
   stats: TrajectoryStats
   factors: Record<string, number | null>
@@ -753,8 +779,23 @@ export interface OptionsSqueeze {
   primary?: 'quiet' | 'two_way' | 'bullish' | 'bearish' | string
   drivers: string[]
   method?: string
-  components?: Record<string, number>
-  scored_components?: Record<string, number>
+  components?: Record<string, number | boolean | null | undefined>
+  scored_components?: Record<string, number | boolean | null | undefined>
+  theory?: {
+    squeeze_risk?: number | null
+    bullish_score_raw?: number | null
+    bearish_score_raw?: number | null
+    bullish_ui?: number | null
+    bearish_ui?: number | null
+    adv_m?: number | null
+    adv_available?: boolean
+    measurable?: boolean
+    directional_flow_imbalance?: number | null
+    momentum?: number | null
+    momentum_fresh?: boolean
+    momentum_price_age_days?: number | null
+    label?: string
+  }
   long_gamma_dampened?: boolean
   negative_fuel?: number
   key_levels?: {
@@ -1021,7 +1062,14 @@ export interface OptionsIntelligence {
   mode_resolved: 'live' | 'history' | 'history_fallback' | 'unavailable'
   asof_utc: string
   observed_at: string | null
-  freshness: { age_seconds: number | null }
+  freshness: {
+    /** Feed liveness for trade_tape (not filtered-whale lag). */
+    age_seconds: number | null
+    feed_asof?: string | null
+    feed_age_seconds?: number | null
+    tape_asof?: string | null
+    tape_age_seconds?: number | null
+  }
   filters: Record<string, number | string | null>
   chain_context: OptionsExpiryContext
   history?: OptionsHistoryMeta
@@ -1042,6 +1090,17 @@ export interface OptionsIntelligence {
     signed_gross_premium?: number | null
     signed_flow_imbalance?: number | null
     signed_flow_confidence?: number
+    signed_flow_confidence_band?: string | null
+    flow_shift?: Record<string, unknown> | null
+    activity_shift?: {
+      signed_imbalance?: number | null
+      shifted?: boolean | null
+      last_shift_kind?: string | null
+      n?: number | null
+      confidence_band?: string | null
+      kind?: string | null
+      note?: string | null
+    } | null
     unresolved_premium: number
     total_gex_m: number
     call_gex_m?: number
@@ -1642,9 +1701,32 @@ export interface FlowStatePayload {
   producing_script: string
 }
 
+export interface QuoteMark {
+  symbol: string
+  last: number | null
+  prev_close: number | null
+  chg_1d_pct: number | null
+  asof: string | null
+  source: string
+  quality: 'live' | 'local' | string
+}
+
+export interface QuotesPayload {
+  asof: string
+  rows: QuoteMark[]
+  count: number
+}
+
 export const api = {
   health: () => req<Health>('/api/health'),
-  status: () => req<StatusPayload>('/api/status'),
+  status: (depth?: ScanDepth) =>
+    req<StatusPayload>(depth ? `/api/status?depth=${depth}` : '/api/status'),
+  quotes: (symbols: string[]) =>
+    req<QuotesPayload>(
+      `/api/quotes?symbols=${encodeURIComponent(
+        symbols.map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 40).join(','),
+      )}`,
+    ),
   leaderboard: () => req<{ asof: string; leaderboard: LeaderboardRow[] }>('/api/leaderboard'),
   gcp: () => req<Record<string, unknown>>('/api/gcp'),
   gates: () => req<{ gates: Gate[] }>('/api/gates'),

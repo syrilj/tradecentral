@@ -39,6 +39,7 @@ const OPTIONS_SURFACES = [
   'components/SqueezeScreener.vue',
   'components/GammaExposureMap.vue',
   'components/OptionsFlowContext.vue',
+  'components/OptionsDirectionBrief.vue',
   'components/ProbabilityDensityChart.vue',
   'components/RiskNeutral3DModel.vue',
   'components/OptionsDriftChart.vue',
@@ -98,6 +99,30 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(view).not.toMatch(/@keyframes live-pulse/)
   })
 
+  it('puts the honest directional read before the structure rail', () => {
+    const view = readSrc('views/OptionsView.vue')
+    const brief = readSrc('components/OptionsDirectionBrief.vue')
+    const flow = readSrc('components/OptionsFlowContext.vue')
+    expect(view).toContain('OptionsDirectionBrief')
+    expect(view.indexOf('<OptionsDirectionBrief')).toBeLessThan(view.indexOf('class="kpi-rail rise"'))
+    expect(brief).toContain('UNDERLYING DIRECTION')
+    expect(brief).toContain('SIGNED FLOW')
+    expect(brief).toContain('PRICE MOMENTUM')
+    expect(brief).toContain('NOT DIRECTION')
+    expect(flow).toContain('CALL = BLUE · PUT = AMBER · IDENTITY, NOT DIRECTION')
+    expect(flow).not.toContain('BULLISH · CALL-HEAVY')
+    expect(flow).not.toContain('BEARISH · PUT-HEAVY')
+  })
+
+  it('keeps strike inspection outside the plot so it never hides bars or strike labels', () => {
+    const gex = readSrc('components/GammaExposureMap.vue')
+    expect(gex).toContain('INSPECTING')
+    expect(gex).toContain('LOCKED STRIKE')
+    expect(gex).toContain('class="strike-focus"')
+    expect(gex).not.toContain('strike-hover-card')
+    expect(gex).not.toContain('hoverBreakdown')
+  })
+
   it('ProbabilityDensityChart has no curve glow filter', () => {
     const src = readSrc('components/ProbabilityDensityChart.vue')
     expect(src).not.toMatch(/filter:\s*drop-shadow/)
@@ -113,6 +138,13 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(surface).not.toContain('props.spot || 100')
     expect(surface).not.toContain('atm_iv || 0.25')
     expect(surface).not.toContain('horizon_days || 30')
+  })
+
+  it('loads the Three.js probability surface only when 3D is requested', () => {
+    const density = readSrc('components/ProbabilityDensityChart.vue')
+    expect(density).toContain('defineAsyncComponent')
+    expect(density).toContain("() => import('@/components/RiskNeutral3DModel.vue')")
+    expect(density).not.toContain("import RiskNeutral3DModel from '@/components/RiskNeutral3DModel.vue'")
   })
 
   it('Options inherits the global instrument palette and labels setup status truthfully', () => {

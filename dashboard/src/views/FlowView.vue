@@ -50,14 +50,15 @@ function openSymbol(symbol: string): void {
         <h1>Options flow</h1>
         <p>
           Track what entered since the prior provider window, read SPY/QQQ/IWM/DIA concentration first,
-          then use the market queue for the rest. Direction is withheld whenever the evidence is unsigned.
+          then act on the desk brief: which names to open, where premium is concentrated, and whether
+          the lean is bullish, bearish, or mixed. Signed buy/sell only appears when the provider marks it.
         </p>
       </div>
       <div class="scope-stack">
         <span class="scope-chip label live"><i aria-hidden="true" /> MARKET-WIDE TAPE</span>
         <span class="scope-chip label">UP TO 500 PRINTS</span>
         <span class="scope-chip label">POLL 15S</span>
-        <span class="scope-chip label warn">ACTIVITY · NOT DIRECTION</span>
+        <span class="scope-chip label">BULLISH / BEARISH LEAN</span>
       </div>
     </header>
 
@@ -79,18 +80,22 @@ function openSymbol(symbol: string): void {
 .flow-view {
   display: flex;
   flex-direction: column;
-  gap: var(--s3);
+  gap: var(--s4);
   min-width: 0;
-  padding-bottom: var(--s5);
+  padding-bottom: var(--s6);
 }
 
 .flow-head {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: var(--s5);
-  padding: var(--s4) var(--s5);
+  gap: var(--s6);
+  min-height: 166px;
+  padding: var(--s5) var(--s6);
   border: var(--hair) solid var(--border-strong);
+  border-left: 3px solid var(--phosphor-dim);
+  background-color: var(--surface-raised);
 }
 
 .flow-title {
@@ -102,17 +107,18 @@ function openSymbol(symbol: string): void {
 }
 
 h1 {
-  margin: 4px 0 0;
+  margin: var(--s2) 0 0;
   color: var(--text-primary);
-  font: 700 clamp(1.55rem, 3vw, 2.4rem) / 1 var(--font-display);
+  font: 700 clamp(1.65rem, 2.5vw, 2.15rem) / 1.05 var(--font-display);
   letter-spacing: -0.04em;
 }
 
 .flow-title p {
-  max-width: 78ch;
-  margin-top: var(--s2);
+  max-width: 76ch;
+  margin-top: var(--s3);
   color: var(--text-secondary);
-  font-size: var(--t-small);
+  font-size: var(--t-body);
+  line-height: 1.55;
 }
 
 .scope-stack {
@@ -120,18 +126,19 @@ h1 {
   align-content: flex-start;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 6px;
-  max-width: 360px;
+  gap: var(--s2);
+  max-width: 390px;
+  padding-bottom: var(--s1);
 }
 
 .scope-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 2px 5px;
+  min-height: 26px;
+  padding: var(--s1) var(--s2);
   color: var(--text-secondary);
   border: var(--hair) solid var(--border-strong);
-  background: var(--surface-overlay);
+  background: var(--surface-base);
 }
 
 .scope-chip.live {
@@ -154,6 +161,7 @@ h1 {
   .flow-head {
     flex-direction: column;
     gap: var(--s3);
+    min-height: 0;
     padding: var(--s4);
   }
 

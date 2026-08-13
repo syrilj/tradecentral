@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const app = readFileSync(join(root, 'App.vue'), 'utf8')
 const api = readFileSync(join(root, 'api.ts'), 'utf8')
+const icons = readFileSync(join(root, 'components', 'AppIcon.vue'), 'utf8')
 
 describe('application market strip contract', () => {
   it('shows observed freshness and trend instead of anonymous number blocks', () => {
@@ -30,5 +31,24 @@ describe('application market strip contract', () => {
     expect(app).not.toContain('class="find"')
     expect(app).not.toContain('.profile-block')
     expect(app).not.toContain('.profile-label')
+  })
+
+  it('uses the TradeCentral identity throughout the operator shell', () => {
+    expect(app).toContain("import TradeCentralMark from '@/components/TradeCentralMark.vue'")
+    expect(app).toContain('aria-label="TradeCentral workspaces"')
+    expect(app).toContain('<TradeCentralMark :size="28" />')
+    expect(app).toContain('<strong>Trade</strong>')
+    expect(app).toContain('<strong>Central</strong>')
+    expect(app).not.toContain('class="mark-e"')
+  })
+
+  it('gives secondary workspaces distinct icons and a keyboard-operable menu', () => {
+    for (const icon of ['sectors', 'pulse', 'momentum', 'fintel', 'evolution', 'adaptive', 'graph', 'changepoints', 'cloud']) {
+      expect(app).toContain(`icon: '${icon}'`)
+      expect(icons).toContain(`name === '${icon}'`)
+    }
+    expect(app).toContain('aria-haspopup="menu"')
+    expect(app).toContain('@keydown="onMoreMenuKey"')
+    expect(app).toContain("document.addEventListener('pointerdown', onOutsidePointer)")
   })
 })

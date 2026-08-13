@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import {
   api,
   type ActivityFlagRow,
+  type QuoteMark,
   type StatusPayload,
   type Readiness,
   type ScanDepth,
@@ -32,9 +33,10 @@ const scanMsg = ref<string | null>(null)
 const scanJob = ref<ScanJob | null>(null)
 let scanPollToken = 0
 
-// Filtering state for dropdowns
+// Filtering state for dropdowns & views
 const peadFilter = ref<'all' | 'flagged' | 'long' | 'short'>('all')
 const signalFilter = ref<'all' | 'entered' | 'actionable' | 'long' | 'short'>('all')
+const dualViewMode = ref<'split' | 'pead' | 'directional'>('split')
 
 /**
  * Confidence contract (must match tools/render_dashboard.py):
@@ -51,8 +53,11 @@ const probing = ref(false)
 const probeErr = ref<string | null>(null)
 const customWatchlist = ref<string[]>(['NVDA', 'TSLA', 'AMD'])
 const probeResults = ref<Record<string, Trajectory | null>>({})
+const liveMarks = ref<Record<string, QuoteMark>>({})
 
 let watchlistTimer: number | undefined
+let marksTimer: number | undefined
+let appliedScanAsof = ''
 
 onMounted(() => {
   try {
@@ -68,13 +73,18 @@ onMounted(() => {
   }
   void probeWatchlist(true)
   void resumeScanJob()
+  void refreshBoardMarks()
   // Keep personal watchlist fresh even when the shared status asof is quiet.
   watchlistTimer = window.setInterval(() => void probeWatchlist(true), 60_000)
+  marksTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshBoardMarks()
+  }, 20_000)
 })
 
 onUnmounted(() => {
   scanPollToken += 1
   if (watchlistTimer !== undefined) clearInterval(watchlistTimer)
+  if (marksTimer !== undefined) clearInterval(marksTimer)
 })
 
 function saveWatchlist(): void {
@@ -126,7 +136,10 @@ async function probeWatchlist(force = false): Promise<void> {
 watch(
   () => status.data.value?.asof,
   (asof, prev) => {
-    if (asof && asof !== prev) void probeWatchlist(true)
+    if (asof && asof !== prev && (!appliedScanAsof || asof >= appliedScanAsof)) {
+      void probeWatchlist(true)
+      void refreshBoardMarks()
+    }
   },
 )
 
@@ -160,6 +173,54 @@ function applyCompletedScan(job: ScanJob): void {
   status.error.value = null
   status.fetchedAt.value = new Date().toISOString()
   scanMsg.value = result.message
+  appliedScanAsof = result.data?.asof || result.asof || ''
+  void refreshBoardMarks()
+}
+
+function boardSymbols(): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (value: string | undefined) => {
+    const sym = String(value || '').trim().toUpperCase()
+    if (!sym || seen.has(sym)) return
+    seen.add(sym)
+    out.push(sym)
+  }
+  for (const row of pead.value) push(row.symbol)
+  for (const row of signals.value) push(row.symbol)
+  for (const row of customWatchlist.value) push(row)
+  return out.slice(0, 40)
+}
+
+async function refreshBoardMarks(): Promise<void> {
+  const symbols = boardSymbols()
+  if (!symbols.length) return
+  try {
+    const payload = await api.quotes(symbols)
+    const next: Record<string, QuoteMark> = { ...liveMarks.value }
+    for (const row of payload.rows) {
+      if (row.symbol) next[row.symbol.toUpperCase()] = row
+    }
+    liveMarks.value = next
+  } catch {
+    /* keep last marks; the next tick retries */
+  }
+}
+
+function markFor(sym: string): QuoteMark | null {
+  return liveMarks.value[sym.toUpperCase()] ?? null
+}
+
+function markLast(sym: string): number | null {
+  const last = markFor(sym)?.last
+  return last != null && Number.isFinite(last) ? last : watchPrice(sym)
+}
+
+function markChg(sym: string): number | null {
+  const live = markFor(sym)?.chg_1d_pct
+  if (live != null && Number.isFinite(live)) return live
+  const traj = probeResults.value[sym]?.stats?.chg_1d_pct
+  return traj != null && Number.isFinite(traj) ? traj : null
 }
 
 async function trackScanJob(initial: ScanJob, token: number): Promise<void> {
@@ -282,6 +343,13 @@ watch(
     if (depth === 'quick' || depth === 'deep') scanDepth.value = depth
   },
   { immediate: true },
+)
+
+watch(
+  () => [pead.value.length, signals.value.length, customWatchlist.value.join(',')],
+  () => {
+    void refreshBoardMarks()
+  },
 )
 
 /* Filtering + confidence ranking */
@@ -462,6 +530,30 @@ function sideWord(value: string | null | undefined): string {
   return side === 'long' ? 'UP' : side === 'short' ? 'DOWN' : 'NONE'
 }
 
+/** Activity lean chip — bullish/bearish when detectable, else neutral/mixed. */
+function activityLean(row: ActivityFlagRow): { label: string; cls: string; title: string } {
+  const lean = String(row.activity_lean || '').toLowerCase()
+  const source = String(row.activity_lean_source || 'none').replaceAll('_', ' ')
+  if (lean === 'bullish') {
+    return { label: row.activity_lean_label || 'BULLISH', cls: 'bullish', title: `Activity lean · ${source}` }
+  }
+  if (lean === 'bearish') {
+    return { label: row.activity_lean_label || 'BEARISH', cls: 'bearish', title: `Activity lean · ${source}` }
+  }
+  if (lean === 'mixed') {
+    return { label: 'MIXED', cls: 'mixed', title: `Activity lean · ${source}` }
+  }
+  // Fallback from price impulse when backend lean is missing on older payloads.
+  const impulse = String(row.price_impulse || '').toLowerCase()
+  if (impulse === 'up' || (row.ret_1d != null && row.ret_1d > 0)) {
+    return { label: 'BULLISH', cls: 'bullish', title: 'Activity lean · price impulse' }
+  }
+  if (impulse === 'down' || (row.ret_1d != null && row.ret_1d < 0)) {
+    return { label: 'BEARISH', cls: 'bearish', title: 'Activity lean · price impulse' }
+  }
+  return { label: 'NEUTRAL', cls: 'neutral', title: 'No clear bullish/bearish activity lean' }
+}
+
 const watchSparks = computed(() => {
   const out: Record<string, string> = {}
   for (const [sym, traj] of Object.entries(probeResults.value)) {
@@ -520,33 +612,50 @@ function navTo(name: string): void {
 
 <template>
   <div class="desk">
+    <!-- ── Header & Session Posture ────────────────────────────────────── -->
     <header class="arena-head">
       <div class="arena-title">
-        <span class="label arena-kicker">Desk / Arena</span>
-        <h1>Execution arena</h1>
-        <p>Capital posture, ranked market activity, and the names worth opening for deeper work.</p>
+        <div class="arena-kicker-row">
+          <span class="label arena-kicker">Desk · Execution Arena</span>
+          <span class="session-indicator" :class="r?.cleared_for_live ? 'live' : 'research'">
+            <i class="session-dot" aria-hidden="true" />
+            {{ r?.cleared_for_live ? 'LIVE BOOK CLEARED' : 'RESEARCH BOOK' }}
+          </span>
+        </div>
+        <h1>Execution Arena</h1>
+        <p class="arena-desc">Session posture, live marks, ranked activity, and the names worth opening next.</p>
       </div>
 
       <div class="arena-context" aria-label="Desk scope and shortcuts">
-        <span class="scope-chip">SESSION BOARD</span>
+        <span class="scope-chip session-chip">
+          <span class="scope-tag">SCOPE</span> SESSION BOARD
+        </span>
         <span class="scope-chip" :class="scan?.depth === 'deep' ? 'live' : 'proxy'">
-          {{ scan?.depth === 'deep' ? 'MARKET-WIDE SCAN' : 'LOCAL SCAN' }}
+          <span class="scope-tag">SCAN</span> {{ scan?.depth === 'deep' ? 'MARKET-WIDE' : 'LOCAL' }}
         </span>
         <span class="scope-chip" :class="r?.cleared_for_live ? 'live' : 'held'">
-          {{ r?.cleared_for_live ? 'CAPITAL CLEARED' : 'PAPER MODE' }}
+          <span class="scope-tag">CAPITAL</span> {{ r?.cleared_for_live ? 'CLEARED' : 'HELD' }}
         </span>
-        <RouterLink :to="{ name: 'flow' }" class="arena-flow-link label">OPEN MARKET FLOW</RouterLink>
+        <RouterLink :to="{ name: 'flow' }" class="arena-flow-link label">
+          <span>MARKET FLOW</span>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+        </RouterLink>
       </div>
     </header>
 
     <!-- ── 00 Summary KPI Deck ─────────────────────────────────────────── -->
-    <div class="desk-summary">
+    <section class="desk-summary" aria-label="Desk session overview metrics">
+      <!-- 01 Capital Status Card -->
       <div class="kpi-card" :class="r?.cleared_for_live ? 'armed' : 'held'">
-        <span class="label kpi-label">Capital Status</span>
-        <div class="kpi-val-row">
-          <span class="kpi-val">{{ r?.cleared_for_live ? 'ARMED' : 'HELD' }}</span>
+        <div class="kpi-head-row">
+          <span class="label kpi-label">Capital Status</span>
           <span class="kpi-badge" :class="r?.cleared_for_live ? 'armed' : 'held'">
-            {{ r?.cleared_for_live ? 'LIVE READY' : 'PAPER TRADING' }}
+            {{ r?.cleared_for_live ? 'LIVE READY' : 'STANDBY' }}
+          </span>
+        </div>
+        <div class="kpi-val-row">
+          <span class="kpi-val fig" :class="r?.cleared_for_live ? 'pos' : 'warn-text'">
+            {{ r?.cleared_for_live ? 'ARMED' : 'HELD' }}
           </span>
         </div>
         <span class="kpi-sub">
@@ -554,12 +663,17 @@ function navTo(name: string): void {
         </span>
       </div>
 
+      <!-- 02 Confidence Posture Card -->
       <div class="kpi-card" :class="confidencePosture.tone">
-        <span class="label kpi-label">Confidence Posture</span>
-        <div class="kpi-val-row">
-          <span class="kpi-val fig" :class="sigHighConf > 0 ? 'pos' : ''">{{ confidencePosture.label }}</span>
+        <div class="kpi-head-row">
+          <span class="label kpi-label">Confidence Posture</span>
           <span class="kpi-badge" :class="sigHighConf > 0 ? 'enter' : 'held'">
             {{ sigEntered }} ENTER · {{ sigHighConf }} HIGH
+          </span>
+        </div>
+        <div class="kpi-val-row">
+          <span class="kpi-val fig" :class="sigHighConf > 0 ? 'pos' : sigActionable > 0 ? 'warn-text' : ''">
+            {{ confidencePosture.label }}
           </span>
         </div>
         <span class="kpi-sub" :title="confidencePosture.detail">
@@ -567,19 +681,27 @@ function navTo(name: string): void {
         </span>
       </div>
 
+      <!-- 03 Activity Flags Card -->
       <div class="kpi-card">
-        <span class="label kpi-label">Activity Flags</span>
+        <div class="kpi-head-row">
+          <span class="label kpi-label">Activity Flags</span>
+          <span class="kpi-badge flat">{{ scan?.depth?.toUpperCase() ?? 'SCAN' }}</span>
+        </div>
         <div class="kpi-val-row">
           <span class="kpi-val fig">{{ activity.length }}</span>
-          <span class="kpi-badge flat">{{ scan?.depth?.toUpperCase() ?? 'SCAN' }}</span>
+          <span class="kpi-sub-count label">{{ liveActivityCount }} LIVE</span>
         </div>
         <span class="kpi-sub">
           {{ liveActivityCount }} live flow · {{ pead.length }} PEAD ordinal
         </span>
       </div>
 
+      <!-- 04 Top Sector Flow (Clickable) -->
       <button class="kpi-card clickable" type="button" aria-label="Open Sectors for top sector flow" @click="navTo('sectors')">
-        <span class="label kpi-label">Top Sector Flow</span>
+        <div class="kpi-head-row">
+          <span class="label kpi-label">Top Sector Flow</span>
+          <span class="kpi-action-hint label">OPEN →</span>
+        </div>
         <div class="kpi-val-row">
           <span class="kpi-val sym">{{ topSector ? topSector.etf : '—' }}</span>
           <span class="kpi-badge" :class="tone(topSector?.flow_score ?? 0)">
@@ -591,8 +713,12 @@ function navTo(name: string): void {
         </span>
       </button>
 
+      <!-- 05 Top Alpha Strategy (Clickable) -->
       <button class="kpi-card clickable" type="button" aria-label="Open Gates for the top alpha strategy" @click="navTo('gates')">
-        <span class="label kpi-label">Top Alpha Strategy</span>
+        <div class="kpi-head-row">
+          <span class="label kpi-label">Top Alpha Strategy</span>
+          <span class="kpi-action-hint label">OPEN →</span>
+        </div>
         <div class="kpi-val-row">
           <span class="kpi-val strat-name">{{ topStrategy ? topStrategy.strategy : '—' }}</span>
           <VerdictChip v-if="topStrategy" :verdict="topStrategy.verdict" size="sm" />
@@ -601,21 +727,24 @@ function navTo(name: string): void {
           Net {{ topStrategy?.net_return ?? '—' }} · Sharpe {{ topStrategy?.sharpe ?? '—' }}
         </span>
       </button>
-    </div>
+    </section>
 
-    <!-- High-confidence queue — empty is an explicit, honest state -->
-    <section class="confidence-queue w-full" aria-label="High confidence directional queue">
+    <!-- ── High-Confidence Queue ───────────────────────────────────────── -->
+    <section class="confidence-queue w-full" :class="{ 'has-items': highConfidenceQueue.length > 0 }" aria-label="High confidence directional queue">
       <div class="confidence-queue-head">
-        <div>
-          <span class="label">High-confidence queue</span>
-          <strong>Calibrated p ≥ {{ pctFrac(ENTER_EDGE, 0) }} or ENTER state</strong>
-          <p class="label queue-note">
-            PEAD ordinal flags never appear here. Moderate watches ({{ pctFrac(ACTIONABLE_EDGE, 0) }}–{{ pctFrac(ENTER_EDGE, 0) }}) stay in Directional Signals only.
+        <div class="confidence-queue-title">
+          <div class="queue-kicker-row">
+            <span class="label queue-kicker">Authorization Queue</span>
+            <span class="queue-edge-pill label">ENTER BAR ≥ {{ pctFrac(ENTER_EDGE, 0) }}</span>
+          </div>
+          <strong>High-Confidence Directional Signals</strong>
+          <p class="queue-note">
+            Calibrated model domain only. PEAD ordinal flags never appear here. Moderate watches ({{ pctFrac(ACTIONABLE_EDGE, 0) }}–{{ pctFrac(ENTER_EDGE, 0) }}) stay in Directional Signals.
           </p>
         </div>
         <div class="confidence-queue-stats">
-          <span class="fig">{{ highConfidenceQueue.length }}</span>
-          <span class="label">NAMES</span>
+          <span class="fig count-fig" :class="highConfidenceQueue.length > 0 ? 'pos' : 'dim'">{{ highConfidenceQueue.length }}</span>
+          <span class="label count-label">AUTHORIZED</span>
         </div>
       </div>
       <div v-if="highConfidenceQueue.length" class="confidence-queue-rows">
@@ -630,29 +759,37 @@ function navTo(name: string): void {
           <span class="side-pill" :class="s.side === 'LONG' || s.side === 'long' ? 'pos' : 'neg'">
             {{ (s.side ?? DASH).toUpperCase() }}
           </span>
-          <span class="fig pos">{{ pctFrac(s.probability, 1) }}</span>
+          <span class="fig pos prob-fig">{{ pctFrac(s.probability, 1) }}</span>
           <span class="state label enter">{{ s.state }}</span>
-          <span class="label dim">{{ (s.horizon ?? '').replace(' Days', 'd') }}</span>
+          <span class="label dim horizon-label">{{ (s.horizon ?? '').replace(' Days', 'd') }}</span>
         </button>
       </div>
-      <p v-else class="note pad confidence-empty">
-        <template v-if="signals.length === 0">
-          No directional scores loaded — run a scan.
-        </template>
-        <template v-else>
-          No high-confidence authorizations this session.
-          Max calibrated edge
-          <strong class="fig">{{ maxCalibratedEdge != null ? pctFrac(maxCalibratedEdge, 1) : DASH }}</strong>
-          · ENTER bar <strong class="fig">{{ pctFrac(ENTER_EDGE, 0) }}</strong>
-          · {{ sigActionable }} moderate watch(es) only.
-        </template>
-      </p>
+      <div v-else class="confidence-empty">
+        <div class="empty-icon-box">
+          <span class="empty-indicator">—</span>
+        </div>
+        <div class="empty-copy">
+          <template v-if="signals.length === 0">
+            <strong>No directional scores loaded.</strong>
+            <p>Run a Quick or Deep scan to evaluate the serving universe.</p>
+          </template>
+          <template v-else>
+            <strong>No high-confidence authorizations this session.</strong>
+            <p>
+              Max calibrated edge: <strong class="fig">{{ maxCalibratedEdge != null ? pctFrac(maxCalibratedEdge, 1) : DASH }}</strong>
+              · ENTER threshold: <strong class="fig">{{ pctFrac(ENTER_EDGE, 0) }}</strong>
+              · {{ sigActionable }} moderate watch names remain under observation.
+            </p>
+          </template>
+        </div>
+      </div>
     </section>
 
-    <section class="scan-console" aria-label="Market scan depth">
+    <!-- ── Scan Console ────────────────────────────────────────────────── -->
+    <section class="scan-console w-full" aria-label="Market scan depth and controls">
       <div class="scan-console-head">
         <div class="scan-title-block">
-          <span class="label scan-kicker">Scan scope</span>
+          <span class="label scan-kicker">Scan Operations</span>
           <strong class="scan-title">{{ selectedScanTitle }}</strong>
           <span class="last-scan label">LAST COMPLETE · {{ scan?.depth?.toUpperCase() ?? 'NONE' }}</span>
         </div>
@@ -756,8 +893,8 @@ function navTo(name: string): void {
       <template #action>
         <div class="activity-legend label">
           <span class="live-dot" :class="{ on: liveActivityCount > 0 }" aria-hidden="true" />
-          {{ livePassLabel }}
-          <span>ORDINAL · NOT PROBABILITY</span>
+          <span class="pass-label">{{ livePassLabel }}</span>
+          <span class="ordinal-note">ORDINAL · NOT PROBABILITY</span>
         </div>
       </template>
 
@@ -765,58 +902,73 @@ function navTo(name: string): void {
         <table v-if="activity.length" class="grid">
           <thead>
             <tr>
-              <th class="label">Rank / Symbol</th>
-              <th class="label num">Activity</th>
-              <th class="label num">Qlib XS</th>
-              <th class="label">Observed Flags</th>
-              <th class="label num">Live Flow</th>
-              <th class="label num">Price / Volume</th>
-              <th class="label">Direction Context</th>
+              <th class="label col-rank">Rank / Symbol</th>
+              <th class="label col-lean">Lean</th>
+              <th class="label num col-act">Activity Score</th>
+              <th class="label num col-qlib">Qlib XS Rank</th>
+              <th class="label col-flags">Observed Flags</th>
+              <th class="label num col-flow">Live Flow</th>
+              <th class="label num col-price">Price / Vol</th>
+              <th class="label col-dir">Direction Context</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in activity" :key="row.symbol" @click="open(row.symbol)">
-              <td>
+            <tr v-for="row in activity" :key="row.symbol" class="activity-row" @click="open(row.symbol)">
+              <td class="col-rank">
                 <span class="rank-idx fig">{{ String(row.activity_rank).padStart(2, '0') }}</span>
                 <span class="fig sym">{{ row.symbol }}</span>
               </td>
-              <td class="num">
+              <td class="col-lean">
+                <span
+                  class="lean-chip label"
+                  :class="activityLean(row).cls"
+                  :title="activityLean(row).title"
+                >{{ activityLean(row).label }}</span>
+              </td>
+              <td class="num col-act">
                 <div class="activity-score">
-                  <span class="fig">{{ num(row.activity_score, 1) }}</span>
-                  <i aria-hidden="true"><b :style="{ width: `${row.activity_score}%` }" /></i>
-                  <small class="label">ORDINAL</small>
+                  <span class="fig score-val">{{ num(row.activity_score, 1) }}</span>
+                  <div class="activity-bar-wrap" aria-hidden="true">
+                    <b :style="{ width: `${row.activity_score}%` }" />
+                  </div>
+                  <small class="label ordinal-tag">ORDINAL</small>
                 </div>
               </td>
-              <td class="num fig">
+              <td class="num fig col-qlib">
                 <div
                   v-if="row.qlib_rank != null"
                   class="qlib-cell"
                   :title="`Ordinal qlib cross-sectional rank · ${row.qlib_source ?? 'research source'} · ${row.qlib_asof ?? 'as-of unavailable'}`"
                 >
-                  <strong>#{{ row.qlib_rank }}</strong>
+                  <strong class="qlib-rank-text">#{{ row.qlib_rank }}</strong>
                   <small class="dim">XS {{ row.qlib_score != null ? num(row.qlib_score, 2) : DASH }} · RSCH</small>
                 </div>
                 <span v-else class="dim">—</span>
               </td>
-              <td>
+              <td class="col-flags">
                 <div class="flag-stack">
-                  <span v-for="flag in row.flags.slice(0, 3)" :key="flag" :class="{ live: flag.includes('LIVE') || flag.includes('$1M') }">
+                  <span
+                    v-for="flag in row.flags.slice(0, 3)"
+                    :key="flag"
+                    class="flag-pill"
+                    :class="{ live: flag.includes('LIVE') || flag.includes('$1M') }"
+                  >
                     {{ flag }}
                   </span>
                 </div>
               </td>
-              <td class="fig num">
+              <td class="fig num col-flow">
                 <template v-if="row.live">
                   <strong class="live-value">{{ row.premium == null ? DASH : usd(row.premium) }}</strong>
                   <small class="flow-count">{{ row.print_count }} prints · C{{ row.call_print_count }}/P{{ row.put_print_count }}</small>
                 </template>
-                <span v-else class="dim">LOCAL ONLY</span>
+                <span v-else class="dim local-tag">LOCAL ONLY</span>
               </td>
-              <td class="fig num">
-                <span :class="tone((row.ret_1d ?? 0) * 100)">{{ signedPct((row.ret_1d ?? 0) * 100, 1) }}</span>
+              <td class="fig num col-price">
+                <span class="price-ret" :class="tone((row.ret_1d ?? 0) * 100)">{{ signedPct((row.ret_1d ?? 0) * 100, 1) }}</span>
                 <small class="flow-count">{{ row.volume_vs_20d_median == null ? DASH : `${num(row.volume_vs_20d_median, 1)}× vol` }}</small>
               </td>
-              <td>
+              <td class="col-dir">
                 <div class="signal-context">
                   <span v-if="row.pead_side" class="context-source label">GAP {{ sideWord(row.pead_side) }}</span>
                   <span v-if="row.directional_side" class="context-source label">5D {{ sideWord(row.directional_side) }}</span>
@@ -846,42 +998,81 @@ function navTo(name: string): void {
       </p>
     </Panel>
 
+    <!-- ── Signal Contract Reconciliation Bridge ────────────────────────── -->
     <section class="signal-contract w-full" aria-label="PEAD and directional signal reconciliation">
       <div class="signal-contract-copy">
-        <span class="label">Signal contract</span>
-        <strong>OPENING GAP EVENT ≠ 5-DAY FORECAST</strong>
+        <div class="contract-kicker-row">
+          <span class="label contract-kicker">Signal Reconciliation</span>
+          <span class="contract-rule-badge label">EVENT ≠ 5D FORECAST</span>
+        </div>
+        <strong>Model Separation Contract</strong>
         <p>
-          PEAD records what happened at the open. Directional estimates the next multi-session move inside a smaller frozen model domain.
+          PEAD records what happened at the market open. Directional estimates the next multi-session move inside a smaller frozen model domain.
           Only the same symbol can agree or conflict; different symbols are non-overlap, not disagreement.
         </p>
       </div>
       <div class="reconciliation-stats" aria-label="Signal overlap counts">
-        <div><span class="label">Overlap</span><strong class="fig">{{ reconciliation?.counts.overlap ?? 0 }}</strong></div>
-        <div class="agree"><span class="label">Agree</span><strong class="fig">{{ reconciliation?.counts.agreements ?? 0 }}</strong></div>
-        <div class="conflict"><span class="label">Conflict</span><strong class="fig">{{ reconciliation?.counts.conflicts ?? 0 }}</strong></div>
-        <div><span class="label">Separate names</span><strong class="fig">{{ (reconciliation?.counts.pead_only ?? pead.length) + (reconciliation?.counts.directional_only ?? signals.length) }}</strong></div>
+        <div class="stat-box"><span class="label">OVERLAP</span><strong class="fig">{{ reconciliation?.counts.overlap ?? 0 }}</strong></div>
+        <div class="stat-box agree"><span class="label">AGREE</span><strong class="fig pos">{{ reconciliation?.counts.agreements ?? 0 }}</strong></div>
+        <div class="stat-box conflict"><span class="label">CONFLICT</span><strong class="fig neg">{{ reconciliation?.counts.conflicts ?? 0 }}</strong></div>
+        <div class="stat-box"><span class="label">SEPARATE</span><strong class="fig">{{ (reconciliation?.counts.pead_only ?? pead.length) + (reconciliation?.counts.directional_only ?? signals.length) }}</strong></div>
       </div>
       <div v-if="reconciliation?.counts.conflicts" class="conflict-strip label">
-        NO UNIFIED THESIS:
-        <span v-for="row in reconciliation.rows.filter((item) => item.relation === 'conflict')" :key="row.symbol">
+        <span class="conflict-head">NO UNIFIED THESIS:</span>
+        <span v-for="row in reconciliation.rows.filter((item) => item.relation === 'conflict')" :key="row.symbol" class="conflict-item">
           {{ row.symbol }} · GAP {{ sideWord(row.pead_side) }} / 5D {{ sideWord(row.directional_side) }}
         </span>
       </div>
     </section>
 
+    <!-- ── Dual Model Signals Section Controls ─────────────────────────── -->
+    <div class="model-views-header w-full">
+      <div class="model-views-kicker">
+        <span class="label section-kicker">Trading Signals & Setup Models</span>
+        <h2>Model Domains</h2>
+      </div>
+      <div class="view-mode-tabs" role="tablist" aria-label="Signal layout mode">
+        <button
+          class="view-tab label"
+          :class="{ active: dualViewMode === 'split' }"
+          type="button"
+          @click="dualViewMode = 'split'"
+        >
+          SPLIT VIEW
+        </button>
+        <button
+          class="view-tab label"
+          :class="{ active: dualViewMode === 'pead' }"
+          type="button"
+          @click="dualViewMode = 'pead'"
+        >
+          PEAD GAP FLAGS ({{ pead.length }})
+        </button>
+        <button
+          class="view-tab label"
+          :class="{ active: dualViewMode === 'directional' }"
+          type="button"
+          @click="dualViewMode = 'directional'"
+        >
+          DIRECTIONAL 5D ({{ signals.length }})
+        </button>
+      </div>
+    </div>
+
     <!-- ── 02 PEAD gap/volume flags ─────────────────────────────────────── -->
     <Panel
+      v-if="dualViewMode === 'split' || dualViewMode === 'pead'"
       label="PEAD Gap / Volume Flags"
       index="02"
       :meta="peadMeta"
       :delay="60"
       flush
-      class="w-half"
+      :class="dualViewMode === 'pead' ? 'w-full' : 'w-half'"
     >
       <template #action>
         <div class="action-bar">
           <div class="select-wrap">
-            <select v-model="peadFilter" class="filter-select label">
+            <select v-model="peadFilter" class="filter-select label" aria-label="Filter PEAD gap setups">
               <option value="all">ALL FLAGS ({{ pead.length }})</option>
               <option value="flagged">SETUP OK ({{ peadFlagged }})</option>
               <option value="long">UP-GAP FLAGS</option>
@@ -892,31 +1083,39 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table v-if="filteredPead.length" class="grid">
+        <table v-if="filteredPead.length" class="grid table-pead">
           <thead>
             <tr>
-              <th class="label">Symbol</th>
-              <th class="label">Side</th>
-              <th class="label num">Strength</th>
-              <th class="label num">Gap / ATR</th>
-              <th class="label num">Volume</th>
-              <th class="label">5D Forecast</th>
-              <th class="label">State</th>
-              <th class="label">Options</th>
+              <th class="label col-sym">Symbol</th>
+              <th class="label num col-last">Last</th>
+              <th class="label num col-chg">1D</th>
+              <th class="label col-side">Side</th>
+              <th class="label num col-score">Strength</th>
+              <th class="label num col-gap">Gap / ATR</th>
+              <th class="label num col-vol">Volume</th>
+              <th class="label col-5d">5D Forecast</th>
+              <th class="label col-state">State</th>
+              <th class="label col-chain">Options</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(c, i) in filteredPead" :key="i" @click="open(c.symbol)">
-              <td class="fig sym">{{ c.symbol }}</td>
-              <td>
+            <tr v-for="c in filteredPead" :key="c.symbol" class="pead-row" @click="open(c.symbol)">
+              <td class="fig sym col-sym">{{ c.symbol }}</td>
+              <td class="fig num col-last" :title="markFor(c.symbol)?.source || 'awaiting mark'">
+                {{ usd(markLast(c.symbol)) }}
+              </td>
+              <td class="fig num col-chg" :class="tone(markChg(c.symbol))">
+                {{ signedPct(markChg(c.symbol)) }}
+              </td>
+              <td class="col-side">
                 <span class="side-pill" :class="c.side === 'long' ? 'pos' : 'neg'">
                   {{ (c.side ?? DASH).toUpperCase() }}
                 </span>
               </td>
-              <td class="fig num" :class="tone(c.evidence?.pead_score)">{{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}</td>
-              <td class="fig num" :class="tone(c.evidence?.gap_std)">{{ num(c.evidence?.gap_std, 2) }}</td>
-              <td class="fig num">{{ num(c.evidence?.vol_surge, 2) }}×</td>
-              <td>
+              <td class="fig num col-score" :class="tone(c.evidence?.pead_score)">{{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}</td>
+              <td class="fig num col-gap" :class="tone(c.evidence?.gap_std)">{{ num(c.evidence?.gap_std, 2) }}</td>
+              <td class="fig num col-vol">{{ num(c.evidence?.vol_surge, 2) }}×</td>
+              <td class="col-5d">
                 <span
                   v-if="signalFor(c.symbol)"
                   class="alignment-chip label"
@@ -926,12 +1125,12 @@ function navTo(name: string): void {
                 </span>
                 <span v-else class="coverage-chip label">NO 5D MODEL ROW</span>
               </td>
-              <td>
+              <td class="col-state">
                 <span class="state label watch">
                   {{ c.model?.state ?? DASH }}
                 </span>
               </td>
-              <td>
+              <td class="col-chain">
                 <button
                   class="chain-btn label"
                   type="button"
@@ -956,17 +1155,18 @@ function navTo(name: string): void {
 
     <!-- ── 03 Directional Signals ──────────────────────────────────────── -->
     <Panel
+      v-if="dualViewMode === 'split' || dualViewMode === 'directional'"
       label="Directional Signals"
       index="03"
       :meta="signalMeta"
       :delay="120"
       flush
-      class="w-half"
+      :class="dualViewMode === 'directional' ? 'w-full' : 'w-half'"
     >
       <template #action>
         <div class="action-bar">
           <div class="select-wrap">
-            <select v-model="signalFilter" class="filter-select label">
+            <select v-model="signalFilter" class="filter-select label" aria-label="Filter directional signals">
               <option value="all">ALL (ranked by edge) · {{ signals.length }}</option>
               <option value="entered">ENTER ONLY · {{ sigEntered }}</option>
               <option value="actionable">≥{{ pctFrac(ACTIONABLE_EDGE, 0) }} WATCH · {{ sigActionable }}</option>
@@ -978,34 +1178,43 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table v-if="filteredSignals.length" class="grid">
+        <table v-if="filteredSignals.length" class="grid table-directional">
           <thead>
             <tr>
-              <th class="label">Symbol</th>
-              <th class="label">Side</th>
-              <th class="label num">Edge</th>
-              <th class="label num">Momentum</th>
-              <th class="label num">Hz</th>
-              <th class="label">Gap Event</th>
-              <th class="label">State</th>
-              <th class="label">Options</th>
+              <th class="label col-sym">Symbol</th>
+              <th class="label num col-last">Last</th>
+              <th class="label num col-chg">1D</th>
+              <th class="label col-side">Side</th>
+              <th class="label num col-edge">Edge</th>
+              <th class="label num col-mom">Momentum</th>
+              <th class="label num col-hz">Hz</th>
+              <th class="label col-gap-event">Gap Event</th>
+              <th class="label col-state">State</th>
+              <th class="label col-chain">Options</th>
             </tr>
           </thead>
           <tbody>
             <tr
               v-for="s in filteredSignals"
-              :key="s.symbol + s.horizon"
+              :key="s.symbol"
+              class="directional-row"
               :class="{ 'row-high': hasHighConfidence(s.probability, s.state) }"
               @click="open(s.symbol)"
             >
-              <td class="fig sym">{{ s.symbol }}</td>
-              <td>
+              <td class="fig sym col-sym">{{ s.symbol }}</td>
+              <td class="fig num col-last" :title="markFor(s.symbol)?.source || 'awaiting mark'">
+                {{ usd(markLast(s.symbol)) }}
+              </td>
+              <td class="fig num col-chg" :class="tone(markChg(s.symbol))">
+                {{ signedPct(markChg(s.symbol)) }}
+              </td>
+              <td class="col-side">
                 <span class="side-pill" :class="s.side === 'LONG' || s.side === 'long' ? 'pos' : 'neg'">
                   {{ (s.side ?? DASH).toUpperCase() }}
                 </span>
               </td>
               <td
-                class="fig num"
+                class="fig num col-edge"
                 :title="edgeTitle(s.probability, s.state)"
               >
                 <template v-if="s.probability != null && Number.isFinite(s.probability)">
@@ -1033,14 +1242,14 @@ function navTo(name: string): void {
                 </template>
                 <span v-else class="dim" title="Uncalibrated — not an edge readout">—</span>
               </td>
-              <td class="fig num mom-cell" :class="tone(s.momentum)" :title="`Model momentum score ${num(s.momentum, 3)}`">
+              <td class="fig num mom-cell col-mom" :class="tone(s.momentum)" :title="`Model momentum score ${num(s.momentum, 3)}`">
                 <div class="mom-wrap">
                   <span class="mom-bar" aria-hidden="true"><i :style="{ width: `${momentumBarPct(s.momentum)}%` }" /></span>
                   <span>{{ num(s.momentum, 2) }}</span>
                 </div>
               </td>
-              <td class="fig num dim">{{ (s.horizon ?? '').replace(' Days', 'd') }}</td>
-              <td>
+              <td class="fig num dim col-hz">{{ (s.horizon ?? '').replace(' Days', 'd') }}</td>
+              <td class="col-gap-event">
                 <span
                   v-if="peadFor(s.symbol)"
                   class="alignment-chip label"
@@ -1050,10 +1259,10 @@ function navTo(name: string): void {
                 </span>
                 <span v-else class="coverage-chip label">NO GAP EVENT</span>
               </td>
-              <td>
+              <td class="col-state">
                 <span class="state label" :class="s.state === 'ENTER' ? 'enter' : 'watch'">{{ s.state }}</span>
               </td>
-              <td>
+              <td class="col-chain">
                 <button
                   class="chain-btn label"
                   type="button"
@@ -1079,7 +1288,7 @@ function navTo(name: string): void {
 
     <!-- ── 04 Custom Stock Watchlist & Ad-Hoc Signal Probe ─────────────── -->
     <Panel
-      label="Custom Watchlist"
+      label="Personal Watchlist & Probe Console"
       index="04"
       :meta="`${customWatchlist.length} pinned · auto-refresh 60s`"
       class="w-full"
@@ -1092,13 +1301,14 @@ function navTo(name: string): void {
             type="text"
             placeholder="Add ticker e.g. TSLA, ASTS"
             class="probe-input label"
+            aria-label="Add ticker to watchlist"
             @keyup.enter="probeSymbol(customTickerInput)"
           />
-          <button class="act label" :disabled="probing || !customTickerInput.trim()" @click="probeSymbol(customTickerInput)">
-            {{ probing ? 'PROBING…' : '+ ADD' }}
+          <button class="act label act-primary" :disabled="probing || !customTickerInput.trim()" @click="probeSymbol(customTickerInput)">
+            {{ probing ? 'PROBING…' : '+ ADD TICKER' }}
           </button>
-          <button class="act label" :disabled="probing" title="Force refresh all watchlist rows" @click="probeWatchlist(true)">
-            REFRESH
+          <button class="act label act-secondary" :disabled="probing" title="Force refresh all watchlist rows" @click="probeWatchlist(true)">
+            REFRESH ALL
           </button>
         </div>
       </template>
@@ -1106,64 +1316,79 @@ function navTo(name: string): void {
       <p v-if="probeErr" class="err pad">{{ probeErr }}</p>
 
       <div class="table-container">
-        <table v-if="customWatchlist.length" class="grid">
+        <table v-if="customWatchlist.length" class="grid table-watchlist">
           <thead>
             <tr>
-              <th class="label">Symbol</th>
-              <th class="label">Spark</th>
-              <th class="label num">Last</th>
-              <th class="label num">1D</th>
-              <th class="label num">5D</th>
-              <th class="label num">Edge</th>
-              <th class="label num">Mom</th>
-              <th class="label num">Sharpe</th>
-              <th class="label">Actions</th>
+              <th class="label col-sym">Symbol</th>
+              <th class="label col-spark">30-Day Trend</th>
+              <th class="label num col-price">Last Price</th>
+              <th class="label num col-ret1">1D Chg</th>
+              <th class="label num col-ret5">5D Chg</th>
+              <th class="label num col-edge">Model Edge</th>
+              <th class="label num col-mom">Momentum</th>
+              <th class="label num col-sharpe">Sharpe</th>
+              <th class="label col-act">Actions</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="sym in customWatchlist" :key="sym" @click="open(sym)">
-              <td class="fig sym">{{ sym }}</td>
-              <td class="spark-cell">
+            <tr v-for="sym in customWatchlist" :key="sym" class="watchlist-row" @click="open(sym)">
+              <td class="fig sym col-sym">{{ sym }}</td>
+              <td class="spark-cell col-spark">
                 <svg v-if="watchSparks[sym]" viewBox="0 0 88 22" class="spark" aria-hidden="true">
-                  <path :d="watchSparks[sym]" fill="none" stroke="currentColor" stroke-width="1.4" />
+                  <path :d="watchSparks[sym]" fill="none" stroke="currentColor" stroke-width="1.6" />
                 </svg>
                 <span v-else class="dim">—</span>
               </td>
-              <td class="fig num price-cell">{{ usd(watchPrice(sym)) }}</td>
-              <td class="fig num" :class="tone(probeResults[sym]?.stats?.chg_1d_pct)">
-                {{ signedPct(probeResults[sym]?.stats?.chg_1d_pct) }}
+              <td class="fig num price-cell col-price">{{ usd(markLast(sym)) }}</td>
+              <td class="fig num col-ret1" :class="tone(markChg(sym))">
+                {{ signedPct(markChg(sym)) }}
               </td>
-              <td class="fig num" :class="tone(probeResults[sym]?.stats?.chg_5d_pct)">
+              <td class="fig num col-ret5" :class="tone(probeResults[sym]?.stats?.chg_5d_pct)">
                 {{ signedPct(probeResults[sym]?.stats?.chg_5d_pct) }}
               </td>
               <td
-                class="fig num"
+                class="fig num col-edge"
                 :title="edgeTitle(signalFor(sym)?.probability, signalFor(sym)?.state)"
               >
                 <template v-if="signalFor(sym)?.probability != null">
                   <span
+                    class="edge-pill-wrap"
                     :class="hasHighConfidence(signalFor(sym)?.probability, signalFor(sym)?.state)
                       ? 'pos'
-                      : hasActionableEdge(signalFor(sym)?.probability) ? '' : 'dim'"
+                      : hasActionableEdge(signalFor(sym)?.probability) ? 'mod' : 'dim'"
                   >
                     {{ pctFrac(signalFor(sym)!.probability, 1) }}
                     <small
                       v-if="signalFor(sym)?.state"
-                      class="label"
+                      class="label state-mini"
                       :class="signalFor(sym)?.state === 'ENTER' ? 'enter' : 'watch'"
                     >{{ signalFor(sym)?.state }}</small>
                   </span>
                 </template>
                 <span v-else class="dim">—</span>
               </td>
-              <td class="fig num" :class="tone(signalFor(sym)?.momentum ?? probeResults[sym]?.stats?.chg_5d_pct)">
+              <td class="fig num col-mom" :class="tone(signalFor(sym)?.momentum ?? probeResults[sym]?.stats?.chg_5d_pct)">
                 {{ signalFor(sym)?.momentum != null ? num(signalFor(sym)!.momentum, 2) : signedPct(probeResults[sym]?.stats?.chg_5d_pct) }}
               </td>
-              <td class="fig num">{{ probeResults[sym]?.stats?.sharpe == null ? DASH : num(probeResults[sym]?.stats?.sharpe, 2) }}</td>
-              <td>
-                <button class="remove-btn label" title="Remove ticker from personal watchlist" @click.stop="removeWatchlistSymbol(sym)">
-                  REMOVE
-                </button>
+              <td class="fig num col-sharpe">{{ probeResults[sym]?.stats?.sharpe == null ? DASH : num(probeResults[sym]?.stats?.sharpe, 2) }}</td>
+              <td class="col-act">
+                <div class="watch-actions">
+                  <button
+                    class="chain-btn label"
+                    type="button"
+                    title="Open options chain"
+                    @click.stop="openOptions(sym)"
+                  >
+                    CHAIN
+                  </button>
+                  <button
+                    class="remove-btn label"
+                    title="Remove ticker from personal watchlist"
+                    @click.stop="removeWatchlistSymbol(sym)"
+                  >
+                    REMOVE
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -1183,15 +1408,286 @@ function navTo(name: string): void {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--s4);
   align-items: start;
+  padding-bottom: var(--s6);
 }
 .w-full { grid-column: 1 / -1; }
 .w-half { grid-column: span 2; }
 
-/* ---- high-confidence queue --------------------------------------------- */
+/* ── Workspace Identity Header ───────────────────────────────────────────── */
+.arena-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s5);
+  padding: var(--s3) 0 var(--s2);
+  border-bottom: var(--hair) solid var(--rule-hi);
+}
+.arena-title { min-width: 0; }
+.arena-kicker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: 4px;
+}
+.arena-kicker {
+  color: var(--phosphor);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.session-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 2px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.session-indicator.live {
+  color: var(--long);
+  background: var(--long-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--long) 50%, var(--rule));
+}
+.session-indicator.research {
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 50%, var(--rule));
+}
+.session-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.arena-title h1 {
+  margin: 2px 0 4px;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 2.2vw, 2.1rem);
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  font-weight: 800;
+}
+.arena-desc {
+  max-width: 680px;
+  color: var(--text-secondary);
+  font-size: var(--t-small);
+  line-height: 1.4;
+}
+.arena-context {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 10px;
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--text-primary);
+  background: var(--panel);
+  font-family: var(--font-display);
+  font-size: var(--t-micro);
+  letter-spacing: var(--track-label);
+  white-space: nowrap;
+}
+.scope-tag {
+  color: var(--ink-ghost);
+  font-weight: 700;
+}
+.scope-chip.session-chip {
+  border-color: var(--rule-hi);
+  background: var(--panel-hi);
+}
+.scope-chip.live {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 60%, var(--rule));
+  background: var(--phosphor-wash);
+}
+.scope-chip.proxy {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--rule));
+}
+.scope-chip.held {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--rule));
+  background: var(--warn-wash);
+}
+.arena-flow-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: var(--hair) solid var(--phosphor);
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: all var(--dur-fast) ease;
+}
+.arena-flow-link:hover {
+  color: var(--void);
+  background: var(--phosphor);
+}
+.flow-arrow {
+  font-family: var(--font-data);
+}
+
+/* ── 00 Summary KPI Deck ─────────────────────────────────────────────────── */
+.desk-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--s3);
+}
+
+.kpi-card {
+  background: var(--panel);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--radius-sm, 3px);
+  padding: var(--s3) var(--s4);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 104px;
+  min-width: 0;
+  overflow: hidden;
+  transition: border-color var(--dur-fast), background var(--dur-fast), transform var(--dur-fast);
+}
+.kpi-card:hover {
+  border-color: var(--rule-hi);
+  background: var(--panel-hi);
+}
+.kpi-card.clickable {
+  cursor: pointer;
+  border-style: solid;
+}
+.kpi-card.clickable:hover {
+  border-color: var(--phosphor-dim);
+}
+button.kpi-card {
+  width: 100%;
+  appearance: none;
+  text-align: left;
+  font: inherit;
+}
+.kpi-card:focus-visible, .arena-flow-link:focus-visible {
+  outline: 2px solid var(--action-focus);
+  outline-offset: 2px;
+}
+.kpi-card.armed {
+  border-left: 3px solid var(--long);
+  background: color-mix(in srgb, var(--long) 5%, var(--panel));
+}
+.kpi-card.held {
+  border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 5%, var(--panel));
+}
+
+.kpi-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-width: 0;
+}
+.kpi-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpi-action-hint {
+  font-size: 9px;
+  color: var(--phosphor);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+}
+
+.kpi-val-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-width: 0;
+  margin: 1px 0;
+}
+
+.kpi-val {
+  font-family: var(--font-data);
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.warn-text { color: var(--warn); }
+
+.kpi-badge {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 750;
+  padding: 2px 7px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+  border: var(--hair) solid currentColor;
+}
+.kpi-badge.armed, .kpi-badge.pos { color: var(--long); background: var(--long-wash); }
+.kpi-badge.held, .kpi-badge.neg { color: var(--short); background: var(--short-wash); }
+.kpi-badge.enter { color: var(--phosphor); background: var(--phosphor-wash); }
+.kpi-badge.flat { color: var(--ink-soft); background: var(--rule); border-color: var(--rule-hi); }
+
+.kpi-sub {
+  font-size: 12px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+.kpi-sub-count {
+  color: var(--phosphor-dim);
+  font-size: 10px;
+  font-weight: 700;
+}
+.fl-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strat-name { font-size: 1.05rem; min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── High-Confidence Authorization Queue ─────────────────────────────────── */
 .confidence-queue {
   border: var(--hair) solid var(--rule-hi);
+  border-left: 3px solid var(--phosphor);
   background: var(--panel);
   min-width: 0;
+  transition: all var(--dur-fast) ease;
+}
+.confidence-queue.has-items {
+  border-color: color-mix(in srgb, var(--long) 50%, var(--rule-hi));
+  border-left: 3px solid var(--long);
+  background: color-mix(in srgb, var(--long) 4%, var(--panel));
 }
 .confidence-queue-head {
   display: flex;
@@ -1201,32 +1697,62 @@ function navTo(name: string): void {
   padding: var(--s3) var(--s4);
   border-bottom: var(--hair) solid var(--rule);
 }
-.confidence-queue-head .label { color: var(--phosphor-dim); letter-spacing: 0.06em; }
-.confidence-queue-head strong {
+.queue-kicker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: 2px;
+}
+.queue-kicker {
+  color: var(--phosphor);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.queue-edge-pill {
+  color: var(--ink-soft);
+  font-size: 9px;
+  padding: 1px 6px;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel-hi);
+  border-radius: 2px;
+}
+.confidence-queue-title strong {
   display: block;
-  margin-top: 2px;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: var(--t-small);
+  font-size: 1rem;
+  letter-spacing: -0.01em;
 }
-.queue-note { margin-top: 4px; color: var(--ink-dim); max-width: 72ch; line-height: 1.4; }
+.queue-note {
+  margin-top: 4px;
+  color: var(--ink-dim);
+  font-size: 12px;
+  max-width: 80ch;
+  line-height: 1.4;
+}
 .confidence-queue-stats {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 1px;
+  gap: 2px;
+  flex-shrink: 0;
 }
-.confidence-queue-stats .fig {
-  font-size: 1.35rem;
+.count-fig {
+  font-size: 1.6rem;
   font-weight: 800;
-  color: var(--phosphor);
   line-height: 1;
+}
+.count-label {
+  font-size: 9px;
+  color: var(--ink-dim);
+  letter-spacing: 0.08em;
 }
 .confidence-queue-rows {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--s2);
-  padding: var(--s3);
+  padding: var(--s3) var(--s4);
 }
 .hc-row {
   display: grid;
@@ -1234,177 +1760,71 @@ function navTo(name: string): void {
   align-items: center;
   gap: var(--s2);
   padding: var(--s2) var(--s3);
-  border: var(--hair) solid color-mix(in srgb, var(--long) 35%, var(--rule));
-  background: color-mix(in srgb, var(--long) 8%, var(--panel));
+  border: var(--hair) solid color-mix(in srgb, var(--long) 50%, var(--rule));
+  background: color-mix(in srgb, var(--long) 10%, var(--panel));
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: all var(--dur-fast) ease;
 }
-.hc-row:hover { border-color: var(--long); background: color-mix(in srgb, var(--long) 14%, var(--panel)); }
-.confidence-empty { color: var(--ink-dim); line-height: 1.45; }
-.row-high td { background: color-mix(in srgb, var(--long) 6%, transparent); }
-.prob-cell.high .confidence-value { color: var(--long); font-weight: 700; }
-
-/* ---- workspace identity ------------------------------------------------- */
-.arena-head {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--s5);
-  padding: var(--s2) 0 var(--s1);
-  border-bottom: var(--hair) solid var(--border-subtle);
+.hc-row:hover {
+  border-color: var(--long);
+  background: color-mix(in srgb, var(--long) 18%, var(--panel));
 }
-.arena-title { min-width: 0; }
-.arena-kicker { color: var(--phosphor-dim); font-size: var(--t-micro); }
-.arena-title h1 {
-  margin: 3px 0 4px;
-  color: var(--text-primary);
-  font-family: var(--font-display);
-  font-size: clamp(1.45rem, 2vw, 2rem);
-  letter-spacing: -0.035em;
-  line-height: 1;
+.prob-fig {
+  font-size: 1.1rem;
+  font-weight: 800;
 }
-.arena-title p { max-width: 620px; color: var(--text-secondary); font-size: var(--t-small); }
-.arena-context { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--s2); }
-.scope-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 2px 7px;
-  border: var(--hair) solid var(--border-strong);
-  color: var(--text-secondary);
-  background: var(--surface-raised);
-  font-family: var(--font-display);
-  font-size: var(--t-micro);
-  letter-spacing: var(--track-label);
-  white-space: nowrap;
-}
-.scope-chip.live { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
-.scope-chip.proxy { color: var(--warn); }
-.scope-chip.held { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border-strong)); }
-.arena-flow-link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 4px 8px;
-  border: var(--hair) solid var(--phosphor-dim);
-  color: var(--phosphor);
-  background: var(--phosphor-wash);
-  font-size: var(--t-micro);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.arena-flow-link:hover { color: var(--surface-canvas); background: var(--phosphor); }
-
-/* ---- 00 Summary KPI Deck ------------------------------------------------ */
-.desk-summary {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--s3);
-}
-
-.kpi-card {
-  background: var(--panel);
-  border: var(--hair) solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
-  padding: var(--s3) var(--s4);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-  transition: border-color var(--dur-fast), background var(--dur-fast);
-}
-.kpi-card:hover {
-  border-color: var(--rule-hi);
-  background: var(--panel-hi);
-}
-.kpi-card.clickable { cursor: pointer; }
-button.kpi-card {
-  width: 100%;
-  appearance: none;
-  text-align: left;
-  font: inherit;
-}
-.kpi-card:focus-visible, .arena-flow-link:focus-visible { outline: 2px solid var(--action-focus); outline-offset: 2px; }
-.kpi-card.armed { border-color: var(--long); }
-.kpi-card.held { border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
-
-.kpi-label {
+.horizon-label {
   font-size: 10px;
-  color: var(--ink-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.kpi-val-row {
+.confidence-empty {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--s2);
-  min-width: 0;
-  overflow: hidden;
+  gap: var(--s4);
+  padding: var(--s4);
+  color: var(--ink-soft);
 }
-
-.kpi-val {
-  font-family: var(--font-mono);
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.1;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.kpi-badge {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 3px;
-  text-transform: uppercase;
+.empty-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule-hi);
   flex-shrink: 0;
-  white-space: nowrap;
 }
-.kpi-badge.armed, .kpi-badge.pos { color: var(--long); background: var(--long-wash); }
-.kpi-badge.held, .kpi-badge.neg { color: var(--short); background: var(--short-wash); }
-.kpi-badge.enter { color: var(--phosphor); background: var(--phosphor-wash); }
-.kpi-badge.flat { color: var(--ink-dim); background: var(--rule); }
+.empty-indicator {
+  color: var(--ink-ghost);
+  font-family: var(--font-data);
+  font-size: 1.2rem;
+}
+.empty-copy strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+.empty-copy p {
+  color: var(--ink-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
 
-.kpi-sub { font-size: 11px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fl-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.strat-name { font-size: 0.95rem; min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* ---- Scan console -------------------------------------------------------- */
+/* ── Scan Console ────────────────────────────────────────────────────────── */
 .scan-console {
-  grid-column: 1 / -1;
   position: relative;
   overflow: hidden;
   border: var(--hair) solid var(--rule-hi);
-  border-left: 3px solid var(--phosphor-dim);
-  background:
-    repeating-linear-gradient(90deg, transparent 0 79px, var(--grid) 80px),
-    var(--void-lift);
+  border-left: 3px solid var(--phosphor);
+  background: var(--void-lift);
 }
-.scan-console::before,
-.scan-console::after {
-  content: '';
-  position: absolute;
-  width: var(--tick);
-  height: var(--tick);
-  pointer-events: none;
-}
-.scan-console::before { inset: -1px auto auto -1px; border-top: 2px solid var(--phosphor); border-left: 2px solid var(--phosphor); }
-.scan-console::after { inset: auto -1px -1px auto; border-right: 2px solid var(--phosphor); border-bottom: 2px solid var(--phosphor); }
 
 .scan-console-head {
   display: grid;
-  grid-template-columns: minmax(140px, 0.7fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(170px, 0.75fr) minmax(0, 1.25fr) auto;
   align-items: stretch;
   min-width: 0;
 }
@@ -1416,71 +1836,86 @@ button.kpi-card {
   gap: var(--s1);
   padding: var(--s4) var(--s5);
   border-right: var(--hair) solid var(--rule);
+  background: var(--panel);
 }
-.scan-kicker { color: var(--phosphor-dim); font-size: var(--t-micro); }
+.scan-kicker { color: var(--phosphor); font-size: 10px; font-weight: 700; }
 .scan-title {
   font-family: var(--font-display);
   color: var(--ink);
-  font-size: var(--t-body);
+  font-size: 1rem;
+  font-weight: 750;
   letter-spacing: 0.02em;
 }
-.last-scan { color: var(--ink-ghost); font-size: 8px; }
-.scan-readouts { display: grid; grid-template-columns: repeat(4, minmax(105px, 1fr)); }
+.last-scan { color: var(--ink-ghost); font-size: 9px; font-weight: 600; }
+
+.scan-readouts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(110px, 1fr));
+  background: var(--panel);
+}
 .scan-readout {
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 2px;
   padding: var(--s3) var(--s4);
-  border-right: var(--hair) solid var(--rule-faint);
+  border-right: var(--hair) solid var(--rule);
 }
-.scan-readout > .label { color: var(--ink-dim); font-size: 9px; }
-.scan-readout > .fig { color: var(--ink); font-size: var(--t-lead); font-weight: 700; }
-.scan-readout > .fig i { color: var(--ink-ghost); font-size: var(--t-small); font-style: normal; }
-.scan-readout > small { color: var(--ink-ghost); font-size: 9px; }
+.scan-readout > .label { color: var(--ink-dim); font-size: 10px; font-weight: 700; }
+.scan-readout > .fig { color: var(--ink); font-size: 1.15rem; font-weight: 800; }
+.scan-readout > .fig i { color: var(--ink-ghost); font-size: 11px; font-style: normal; font-weight: 500; }
+.scan-readout > small { color: var(--ink-soft); font-size: 10px; }
 
 .scan-controls {
   display: flex;
   align-items: center;
-  gap: var(--s2);
-  padding: var(--s3) var(--s4);
+  gap: var(--s3);
+  padding: var(--s3) var(--s5);
+  background: var(--panel-hi);
 }
 .depth-switch { display: flex; border: var(--hair) solid var(--rule-hi); }
 .depth-option {
-  min-width: 78px;
-  padding: 7px 10px;
-  color: var(--ink-dim);
+  min-width: 88px;
+  padding: 8px 12px;
+  color: var(--ink-soft);
   background: var(--panel);
   border-right: var(--hair) solid var(--rule-hi);
-  font-size: 9px;
+  font-size: 10px;
+  font-weight: 750;
+  transition: all var(--dur-fast) ease;
 }
 .depth-option:last-child { border-right: 0; }
-.depth-option span { color: var(--ink-ghost); margin-left: var(--s1); }
-.depth-option:hover:not(:disabled) { color: var(--ink); background: var(--panel-hi); }
+.depth-option span { color: var(--ink-ghost); margin-left: var(--s1); font-weight: 600; }
+.depth-option:hover:not(:disabled) { color: var(--ink); background: var(--panel-raise); }
 .depth-option.on { color: var(--void); background: var(--phosphor); }
-.depth-option.on span { color: rgba(8, 9, 12, 0.62); }
+.depth-option.on span { color: rgba(10, 11, 15, 0.7); }
+
 .scan-run {
   display: flex;
   align-items: center;
   gap: var(--s2);
-  min-width: 154px;
+  min-width: 170px;
   justify-content: center;
-  padding: 8px 12px;
-  color: var(--phosphor);
-  border: var(--hair) solid var(--phosphor-dim);
-  background: var(--phosphor-wash);
-  font-size: 9px;
+  padding: 9px 14px;
+  color: var(--void);
+  border: var(--hair) solid var(--phosphor);
+  background: var(--phosphor);
+  font-size: 10px;
   font-weight: 800;
+  letter-spacing: 0.05em;
+  transition: all var(--dur-fast) ease;
 }
-.scan-run:hover:not(:disabled) { color: var(--void); background: var(--phosphor); }
-.scan-run:disabled, .depth-option:disabled { cursor: progress; opacity: 0.68; }
-.scan-pulse { width: 6px; height: 6px; background: currentColor; }
+.scan-run:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--phosphor) 85%, #fff);
+}
+.scan-run:disabled, .depth-option:disabled { cursor: progress; opacity: 0.7; }
+.scan-pulse { width: 7px; height: 7px; background: currentColor; border-radius: 1px; }
 .scan-run:disabled .scan-pulse { animation: scan-blink 720ms steps(2, end) infinite; }
 @keyframes scan-blink { 50% { opacity: 0.2; } }
 
 .scan-progress {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.45fr);
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 0.45fr);
   align-items: center;
   gap: var(--s5);
   padding: var(--s3) var(--s5);
@@ -1488,10 +1923,10 @@ button.kpi-card {
   background: var(--phosphor-wash);
 }
 .scan-progress-copy { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: var(--s3); min-width: 0; }
-.scan-progress-copy > .label { color: var(--phosphor); font-size: 9px; white-space: nowrap; }
-.scan-progress-copy > strong { overflow: hidden; color: var(--ink); font-size: var(--t-small); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.scan-progress-copy > small { color: var(--ink-dim); font-size: 9px; white-space: nowrap; }
-.scan-progress-track { height: 4px; overflow: hidden; border: var(--hair) solid var(--rule-hi); background: var(--void); }
+.scan-progress-copy > .label { color: var(--phosphor); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.scan-progress-copy > strong { overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.scan-progress-copy > small { color: var(--ink-soft); font-size: 10px; white-space: nowrap; }
+.scan-progress-track { height: 5px; overflow: hidden; border: var(--hair) solid var(--rule-hi); background: var(--void); }
 .scan-progress-track > i { display: block; height: 100%; background: var(--phosphor); transition: width var(--dur-standard) ease; }
 
 .scan-explain {
@@ -1499,135 +1934,318 @@ button.kpi-card {
   align-items: center;
   justify-content: space-between;
   gap: var(--s4);
-  min-height: 30px;
+  min-height: 32px;
   padding: var(--s2) var(--s5);
-  color: var(--ink-dim);
+  color: var(--ink-soft);
   border-top: var(--hair) solid var(--rule);
-  background: rgba(8, 9, 12, 0.46);
-  font-size: 9px;
+  background: rgba(10, 11, 15, 0.6);
+  font-size: 11px;
 }
-.scan-explain .scan-msg { padding: 0; color: var(--phosphor-dim); }
+.scan-explain .scan-msg { padding: 0; color: var(--phosphor); font-weight: 600; }
 .scan-flow-link {
   flex: 0 0 auto;
   min-height: 24px;
-  padding: 3px 7px;
+  padding: 3px 8px;
   color: var(--phosphor);
   border: var(--hair) solid var(--phosphor-dim);
+  background: var(--phosphor-wash);
   text-decoration: none;
+  font-weight: 700;
+  font-size: 10px;
 }
 .scan-flow-link:hover { color: var(--void); background: var(--phosphor); }
-.confidence-note { color: var(--warn); text-align: right; }
 
-/* ---- 01 Interlock -------------------------------------------------------- */
-.interlock { display: flex; align-items: flex-start; gap: var(--s6); flex-wrap: wrap; }
-.verdict-block { display: flex; flex-direction: column; gap: 4px; padding-right: var(--s5); }
+/* ── Panel 01: Live Activity Flags ───────────────────────────────────────── */
+.activity-panel { border-color: var(--rule-hi); }
+.activity-table { max-height: 520px; }
+.activity-legend { display: flex; align-items: center; gap: var(--s3); color: var(--ink-soft); font-size: 10px; font-weight: 600; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); }
+.live-dot.on { background: var(--phosphor); }
+.pass-label { color: var(--ink); }
+.ordinal-note { color: var(--warn); border-left: var(--hair) solid var(--rule-hi); padding-left: var(--s3); }
 
-.verdict-pill { display: flex; align-items: center; gap: var(--s3); }
-.big-verdict {
-  font-family: var(--font-display);
-  font-size: 2.25rem;
+.rank-idx { display: inline-block; width: 3ch; margin-right: var(--s2); color: var(--ink-ghost); font-weight: 700; }
+.activity-row:hover { background: var(--panel-raise); }
+
+/* Lean Chips - High Contrast */
+.lean-chip {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 2px;
   font-weight: 800;
-  line-height: 0.95;
-  letter-spacing: -0.04em;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+  white-space: nowrap;
 }
-.held .big-verdict { color: var(--warn); }
-.armed .big-verdict { color: var(--phosphor); }
+.lean-chip.bullish {
+  color: #52c78f;
+  border: var(--hair) solid #52c78f;
+  background: rgba(82, 199, 143, 0.14);
+}
+.lean-chip.bearish {
+  color: #f06d7b;
+  border: var(--hair) solid #f06d7b;
+  background: rgba(240, 109, 123, 0.14);
+}
+.lean-chip.mixed {
+  color: #e5b048;
+  border: var(--hair) solid #e5b048;
+  background: rgba(229, 176, 72, 0.14);
+}
+.lean-chip.neutral {
+  color: var(--ink-soft);
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel-hi);
+}
 
-.lamp-dot { width: 10px; height: 10px; border-radius: 50%; }
-.armed .lamp-dot { background: var(--phosphor); }
-.held .lamp-dot { background: var(--warn); }
-
-.vsub { color: var(--ink-dim); font-size: var(--t-small); }
-.gauge-set { display: flex; gap: var(--s5); flex-wrap: wrap; }
-
-.shadow-meter-wrap { margin: var(--s4) 0 var(--s3); }
-.shadow-bar { position: relative; height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; }
-.shadow-bar i {
+/* Activity Meter */
+.activity-score {
+  display: grid;
+  grid-template-columns: 4ch 64px;
+  justify-content: end;
+  align-items: center;
+  gap: 2px var(--s2);
+}
+.score-val { font-weight: 750; color: var(--ink); }
+.activity-bar-wrap {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  background: var(--rule);
+  border-radius: 1px;
+}
+.activity-bar-wrap b {
   display: block;
   height: 100%;
-  background: var(--phosphor);
-  transition: width var(--dur-slow) var(--ease-out);
+  background: var(--warn);
+}
+.ordinal-tag {
+  grid-column: 1 / -1;
+  text-align: right;
+  color: var(--ink-ghost);
+  font-size: 8px;
+  letter-spacing: 0.06em;
 }
 
-.shadow-meter-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-dim); margin-top: 4px; }
-.blocks-wrap { margin-top: var(--s3); border-top: var(--hair) solid var(--rule-faint); padding-top: var(--s3); }
-.blocks-header { display: flex; justify-content: space-between; align-items: center; color: var(--ink-dim); font-size: var(--t-tiny); font-weight: 700; margin-bottom: var(--s2); }
+/* Qlib Cell */
+.qlib-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; }
+.qlib-rank-text { color: var(--ink); font-weight: 750; }
 
-.toggle-btn { background: transparent; border: none; color: var(--phosphor); font-size: var(--t-tiny); cursor: pointer; padding: 0; }
-.toggle-btn:hover { text-decoration: underline; }
+/* Flags */
+.flag-stack { display: flex; flex-wrap: wrap; gap: 4px; max-width: 280px; }
+.flag-pill {
+  padding: 1px 6px;
+  color: var(--ink-soft);
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.flag-pill.live {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 60%, var(--rule));
+  background: var(--phosphor-wash);
+}
 
-.blocks { list-style: none; display: flex; flex-direction: column; gap: var(--s1); }
-.block {
+.live-value { display: block; color: var(--phosphor); font-weight: 800; font-size: 13px; }
+.flow-count { display: block; margin-top: 2px; color: var(--ink-dim); font-family: var(--font-ui); font-size: 10px; white-space: nowrap; }
+.local-tag { font-size: 10px; font-weight: 600; }
+.price-ret { font-weight: 750; font-size: 13px; }
+
+/* Signal Context */
+.signal-context { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 240px; }
+.context-source, .coverage-chip {
+  padding: 2px 6px;
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--ink-soft);
+  background: var(--panel-hi);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.alignment-chip {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  border: var(--hair) solid currentColor;
+}
+.alignment-chip.agree {
+  color: #52c78f;
+  border-color: #52c78f;
+  background: rgba(82, 199, 143, 0.14);
+}
+.alignment-chip.conflict {
+  color: #f06d7b;
+  border-color: #f06d7b;
+  background: rgba(240, 109, 123, 0.14);
+}
+.alignment-chip.pead_only, .alignment-chip.directional_only {
+  color: #e5b048;
+  border-color: #e5b048;
+  background: rgba(229, 176, 72, 0.14);
+}
+.context-edge { color: var(--warn); font-size: 10px; font-weight: 700; }
+
+/* ── Signal Contract Reconciliation ──────────────────────────────────────── */
+.signal-contract {
   display: grid;
-  grid-template-columns: 2.5ch 1fr;
+  grid-template-columns: minmax(300px, 1fr) auto;
+  gap: var(--s4) var(--s5);
+  padding: var(--s4) var(--s5);
+  border: var(--hair) solid var(--rule-hi);
+  border-left: 3px solid var(--warn);
+  background: var(--panel);
+}
+.contract-kicker-row {
+  display: flex;
+  align-items: center;
   gap: var(--s3);
-  align-items: baseline;
-  padding: var(--s2) 0;
-  border-bottom: var(--hair) solid var(--rule-faint);
+  margin-bottom: 2px;
 }
-.b-idx { font-size: var(--t-micro); color: var(--warn); font-weight: 700; }
-.b-txt { font-size: var(--t-small); color: var(--ink); line-height: 1.4; }
+.contract-kicker { color: var(--warn); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.contract-rule-badge {
+  color: var(--ink-soft);
+  font-size: 9px;
+  padding: 1px 6px;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel-hi);
+  border-radius: 2px;
+}
+.signal-contract-copy > strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+.signal-contract-copy > p {
+  max-width: 85ch;
+  margin-top: 4px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.reconciliation-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(80px, 1fr));
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel-hi);
+}
+.stat-box {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-width: 80px;
+  padding: var(--s3) var(--s3);
+  border-right: var(--hair) solid var(--rule-hi);
+}
+.stat-box:last-child { border-right: 0; }
+.stat-box .label { color: var(--ink-ghost); font-size: 9px; font-weight: 700; margin-bottom: 2px; }
+.stat-box strong { font-size: 1.3rem; font-weight: 800; }
+.stat-box.agree strong { color: var(--long); }
+.stat-box.conflict strong { color: var(--short); }
 
-/* ---- Filter Controls & Action Slot -------------------------------------- */
+.conflict-strip {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  padding-top: var(--s3);
+  border-top: var(--hair) solid var(--rule);
+  color: var(--short);
+}
+.conflict-head { font-weight: 750; font-size: 10px; }
+.conflict-item {
+  padding: 2px 8px;
+  border: var(--hair) solid color-mix(in srgb, var(--short) 60%, var(--rule));
+  background: var(--short-wash);
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* ── Model Views Controls ────────────────────────────────────────────────── */
+.model-views-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s2) 0 var(--s1);
+  margin-top: var(--s2);
+  border-bottom: var(--hair) solid var(--rule-hi);
+}
+.section-kicker { color: var(--phosphor-dim); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.model-views-kicker h2 {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  color: var(--ink);
+  font-weight: 750;
+  margin-top: 1px;
+}
+.view-mode-tabs {
+  display: flex;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.view-tab {
+  padding: 6px 14px;
+  font-size: 10px;
+  font-weight: 750;
+  color: var(--ink-soft);
+  background: var(--panel);
+  border-right: var(--hair) solid var(--rule-hi);
+  transition: all var(--dur-fast) ease;
+}
+.view-tab:last-child { border-right: 0; }
+.view-tab:hover { color: var(--ink); background: var(--panel-hi); }
+.view-tab.active {
+  color: var(--void);
+  background: var(--phosphor);
+}
+
+/* ── Filter Controls & Action Bar ────────────────────────────────────────── */
 .action-bar { display: flex; align-items: center; gap: var(--s3); }
-
-.select-wrap {
-  position: relative;
-}
-
+.select-wrap { position: relative; }
 .filter-select {
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule-hi);
   color: var(--phosphor);
   font-size: 11px;
-  font-weight: 700;
-  padding: 4px 10px;
-  border-radius: 3px;
+  font-weight: 750;
+  padding: 4px 12px;
+  border-radius: 2px;
   cursor: pointer;
   outline: none;
+  transition: border-color var(--dur-fast);
+}
+.filter-select:hover, .filter-select:focus-visible {
+  border-color: var(--phosphor);
 }
 .filter-select option {
   background: var(--panel);
   color: var(--ink);
 }
 
-/* ---- Probe Input Bar ----------------------------------------------------- */
-.probe-input-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  flex-wrap: wrap;
-}
-
-.probe-input {
-  background: var(--panel-hi);
-  border: var(--hair) solid var(--rule-hi);
-  color: var(--ink);
-  font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 3px;
-  width: 200px;
-}
-
-.remove-btn {
-  background: transparent;
-  border: var(--hair) solid var(--rule);
-  color: var(--ink-dim);
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 2px;
-  cursor: pointer;
-}
-.remove-btn:hover {
-  color: var(--short);
-  border-color: var(--short);
-}
-
-/* ---- Scrollable Signal Tables ------------------------------------------- */
+/* ── Tables & Grid Data ──────────────────────────────────────────────────── */
 .table-container {
   max-height: 480px;
   overflow-y: auto;
+  overflow-x: auto;
   scrollbar-width: thin;
 }
 
@@ -1636,131 +2254,211 @@ button.kpi-card {
   text-align: left;
   padding: var(--s3) var(--s4);
   color: var(--ink-dim);
-  border-bottom: var(--hair) solid var(--rule);
+  border-bottom: var(--hair) solid var(--rule-hi);
   position: sticky;
   top: 0;
   background: var(--panel-hi);
-  font-weight: 700;
+  font-weight: 750;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   z-index: 1;
+  white-space: nowrap;
 }
-.grid td { padding: var(--s2) var(--s4); border-bottom: var(--hair) solid var(--rule-faint); color: var(--ink); vertical-align: middle; }
+.grid td {
+  padding: var(--s2) var(--s4);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  color: var(--ink);
+  vertical-align: middle;
+}
 .grid tbody tr { cursor: pointer; transition: background var(--dur-fast); }
 .grid tbody tr:hover { background: var(--panel-raise); }
 
 .num { text-align: right; }
-.sym { color: var(--phosphor); font-weight: 700; }
-.side-pill { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 2px; }
-.side-pill.pos { color: var(--long); background: var(--long-wash); }
-.side-pill.neg { color: var(--short); background: var(--short-wash); }
-.side-pill.neutral { color: var(--ink-dim); background: var(--rule); }
+.sym { color: var(--phosphor); font-weight: 750; font-size: 13px; }
 
-/* ---- Live activity tape ------------------------------------------------- */
-.activity-panel { border-color: color-mix(in srgb, var(--phosphor) 30%, var(--rule)); }
-.activity-table { max-height: 520px; }
-.activity-legend { display: flex; align-items: center; gap: var(--s2); color: var(--ink-dim); font-size: 9px; }
-.activity-legend > span:last-child { color: var(--warn); border-left: var(--hair) solid var(--rule); padding-left: var(--s2); }
-.live-dot { width: 6px; height: 6px; background: var(--ink-ghost); box-shadow: none; }
-.live-dot.on { background: var(--phosphor); }
-.rank-idx { display: inline-block; width: 3ch; margin-right: var(--s2); color: var(--ink-ghost); }
-.activity-score { display: grid; grid-template-columns: 4ch 70px; justify-content: end; align-items: center; gap: 2px var(--s2); }
-.activity-score > i { display: block; height: 3px; overflow: hidden; background: var(--rule); }
-.activity-score > i b { display: block; height: 100%; background: var(--warn); }
-.activity-score > small { grid-column: 1 / -1; text-align: right; color: var(--ink-ghost); font-size: 8px; }
-.qlib-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }
-.qlib-cell > strong { color: var(--ink); }
-.qlib-cell > small { color: var(--ink-ghost); font-family: var(--font-ui); font-size: 8px; letter-spacing: 0.04em; }
-.flag-stack { display: flex; flex-wrap: wrap; gap: 3px; max-width: 300px; }
-.flag-stack span { padding: 1px 5px; color: var(--ink-dim); background: var(--rule); font-size: 9px; font-weight: 700; letter-spacing: 0.03em; }
-.flag-stack span.live { color: var(--phosphor); background: var(--phosphor-wash); }
-.live-value { display: block; color: var(--phosphor); }
-.flow-count, .context-edge { display: block; margin-top: 2px; color: var(--ink-dim); font-family: var(--font-ui); font-size: 9px; white-space: nowrap; }
-.context-edge { color: var(--warn); }
-.signal-context { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; max-width: 210px; }
-.context-source, .coverage-chip { padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--panel-raise); font-size: 8px; white-space: nowrap; }
-.alignment-chip { display: inline-flex; min-height: 19px; align-items: center; padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); white-space: nowrap; }
-.alignment-chip.agree { color: var(--long); border-color: color-mix(in srgb, var(--long) 60%, var(--rule)); background: var(--long-wash); }
-.alignment-chip.conflict { color: var(--short); border-color: color-mix(in srgb, var(--short) 60%, var(--rule)); background: var(--short-wash); }
-.alignment-chip.pead_only, .alignment-chip.directional_only { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--rule)); }
+/* Side Pills */
+.side-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 2px;
+  text-align: center;
+}
+.side-pill.pos {
+  color: #52c78f;
+  border: var(--hair) solid #52c78f;
+  background: rgba(82, 199, 143, 0.14);
+}
+.side-pill.neg {
+  color: #f06d7b;
+  border: var(--hair) solid #f06d7b;
+  background: rgba(240, 109, 123, 0.14);
+}
+.side-pill.neutral {
+  color: var(--ink-soft);
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--rule);
+}
 
-/* PEAD is a session event; Directional is a 5D model. Keep that contract
-   visible between the two panels so adjacent tables cannot read as two votes. */
-.signal-contract { display: grid; grid-template-columns: minmax(300px, 1fr) auto; gap: var(--s3) var(--s5); padding: var(--s4); border: var(--hair) solid var(--rule-hi); border-left: 3px solid var(--warn); background: var(--panel); }
-.signal-contract-copy > span { color: var(--warn); }
-.signal-contract-copy > strong { display: block; margin-top: 3px; color: var(--ink); font-family: var(--font-display); font-size: var(--t-small); letter-spacing: .03em; }
-.signal-contract-copy > p { max-width: 85ch; margin-top: 5px; color: var(--ink-dim); font-size: var(--t-small); line-height: 1.45; }
-.reconciliation-stats { display: grid; grid-template-columns: repeat(4, minmax(72px, 1fr)); border: var(--hair) solid var(--rule); }
-.reconciliation-stats > div { display: flex; flex-direction: column; justify-content: center; min-width: 78px; padding: var(--s2) var(--s3); border-right: var(--hair) solid var(--rule); }
-.reconciliation-stats > div:last-child { border-right: 0; }
-.reconciliation-stats span { color: var(--ink-ghost); font-size: 8px; }
-.reconciliation-stats strong { margin-top: 2px; color: var(--ink); font-size: var(--t-body); }
-.reconciliation-stats .agree strong { color: var(--long); }
-.reconciliation-stats .conflict strong { color: var(--short); }
-.conflict-strip { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); padding-top: var(--s3); border-top: var(--hair) solid var(--rule); color: var(--short); }
-.conflict-strip span { padding: 2px 6px; border: var(--hair) solid color-mix(in srgb, var(--short) 55%, var(--rule)); background: var(--short-wash); }
-
+/* Directional Edge Gauges */
 .prob-cell { display: flex; align-items: center; justify-content: flex-end; gap: var(--s3); }
-.prob-bar-wrap { width: 48px; height: 4px; background: var(--rule); border-radius: 2px; overflow: hidden; }
-.prob-bar { height: 100%; border-radius: 2px; }
+.prob-bar-wrap { width: 50px; height: 5px; background: var(--rule); border-radius: 1px; overflow: hidden; }
+.prob-bar { height: 100%; border-radius: 1px; }
 .prob-bar.pos { background: var(--phosphor); }
 .prob-bar.mod { background: var(--warn); }
-.prob-bar.flat { background: var(--ink-dim); opacity: 0.55; }
-.prob-cell.weak { opacity: 0.72; }
-.confidence-value { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.05; }
-.confidence-value small { font-family: var(--font-ui); font-size: 8px; letter-spacing: 0.08em; }
+.prob-bar.flat { background: var(--ink-ghost); opacity: 0.6; }
+.prob-cell.weak { opacity: 0.75; }
+.confidence-value { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; font-weight: 750; }
+.confidence-value small { font-family: var(--font-ui); font-size: 8px; font-weight: 800; letter-spacing: 0.08em; }
 .confidence-high { color: var(--long); }
 .confidence-moderate { color: var(--warn); }
 .confidence-low, .confidence-unavailable { color: var(--ink-ghost); }
-.confidence-footnote { border-top: var(--hair) solid var(--rule-faint); margin-top: 0 !important; }
+.row-high td { background: color-mix(in srgb, var(--long) 7%, transparent); }
 
+/* Momentum Cells */
 .mom-wrap { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .mom-bar {
   width: 36px;
-  height: 3px;
+  height: 4px;
   background: var(--rule);
   overflow: hidden;
   border-radius: 1px;
 }
 .mom-bar i { display: block; height: 100%; background: currentColor; opacity: 0.85; }
-.spark-cell { width: 96px; color: var(--phosphor-dim); }
+
+/* Status Badges */
+.state {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: var(--hair) solid currentColor;
+  border-radius: 2px;
+  font-weight: 750;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.state.enter { color: var(--phosphor); background: var(--phosphor-wash); }
+.state.watch { color: var(--ink-soft); border-color: var(--rule-hi); background: var(--panel-hi); }
+
+/* Action Buttons */
+.chain-btn {
+  padding: 3px 8px;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 2px;
+  background: var(--panel-hi);
+  color: var(--call-hi);
+  font-weight: 750;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
+}
+.chain-btn:hover,
+.chain-btn:focus-visible {
+  color: var(--void);
+  background: var(--call-hi);
+  border-color: var(--call-hi);
+}
+
+/* ── Panel 04: Personal Watchlist ────────────────────────────────────────── */
+.probe-input-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.probe-input {
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 2px;
+  width: 220px;
+  transition: border-color var(--dur-fast);
+}
+.probe-input:focus {
+  border-color: var(--phosphor);
+}
+.act {
+  padding: 5px 12px;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
+}
+.act-primary {
+  color: var(--void);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+}
+.act-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--phosphor) 85%, #fff);
+}
+.act-secondary {
+  color: var(--ink);
+  background: var(--panel-hi);
+}
+.act-secondary:hover:not(:disabled) {
+  border-color: var(--rule-hi);
+  background: var(--panel-raise);
+}
+.act:disabled { opacity: 0.6; cursor: progress; }
+
+.spark-cell { width: 96px; color: var(--phosphor); }
 .spark { width: 88px; height: 22px; display: block; }
 .spark path { vector-effect: non-scaling-stroke; }
 
-.dim { color: var(--ink-dim); }
+.edge-pill-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 750;
+}
+.edge-pill-wrap.pos { color: var(--long); }
+.edge-pill-wrap.mod { color: var(--warn); }
+.state-mini {
+  font-size: 8px;
+  padding: 1px 4px;
+  border: var(--hair) solid currentColor;
+  border-radius: 1px;
+}
+.watch-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.remove-btn {
+  background: transparent;
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--ink-ghost);
+  font-size: 9px;
+  font-weight: 750;
+  padding: 3px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
+}
+.remove-btn:hover {
+  color: var(--short);
+  border-color: var(--short);
+  background: var(--short-wash);
+}
+
+/* ── Shared Utilities & Responsive Breakpoints ───────────────────────────── */
+.dim { color: var(--ink-ghost); }
 .pos { color: var(--long); }
 .neg { color: var(--short); }
-.state { padding: 2px 7px; border: var(--hair) solid currentColor; border-radius: 2px; font-weight: 600; }
-.state.enter { color: var(--phosphor); background: var(--phosphor-wash); }
-.state.watch { color: var(--ink-dim); border-color: var(--rule-hi); }
-
-/* Routes a flagged name into the options engine — the chain fetch the scan
-   itself never performs. Quiet by default so it reads as an action, not a
-   signal. */
-.chain-btn {
-  padding: 2px 7px;
-  border: var(--hair) solid var(--rule-hi);
-  border-radius: 2px;
-  background: transparent;
-  color: var(--ink-faint);
-  cursor: pointer;
-}
-
-.chain-btn:hover,
-.chain-btn:focus-visible {
-  color: var(--call-hi);
-  border-color: var(--call);
-}
-
-.act {
-  padding: 3px 10px;
-  border: var(--hair) solid var(--rule-hi);
-  color: var(--ink);
-  font-weight: 600;
-}
-.act:hover:not(:disabled) { color: var(--phosphor); border-color: var(--phosphor); background: var(--phosphor-wash); }
-.act:disabled { color: var(--ink-dim); cursor: progress; }
-
-.scan-msg { padding: var(--s2) var(--s4); color: var(--phosphor-dim); }
-.note { color: var(--ink-dim); font-size: var(--t-small); }
+.confidence-footnote { border-top: var(--hair) solid var(--rule); margin-top: 0 !important; }
+.note { color: var(--ink-soft); font-size: var(--t-small); }
 .note.pad { padding: var(--s5) var(--s4); }
 .note.pad-x { padding: var(--s3) var(--s4) var(--s4); }
 .note.tiny { font-size: 11px; margin-top: var(--s3); }
@@ -1773,10 +2471,17 @@ button.kpi-card {
   .scan-console-head { grid-template-columns: 180px 1fr; }
   .scan-controls { grid-column: 1 / -1; border-top: var(--hair) solid var(--rule); justify-content: flex-end; }
 }
+@media (max-width: 1100px) {
+  .w-half { grid-column: span 4; }
+  .desk-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reconciliation-stats { grid-template-columns: repeat(2, 1fr); }
+  .stat-box:nth-child(2) { border-right: 0; }
+  .stat-box:nth-child(-n + 2) { border-bottom: var(--hair) solid var(--rule-hi); }
+}
 @media (max-width: 768px) {
   .arena-head { align-items: flex-start; flex-direction: column; gap: var(--s3); padding-bottom: var(--s3); }
   .arena-context { justify-content: flex-start; }
-  .arena-flow-link { min-height: 44px; }
+  .arena-flow-link { min-height: 40px; }
   .desk-summary { grid-template-columns: 1fr; }
   .desk { grid-template-columns: 1fr; }
   .w-half { grid-column: span 1; }
@@ -1792,9 +2497,8 @@ button.kpi-card {
   .scan-progress-copy > strong { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
   .scan-explain { align-items: flex-start; flex-direction: column; }
   .signal-contract { grid-template-columns: 1fr; }
-  .reconciliation-stats { grid-template-columns: repeat(2, 1fr); }
-  .reconciliation-stats > div:nth-child(2) { border-right: 0; }
-  .reconciliation-stats > div:nth-child(-n + 2) { border-bottom: var(--hair) solid var(--rule); }
-  .confidence-note { text-align: left; }
+  .model-views-header { flex-direction: column; align-items: flex-start; gap: var(--s2); }
+  .view-mode-tabs { width: 100%; }
+  .view-tab { flex: 1; text-align: center; }
 }
 </style>

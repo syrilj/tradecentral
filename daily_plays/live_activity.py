@@ -280,6 +280,108 @@ def _context_side(row: Mapping[str, Any] | None) -> str | None:
     return side if side in {"long", "short"} else None
 
 
+def _activity_lean(
+    *,
+    signed_net_premium: float | None = None,
+    signed_print_count: int = 0,
+    context_side: str | None = None,
+    call_premium: float | None = None,
+    put_premium: float | None = None,
+    call_put_imbalance: float | None = None,
+    price_impulse: str | None = None,
+    ret_1d: float | None = None,
+) -> dict[str, Any]:
+    """Describe whether detected activity leans bullish or bearish.
+
+    This is an activity lean for the desk — not a trade authorization. Priority:
+    1) provider-signed premium, 2) model/PEAD context, 3) call/put premium mix
+    with price impulse confirmation, 4) price impulse alone.
+    """
+    signed_count = max(0, int(signed_print_count or 0))
+    if signed_count > 0 and signed_net_premium is not None:
+        net = float(signed_net_premium)
+        if abs(net) < 1e-9:
+            lean = "mixed"
+        else:
+            lean = "bullish" if net > 0 else "bearish"
+        return {
+            "activity_lean": lean,
+            "activity_lean_source": "signed_flow",
+            "activity_lean_label": lean.upper(),
+        }
+
+    ctx = str(context_side or "").strip().lower()
+    if ctx in {"long", "bullish"}:
+        return {
+            "activity_lean": "bullish",
+            "activity_lean_source": "model_context",
+            "activity_lean_label": "BULLISH",
+        }
+    if ctx in {"short", "bearish"}:
+        return {
+            "activity_lean": "bearish",
+            "activity_lean_source": "model_context",
+            "activity_lean_label": "BEARISH",
+        }
+    if ctx == "mixed":
+        return {
+            "activity_lean": "mixed",
+            "activity_lean_source": "model_context",
+            "activity_lean_label": "MIXED",
+        }
+
+    imbalance = call_put_imbalance
+    if imbalance is None:
+        call_p = float(call_premium or 0.0)
+        put_p = float(put_premium or 0.0)
+        total = call_p + put_p
+        if total > 0:
+            imbalance = (call_p - put_p) / total
+
+    prem_lean: str | None = None
+    if imbalance is not None and abs(float(imbalance)) >= 0.15:
+        prem_lean = "bullish" if float(imbalance) > 0 else "bearish"
+
+    impulse = str(price_impulse or "").strip().lower()
+    price_lean: str | None = None
+    if impulse == "up" or (ret_1d is not None and float(ret_1d) > 0):
+        price_lean = "bullish"
+    elif impulse == "down" or (ret_1d is not None and float(ret_1d) < 0):
+        price_lean = "bearish"
+
+    if prem_lean and price_lean:
+        if prem_lean == price_lean:
+            return {
+                "activity_lean": prem_lean,
+                "activity_lean_source": "premium_and_price",
+                "activity_lean_label": prem_lean.upper(),
+            }
+        # Options activity still has a side when premium is skewed; surface that
+        # lean and mark that spot moved the other way in the source label.
+        return {
+            "activity_lean": prem_lean,
+            "activity_lean_source": "call_put_premium_vs_price",
+            "activity_lean_label": prem_lean.upper(),
+        }
+    if prem_lean:
+        return {
+            "activity_lean": prem_lean,
+            "activity_lean_source": "call_put_premium",
+            "activity_lean_label": prem_lean.upper(),
+        }
+    if price_lean:
+        return {
+            "activity_lean": price_lean,
+            "activity_lean_source": "price_impulse",
+            "activity_lean_label": price_lean.upper(),
+        }
+    return {
+        "activity_lean": "neutral",
+        "activity_lean_source": "none",
+        "activity_lean_label": "NEUTRAL",
+    }
+
+
 def _signal_alignment(pead_side: str | None, directional_side: str | None) -> str:
     """Classify two differently-timed signals without pretending they are peers.
 
@@ -402,6 +504,25 @@ def _merge_activity_rows(
             if isinstance(probability, (int, float)) and math.isfinite(float(probability))
             else None
         )
+        call_premium = _finite(evidence.get("call_premium"))
+        put_premium = _finite(evidence.get("put_premium"))
+        classified = (call_premium or 0.0) + (put_premium or 0.0)
+        call_put_imbalance = (
+            (float(call_premium or 0.0) - float(put_premium or 0.0)) / classified
+            if classified > 0 else None
+        )
+        signed_net = _finite(evidence.get("signed_net_premium"))
+        signed_prints = int(evidence.get("signed_print_count") or 0)
+        lean = _activity_lean(
+            signed_net_premium=signed_net,
+            signed_print_count=signed_prints,
+            context_side=context_side,
+            call_premium=call_premium,
+            put_premium=put_premium,
+            call_put_imbalance=call_put_imbalance,
+            price_impulse=str(local_row.get("price_impulse") or ""),
+            ret_1d=_finite(local_row.get("ret_1d")),
+        )
         sources = ["daily OHLCV"] if local_row else []
         if flow_row:
             sources.insert(0, "LSE live flow")
@@ -423,6 +544,7 @@ def _merge_activity_rows(
             "directional_horizon": (models.get(symbol) or {}).get("horizon"),
             "signal_alignment": signal_alignment,
             "calibrated_probability": calibrated_probability,
+            **lean,
             "live": bool(flow_row),
             "live_asof": flow_row.get("asof_utc"),
             "premium": round(premium, 2) if premium is not None else None,
@@ -430,8 +552,9 @@ def _merge_activity_rows(
             "call_print_count": int(evidence.get("call_print_count") or 0),
             "put_print_count": int(evidence.get("put_print_count") or 0),
             "contract_count": int(evidence.get("contract_count") or 0),
-            "call_premium": _finite(evidence.get("call_premium")),
-            "put_premium": _finite(evidence.get("put_premium")),
+            "call_premium": call_premium,
+            "put_premium": put_premium,
+            "call_put_imbalance": round(call_put_imbalance, 4) if call_put_imbalance is not None else None,
             "put_flow_pct": _finite(evidence.get("put_flow_pct")),
             "otm_premium": _finite(evidence.get("otm_premium")),
             "otm_flow_pct": _finite(evidence.get("otm_flow_pct")),
@@ -444,7 +567,7 @@ def _merge_activity_rows(
             "unusual_contracts": int(evidence.get("unusual_contracts") or 0),
             "average_price": _finite(evidence.get("average_price")),
             "average_dte": _finite(evidence.get("average_dte")),
-            "signed_print_count": int(evidence.get("signed_print_count") or 0),
+            "signed_print_count": signed_prints,
             "ret_1d": local_row.get("ret_1d"),
             "volume_vs_20d_median": local_row.get("volume_vs_20d_median"),
             "price_impulse": local_row.get("price_impulse"),
@@ -525,10 +648,18 @@ def build_unusual_options_flow(
             continue
         call_n = int(evidence.get("call_print_count") or 0)
         put_n = int(evidence.get("put_print_count") or 0)
-        total_n = max(call_n + put_n, 1)
-        call_share = call_n / total_n
-        put_share = put_n / total_n
-        imbalance = call_share - put_share  # + call heavy, − put heavy
+        # Premium share is the identity mix the UI bars show. Print-count
+        # imbalance used to disagree violently with those bars (e.g. more
+        # small call prints while a few puts dominate notional → "+call"
+        # while the bar is 90% put). Prefer premium; fall back to counts.
+        call_prem = _finite(evidence.get("call_premium"))
+        put_prem = _finite(evidence.get("put_premium"))
+        classified = (call_prem or 0.0) + (put_prem or 0.0)
+        if classified > 0 and call_prem is not None and put_prem is not None:
+            imbalance = (call_prem - put_prem) / classified  # + call heavy, − put heavy
+        else:
+            total_n = max(call_n + put_n, 1)
+            imbalance = (call_n - put_n) / total_n
         local = local_by.get(symbol, {})
         # Absolute, cohort-invariant premium transform: adding an unrelated
         # whale must not change every existing row's score. $1M saturates the
@@ -556,6 +687,20 @@ def build_unusual_options_flow(
 
         direction_signed = bool(evidence.get("direction_signed"))
         signed_side = _context_side(flow_row) if direction_signed else None
+        signed_net = _finite(evidence.get("signed_net_premium"))
+        signed_prints = int(evidence.get("signed_print_count") or 0)
+        call_prem = _finite(evidence.get("call_premium"))
+        put_prem = _finite(evidence.get("put_premium"))
+        lean = _activity_lean(
+            signed_net_premium=signed_net if direction_signed else None,
+            signed_print_count=signed_prints if direction_signed else 0,
+            context_side=signed_side or "neutral",
+            call_premium=call_prem,
+            put_premium=put_prem,
+            call_put_imbalance=imbalance,
+            price_impulse=str(local.get("price_impulse") or "flat"),
+            ret_1d=_finite(local.get("ret_1d")),
+        )
         board.append({
             "symbol": symbol,
             "unusual_score": unusual_score,
@@ -567,6 +712,7 @@ def build_unusual_options_flow(
             # signed provider observation may supply directional context.
             "context_side": signed_side or "neutral",
             "calibrated_probability": None,
+            **lean,
             "live": True,
             "live_asof": flow_row.get("asof_utc"),
             "premium": round(premium, 2),
@@ -575,8 +721,8 @@ def build_unusual_options_flow(
             "put_print_count": put_n,
             "call_put_imbalance": round(imbalance, 4),
             "contract_count": int(evidence.get("contract_count") or 0),
-            "call_premium": _finite(evidence.get("call_premium")),
-            "put_premium": _finite(evidence.get("put_premium")),
+            "call_premium": call_prem,
+            "put_premium": put_prem,
             "put_flow_pct": _finite(evidence.get("put_flow_pct")),
             "otm_premium": _finite(evidence.get("otm_premium")),
             "otm_flow_pct": _finite(evidence.get("otm_flow_pct")),
@@ -589,7 +735,7 @@ def build_unusual_options_flow(
             "unusual_contracts": int(evidence.get("unusual_contracts") or 0),
             "average_price": _finite(evidence.get("average_price")),
             "average_dte": _finite(evidence.get("average_dte")),
-            "signed_print_count": int(evidence.get("signed_print_count") or 0),
+            "signed_print_count": signed_prints,
             "premium_basis": str(evidence.get("premium_basis") or "provider_symbol_aggregate"),
             "ret_1d": local.get("ret_1d"),
             "volume_vs_20d_median": local.get("volume_vs_20d_median"),

@@ -1,24 +1,95 @@
 <script setup lang="ts">
 import { computed, nextTick, provide, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type StatusPayload, type Readiness, type MarketClock, type ComparePayload } from '@/api'
+import { ClerkLoaded, ClerkLoading, UserButton, useAuth, useClerk, useUser } from '@clerk/vue'
+import { api, configureApiAuth, type StatusPayload, type Readiness, type MarketClock, type ComparePayload, type ScanDepth } from '@/api'
+import { isAllowedOperatorEmail } from '@/auth'
 import { useResource } from '@/composables/useResource'
 import { num, age, signedPct, tone, usd } from '@/format'
 import AppIcon from '@/components/AppIcon.vue'
 import SearchPalette from '@/components/SearchPalette.vue'
+import TradeCentralMark from '@/components/TradeCentralMark.vue'
 
 const route = useRoute()
 const router = useRouter()
+const { getToken, isLoaded, isSignedIn } = useAuth()
+const clerk = useClerk()
+const { user } = useUser()
+const publicRoute = computed(() => route.meta.public === true)
+const operatorEmail = computed(() => user.value?.primaryEmailAddress?.emailAddress ?? '')
+const operatorAllowed = computed(() => isAllowedOperatorEmail(operatorEmail.value))
+const signingOut = ref(false)
+
+async function signOut(): Promise<void> {
+  if (signingOut.value) return
+  signingOut.value = true
+  try {
+    await clerk.value?.signOut()
+    await router.replace({ name: 'landing' })
+  } finally {
+    signingOut.value = false
+  }
+}
+
+configureApiAuth(async () => {
+  if (!isLoaded.value || !isSignedIn.value || !operatorAllowed.value) return null
+  return getToken.value()
+})
 
 /* The shell owns the two feeds every view needs, and hands them down. A single
    poller for status beats four views each opening their own. */
-const status = useResource<StatusPayload>(() => api.status(), { intervalMs: 60_000 })
-const readiness = useResource<Readiness>(() => api.readiness(), { intervalMs: 120_000 })
-const marketClock = useResource<MarketClock>(() => api.marketClock(), { intervalMs: 30_000 })
+const authEnabled = () => isSignedIn.value === true && operatorAllowed.value
+const lastStatusDepth = ref<ScanDepth | undefined>(undefined)
+const status = useResource<StatusPayload>(
+  () => api.status(lastStatusDepth.value),
+  { intervalMs: 60_000, enabled: authEnabled },
+)
+watch(
+  () => status.data.value?.scan_summary?.depth,
+  (depth) => {
+    if (depth === 'deep' || depth === 'quick') lastStatusDepth.value = depth
+  },
+)
+const readiness = useResource<Readiness>(() => api.readiness(), { intervalMs: 120_000, enabled: authEnabled })
+const marketClock = useResource<MarketClock>(() => api.marketClock(), { intervalMs: 30_000, enabled: authEnabled })
 /** Benchmark tape for the strip — SPY, Nasdaq (QQQ), Dow (DIA), Oil/energy (XLE). */
 const tapeMarks = useResource<ComparePayload>(
   () => api.compare(['SPY', 'QQQ', 'DIA', 'XLE'], '1m'),
-  { intervalMs: 120_000 },
+  { intervalMs: 120_000, enabled: authEnabled },
+)
+
+watch(isSignedIn, (signedIn) => {
+  if (signedIn && operatorAllowed.value) {
+    void Promise.all([
+      status.refresh(),
+      readiness.refresh(),
+      marketClock.refresh(),
+      tapeMarks.refresh(),
+    ])
+  } else {
+    status.clear()
+    readiness.clear()
+    marketClock.clear()
+    tapeMarks.clear()
+  }
+})
+
+watch(
+  [isLoaded, isSignedIn, operatorAllowed, () => route.name, () => route.fullPath],
+  () => {
+    if (!isLoaded.value) return
+    if (isSignedIn.value && !operatorAllowed.value && route.name !== 'auth') {
+      void router.replace({ name: 'auth' })
+      return
+    }
+    if (!isSignedIn.value && route.meta.public !== true) {
+      void router.replace({
+        name: 'auth',
+        query: { redirect: route.fullPath },
+      })
+    }
+  },
+  { immediate: true },
 )
 
 provide('status', status)
@@ -33,24 +104,27 @@ const primaryNav = [
 ] as const
 
 const marketTools = [
-  { name: 'sectors', idx: 'M1', title: 'Sectors', hint: 'Rotation and leadership', icon: 'market' },
-  { name: 'sentiment', idx: 'M2', title: 'Pulse', hint: 'Structure and outliers', icon: 'market' },
-  { name: 'momentum', idx: 'M3', title: 'Momentum', hint: 'Five pillars scan', icon: 'market' },
-  { name: 'fintel', idx: 'M4', title: 'Fintel', hint: 'Short, borrow, owners', icon: 'market' },
+  { name: 'sectors', idx: 'M1', title: 'Sectors', hint: 'Rotation and leadership', icon: 'sectors' },
+  { name: 'sentiment', idx: 'M2', title: 'Pulse', hint: 'Structure and outliers', icon: 'pulse' },
+  { name: 'momentum', idx: 'M3', title: 'Momentum', hint: 'Five pillars scan', icon: 'momentum' },
+  { name: 'fintel', idx: 'M4', title: 'Fintel', hint: 'Short, borrow, owners', icon: 'fintel' },
 ] as const
 
 const researchTools = [
-  { name: 'gates', idx: 'R1', title: 'Gates', hint: 'Pre-registered verdicts', icon: 'research' },
-  { name: 'evolution', idx: 'R2', title: 'Evolution', hint: 'GA survivors lab', icon: 'research' },
-  { name: 'adaptive', idx: 'R3', title: 'Live Blend', hint: 'Regime multi-stream', icon: 'research' },
-  { name: 'graph', idx: 'R4', title: 'Graph', hint: 'Knowledge graph', icon: 'research' },
-  { name: 'changepoints', idx: 'R5', title: 'Breaks', hint: 'Bayesian regime breaks', icon: 'research' },
-  { name: 'cloud', idx: 'R6', title: 'Cloud', hint: 'Vertex AI training', icon: 'research' },
+  { name: 'gates', idx: 'R1', title: 'Gates', hint: 'Pre-registered verdicts', icon: 'gate' },
+  { name: 'evolution', idx: 'R2', title: 'Evolution', hint: 'GA survivors lab', icon: 'evolution' },
+  { name: 'adaptive', idx: 'R3', title: 'Live Blend', hint: 'Regime multi-stream', icon: 'adaptive' },
+  { name: 'graph', idx: 'R4', title: 'Graph', hint: 'Knowledge graph', icon: 'graph' },
+  { name: 'changepoints', idx: 'R5', title: 'Breaks', hint: 'Bayesian regime breaks', icon: 'changepoints' },
+  { name: 'cloud', idx: 'R6', title: 'Cloud', hint: 'Vertex AI training', icon: 'cloud' },
 ] as const
 
 const secondaryNav = [...marketTools, ...researchTools] as const
 
 const moreOpen = ref(false)
+const moreWrap = ref<HTMLDivElement | null>(null)
+const moreButton = ref<HTMLButtonElement | null>(null)
+const morePanel = ref<HTMLElement | null>(null)
 const stage = ref<HTMLElement | null>(null)
 
 const vol = computed(() => status.data.value?.latest_vol)
@@ -292,15 +366,55 @@ function onKey(e: KeyboardEvent): void {
   }
 }
 
+function onOutsidePointer(e: PointerEvent): void {
+  if (!moreOpen.value || !moreWrap.value || !(e.target instanceof Node)) return
+  if (!moreWrap.value.contains(e.target)) moreOpen.value = false
+}
+
+async function openToolsMenu(edge: 'first' | 'last' = 'first'): Promise<void> {
+  moreOpen.value = true
+  await nextTick()
+  const items = Array.from(
+    morePanel.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
+  )
+  items[edge === 'first' ? 0 : items.length - 1]?.focus()
+}
+
+function onMoreMenuKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    moreOpen.value = false
+    moreButton.value?.focus()
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+  const items = Array.from(
+    morePanel.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
+  )
+  if (!items.length) return
+  e.preventDefault()
+  const current = items.indexOf(document.activeElement as HTMLElement)
+  const next = e.key === 'Home'
+    ? 0
+    : e.key === 'End'
+      ? items.length - 1
+      : e.key === 'ArrowUp'
+        ? (current <= 0 ? items.length - 1 : current - 1)
+        : (current + 1) % items.length
+  items[next]?.focus()
+}
+
 onMounted(() => {
   /* Default density stays compact; no user toggle — layout is fixed. */
   document.documentElement.dataset.density = 'compact'
   tick = window.setInterval(() => (clock.value = utcNow()), 1000)
   window.addEventListener('keydown', onKey)
+  document.addEventListener('pointerdown', onOutsidePointer)
 })
 onUnmounted(() => {
   if (tick !== undefined) clearInterval(tick)
   window.removeEventListener('keydown', onKey)
+  document.removeEventListener('pointerdown', onOutsidePointer)
 })
 
 watch(() => route.fullPath, async () => {
@@ -336,15 +450,33 @@ function openRotation(): void {
 function openVol(): void {
   void router.push({ name: 'sentiment' })
 }
+
 </script>
 
 <template>
-  <div class="shell">
+  <ClerkLoading>
+    <div class="clerk-boot" role="status">
+      <TradeCentralMark :size="40" />
+      <strong class="clerk-boot-word">TradeCentral</strong>
+      <span class="label">Loading operator session…</span>
+    </div>
+  </ClerkLoading>
+
+  <ClerkLoaded>
+    <div v-if="!publicRoute && (!isSignedIn || !operatorAllowed)" class="clerk-redirect" role="status">
+      <span class="label">Opening operator access…</span>
+    </div>
+
+    <div v-else class="shell">
     <a class="skip-link" href="#main-content">Skip to workspace</a>
     <!-- ── left rail ────────────────────────────────────────────────────── -->
-    <nav class="rail" aria-label="Primary">
-      <RouterLink to="/" class="mark" aria-label="Overview home">
-        <span class="mark-e">E</span>
+    <nav class="rail" aria-label="TradeCentral workspaces">
+      <RouterLink to="/" class="mark" aria-label="TradeCentral overview">
+        <TradeCentralMark :size="28" />
+        <span class="mark-word" aria-hidden="true">
+          <strong>Trade</strong>
+          <strong>Central</strong>
+        </span>
         <span class="mark-rule" aria-hidden="true" />
       </RouterLink>
 
@@ -366,18 +498,32 @@ function openVol(): void {
       </ul>
 
       <!-- More: secondary views dropdown -->
-      <div class="more-wrap">
+      <div ref="moreWrap" class="more-wrap">
         <button
+          ref="moreButton"
+          type="button"
           class="more-btn nav-item"
           :class="{ on: secondaryActive || moreOpen }"
           :aria-expanded="moreOpen"
+          aria-haspopup="menu"
+          aria-controls="workspace-tools-menu"
           :title="moreOpen ? 'Close tools' : 'Open market and research tools'"
           @click="moreOpen = !moreOpen"
+          @keydown.down.prevent="openToolsMenu('first')"
+          @keydown.up.prevent="openToolsMenu('last')"
         >
           <AppIcon class="nav-icon" name="more" :size="18" />
           <span class="nav-title label">Tools</span>
         </button>
-        <div v-if="moreOpen" class="more-panel" role="menu" aria-label="Market and research tools">
+        <div
+          v-if="moreOpen"
+          id="workspace-tools-menu"
+          ref="morePanel"
+          class="more-panel"
+          role="menu"
+          aria-label="Market and research tools"
+          @keydown="onMoreMenuKey"
+        >
           <button class="more-search" type="button" role="menuitem" @click="moreOpen = false; paletteOpen = true">
             <AppIcon name="search" :size="16" />
             <span class="more-title label">Search symbol</span>
@@ -391,7 +537,7 @@ function openVol(): void {
             role="menuitem"
             @click="moreOpen = false"
           >
-            <AppIcon name="desk" :size="16" />
+            <AppIcon name="home" :size="16" />
             <span class="more-title label">Overview</span>
             <span class="more-idx fig">HOME</span>
           </RouterLink>
@@ -426,6 +572,14 @@ function openVol(): void {
             <span class="more-idx fig">{{ n.idx }}</span>
           </RouterLink>
         </div>
+      </div>
+
+      <div class="clerk-user" :title="operatorEmail || 'Account and sign out'">
+        <UserButton after-sign-out-url="/" />
+        <span class="nav-title label">Account</span>
+        <button type="button" class="account-signout label" :disabled="signingOut" @click="void signOut()">
+          {{ signingOut ? 'EXITING' : 'SIGN OUT' }}
+        </button>
       </div>
 
     </nav>
@@ -586,7 +740,8 @@ function openVol(): void {
       @close="paletteOpen = false"
       @select="openSymbol"
     />
-  </div>
+    </div>
+  </ClerkLoaded>
 </template>
 
 <style scoped>
@@ -650,20 +805,27 @@ function openVol(): void {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--s2);
-  padding-bottom: var(--s2);
+  gap: 5px;
+  padding: 1px 4px var(--s3);
+  color: var(--ink);
   text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out);
 }
-.mark:hover { text-decoration: none; }
+.mark:hover { color: var(--phosphor); text-decoration: none; }
 
-.mark-e {
+.mark-word {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   font-family: var(--font-display);
-  font-size: 1.125rem;
-  font-weight: 800;
-  color: var(--phosphor);
-  letter-spacing: -0.04em;
-  line-height: 1;
+  font-size: 8px;
+  font-weight: 750;
+  line-height: 0.95;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
 }
+.mark-word strong:last-child { color: var(--ink-dim); }
+.mark:hover .mark-word strong:last-child { color: currentColor; }
 
 .mark-rule {
   width: 22px;
@@ -733,6 +895,44 @@ function openVol(): void {
 .more-wrap {
   position: relative;
 }
+.clerk-user {
+  width: 100%;
+  min-height: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: auto;
+  border-top: var(--hair) solid var(--rule-faint);
+}
+.clerk-user :deep(.cl-avatarBox) {
+  width: 27px;
+  height: 27px;
+  border: var(--hair) solid var(--rule-hi);
+}
+.account-signout {
+  padding: 2px 4px;
+  color: var(--ink-ghost);
+  border: var(--hair) solid var(--rule);
+  background: var(--void-lift);
+  font-size: 8px;
+  cursor: pointer;
+}
+.account-signout:hover:not(:disabled) { color: var(--short); border-color: color-mix(in srgb, var(--short) 55%, var(--rule)); }
+.clerk-boot,
+.clerk-redirect {
+  position: relative;
+  z-index: 5;
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--s4);
+  color: var(--ink-dim);
+  background: var(--void);
+}
+.clerk-boot-word { color: var(--ink); font: 700 var(--t-display) var(--font-display); }
 .more-btn {
   width: 100%;
   border: none;
@@ -747,6 +947,8 @@ function openVol(): void {
   background: var(--void-lift);
   border: var(--hair) solid var(--rule-hi);
   min-width: 208px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
@@ -1067,6 +1269,15 @@ function openVol(): void {
   .nav-item.on::after { top: auto; right: 18%; bottom: 0; left: 18%; width: auto; height: 2px; }
   .nav-pulse { top: 8px; right: calc(50% - 15px); }
   .more-wrap { flex: 0 0 52px; width: 52px; margin-top: 0; }
+  .clerk-user {
+    flex: 0 0 52px;
+    width: 52px;
+    margin-top: 0;
+    min-height: 64px;
+    border-top: 0;
+    border-left: var(--hair) solid var(--rule-faint);
+  }
+  .account-signout { display: none; }
   .more-btn { min-height: 64px; height: 64px; }
   .more-panel { top: auto; right: 0; bottom: calc(100% + 2px); left: auto; }
   .foot { display: none; }
@@ -1096,6 +1307,5 @@ function openVol(): void {
   }
   .mobile-market-state.closed,
   .mobile-market-state.unknown { color: var(--warn); }
-  .more-panel { left: calc(100% + 1px); }
 }
 </style>

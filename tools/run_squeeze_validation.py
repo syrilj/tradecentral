@@ -48,6 +48,13 @@ def main() -> int:
             f"amp IC(SR,|r|)={amp.get('rank_ic_sr_vs_abs_ret')}"
         )
     print("threshold_sweep:", json.dumps(summary.get("threshold_sweep"), indent=2, default=str))
+    for name in ("train", "oos"):
+        block = summary.get(name) or (payload.get("train_oos") or {}).get(name) or {}
+        if block:
+            print(
+                f"  {name.upper()}: n={block.get('n')} hit_rate={block.get('hit_rate')} "
+                f"rank_ic={block.get('rank_ic')} threshold={block.get('threshold')}"
+            )
     print(f"artifacts → {args.out_dir}")
     return 0
 

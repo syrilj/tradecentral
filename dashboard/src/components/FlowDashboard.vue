@@ -88,7 +88,8 @@ interface DirectionRead {
 }
 
 interface PriceRead {
-  value: string
+  spot: string
+  move: string
   detail: string
   tone: string
 }
@@ -99,7 +100,20 @@ interface TriagePick {
   symbol: string
   value: string
   detail: string
+  lean: string
+  leanState: string
+  action: string
   tags: EvidenceTag[]
+}
+
+/** Concrete desk next-step for a name — research path, not order authorization. */
+interface ActionInsight {
+  lean: string
+  leanState: 'bullish' | 'bearish' | 'mixed' | 'unknown' | 'model-bullish' | 'model-bearish'
+  priority: 'now' | 'soon' | 'watch' | 'skip'
+  action: string
+  focus: string
+  why: string
 }
 
 const MAJOR_SYMBOLS = ['SPY', 'QQQ', 'IWM', 'DIA'] as const
@@ -342,8 +356,8 @@ const providerFreshnessState = computed(() => {
 
 const feedStatusLabel = computed(() => {
   if (!props.payload) return 'WAITING'
-  if (providerFreshnessState.value === 'stale') return 'STALE WINDOW'
-  if (providerFreshnessState.value === 'live') return 'LIVE WINDOW'
+  if (providerFreshnessState.value === 'stale') return 'STALE SAMPLE'
+  if (providerFreshnessState.value === 'live') return 'LIVE SAMPLE'
   return String(props.payload.feed_status ?? 'unknown').replaceAll('_', ' ').toUpperCase()
 })
 
@@ -508,6 +522,7 @@ function directionRead(symbol: string): DirectionRead {
   const hasSignedFlow = !!stats && stats.signedPrints > 0 && stats.signedGross > 0
   const modelStrong = strongModelContext(context)
   const modelBullish = context?.side.toLowerCase() === 'long'
+  const boardRow = (props.payload?.rows ?? []).find((row) => row.symbol === symbol) ?? null
 
   if (hasSignedFlow && stats) {
     const balance = Math.abs(stats.signedNet) / stats.signedGross
@@ -533,10 +548,39 @@ function directionRead(symbol: string): DirectionRead {
     }
   }
 
+  // Prefer backend activity lean (premium + price + model) when unsigned.
+  const lean = String(boardRow?.activity_lean || '').toLowerCase()
+  if (lean === 'bullish' || lean === 'bearish' || lean === 'mixed') {
+    const source = String(boardRow?.activity_lean_source || 'activity').replaceAll('_', ' ')
+    return {
+      state: lean === 'mixed' ? 'mixed' : lean,
+      label: lean === 'mixed' ? 'MIXED ACTIVITY' : `${lean.toUpperCase()} ACTIVITY`,
+      detail: `Activity lean · ${source}${modelStrong ? ' · model also available' : ''}`,
+    }
+  }
+
+  // Local fallback from premium mix so the card always states bullish/bearish.
+  if (boardRow) {
+    const putShare = finite(boardRow.put_flow_pct)
+    const imb = finite(boardRow.call_put_imbalance)
+    const callHeavy = (imb != null && imb >= 0.15) || (putShare != null && putShare <= 0.42)
+    const putHeavy = (imb != null && imb <= -0.15) || (putShare != null && putShare >= 0.58)
+    if (callHeavy || putHeavy) {
+      const bullish = !!callHeavy && !putHeavy
+      return {
+        state: bullish ? 'bullish' : 'bearish',
+        label: bullish ? 'BULLISH ACTIVITY' : 'BEARISH ACTIVITY',
+        detail: bullish
+          ? 'Call-heavy premium mix · activity lean, not signed trade direction'
+          : 'Put-heavy premium mix · activity lean, not signed trade direction',
+      }
+    }
+  }
+
   if (modelStrong && context) {
     return {
       state: modelBullish ? 'model-bullish' : 'model-bearish',
-      label: modelBullish ? 'LONG MODEL LEAN' : 'SHORT MODEL LEAN',
+      label: modelBullish ? 'BULLISH · MODEL LEAN' : 'BEARISH · MODEL LEAN',
       detail: `${fractionPercent(context.probability, 0)} calibrated · flow itself is unsigned`,
     }
   }
@@ -544,38 +588,46 @@ function directionRead(symbol: string): DirectionRead {
   if (context?.probability != null) {
     return {
       state: 'unknown',
-      label: 'DIRECTION NOT READABLE',
+      label: 'NEUTRAL ACTIVITY',
       detail: `${context.state} ${context.side} at ${fractionPercent(context.probability, 0)} does not clear the evidence gate`,
     }
   }
 
   return {
     state: 'unknown',
-    label: 'DIRECTION NOT READABLE',
-    detail: 'No provider-signed prints and no qualified model signal',
+    label: 'NEUTRAL ACTIVITY',
+    detail: 'No clear bullish/bearish lean in premium mix, price impulse, or signed flow',
   }
 }
 
 function priceRead(row: UnusualFlowRow): PriceRead {
   const dayReturn = finite(row.ret_1d)
   const stats = tapeStats(row.symbol)
+  const spot = stats?.spot
+  const fallbackMove = stats?.windowMove
+
   if (dayReturn != null) {
     return {
-      value: returnPercent(dayReturn),
-      detail: stats?.spot != null ? `${usd(stats.spot, 2)} tape spot · 1D return` : '1D underlying return',
+      spot: spot != null ? usd(spot, 2) : 'SPOT UNAVAILABLE',
+      move: returnPercent(dayReturn),
+      detail: spot != null ? '1D move · tape spot' : '1D move · spot unavailable',
       tone: tone(dayReturn),
     }
   }
-  if (stats?.spot != null) {
+  if (spot != null) {
     return {
-      value: usd(stats.spot, 2),
-      detail: stats.windowMove == null
-        ? 'Tape spot · return feed unavailable'
-        : `${returnPercent(stats.windowMove)} within provider window`,
-      tone: stats.windowMove == null ? 'flat' : tone(stats.windowMove),
+      spot: usd(spot, 2),
+      move: fallbackMove == null ? 'MOVE UNAVAILABLE' : returnPercent(fallbackMove),
+      detail: fallbackMove == null ? 'Tape spot · no return series' : 'Move within latest provider sample',
+      tone: fallbackMove == null ? 'flat' : tone(fallbackMove),
     }
   }
-  return { value: 'UNAVAILABLE', detail: 'No underlying price in this snapshot', tone: 'flat' }
+  return {
+    spot: 'SPOT UNAVAILABLE',
+    move: 'MOVE UNAVAILABLE',
+    detail: 'No underlying price in this provider sample',
+    tone: 'flat',
+  }
 }
 
 function evidenceFor(row: UnusualFlowRow): EvidenceTag[] {
@@ -599,7 +651,7 @@ function evidenceFor(row: UnusualFlowRow): EvidenceTag[] {
   }
   if (flagged > 0) {
     tags.push({
-      label: flaggedShare(row) >= 0.15 ? 'High flagged share' : 'Flagged prints',
+      label: flaggedShare(row) > 0 ? `Flagged ${fractionPercent(flaggedShare(row), 0)}` : 'Flagged prints',
       kind: 'flag',
     })
   }
@@ -615,13 +667,75 @@ function primaryReadout(row: UnusualFlowRow): string {
     return `${fractionPercent(sweepShare(row), 0)} of premium is sweep-class activity`
   }
   if (flaggedShare(row) >= 0.15) {
-    return `${fractionPercent(flaggedShare(row), 0)} of contracts hit current-tape heuristics`
+    return `${fractionPercent(flaggedShare(row), 0)} of contracts carry a current-tape heuristic flag`
   }
   const dte = finite(row.average_dte)
   if (dte != null && dte <= 7) {
     return `${moneyCompact(row.premium)} with ${num(dte, 1)}D average expiry`
   }
   return `${moneyCompact(row.premium)} across ${exactCount(row.contract_count)} contracts`
+}
+
+function actionInsight(row: UnusualFlowRow): ActionInsight {
+  const direction = directionRead(row.symbol)
+  const stats = tapeStats(row.symbol)
+  const pulseRow = symbolPulse(row.symbol)
+  const dte = finite(row.average_dte)
+  const nearExpiry = dte != null && dte <= 7
+  const sweeps = sweepShare(row) >= 0.15 || (finite(row.sweep_count) ?? 0) > 0
+  const incoming = pulseRow.newPrints > 0
+  const strike = stats?.topStrike && stats.topStrike !== 'Unavailable' ? stats.topStrike : null
+  const dteZone = stats?.topDteBucket && stats.topDteBucket !== 'Unavailable'
+    ? stats.topDteBucket
+    : nearExpiry
+      ? '0–7D'
+      : dte != null
+        ? `${num(dte, 0)}D avg`
+        : null
+
+  const focusParts = [
+    strike ? `top ${strike}` : null,
+    dteZone ? dteZone : null,
+    sweeps ? 'sweep cluster' : null,
+  ].filter(Boolean)
+  const focus = focusParts.length ? focusParts.join(' · ') : 'full chain for walls + liquidity'
+
+  let priority: ActionInsight['priority'] = 'watch'
+  if (providerFreshnessState.value === 'stale') {
+    priority = 'skip'
+  } else if (incoming || nearExpiry || sweeps || direction.state.includes('bullish') || direction.state.includes('bearish')) {
+    priority = incoming || nearExpiry ? 'now' : 'soon'
+  } else if (direction.state === 'mixed' || direction.state === 'unknown') {
+    priority = 'watch'
+  }
+
+  let action: string
+  if (priority === 'skip') {
+    action = 'Refresh feed before chain work — provider sample is stale'
+  } else if (direction.state === 'mixed') {
+    action = 'Open chain · reconcile conflicting lean vs model before size'
+  } else if (direction.state.includes('bullish')) {
+    action = nearExpiry
+      ? 'Open chain · map near-dated call strikes + upside walls'
+      : 'Open chain · confirm call side liquidity and call wall'
+  } else if (direction.state.includes('bearish')) {
+    action = nearExpiry
+      ? 'Open chain · map near-dated put strikes + downside walls'
+      : 'Open chain · confirm put side liquidity and put wall'
+  } else if (incoming) {
+    action = 'Open chain · new prints just landed; read structure first'
+  } else {
+    action = 'Park for later · no clear lean; keep in review queue'
+  }
+
+  return {
+    lean: direction.label,
+    leanState: direction.state,
+    priority,
+    action,
+    focus,
+    why: primaryReadout(row),
+  }
 }
 
 const majorRows = computed(() => {
@@ -646,13 +760,13 @@ const topIncoming = computed(() =>
 const pulseState = computed(() => {
   if (pulse.value.baseline) return { label: 'BASELINE SET', state: 'baseline' }
   if (pulse.value.newPrintCount > 0) return { label: `${pulse.value.newPrintCount} NEW PRINTS`, state: 'active' }
-  if (!pulse.value.asofAdvanced) return { label: 'WINDOW UNCHANGED', state: 'quiet' }
+  if (!pulse.value.asofAdvanced) return { label: 'SAMPLE UNCHANGED', state: 'quiet' }
   return { label: 'NO NEW QUALIFIED PRINTS', state: 'quiet' }
 })
 
 const pulseNarrative = computed(() => {
   if (pulse.value.baseline) {
-    return 'The next fresh provider window will show new prints, premium rotation, and rank movement automatically.'
+    return 'The next fresh provider sample will show new prints, premium rotation, and rank movement automatically.'
   }
   if (topIncoming.value) {
     return `${topIncoming.value[0]} leads incoming activity with ${moneyCompact(topIncoming.value[1].newPremium)} across ${topIncoming.value[1].newPrints} new prints.`
@@ -660,39 +774,86 @@ const pulseNarrative = computed(() => {
   if (!pulse.value.asofAdvanced) {
     return 'The provider returned the same newest print. Rankings remain stable; no activity is being invented.'
   }
-  return 'The provider window advanced, but no newly retained prints cleared this local view.'
+  return 'The provider sample advanced, but no newly retained prints cleared this local view.'
+})
+
+const leanTally = computed(() => {
+  let bullish = 0
+  let bearish = 0
+  let mixed = 0
+  let neutral = 0
+  for (const row of qualifiedRows.value.slice(0, 24)) {
+    const state = directionRead(row.symbol).state
+    if (state.includes('bullish')) bullish += 1
+    else if (state.includes('bearish')) bearish += 1
+    else if (state === 'mixed') mixed += 1
+    else neutral += 1
+  }
+  return { bullish, bearish, mixed, neutral, n: bullish + bearish + mixed + neutral }
+})
+
+const marketActionHeadline = computed(() => {
+  const tally = leanTally.value
+  if (!tally.n) return 'No qualified names above threshold'
+  if (tally.bullish >= tally.bearish + 2 && tally.bullish >= 3) {
+    return `Bullish activity lean leads the top tape (${tally.bullish}/${tally.n})`
+  }
+  if (tally.bearish >= tally.bullish + 2 && tally.bearish >= 3) {
+    return `Bearish activity lean leads the top tape (${tally.bearish}/${tally.n})`
+  }
+  if (tally.mixed >= 3) {
+    return `Mixed / conflicting leans dominate — prioritize evidence reconciliation`
+  }
+  return `Split tape · ${tally.bullish} bullish · ${tally.bearish} bearish · ${tally.mixed} mixed`
+})
+
+const topActionNames = computed(() => {
+  const scored = qualifiedRows.value.map((row) => {
+    const insight = actionInsight(row)
+    const rank = insight.priority === 'now' ? 3 : insight.priority === 'soon' ? 2 : insight.priority === 'watch' ? 1 : 0
+    return { symbol: row.symbol, insight, rank, premium: finite(row.premium) ?? 0 }
+  })
+  return scored
+    .filter((row) => row.rank >= 2)
+    .sort((a, b) => b.rank - a.rank || b.premium - a.premium)
+    .slice(0, 3)
 })
 
 const workspaceBrief = computed(() => {
+  const leadNames = topActionNames.value.map((row) => row.symbol)
+  const leadCopy = leadNames.length
+    ? `Next: open ${leadNames.join(', ')} chain${leadNames.length === 1 ? '' : 's'} — confirm walls, liquidity, and signed side before any size.`
+    : 'Next: scan the three review leads below, then open one chain only after lean + concentration agree.'
+
   if (providerFreshnessState.value === 'stale') {
     return {
       tone: 'stale',
-      eyebrow: 'Archived provider window',
+      eyebrow: 'Stale provider sample',
       title: 'Context only — refresh before using this tape intraday',
-      body: `The newest provider observation is ${providerFreshness.value} old. Rankings below describe that archived window; they are not a live entry signal.`,
+      body: `The newest provider observation is ${providerFreshness.value} old. ${marketActionHeadline.value}. Do not treat these ranks as live entry signals.`,
     }
   }
   if (pulse.value.newPrintCount > 0) {
     return {
       tone: 'active',
-      eyebrow: 'New activity detected',
-      title: `${pulse.value.newPrintCount} retained prints changed the review queue`,
-      body: pulseNarrative.value,
+      eyebrow: 'Actionable desk brief',
+      title: marketActionHeadline.value,
+      body: `${pulseNarrative.value} ${leadCopy}`,
     }
   }
   if (pulse.value.baseline) {
     return {
       tone: 'baseline',
-      eyebrow: 'Current provider window',
-      title: 'Ranked now; change tracking starts with this snapshot',
-      body: 'Use the three review leads below for cross-sectional context. The next distinct provider window will add measured rank and premium changes.',
+      eyebrow: 'Actionable desk brief',
+      title: marketActionHeadline.value,
+      body: `Baseline sample set. ${leadCopy} Rank moves appear after the next distinct provider sample.`,
     }
   }
   return {
     tone: 'quiet',
-    eyebrow: 'Provider window unchanged',
-    title: 'No new retained prints — the review order is stable',
-    body: pulseNarrative.value,
+    eyebrow: 'Actionable desk brief',
+    title: marketActionHeadline.value,
+    body: `${pulseNarrative.value} ${leadCopy}`,
   }
 })
 
@@ -704,10 +865,17 @@ const triagePicks = computed<TriagePick[]>(() => {
   const byExpiry = [...filteredRows.value]
     .filter((row) => finite(row.average_dte) != null)
     .sort((a, b) => (finite(a.average_dte) ?? Infinity) - (finite(b.average_dte) ?? Infinity))[0]
+  const byAction = topActionNames.value[0]
+    ? filteredRows.value.find((row) => row.symbol === topActionNames.value[0].symbol)
+    : undefined
   const specs: Array<{ key: string; eyebrow: string; row: UnusualFlowRow | undefined }> = [
-    { key: 'review', eyebrow: pulse.value.newPrintCount > 0 ? 'Incoming / review first' : 'Review first', row: byReview },
-    { key: 'sweeps', eyebrow: 'Largest sweep cluster', row: bySweep },
-    { key: 'expiry', eyebrow: 'Shortest duration', row: byExpiry },
+    {
+      key: 'review',
+      eyebrow: pulse.value.newPrintCount > 0 ? 'Open first · incoming' : 'Open first · review lead',
+      row: byAction ?? byReview,
+    },
+    { key: 'sweeps', eyebrow: 'Open · largest sweep cluster', row: bySweep },
+    { key: 'expiry', eyebrow: 'Open · shortest duration', row: byExpiry },
   ]
   const used = new Set<string>()
   const picks: TriagePick[] = []
@@ -719,12 +887,16 @@ const triagePicks = computed<TriagePick[]>(() => {
     }
     if (!row) continue
     used.add(row.symbol)
+    const insight = actionInsight(row)
     picks.push({
       key: spec.key,
       eyebrow: spec.eyebrow,
       symbol: row.symbol,
       value: moneyCompact(row.premium),
-      detail: primaryReadout(row),
+      detail: insight.action,
+      lean: insight.lean,
+      leanState: insight.leanState,
+      action: insight.focus,
       tags: evidenceFor(row).slice(0, 2),
     })
   }
@@ -763,15 +935,42 @@ function clearFilters(): void {
   sortKey.value = 'review'
 }
 
+/** Premium-based put share; never invent 100% put when the field is missing. */
+function putShare(row: UnusualFlowRow): number | null {
+  const direct = finite(row.put_flow_pct)
+  if (direct != null) return clamp01(direct)
+  const callP = finite(row.call_premium)
+  const putP = finite(row.put_premium)
+  if (callP == null && putP == null) return null
+  const total = (callP ?? 0) + (putP ?? 0)
+  return total > 0 ? clamp01((putP ?? 0) / total) : null
+}
+
+function callShare(row: UnusualFlowRow): number | null {
+  const put = putShare(row)
+  return put == null ? null : 1 - put
+}
+
+function putShareLabel(row: UnusualFlowRow): string {
+  return fractionPercent(putShare(row), 0)
+}
+
+function callShareLabel(row: UnusualFlowRow): string {
+  return fractionPercent(callShare(row), 0)
+}
+
 function putBarWidth(row: UnusualFlowRow): string {
-  const share = finite(row.put_flow_pct)
-  return `${share == null ? 0 : clamp01(share) * 100}%`
+  const share = putShare(row)
+  return `${share == null ? 0 : share * 100}%`
 }
 
 function callBarWidth(row: UnusualFlowRow): string {
-  const share = finite(row.put_flow_pct)
-  return `${share == null ? 0 : (1 - clamp01(share)) * 100}%`
+  const share = callShare(row)
+  return `${share == null ? 0 : share * 100}%`
 }
+
+
+
 
 function tapeTime(timestamp: string): string {
   const date = new Date(timestamp)
@@ -929,13 +1128,14 @@ function downloadTapeCsv(): void {
           <AppIcon name="flow" :size="17" />
         </span>
         <div>
-          <span class="label">Provider activity window</span>
+          <span class="label">Latest provider sample</span>
           <strong class="fig">{{ sourceLabel }}</strong>
+          <small>Returned contracts in one provider poll · not total market volume</small>
         </div>
       </div>
 
       <div class="threshold-control">
-        <span class="label">Minimum ticker premium</span>
+        <span class="label">Minimum sample premium</span>
         <div class="thresholds" aria-label="Minimum aggregate options premium">
           <button
             v-for="value in THRESHOLDS"
@@ -995,9 +1195,9 @@ function downloadTapeCsv(): void {
     <div v-else-if="!hasMeasuredFlow" class="feed-recovery empty-feed ticked" role="status">
       <span class="recovery-mark label">0×</span>
       <div>
-        <span class="label">No measured prints in the current window</span>
+        <span class="label">No measured prints in the latest provider sample</span>
         <strong>The provider returned no contracts above ${{ compact(minPremium) }}.</strong>
-        <p>{{ payload.feed_reason || payload.warnings?.[0] || 'Try a lower threshold or request a fresh market-wide window.' }}</p>
+        <p>{{ payload.feed_reason || payload.warnings?.[0] || 'Try a lower threshold or request a fresh market-wide provider sample.' }}</p>
       </div>
       <button type="button" class="empty-action label" :disabled="loading" @click="emit('refresh')">
         {{ loading ? 'PULLING' : 'REFRESH FEED' }}
@@ -1023,6 +1223,7 @@ function downloadTapeCsv(): void {
           :key="pick.key"
           type="button"
           class="triage-pick"
+          :class="pick.leanState"
           :aria-label="`Open ${pick.symbol} options — ${pick.eyebrow}`"
           @click="openSymbol(pick.symbol)"
         >
@@ -1032,7 +1233,9 @@ function downloadTapeCsv(): void {
             <strong class="fig">{{ pick.symbol }}</strong>
             <b class="fig">{{ pick.value }}</b>
           </span>
-          <small>{{ pick.detail }}</small>
+          <span class="triage-lean label" :class="pick.leanState">{{ pick.lean }}</span>
+          <small class="triage-action">{{ pick.detail }}</small>
+          <small class="triage-focus">Focus: {{ pick.action }}</small>
           <span class="triage-tags">
             <span v-for="tag in pick.tags" :key="tag.label" class="label" :class="tag.kind">{{ tag.label }}</span>
           </span>
@@ -1044,6 +1247,7 @@ function downloadTapeCsv(): void {
         <div class="filter-intro">
           <span class="label">Review queue filters</span>
           <strong>Narrow the evidence</strong>
+          <small>Calls and puts are contract identity; flags are current-tape heuristics, not trade instructions.</small>
         </div>
 
         <label class="search-filter">
@@ -1055,23 +1259,25 @@ function downloadTapeCsv(): void {
         </label>
 
         <fieldset class="seg-filter activity-filter">
-          <legend class="label">Activity</legend>
+          <legend class="label">Show</legend>
           <div>
             <button type="button" :class="{ active: activityFilter === 'all' }" @click="activityFilter = 'all'">All</button>
             <button type="button" :class="{ active: activityFilter === 'incoming' }" @click="activityFilter = 'incoming'">New</button>
             <button type="button" :class="{ active: activityFilter === 'sweeps' }" @click="activityFilter = 'sweeps'">Sweeps</button>
-            <button type="button" :class="{ active: activityFilter === 'flagged' }" @click="activityFilter = 'flagged'">Flagged</button>
+            <button type="button" title="Premium, volume, repeat, or sweep heuristics in the current tape" :class="{ active: activityFilter === 'flagged' }" @click="activityFilter = 'flagged'">Flags</button>
             <button type="button" :class="{ active: activityFilter === 'near' }" @click="activityFilter = 'near'">≤7D</button>
           </div>
+          <small>Flags mark unusual prints for inspection; they do not establish direction.</small>
         </fieldset>
 
         <fieldset class="seg-filter">
-          <legend class="label">Dominant right</legend>
+          <legend class="label">Contract mix</legend>
           <div>
             <button type="button" :class="{ active: rightFilter === 'all' }" @click="rightFilter = 'all'">Any</button>
-            <button type="button" :class="{ active: rightFilter === 'call' }" @click="rightFilter = 'call'">Calls</button>
-            <button type="button" :class="{ active: rightFilter === 'put' }" @click="rightFilter = 'put'">Puts</button>
+            <button type="button" :class="{ active: rightFilter === 'call' }" @click="rightFilter = 'call'">Call-led</button>
+            <button type="button" :class="{ active: rightFilter === 'put' }" @click="rightFilter = 'put'">Put-led</button>
           </div>
+          <small>Filters premium mix only. Buy/sell direction needs provider-signed flow.</small>
         </fieldset>
 
         <label class="select-filter">
@@ -1107,7 +1313,10 @@ function downloadTapeCsv(): void {
             <span class="label section-kicker">Index flow first</span>
             <h2 id="majors-title">Where the major tape is concentrated</h2>
           </div>
-          <p><strong class="label">{{ directionPolicy }}</strong><br>Direction appears only when signed flow or a gated calibrated model supports it.</p>
+          <p>
+            <strong class="label">{{ directionPolicy }}</strong><br>
+            Activity lean is descriptive; signed buy/sell and ENTER-state models upgrade evidence. Open chain only to confirm walls and liquidity.
+          </p>
         </header>
 
         <div class="major-grid">
@@ -1130,7 +1339,7 @@ function downloadTapeCsv(): void {
 
               <div class="major-premium">
                 <div>
-                  <span class="label">Window premium</span>
+                  <span class="label">Sample premium</span>
                   <strong class="fig">{{ moneyCompact(major.row.premium) }}</strong>
                 </div>
                 <div>
@@ -1139,27 +1348,26 @@ function downloadTapeCsv(): void {
                 </div>
               </div>
 
-              <div v-if="directionRead(major.symbol).state !== 'unknown'" class="major-direction" :class="directionRead(major.symbol).state">
+              <div class="major-direction" :class="directionRead(major.symbol).state">
                 <span class="direction-arrow" aria-hidden="true">
-                  {{ directionRead(major.symbol).state.includes('bullish') ? '↑' : directionRead(major.symbol).state.includes('bearish') ? '↓' : directionRead(major.symbol).state === 'mixed' ? '↕' : '?' }}
+                  {{ directionRead(major.symbol).state.includes('bullish') ? '↑' : directionRead(major.symbol).state.includes('bearish') ? '↓' : directionRead(major.symbol).state === 'mixed' ? '↕' : '·' }}
                 </span>
                 <div>
                   <strong class="label">{{ directionRead(major.symbol).label }}</strong>
                   <small>{{ directionRead(major.symbol).detail }}</small>
                 </div>
               </div>
-              <p v-else class="major-unsigned label">UNSIGNED · CONTRACT MIX BELOW IS DESCRIPTIVE</p>
 
               <div class="major-identity">
                 <div class="identity-labels fig">
-                  <span class="call-text">CALL {{ fractionPercent(1 - (finite(major.row.put_flow_pct) ?? 1), 0) }}</span>
-                  <span class="put-text">PUT {{ fractionPercent(major.row.put_flow_pct, 0) }}</span>
+                  <span class="call-text">CALLS {{ callShareLabel(major.row) }}</span>
+                  <span class="put-text">PUTS {{ putShareLabel(major.row) }}</span>
                 </div>
                 <span class="identity-bar" aria-hidden="true">
                   <i class="call-segment" :style="{ width: callBarWidth(major.row) }" />
                   <i class="put-segment" :style="{ width: putBarWidth(major.row) }" />
                 </span>
-                <small>Contract identity · not direction</small>
+                <small>Contract type only · not provider-signed buy / sell</small>
               </div>
 
               <dl class="major-concentration">
@@ -1173,9 +1381,14 @@ function downloadTapeCsv(): void {
                 </div>
                 <div>
                   <dt class="label">Spot</dt>
-                  <dd class="fig" :class="priceRead(major.row).tone">{{ priceRead(major.row).value }}</dd>
+                  <dd class="fig">{{ priceRead(major.row).spot }}</dd>
+                  <small :class="priceRead(major.row).tone">{{ priceRead(major.row).move }}</small>
                 </div>
               </dl>
+              <p class="major-action label" :class="actionInsight(major.row).leanState">
+                <span>{{ actionInsight(major.row).priority.toUpperCase() }}</span>
+                {{ actionInsight(major.row).action }}
+              </p>
               <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
                 OPEN {{ major.symbol }} CHAIN <span aria-hidden="true">→</span>
               </button>
@@ -1185,7 +1398,7 @@ function downloadTapeCsv(): void {
                 <strong class="major-symbol fig">{{ major.symbol }}</strong>
               </header>
               <div class="major-absent">
-                <strong>Not in this provider window</strong>
+                <strong>Not in the latest provider sample</strong>
                 <p>No qualifying {{ major.symbol }} aggregate cleared ${{ compact(minPremium) }}.</p>
               </div>
               <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
@@ -1198,14 +1411,14 @@ function downloadTapeCsv(): void {
 
       <section class="snapshot-strip rise" aria-label="Current threshold snapshot">
         <article>
-          <span class="label">Premium in scope</span>
+          <span class="label">Premium in latest sample</span>
           <strong class="fig">{{ moneyCompact(projectedSummary.totalPremium) }}</strong>
           <small>{{ qualifiedRows.length }} tickers above threshold</small>
         </article>
         <article>
           <span class="label">Contracts in scope</span>
           <strong class="fig">{{ compact(projectedSummary.totalContracts) }}</strong>
-          <small>{{ exactCount(projectedSummary.anomalyContracts) }} current-tape heuristic</small>
+          <small>{{ exactCount(projectedSummary.anomalyContracts) }} contracts with current-tape flags</small>
         </article>
         <article>
           <span class="label">Sweep-class premium</span>
@@ -1232,12 +1445,12 @@ function downloadTapeCsv(): void {
             <thead>
               <tr>
                 <th class="label">Review</th>
-                <th class="label">Why it surfaced</th>
-                <th class="label num">Window / new</th>
-                <th class="label">Contract identity</th>
+                <th class="label">Desk next step</th>
+                <th class="label num">Sample / change</th>
+                <th class="label">Call / put mix</th>
                 <th class="label">Concentration</th>
                 <th class="label">Underlying</th>
-                <th class="label">Direction evidence</th>
+                <th class="label">Activity lean</th>
                 <th><span class="sr-only">Open symbol</span></th>
               </tr>
             </thead>
@@ -1250,8 +1463,10 @@ function downloadTapeCsv(): void {
                   </button>
                   <span v-if="!pulse.baseline" class="table-rank-move fig" :class="rankMoveClass(row.symbol)">{{ rankMoveLabel(row.symbol) }}</span>
                 </td>
-                <td class="reason-cell">
-                  <strong>{{ primaryReadout(row) }}</strong>
+                <td class="reason-cell action-cell" :class="actionInsight(row).leanState">
+                  <span class="priority-chip label" :class="actionInsight(row).priority">{{ actionInsight(row).priority.toUpperCase() }}</span>
+                  <strong>{{ actionInsight(row).action }}</strong>
+                  <small>Focus {{ actionInsight(row).focus }} · {{ actionInsight(row).why }}</small>
                   <span class="tag-line">
                     <span
                       v-for="tag in evidenceFor(row)"
@@ -1265,29 +1480,30 @@ function downloadTapeCsv(): void {
                 </td>
                 <td class="activity-cell num">
                   <strong class="fig">{{ moneyCompact(row.premium) }}</strong>
-                  <small v-if="pulse.baseline" class="fig">captured window · {{ exactCount(row.contract_count) }} contracts</small>
+                  <small v-if="pulse.baseline" class="fig">latest sample · {{ exactCount(row.contract_count) }} contracts</small>
                   <small v-else-if="symbolPulse(row.symbol).newPrints > 0" class="fig incoming-copy">
-                    +{{ moneyCompact(symbolPulse(row.symbol).newPremium) }} · {{ symbolPulse(row.symbol).newPrints }} new
+                    +{{ moneyCompact(symbolPulse(row.symbol).newPremium) }} · {{ symbolPulse(row.symbol).newPrints }} new vs prior sample
                   </small>
-                  <small v-else class="fig">{{ signedMoneyCompact(symbolPulse(row.symbol).windowPremiumDelta) }} window net</small>
+                  <small v-else class="fig">{{ signedMoneyCompact(symbolPulse(row.symbol).windowPremiumDelta) }} vs prior sample</small>
                 </td>
                 <td class="identity-cell">
                   <div class="identity-labels fig">
-                    <span class="call-text">C {{ fractionPercent(1 - (finite(row.put_flow_pct) ?? 1), 0) }}</span>
-                    <span class="put-text">P {{ fractionPercent(row.put_flow_pct, 0) }}</span>
+                    <span class="call-text">CALLS {{ callShareLabel(row) }}</span>
+                    <span class="put-text">PUTS {{ putShareLabel(row) }}</span>
                   </div>
                   <span class="identity-bar" aria-hidden="true">
                     <i class="call-segment" :style="{ width: callBarWidth(row) }" />
                     <i class="put-segment" :style="{ width: putBarWidth(row) }" />
                   </span>
+                  <small class="identity-note">CONTRACT TYPE · NOT BUY / SELL</small>
                 </td>
                 <td class="structure-cell fig">
                   <strong>{{ tapeStats(row.symbol)?.topStrike ?? (row.average_dte == null ? DASH : `${num(row.average_dte, 1)}D avg`) }}</strong>
                   <small>{{ tapeStats(row.symbol)?.topDteBucket ?? `${fractionPercent(row.average_otm_pct)} avg OTM` }}</small>
                 </td>
                 <td class="price-cell">
-                  <strong class="fig" :class="priceRead(row).tone">{{ priceRead(row).value }}</strong>
-                  <small>{{ priceRead(row).detail }}</small>
+                  <strong class="fig">{{ priceRead(row).spot }}</strong>
+                  <small :class="priceRead(row).tone">{{ priceRead(row).move }} · {{ priceRead(row).detail }}</small>
                 </td>
                 <td class="direction-cell" :class="directionRead(row.symbol).state">
                   <span class="direction-chip label">{{ directionRead(row.symbol).label }}</span>
@@ -1295,7 +1511,7 @@ function downloadTapeCsv(): void {
                 </td>
                 <td class="open-cell">
                   <button type="button" class="row-open label" :aria-label="`Review ${row.symbol} options`" @click="openSymbol(row.symbol)">
-                    REVIEW <span aria-hidden="true">→</span>
+                    OPEN <span aria-hidden="true">→</span>
                   </button>
                 </td>
               </tr>
@@ -1339,7 +1555,7 @@ function downloadTapeCsv(): void {
         <div v-if="tapeExpanded" id="flow-raw-tape" class="drawer-body">
           <div class="tape-toolbar">
             <p>
-              Filters above also apply here. <strong>C/P is contract identity, not market direction.</strong>
+              Filters above also apply here. <strong>C/P feeds the activity lean; signed buy/sell is separate.</strong>
               Aggressor is shown only when the provider supplies it.
             </p>
             <button type="button" class="panel-action label" :disabled="!tapeRows.length" @click="downloadTapeCsv">
@@ -1358,7 +1574,7 @@ function downloadTapeCsv(): void {
                   <th class="label num">Fill × contracts</th>
                   <th class="label">Class</th>
                   <th class="label num">Premium</th>
-                  <th class="label">Window percentile</th>
+                  <th class="label">Sample percentile</th>
                   <th class="label">Aggressor</th>
                 </tr>
               </thead>
@@ -1418,15 +1634,15 @@ function downloadTapeCsv(): void {
       <section class="method-strip" aria-label="Flow interpretation rules">
         <article>
           <span class="label">Ranking</span>
-          <p>Review priority recomputes after every fresh {{ pollSeconds }}s poll. Arrows and “new” compare overlapping provider windows; negative window net can mean old prints rolled out.</p>
+          <p>Review priority recomputes after every fresh {{ pollSeconds }}s poll. “New” and sample changes compare overlapping provider samples; a negative change can mean old prints rolled out.</p>
         </article>
         <article>
           <span class="label">Direction gate</span>
-          <p>Bullish/bearish labels require provider-signed flow. A model appears only as a separate lean when calibrated, setup-qualified, ENTER-state, and ≥55%.</p>
+          <p>Activity lean (bullish/bearish) uses premium mix + price impulse; signed trade direction requires provider buy/sell. Models appear only when calibrated, setup-qualified, ENTER-state, and ≥55%.</p>
         </article>
         <article>
-          <span class="label">Identity & scope</span>
-          <p>PUT / (CALL + PUT) is contract mix only; no bullish or bearish intent is inferred from call/put alone. {{ providerBasis }} · MARKET-WIDE WINDOW · ≥ ${{ compact(minPremium) }}.</p>
+          <span class="label">Actionable insights</span>
+          <p>Desk next steps tell you what to open and what to check (strike, DTE, walls). They are research triage — not order authorization. {{ providerBasis }} · LATEST PROVIDER SAMPLE · ≥ ${{ compact(minPremium) }}.</p>
         </article>
       </section>
     </template>
@@ -1438,23 +1654,29 @@ function downloadTapeCsv(): void {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  gap: var(--s3);
+  gap: var(--s4);
 }
 
+/* ── 01 Control Rail ─────────────────────────────────────────────────────── */
 .control-rail {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   min-width: 0;
   gap: var(--s4);
-  padding: var(--s3) var(--s4);
+  min-height: 60px;
+  padding: var(--s3) var(--s5);
   border: var(--hair) solid var(--border-strong);
+  border-left: 3px solid var(--phosphor);
+  background-color: var(--surface-raised);
+  flex-wrap: wrap;
 }
 
 .control-identity {
   display: flex;
   align-items: center;
   gap: var(--s3);
-  min-width: 230px;
+  min-width: 210px;
 }
 
 .control-identity > div {
@@ -1467,17 +1689,24 @@ function downloadTapeCsv(): void {
 .control-identity strong {
   color: var(--text-primary);
   font-size: var(--t-small);
+  font-weight: 750;
+}
+.control-identity small {
+  color: var(--text-tertiary);
+  font-size: 9px;
+  line-height: 1.3;
 }
 
 .feed-mark {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
   color: var(--text-tertiary);
   border: var(--hair) solid var(--border-strong);
   background: var(--surface-base);
+  border-radius: 2px;
 }
 
 .feed-mark.active {
@@ -1493,39 +1722,44 @@ function downloadTapeCsv(): void {
   min-width: 0;
 }
 
+.threshold-control > .label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .thresholds {
   display: flex;
-  gap: 3px;
+  border: var(--hair) solid var(--border-strong);
+  border-radius: 2px;
+  overflow: hidden;
 }
 
-.thresholds button,
-.refresh-button,
-.panel-action,
-.empty-action,
-.major-open,
-.row-open,
-.reset-filter {
-  min-height: var(--density-control-h);
-  padding: 4px 8px;
+.thresholds button {
+  min-height: 32px;
+  padding: 4px 12px;
   color: var(--text-secondary);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-raised);
+  border: 0;
+  border-right: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
   font-family: var(--font-data);
   font-size: var(--t-tiny);
-  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  font-weight: 700;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.thresholds button:last-child { border-right: 0; }
+
+.thresholds button:hover:not(.active) {
+  color: var(--text-primary);
+  background: var(--surface-overlay);
 }
 
-.thresholds button:hover,
-.thresholds button.active,
-.refresh-button:hover:not(:disabled),
-.panel-action:hover:not(:disabled),
-.empty-action:hover,
-.major-open:hover,
-.row-open:hover,
-.reset-filter:hover:not(:disabled) {
-  color: var(--phosphor);
-  border-color: var(--phosphor-dim);
-  background: var(--phosphor-wash);
+.thresholds button.active {
+  color: var(--void);
+  background: var(--phosphor);
+  font-weight: 800;
 }
 
 .control-status {
@@ -1535,23 +1769,40 @@ function downloadTapeCsv(): void {
   margin-left: auto;
   color: var(--text-tertiary);
   text-align: right;
+  font-size: 10px;
 }
 
-.control-status span:first-child { color: var(--status-live); }
+.control-status span:first-child {
+  color: var(--status-live);
+  font-weight: 700;
+}
 
 .refresh-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 98px;
+  gap: 7px;
+  min-width: 116px;
+  min-height: 34px;
+  padding: 6px 14px;
+  color: var(--void);
+  border: var(--hair) solid var(--phosphor);
+  background: var(--phosphor);
   font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 10px;
   letter-spacing: var(--track-label);
+  border-radius: 2px;
+  transition: all var(--dur-fast) ease;
+}
+
+.refresh-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--phosphor) 85%, #fff);
 }
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.42;
+  opacity: 0.5;
 }
 
 .error-strip {
@@ -1559,7 +1810,7 @@ button:disabled {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--s3);
-  padding: var(--s2) var(--s3);
+  padding: var(--s2) var(--s4);
   color: var(--short);
   border: var(--hair) solid var(--short);
   border-left-width: 3px;
@@ -1568,24 +1819,26 @@ button:disabled {
 }
 
 .error-strip strong,
-.stale-copy { color: inherit; }
+.stale-copy { color: inherit; font-weight: 700; }
 
 .no-snapshot {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--s2);
+  gap: var(--s3);
   min-height: 260px;
   padding: var(--s6);
   color: var(--text-tertiary);
   border: var(--hair) solid var(--border-strong);
   text-align: center;
+  background: var(--surface-raised);
 }
 
 .no-snapshot strong {
   color: var(--text-primary);
   font-size: var(--t-lead);
+  font-weight: 750;
 }
 
 .feed-recovery {
@@ -1613,13 +1866,15 @@ button:disabled {
   height: 48px;
   color: inherit;
   border: var(--hair) solid currentColor;
+  border-radius: 2px;
+  font-weight: 800;
 }
 
 .feed-recovery strong {
   display: block;
-  margin-top: 5px;
+  margin-top: 4px;
   color: var(--text-primary);
-  font: 650 var(--t-lead) / 1.15 var(--font-display);
+  font: 700 var(--t-lead) / 1.15 var(--font-display);
 }
 
 .feed-recovery p {
@@ -1629,11 +1884,29 @@ button:disabled {
   font-size: var(--t-small);
 }
 
-.section-kicker { color: var(--phosphor); }
+.empty-action {
+  min-height: 32px;
+  padding: var(--s1) var(--s4);
+  color: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+  background: var(--phosphor-wash);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.empty-action:hover {
+  color: var(--void);
+  background: var(--phosphor);
+}
 
+.section-kicker { color: var(--phosphor); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+
+/* ── Live Pulse Banner ───────────────────────────────────────────────────── */
 .live-pulse {
   display: grid;
-  grid-template-columns: minmax(360px, 1.4fr) repeat(3, minmax(180px, 1fr));
+  grid-template-columns: minmax(360px, 1.4fr) repeat(3, minmax(190px, 1fr));
   min-width: 0;
   border: var(--hair) solid var(--border-strong);
   border-left: 3px solid var(--phosphor);
@@ -1643,107 +1916,266 @@ button:disabled {
 .live-pulse.brief-stale { border-left-color: var(--warn); }
 .brief-stale .section-kicker { color: var(--warn); }
 
-.pulse-copy,
-.pulse-stat {
+.pulse-copy {
   min-width: 0;
-  padding: var(--s4);
+  padding: var(--s5);
+  background: var(--surface-base);
 }
 
 .pulse-copy h2 {
-  margin-top: 5px;
+  margin-top: var(--s2);
   color: var(--text-primary);
-  font: 650 var(--t-lead) / 1.2 var(--font-display);
+  font: 700 var(--t-display) / 1.25 var(--font-display);
+  letter-spacing: -0.025em;
 }
 
 .pulse-copy > p {
   max-width: 70ch;
-  margin-top: var(--s2);
+  margin-top: var(--s3);
   color: var(--text-secondary);
   font-size: var(--t-small);
+  line-height: 1.55;
 }
 
 .pulse-cadence {
   display: flex;
   flex-wrap: wrap;
   gap: 6px var(--s3);
-  margin-top: var(--s3);
+  margin-top: var(--s4);
   color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .pulse-cadence span:first-child { color: var(--phosphor); }
-.pulse-cadence i { display: inline-block; width: 5px; height: 5px; margin-right: 5px; background: currentColor; }
+.pulse-cadence i { display: inline-block; width: 6px; height: 6px; margin-right: 5px; background: currentColor; border-radius: 50%; }
 
+/* ── Triage Picks ────────────────────────────────────────────────────────── */
 .triage-pick {
   position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 154px;
-  padding: var(--s3);
+  min-height: 180px;
+  padding: var(--s4);
   color: var(--text-secondary);
   border-left: var(--hair) solid var(--border-subtle);
+  border-top: 3px solid var(--rule-hi);
   text-align: left;
-  transition: background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .triage-pick:hover {
-  background: var(--phosphor-wash);
-  box-shadow: inset 0 2px var(--phosphor);
+  background: var(--surface-overlay);
+  border-color: var(--rule-hi);
 }
 
 .triage-index {
   position: absolute;
   top: var(--s3);
-  right: var(--s3);
+  right: var(--s4);
   color: var(--text-tertiary);
-  font-size: var(--t-micro);
+  font-size: 11px;
+  font-weight: 750;
 }
 
-.triage-pick > .label { padding-right: 26px; color: var(--text-tertiary); }
-.triage-symbol-line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); margin-top: 9px; }
-.triage-symbol-line strong { color: var(--text-primary); font-size: var(--t-fig); }
-.triage-symbol-line b { color: var(--phosphor); font-size: var(--t-small); font-weight: 600; }
-.triage-pick > small { margin-top: 6px; color: var(--text-secondary); font-size: var(--t-micro); line-height: 1.35; }
-.triage-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-.triage-tags span { padding: 2px 4px; color: var(--text-tertiary); border: var(--hair) solid var(--border-subtle); font-size: 8px; }
-.triage-tags .sweep,
-.triage-tags .flag { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border-subtle)); }
-.triage-tags .size { color: var(--phosphor); border-color: var(--phosphor-dim); }
-.triage-open { margin-top: auto; padding-top: 8px; color: var(--phosphor); }
+.triage-pick > .label { padding-right: 26px; color: var(--text-tertiary); font-size: 10px; font-weight: 700; }
+.triage-symbol-line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); margin-top: var(--s2); }
+.triage-symbol-line strong { color: var(--phosphor); font-size: var(--t-fig); font-weight: 750; }
+.triage-symbol-line b { color: var(--text-primary); font-size: var(--t-small); font-weight: 750; }
 
-.pulse-stat {
+.triage-lean {
+  display: inline-flex;
+  margin-top: 7px;
+  padding: 1px 7px;
+  width: fit-content;
+  border-radius: 2px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  font-size: 9px;
+  border: var(--hair) solid currentColor;
+}
+.triage-lean.bullish,
+.triage-lean.model-bullish {
+  color: #52c78f;
+  border-color: #52c78f;
+  background: rgba(82, 199, 143, 0.14);
+}
+.triage-lean.bearish,
+.triage-lean.model-bearish {
+  color: #f06d7b;
+  border-color: #f06d7b;
+  background: rgba(240, 109, 123, 0.14);
+}
+.triage-lean.mixed {
+  color: #e5b048;
+  border-color: #e5b048;
+  background: rgba(229, 176, 72, 0.14);
+}
+
+.triage-action {
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.triage-focus {
+  margin-top: var(--s1);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.triage-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.triage-tags span {
+  padding: 1px 5px;
+  color: var(--text-secondary);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 2px;
+}
+.triage-tags .sweep,
+.triage-tags .flag { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--border-strong)); }
+.triage-tags .size { color: var(--phosphor); border-color: var(--phosphor-dim); }
+
+.triage-open {
+  margin-top: auto;
+  padding-top: var(--s3);
+  color: var(--phosphor);
+  border-top: var(--hair) solid var(--border-subtle);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+}
+.triage-pick.bullish,
+.triage-pick.model-bullish { border-top-color: #52c78f; }
+.triage-pick.bearish,
+.triage-pick.model-bearish { border-top-color: #f06d7b; }
+.triage-pick.mixed { border-top-color: #e5b048; }
+
+/* ── Filter Shelf ────────────────────────────────────────────────────────── */
+.filter-shelf {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.65fr) minmax(150px, 0.8fr) auto auto minmax(120px, 0.6fr) minmax(150px, 0.7fr) auto;
+  align-items: end;
+  gap: var(--s3);
+  padding: var(--s4);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.filter-intro {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 5px;
-  border-left: var(--hair) solid var(--border-subtle);
+  align-self: center;
+  gap: 3px;
+  min-width: 0;
+}
+.filter-intro .label { font-size: 10px; font-weight: 700; color: var(--ink-dim); }
+.filter-intro strong { color: var(--text-primary); font: 700 var(--t-small) var(--font-display); }
+.filter-intro small { color: var(--text-tertiary); font-size: 9px; line-height: 1.35; }
+
+.search-filter,
+.select-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.search-filter > .label,
+.select-filter > .label,
+.seg-filter legend {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.pulse-stat > strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: clamp(1rem, 1.6vw, var(--t-fig));
-  line-height: 1.05;
-  text-overflow: ellipsis;
-}
-
-.pulse-stat small {
+.input-shell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 3px 8px;
   color: var(--text-tertiary);
-  font-size: var(--t-micro);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  border-radius: 2px;
+}
+.input-shell:focus-within {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+}
+.input-shell input {
+  width: 100%;
+  min-width: 0;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  text-transform: uppercase;
+}
+.input-shell input::placeholder { color: var(--text-tertiary); text-transform: none; }
+
+.seg-filter { min-width: 0; border: 0; }
+.seg-filter > div { display: flex; border: var(--hair) solid var(--border-strong); border-radius: 2px; overflow: hidden; }
+.seg-filter > small { display: block; max-width: 28ch; margin-top: 4px; color: var(--text-tertiary); font-size: 9px; line-height: 1.3; }
+.seg-filter button {
+  min-height: 32px;
+  padding: 3px 10px;
+  color: var(--text-secondary);
+  border: 0;
+  border-right: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  font-weight: 700;
+  transition: all var(--dur-fast) ease;
+}
+.seg-filter button:last-child { border-right: 0; }
+.seg-filter button:hover:not(.active) { color: var(--text-primary); background: var(--surface-overlay); }
+.seg-filter button.active {
+  color: var(--void);
+  background: var(--phosphor);
+  font-weight: 800;
 }
 
-.pulse-state { font-size: var(--t-small) !important; letter-spacing: 0.03em; }
-.pulse-state.active { color: var(--phosphor); }
-.pulse-state.quiet { color: var(--text-secondary); }
-.pulse-state.baseline { color: var(--warn); }
-
-.direction-coverage small {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+.select-filter select {
+  width: 100%;
+  min-height: 32px;
+  padding: 3px 24px 3px 8px;
+  color: var(--text-primary);
+  border: var(--hair) solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--surface-base);
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  font-weight: 600;
 }
 
+.reset-filter {
+  min-height: 32px;
+  padding: 4px 10px;
+  color: var(--text-secondary);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  border-radius: 2px;
+}
+.reset-filter:hover:not(:disabled) {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+}
+
+/* ── Majors Section ──────────────────────────────────────────────────────── */
 .majors-section {
   min-width: 0;
   border: var(--hair) solid var(--border-strong);
@@ -1755,14 +2187,14 @@ button:disabled {
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--s5);
-  padding: var(--s3) var(--s4);
+  padding: var(--s4) var(--s5);
   border-bottom: var(--hair) solid var(--border-subtle);
 }
 
 .majors-head h2 {
   margin-top: 4px;
   color: var(--text-primary);
-  font: 650 var(--t-lead) var(--font-display);
+  font: 700 var(--t-lead) var(--font-display);
 }
 
 .majors-head p {
@@ -1782,15 +2214,15 @@ button:disabled {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 244px;
-  padding: var(--s3);
+  min-height: 286px;
+  padding: var(--s4);
   border-right: var(--hair) solid var(--border-subtle);
+  background: var(--surface-raised);
   transition: background var(--dur-fast) var(--ease-out);
 }
-
 .major-card:last-child { border-right: 0; }
-.major-card.incoming { background: var(--phosphor-wash); box-shadow: inset 0 2px var(--phosphor); }
-.major-card.absent { color: var(--text-tertiary); background: var(--surface-raised); }
+.major-card.incoming { background: var(--phosphor-wash); }
+.major-card.absent { color: var(--text-tertiary); background: var(--surface-base); }
 
 .major-symbol-line {
   display: flex;
@@ -1799,20 +2231,19 @@ button:disabled {
 }
 
 .major-symbol {
-  color: var(--text-primary);
+  color: var(--phosphor);
   font-size: var(--t-fig);
-  font-weight: 650;
+  font-weight: 750;
 }
-
-button.major-symbol:hover { color: var(--phosphor); }
-.major-rank { margin-left: auto; color: var(--text-tertiary); font-size: var(--t-micro); }
+button.major-symbol:hover { color: var(--ink); }
+.major-rank { margin-left: auto; color: var(--text-tertiary); font-size: var(--t-micro); font-weight: 700; }
 
 .rank-move,
 .table-rank-move {
   color: var(--text-tertiary);
   font-size: var(--t-micro);
+  font-weight: 700;
 }
-
 .rank-move.up,
 .table-rank-move.up { color: var(--long); }
 .rank-move.down,
@@ -1821,12 +2252,14 @@ button.major-symbol:hover { color: var(--phosphor); }
 .new-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 17px;
-  padding: 1px 4px;
+  min-height: 18px;
+  padding: 1px 5px;
   color: var(--phosphor);
   border: var(--hair) solid var(--phosphor-dim);
   background: var(--phosphor-wash);
-  font-size: 9px;
+  font-size: var(--t-micro);
+  font-weight: 800;
+  border-radius: 2px;
 }
 
 .major-premium {
@@ -1837,9 +2270,8 @@ button.major-symbol:hover { color: var(--phosphor); }
   padding-bottom: var(--s2);
   border-bottom: var(--hair) solid var(--border-subtle);
 }
-
 .major-premium div { min-width: 0; }
-.major-premium strong { display: block; overflow: hidden; margin-top: 3px; color: var(--text-primary); font-size: var(--t-small); text-overflow: ellipsis; }
+.major-premium strong { display: block; overflow: hidden; margin-top: 2px; color: var(--text-primary); font-size: var(--t-small); font-weight: 750; text-overflow: ellipsis; }
 
 .major-direction {
   display: grid;
@@ -1850,26 +2282,45 @@ button.major-symbol:hover { color: var(--phosphor); }
   padding: var(--s2);
   color: var(--text-secondary);
   border: var(--hair) solid var(--border-strong);
-  background: var(--surface-raised);
+  background: var(--surface-base);
+  border-radius: 2px;
 }
-
 .direction-arrow {
-  color: var(--text-tertiary);
-  font: 700 var(--t-fig) / 1 var(--font-data);
+  font: 800 var(--t-fig) / 1 var(--font-data);
   text-align: center;
 }
-
-.major-direction strong { display: block; color: inherit; }
-.major-direction small { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: var(--t-micro); }
-.major-direction.bullish { color: var(--long); border-color: var(--long); background: var(--long-wash); }
-.major-direction.bearish { color: var(--short); border-color: var(--short); background: var(--short-wash); }
-.major-direction.mixed { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.major-direction.model-bullish { color: var(--long); border-color: color-mix(in srgb, var(--long) 45%, var(--border-strong)); }
-.major-direction.model-bearish { color: var(--short); border-color: color-mix(in srgb, var(--short) 45%, var(--border-strong)); }
-.major-unsigned { margin-top: var(--s2); color: var(--text-tertiary); font-size: 8px; }
+.major-direction strong { display: block; color: inherit; font-size: 11px; font-weight: 800; }
+.major-direction small { display: block; margin-top: 1px; color: var(--text-tertiary); font-size: var(--t-micro); }
+.major-direction.bullish { color: #52c78f; border-color: #52c78f; background: rgba(82, 199, 143, 0.14); }
+.major-direction.bearish { color: #f06d7b; border-color: #f06d7b; background: rgba(240, 109, 123, 0.14); }
+.major-direction.mixed { color: #e5b048; border-color: #e5b048; background: rgba(229, 176, 72, 0.14); }
+.major-direction.model-bullish { color: #52c78f; border-color: color-mix(in srgb, #52c78f 45%, var(--border-strong)); }
+.major-direction.model-bearish { color: #f06d7b; border-color: color-mix(in srgb, #f06d7b 45%, var(--border-strong)); }
 
 .major-identity { margin-top: var(--s2); }
-.major-identity small { display: block; margin-top: 5px; color: var(--text-tertiary); font-size: var(--t-micro); }
+.major-identity small { display: block; margin-top: 4px; color: var(--text-tertiary); font-size: var(--t-micro); }
+
+.call-text { color: var(--call-hi); font-weight: 750; }
+.put-text { color: var(--put-hi); font-weight: 750; }
+.identity-labels { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); font-size: 10px; }
+
+.identity-bar {
+  display: flex;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border-radius: 1px;
+}
+.call-segment { display: block; background: var(--call); }
+.put-segment { display: block; background: var(--put); }
+.identity-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-tertiary);
+  font: 700 8px var(--font-display);
+  letter-spacing: .05em;
+}
 
 .major-concentration {
   display: grid;
@@ -1877,17 +2328,54 @@ button.major-symbol:hover { color: var(--phosphor); }
   gap: var(--s2);
   margin-top: var(--s3);
 }
-
 .major-concentration div { min-width: 0; }
-.major-concentration dd { overflow: hidden; margin-top: 3px; color: var(--text-primary); font-size: var(--t-tiny); text-overflow: ellipsis; white-space: nowrap; }
-.major-price-detail { margin-top: 4px; color: var(--text-tertiary); font-size: var(--t-micro); }
+.major-concentration dd { overflow: hidden; margin-top: 2px; color: var(--text-primary); font-size: var(--t-tiny); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.major-concentration small { display: block; margin-top: 1px; font-size: 9px; }
+
+.major-action {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  color: var(--text-secondary);
+  border: var(--hair) solid var(--border-subtle);
+  background: var(--surface-base);
+  font-size: var(--t-micro);
+  line-height: 1.35;
+  border-radius: 2px;
+}
+.major-action > span {
+  color: var(--phosphor);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.major-action.bullish > span,
+.major-action.model-bullish > span { color: #52c78f; }
+.major-action.bearish > span,
+.major-action.model-bearish > span { color: #f06d7b; }
+.major-action.mixed > span { color: #e5b048; }
 
 .major-open {
   width: 100%;
   margin-top: auto;
-  padding-top: 5px;
+  min-height: 32px;
+  padding: var(--s2) var(--s3);
+  color: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+  background: var(--phosphor-wash);
   font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 800;
   letter-spacing: 0.05em;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
+}
+.major-open:hover {
+  color: var(--void);
+  border-color: var(--phosphor);
+  background: var(--phosphor);
 }
 
 .major-absent {
@@ -1896,66 +2384,35 @@ button.major-symbol:hover { color: var(--phosphor); }
   flex-direction: column;
   justify-content: center;
   text-align: center;
+  padding: var(--s4) 0;
 }
-
 .major-absent strong { color: var(--text-secondary); }
 .major-absent p { margin-top: 4px; font-size: var(--t-small); }
 
-.evidence-tag {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 2px 6px;
-  color: var(--text-secondary);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-overlay);
-  letter-spacing: 0.04em;
-}
-
-.evidence-tag.sweep,
-.evidence-tag.flag { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--border-strong)); }
-.evidence-tag.move { color: var(--text-primary); }
-.evidence-tag.size { color: var(--phosphor); border-color: var(--phosphor-dim); }
-
-.call-text { color: var(--call-hi); }
-.put-text { color: var(--put-hi); }
-
-.identity-bar {
-  display: flex;
-  width: 100%;
-  overflow: hidden;
-  background: var(--border-subtle);
-}
-
-.identity-bar { height: 5px; }
-.call-segment { display: block; background: var(--call); }
-.put-segment { display: block; background: var(--put); }
-
+/* ── Snapshot Strip ──────────────────────────────────────────────────────── */
 .snapshot-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border: var(--hair) solid var(--border-strong);
-  background: var(--surface-base);
+  background: var(--surface-raised);
 }
 
 .snapshot-strip article {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  padding: var(--s3) var(--s4);
+  padding: var(--s4) var(--s5);
   border-right: var(--hair) solid var(--border-subtle);
 }
-
 .snapshot-strip article:last-child { border-right: 0; }
-
 .snapshot-strip strong {
   color: var(--text-primary);
-  font-size: var(--t-fig);
+  font-size: 1.35rem;
+  font-weight: 800;
   line-height: 1.1;
 }
-
 .snapshot-strip small {
   overflow: hidden;
   color: var(--text-tertiary);
@@ -1968,262 +2425,204 @@ button.major-symbol:hover { color: var(--phosphor); }
   position: absolute;
   top: var(--s2);
   right: var(--s2);
-  padding: 2px 4px;
+  padding: 1px 5px;
   color: var(--text-tertiary);
   border: var(--hair) solid var(--border-strong);
+  font-size: 9px;
+  font-weight: 800;
+  border-radius: 2px;
 }
-
-.fresh-state.live { color: var(--status-live); border-color: var(--phosphor-dim); }
-.fresh-state.stale { color: var(--warn); border-color: var(--warn); }
+.fresh-state.live { color: var(--status-live); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
+.fresh-state.stale { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
 .fresh-state.unavailable { color: var(--short); border-color: var(--short); }
 
-.freshness-stat > .label:first-child {
-  padding-right: 58px;
-}
+.freshness-stat > .label:first-child { padding-right: 58px; }
 
-.filter-shelf {
-  display: grid;
-  grid-template-columns: minmax(132px, 0.65fr) minmax(145px, 0.8fr) auto auto minmax(120px, 0.6fr) minmax(150px, 0.7fr) auto;
-  align-items: end;
-  gap: var(--s3);
-  padding: var(--s3);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-raised);
-}
-
-.filter-intro {
-  display: flex;
-  flex-direction: column;
-  align-self: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.filter-intro strong { color: var(--text-primary); font: 600 var(--t-small) var(--font-display); }
-
-.search-filter,
-.select-filter {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-
-.input-shell {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: var(--density-control-h);
-  padding: 3px 8px;
-  color: var(--text-tertiary);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-base);
-}
-
-.input-shell:focus-within {
-  color: var(--phosphor);
-  border-color: var(--phosphor-dim);
-}
-
-.input-shell input {
-  width: 100%;
-  min-width: 0;
-  outline: none;
-  color: var(--text-primary);
-  font-family: var(--font-data);
-  font-size: var(--t-tiny);
-  text-transform: uppercase;
-}
-
-.input-shell input::placeholder { color: var(--text-tertiary); text-transform: none; }
-
-.seg-filter {
-  min-width: 0;
-  border: 0;
-}
-
-.seg-filter legend { margin-bottom: 5px; }
-.seg-filter > div { display: flex; }
-
-.seg-filter button {
-  min-height: var(--density-control-h);
-  padding: 3px 8px;
-  color: var(--text-secondary);
-  border: var(--hair) solid var(--border-strong);
-  border-right: 0;
-  background: var(--surface-base);
-  font-family: var(--font-data);
-  font-size: var(--t-tiny);
-}
-
-.seg-filter button:last-child { border-right: var(--hair) solid var(--border-strong); }
-.seg-filter button.active { color: var(--phosphor); background: var(--phosphor-wash); }
-
-.select-filter select {
-  width: 100%;
-  min-height: var(--density-control-h);
-  padding: 3px 24px 3px 8px;
-  color: var(--text-primary);
-  border: var(--hair) solid var(--border-strong);
-  border-radius: 0;
-  background: var(--surface-base);
-  font-family: var(--font-data);
-  font-size: var(--t-tiny);
-}
-
-.reset-filter {
-  font-family: var(--font-display);
-  letter-spacing: 0.06em;
-}
-
-.panel-action {
-  min-height: 24px;
-  padding: 2px 7px;
-  font-family: var(--font-display);
-  letter-spacing: var(--track-label);
-}
-
+/* ── Review Table (Panel 01) ─────────────────────────────────────────────── */
 .table-scroll {
   min-width: 0;
   overflow: auto;
 }
-
 .review-scroll { max-height: 620px; }
 .tape-scroll { max-height: 610px; }
 
 .review-table {
   min-width: 1120px;
   font-size: var(--t-tiny);
+  border-collapse: collapse;
 }
 
-.review-table th,
-.review-table td { padding: var(--s2) var(--s3); }
-
+.review-table th {
+  padding: var(--s3) var(--s4);
+  color: var(--ink-dim);
+  background: var(--surface-overlay);
+  border-bottom: var(--hair) solid var(--border-strong);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-weight: 750;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.review-table td {
+  padding: var(--s3) var(--s4);
+  border-bottom: var(--hair) solid var(--border-subtle);
+  vertical-align: middle;
+}
 .review-table tbody tr:hover { background: var(--surface-overlay); }
 .review-table tbody tr.incoming,
-.tape-table tbody tr.incoming { background: var(--phosphor-wash); box-shadow: inset 2px 0 var(--phosphor); }
+.tape-table tbody tr.incoming { background: var(--phosphor-wash); }
 
 .review-symbol {
   width: 112px;
   white-space: nowrap;
 }
-
 .row-rank {
   display: inline-block;
   width: 24px;
   margin-right: var(--s2);
   color: var(--text-tertiary);
   font-size: var(--t-micro);
+  font-weight: 700;
 }
-
 .symbol-button {
-  color: var(--text-primary);
-  font-weight: 650;
+  color: var(--phosphor);
+  font-weight: 750;
+  font-size: 13px;
+  cursor: pointer;
 }
-
-.symbol-button:hover { color: var(--phosphor); }
+.symbol-button:hover { color: var(--ink); }
 
 .reason-cell {
   width: 31%;
   min-width: 290px;
 }
-
 .reason-cell > strong {
   display: block;
   color: var(--text-primary);
-  font-weight: 500;
+  font-weight: 600;
   white-space: normal;
 }
-
-.tag-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 5px;
-}
-
-.tag-line .evidence-tag {
-  min-height: 17px;
-  padding: 1px 4px;
-  font-size: 9px;
-}
-
-.activity-cell strong,
-.structure-cell strong,
-.price-cell strong {
+.action-cell > strong {
   display: block;
+  margin-top: 2px;
   color: var(--text-primary);
+  font-size: var(--t-tiny);
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: normal;
 }
-
-.activity-cell small,
-.structure-cell small,
-.price-cell small,
-.direction-cell small,
-.expiry-cell small,
-.execution-cell small {
+.action-cell > small {
   display: block;
   margin-top: 3px;
   color: var(--text-tertiary);
   font-size: var(--t-micro);
+  line-height: 1.4;
+  white-space: normal;
 }
+.price-cell strong { display: block; color: var(--text-primary); font-size: var(--t-small); }
+.price-cell small { display: block; max-width: 21ch; margin-top: 3px; color: var(--text-tertiary); font-size: var(--t-micro); line-height: 1.35; white-space: normal; }
+.price-cell small.pos { color: var(--long); }
+.price-cell small.neg { color: var(--short); }
 
-.identity-cell { min-width: 140px; }
-.identity-labels { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: var(--t-micro); }
-.structure-cell { min-width: 100px; }
-.price-cell { min-width: 140px; }
-.direction-cell { min-width: 200px; }
+.priority-chip {
+  display: inline-flex;
+  margin-bottom: 3px;
+  padding: 1px 6px;
+  border: var(--hair) solid currentColor;
+  border-radius: 2px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  font-size: 9px;
+}
+.priority-chip.now {
+  color: #52c78f;
+  border-color: #52c78f;
+  background: rgba(82, 199, 143, 0.14);
+}
+.priority-chip.soon {
+  color: #e5b048;
+  border-color: #e5b048;
+  background: rgba(229, 176, 72, 0.14);
+}
+.priority-chip.watch { color: var(--text-secondary); border-color: var(--border-strong); }
+.priority-chip.skip { color: var(--text-tertiary); opacity: 0.85; border-color: var(--border-subtle); }
 
+.tag-line { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.tag-line .evidence-tag { min-height: 18px; padding: 1px 5px; font-size: var(--t-micro); font-weight: 700; border-radius: 2px; }
+
+.direction-cell { min-width: 180px; }
 .direction-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 2px 5px;
-  color: var(--text-secondary);
+  min-height: 22px;
+  padding: 1px 7px;
+  border-radius: 2px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  border: var(--hair) solid currentColor;
+}
+.direction-cell.bullish .direction-chip { color: #52c78f; border-color: #52c78f; background: rgba(82, 199, 143, 0.14); }
+.direction-cell.bearish .direction-chip { color: #f06d7b; border-color: #f06d7b; background: rgba(240, 109, 123, 0.14); }
+.direction-cell.mixed .direction-chip { color: #e5b048; border-color: #e5b048; background: rgba(229, 176, 72, 0.14); }
+.direction-cell.model-bullish .direction-chip { color: #52c78f; border-color: color-mix(in srgb, #52c78f 45%, var(--border-strong)); }
+.direction-cell.model-bearish .direction-chip { color: #f06d7b; border-color: color-mix(in srgb, #f06d7b 45%, var(--border-strong)); }
+
+.row-open {
+  min-height: 26px;
+  padding: 3px 8px;
+  color: var(--call-hi);
   border: var(--hair) solid var(--border-strong);
   background: var(--surface-base);
+  font-size: 10px;
+  font-weight: 750;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
 }
-
-.direction-cell.bullish .direction-chip { color: var(--long); border-color: var(--long); background: var(--long-wash); }
-.direction-cell.bearish .direction-chip { color: var(--short); border-color: var(--short); background: var(--short-wash); }
-.direction-cell.mixed .direction-chip { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.direction-cell.model-bullish .direction-chip { color: var(--long); border-color: color-mix(in srgb, var(--long) 45%, var(--border-strong)); }
-.direction-cell.model-bearish .direction-chip { color: var(--short); border-color: color-mix(in srgb, var(--short) 45%, var(--border-strong)); }
-.incoming-copy { color: var(--phosphor) !important; }
-.open-cell { text-align: right; }
-.row-open { min-height: 24px; padding: 2px 6px; }
+.row-open:hover {
+  color: var(--void);
+  background: var(--call-hi);
+  border-color: var(--call-hi);
+}
 
 .queue-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
-  padding: var(--s2) var(--s3);
+  padding: var(--s3) var(--s4);
   color: var(--text-tertiary);
   border-top: var(--hair) solid var(--border-subtle);
   background: var(--surface-raised);
 }
 
-.no-filter-results,
-.tape-unavailable {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s2);
-  min-height: 160px;
-  padding: var(--s5);
-  color: var(--text-tertiary);
-  text-align: center;
+.panel-action {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: var(--track-label);
+  color: var(--text-secondary);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.panel-action:hover:not(:disabled) {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
 }
 
-.no-filter-results strong,
-.tape-unavailable strong { color: var(--text-primary); }
-
+/* ── Raw Tape Table (Panel 02) ───────────────────────────────────────────── */
 .evidence-drawer {
   border: var(--hair) solid var(--border-strong);
   background: var(--surface-raised);
 }
-
 .evidence-drawer.open { border-color: var(--rule-hi); }
 
 .drawer-toggle {
@@ -2232,58 +2631,65 @@ button.major-symbol:hover { color: var(--phosphor); }
   align-items: center;
   gap: var(--s3);
   width: 100%;
-  min-height: 58px;
-  padding: var(--s3) var(--s4);
+  min-height: 60px;
+  padding: var(--s3) var(--s5);
   color: var(--text-secondary);
   text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease;
 }
-
 .drawer-toggle:hover { background: var(--surface-overlay); }
-.drawer-index { color: var(--phosphor); font-size: var(--t-micro); }
-.drawer-copy { display: flex; flex-direction: column; }
-.drawer-copy strong { color: var(--text-primary); font: 650 var(--t-small) var(--font-display); }
+.drawer-index { color: var(--phosphor); font-size: var(--t-micro); font-weight: 800; }
+.drawer-copy strong { color: var(--text-primary); font: 700 var(--t-small) var(--font-display); }
 .drawer-copy small { margin-top: 2px; color: var(--text-tertiary); font-size: var(--t-micro); }
-.drawer-note { color: var(--text-tertiary); font-size: var(--t-small); }
-.drawer-action { color: var(--phosphor); }
-.drawer-action i { display: inline-block; margin-left: 5px; font-style: normal; transition: transform var(--dur-fast) var(--ease-out); }
-.evidence-drawer.open .drawer-action i { transform: rotate(180deg); }
-
-.drawer-body { border-top: var(--hair) solid var(--border-subtle); }
+.drawer-action { color: var(--phosphor); font-weight: 750; font-size: 10px; }
 
 .tape-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s4);
-  padding: var(--s2) var(--s3);
+  padding: var(--s3) var(--s4);
   background: var(--surface-base);
+  border-bottom: var(--hair) solid var(--border-subtle);
 }
-
-.tape-toolbar p {
-  color: var(--text-secondary);
-  font-size: var(--t-small);
-}
-
-.tape-toolbar strong { color: var(--text-primary); }
 
 .tape-table {
   min-width: 1080px;
   font-size: var(--t-tiny);
+  border-collapse: collapse;
 }
-
-.tape-table th,
-.tape-table td { padding: var(--s2) var(--s3); }
+.tape-table th {
+  padding: var(--s2) var(--s3);
+  color: var(--ink-dim);
+  background: var(--surface-overlay);
+  border-bottom: var(--hair) solid var(--border-strong);
+  font-weight: 750;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.tape-table td {
+  padding: var(--s2) var(--s3);
+  border-bottom: var(--hair) solid var(--border-subtle);
+  vertical-align: middle;
+}
 .tape-table tbody tr:hover { background: var(--surface-overlay); }
 
-.contract-cell {
-  display: flex;
+.right-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  min-height: 20px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-weight: 800;
+  font-size: 10px;
 }
+.right-chip.call { color: var(--call-hi); border: var(--hair) solid var(--call); background: var(--call-wash); }
+.right-chip.put { color: var(--put-hi); border: var(--hair) solid var(--put); background: var(--put-wash); }
 
-.right-chip,
-.class-chip,
-.aggressor {
+.class-chip {
   display: inline-flex;
   align-items: center;
   min-height: 19px;
@@ -2291,15 +2697,11 @@ button.major-symbol:hover { color: var(--phosphor); }
   color: var(--text-secondary);
   border: var(--hair) solid var(--border-strong);
   background: var(--surface-base);
+  font-size: 9px;
+  font-weight: 750;
+  border-radius: 2px;
 }
-
-.right-chip.call { color: var(--call-hi); border-color: var(--call); background: var(--call-wash); }
-.right-chip.put { color: var(--put-hi); border-color: var(--put); background: var(--put-wash); }
 .class-chip.heuristic { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.class-chip sup { margin-left: 3px; font: 700 8px var(--font-data); }
-.expiry-cell strong,
-.execution-cell strong { display: block; color: var(--text-primary); font-weight: 500; }
-.tape-premium { color: var(--text-primary); font-weight: 600; }
 
 .heat-cell {
   display: grid;
@@ -2307,41 +2709,34 @@ button.major-symbol:hover { color: var(--phosphor); }
   align-items: center;
   gap: 6px;
 }
-
 .heat-track {
   display: block;
   height: 5px;
   overflow: hidden;
   background: var(--border-subtle);
+  border-radius: 1px;
 }
-
 .heat-track i { display: block; height: 100%; background: var(--text-tertiary); }
 .heat-cell.warm .heat-track i { background: var(--warn); }
 .heat-cell.hot .heat-track i { background: var(--phosphor); }
-
-.tape-unavailable {
-  flex-direction: row;
-  text-align: left;
-}
 
 .method-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   border-top: var(--hair) solid var(--border-strong);
   border-bottom: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
 }
-
 .method-strip article {
-  padding: var(--s3) var(--s4);
+  padding: var(--s4) var(--s5);
   border-right: var(--hair) solid var(--border-subtle);
 }
-
 .method-strip article:last-child { border-right: 0; }
-
 .method-strip p {
   margin-top: 4px;
   color: var(--text-tertiary);
   font-size: var(--t-micro);
+  line-height: 1.4;
 }
 
 .sr-only {
@@ -2356,6 +2751,7 @@ button.major-symbol:hover { color: var(--phosphor); }
   border: 0;
 }
 
+/* ── Responsive Layouts ─────────────────────────────────────────────────── */
 @media (max-width: 1320px) {
   .live-pulse { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .pulse-copy { grid-column: 1 / -1; border-bottom: var(--hair) solid var(--border-subtle); }
@@ -2363,7 +2759,7 @@ button.major-symbol:hover { color: var(--phosphor); }
   .major-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .major-card:nth-child(2) { border-right: 0; }
   .major-card:nth-child(n + 3) { border-top: var(--hair) solid var(--border-subtle); }
-  .filter-shelf { grid-template-columns: minmax(150px, 1fr) auto auto; }
+  .filter-shelf { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .select-filter { min-width: 140px; }
   .reset-filter { align-self: end; }
 }

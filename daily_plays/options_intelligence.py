@@ -106,6 +106,25 @@ def _timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _is_date_only_timestamp(value: datetime) -> bool:
+    """True when the provider only stamped the calendar day (midnight UTC)."""
+    return value.hour == 0 and value.minute == 0 and value.second == 0 and value.microsecond == 0
+
+
+def _best_observation_time(values: Sequence[datetime | None]) -> datetime | None:
+    """Newest observation, preferring real clock times over midnight day-buckets.
+
+    LSE sometimes emits session prints as ``YYYY-MM-DDT00:00:00Z``. Using those
+    as "last observation" makes a live feed look 12–20h stale mid-session even
+    while sub-premium prints arrive with proper timestamps.
+    """
+    stamps = [value for value in values if value is not None]
+    if not stamps:
+        return None
+    precise = [value for value in stamps if not _is_date_only_timestamp(value)]
+    return max(precise or stamps)
+
+
 def _expiry(value: Any) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -681,10 +700,22 @@ def _flow_series(
         bucket.setdefault("anomaly_premium", 0.0)
 
     tape_rows.sort(key=lambda row: row["timestamp"], reverse=True)
+    chronological = sorted(tape_rows, key=lambda row: row["timestamp"])
+    signed_observations = [
+        float(row["signed_premium"])
+        for row in chronological
+        if row.get("signed_premium") is not None
+    ]
+    # Call + / put − is contract-activity persistence, not buy/sell direction.
+    activity_observations = [
+        float(row["premium"]) if row.get("right") == "call" else -float(row["premium"])
+        for row in chronological
+        if row.get("right") in {"call", "put"} and row.get("premium") is not None
+    ]
     for row in tape_rows:
         row["timestamp"] = row["timestamp"].isoformat()
         row["expiry"] = row["expiry"].isoformat() if row["expiry"] else None
-    return series, tape_rows[: filters.tape_limit], rejected
+    return series, tape_rows[: filters.tape_limit], rejected, signed_observations, activity_observations
 
 
 def _chain_activity_series(
@@ -1631,7 +1662,7 @@ def build_options_intelligence(
     )
     spread_samples = [row["spread_pct"] for row in filtered_chain if row["spread_pct"] is not None]
     median_spread_pct = median(spread_samples) if spread_samples else None
-    flow_series, tape, flow_rejected = _flow_series(
+    flow_series, tape, flow_rejected, signed_observations, activity_observations = _flow_series(
         flow_rows,
         filters=filters,
         asof=now,
@@ -1678,18 +1709,45 @@ def build_options_intelligence(
     signed_gross = sum(float(row.get("signed_gross_premium") or 0.0) for row in flow_series)
     signed_prints = sum(int(row.get("signed_premium_observations") or 0) for row in flow_series)
     unresolved = sum(float(row["unresolved_premium"]) for row in flow_series)
-    observed_times = [
-        value for value in [chain_observed, *(
-            _timestamp(row.get("timestamp")) for row in tape
-        )] if value is not None
-    ]
-    observed_at = max(observed_times, default=chain_observed)
-    age_seconds = max(0.0, (now - observed_at).total_seconds()) if observed_at else None
+    # Tape age = newest *qualifying* print (what the desk list shows).
+    # Feed age = newest provider print before min-premium/volume filters so a
+    # live underlier is not marked TAPE STALE just because $25k+ whales are rare.
+    tape_asof = _best_observation_time(
+        [_timestamp(row.get("timestamp")) for row in tape]
+    )
+    feed_asof = _best_observation_time([
+        _timestamp(flow_rejected.get("print_ts_max")),
+        _timestamp(flow_rejected.get("print_ts_min")),
+        tape_asof,
+    ])
+    # Prefer the true max feed stamp even when it is a day-bucket if that is
+    # all the provider sent; _best_observation_time already prefers precise.
+    if feed_asof is None:
+        feed_asof = _timestamp(flow_rejected.get("print_ts_max")) or tape_asof
+    # Overall observed_at prefers live tape/feed clocks over chain capture time
+    # (chain OI snapshots are often multi-day and should not drive tape lag).
+    observed_at = feed_asof or tape_asof or chain_observed
+    tape_age_seconds = (
+        max(0.0, (now - tape_asof).total_seconds()) if tape_asof is not None else None
+    )
+    feed_age_seconds = (
+        max(0.0, (now - feed_asof).total_seconds()) if feed_asof is not None else None
+    )
+    # Live lamp should follow the feed when we have trade-tape evidence at all.
+    if activity_basis == "trade_tape":
+        age_seconds = feed_age_seconds if feed_age_seconds is not None else tape_age_seconds
+    elif tape_age_seconds is not None:
+        age_seconds = tape_age_seconds
+    elif observed_at is not None:
+        age_seconds = max(0.0, (now - observed_at).total_seconds())
+    else:
+        age_seconds = None
 
     caveats = [
         "Call/put activity is not bought/sold direction. Signed net flow requires an explicit provider aggressor.",
         "Charting GEX uses call-positive/put-negative wall convention; squeeze theory uses short-premium dealer inventory (q=−OI). True dealer inventory is not public.",
-        "Gamma squeeze direction uses explicitly signed flow and/or price momentum; unsigned call/put identity never supplies trade direction.",
+        "Gamma squeeze direction uses post-shift signed flow and/or price momentum; unsigned call/put identity never supplies trade direction.",
+        "A mid-tape flow reversal rebuilds the directional imbalance from the post-shift window; thin, stale, or just-shifted samples cannot be high-confidence.",
         "Open interest is generally a prior-session observation, so GEX is a positioning estimate rather than a live position ledger.",
         "Implied probabilities are risk-neutral diagnostics from IV, not calibrated forecasts of where the stock will trade.",
     ]
@@ -1740,13 +1798,29 @@ def build_options_intelligence(
 
     anomaly_count = sum(bool(row.get("anomaly_flags")) for row in tape)
     # summary.activity_imbalance below remains the observable call/put identity
-    # mix. The squeeze direction uses only signed premium and shrinks a thin
-    # signed sample toward neutral.
-    imbalance_confidence = _imbalance_confidence(signed_prints)
-    signed_flow_imbalance = (
-        round((float(signed_net) / signed_gross) * imbalance_confidence, 6)
-        if signed_net is not None and signed_gross > 0
-        else None
+    # mix. Squeeze direction uses post-shift signed premium, not the stale
+    # full-window cumulative that stays locked after a mid-tape reversal.
+    from edge.research.flow_shift import current_flow_after_shift
+
+    flow_shift_readout = None
+    if signed_observations:
+        flow_shift_readout = current_flow_after_shift(
+            signed_observations,
+            last_age=tape_age_seconds,
+            max_fresh_age=24.0 * 3600.0,
+        )
+        imbalance_confidence = float(flow_shift_readout.confidence)
+        signed_flow_imbalance = round(float(flow_shift_readout.effective_imbalance), 6)
+    else:
+        imbalance_confidence = _imbalance_confidence(signed_prints)
+        signed_flow_imbalance = None
+    activity_shift_readout = (
+        current_flow_after_shift(
+            activity_observations,
+            last_age=tape_age_seconds,
+            max_fresh_age=24.0 * 3600.0,
+        )
+        if activity_observations else None
     )
     squeeze = _squeeze_readout(
         spot=resolved_spot,
@@ -1764,6 +1838,16 @@ def build_options_intelligence(
         asof=chain_asof,
         rate=filters.risk_free_rate,
     )
+    if flow_shift_readout is not None:
+        shift_payload = flow_shift_readout.to_dict()
+        squeeze["flow_shift"] = shift_payload
+        if isinstance(squeeze.get("theory"), dict):
+            squeeze["theory"]["flow_shift"] = shift_payload
+        if isinstance(squeeze.get("components"), dict):
+            squeeze["components"]["flow_shift_last_index"] = flow_shift_readout.last_shift_index
+            squeeze["components"]["flow_shift_kind"] = flow_shift_readout.last_shift_kind
+            squeeze["components"]["flow_confidence_band"] = flow_shift_readout.confidence_band
+            squeeze["components"]["flow_n_post_shift"] = flow_shift_readout.n_post_shift
     squeeze_theory = squeeze.get("theory") if isinstance(squeeze.get("theory"), Mapping) else {}
     if squeeze_theory.get("momentum_fresh") is False:
         price_age = squeeze_theory.get("momentum_price_age_days")
@@ -1785,7 +1869,14 @@ def build_options_intelligence(
         "mode_resolved": mode_resolved,
         "asof_utc": now.isoformat(),
         "observed_at": observed_at.isoformat() if observed_at else None,
-        "freshness": {"age_seconds": round(age_seconds, 3) if age_seconds is not None else None},
+        "freshness": {
+            # age_seconds = feed liveness for trade_tape (not filtered-whale lag).
+            "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+            "feed_asof": feed_asof.isoformat() if feed_asof is not None else None,
+            "feed_age_seconds": round(feed_age_seconds, 3) if feed_age_seconds is not None else None,
+            "tape_asof": tape_asof.isoformat() if tape_asof is not None else None,
+            "tape_age_seconds": round(tape_age_seconds, 3) if tape_age_seconds is not None else None,
+        },
         "filters": asdict(filters),
         "chain_context": chain_context,
         "provider": {
@@ -1804,6 +1895,20 @@ def build_options_intelligence(
             "signed_gross_premium": round(signed_gross, 2) if signed_gross > 0 else None,
             "signed_flow_imbalance": signed_flow_imbalance,
             "signed_flow_confidence": round(imbalance_confidence, 6),
+            "signed_flow_confidence_band": (
+                flow_shift_readout.confidence_band if flow_shift_readout is not None else (
+                    "low" if signed_prints < 2 else "medium"
+                )
+            ),
+            "flow_shift": flow_shift_readout.to_dict() if flow_shift_readout is not None else None,
+            "activity_shift": (
+                {
+                    **activity_shift_readout.to_dict(),
+                    "kind": "contract_activity",
+                    "note": "call_plus_put_minus_persistence_not_aggressor",
+                }
+                if activity_shift_readout is not None else None
+            ),
             "unresolved_premium": round(unresolved, 2),
             "median_spread_pct": round(median_spread_pct, 6) if median_spread_pct is not None else None,
             **gex_summary,

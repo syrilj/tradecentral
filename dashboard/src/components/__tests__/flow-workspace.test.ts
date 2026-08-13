@@ -33,7 +33,7 @@ describe('Standalone Flow workspace contract', () => {
 
   it('does not expose legacy routed-symbol or Deep-scan coverage', () => {
     expect(dashboard).toContain('MARKET-WIDE FLOW')
-    expect(dashboard).toContain('MARKET-WIDE WINDOW')
+    expect(dashboard).toContain('LATEST PROVIDER SAMPLE')
     expect(dashboard).not.toContain('Partial provider coverage')
     expect(dashboard).not.toContain('routed symbols returned valid provider responses')
     expect(dashboard).not.toContain('DEEP SCAN SNAPSHOT')
@@ -45,11 +45,11 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).toMatch(/qualifiedTapeRows\.value\.slice\(0, MAX_TAPE_ROWS\)/)
   })
 
-  it('states the premium-share formula and never infers direction from call/put identity', () => {
+  it('states the premium-share formula and labels bullish/bearish activity lean', () => {
     expect(dashboard).toMatch(/putPremium \/ classifiedPremium/)
-    expect(dashboard).toContain('PUT / (CALL + PUT)')
-    expect(dashboard).toContain('C/P is contract identity, not market direction.')
-    expect(dashboard).toContain('no bullish or bearish intent is inferred from call/put alone')
+    expect(dashboard).toContain('Activity lean (bullish/bearish)')
+    expect(dashboard).toContain('BULLISH ACTIVITY')
+    expect(dashboard).toContain('signed trade direction requires provider buy/sell')
     expect(dashboard).not.toContain('Dark pool flow')
     expect(dashboard).not.toContain('NO ATS SOURCE')
   })
@@ -63,13 +63,13 @@ describe('Standalone Flow workspace contract', () => {
   it('blocks legacy payloads and collapses empty data into one recovery state', () => {
     expect(dashboard).toMatch(/source_snapshot !== 'market_flow'/)
     expect(dashboard).toContain('Legacy Flow response blocked')
-    expect(dashboard).toContain('No measured prints in the current window')
+    expect(dashboard).toContain('No measured prints in the latest provider sample')
     expect(dashboard).toMatch(/v-else-if="!hasMeasuredFlow"/)
   })
 
   it('makes an honest operator brief and measured review queue primary while keeping raw prints optional', () => {
     expect(dashboard).toContain('What deserves review')
-    expect(dashboard).toContain('Archived provider window')
+    expect(dashboard).toContain('Stale provider sample')
     expect(dashboard).toContain('Context only — refresh before using this tape intraday')
     expect(dashboard).toContain('triagePicks')
     expect(dashboard).toContain('OPEN CHAIN →')
@@ -80,13 +80,25 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).not.toContain('Smart market insight / ticker')
   })
 
+  it('surfaces actionable desk next steps from lean, concentration, and freshness', () => {
+    expect(dashboard).toContain('Actionable desk brief')
+    expect(dashboard).toMatch(/function actionInsight/)
+    expect(dashboard).toContain('Desk next step')
+    expect(dashboard).toContain('Open chain · map near-dated call strikes + upside walls')
+    expect(dashboard).toContain('Open chain · map near-dated put strikes + downside walls')
+    expect(dashboard).toContain('Refresh feed before chain work — provider sample is stale')
+    expect(dashboard).toContain('Focus:')
+    expect(dashboard).toContain('Actionable insights')
+    expect(dashboard).toContain('research triage — not order authorization')
+  })
+
   it('supports local symbol, activity, right, expiry, and ordering filters', () => {
     expect(dashboard).toMatch(/symbolQuery = ref/)
     expect(dashboard).toMatch(/activityFilter = ref/)
     expect(dashboard).toMatch(/rightFilter = ref/)
     expect(dashboard).toMatch(/dteFilter = ref/)
     expect(dashboard).toMatch(/sortKey = ref/)
-    expect(dashboard).toContain('Dominant right')
+    expect(dashboard).toContain('Contract mix')
     expect(dashboard).toContain("activityFilter = 'incoming'")
     expect(dashboard).toContain('New premium')
     expect(dashboard).toContain('Average expiry')
@@ -103,7 +115,7 @@ describe('Standalone Flow workspace contract', () => {
   })
 
   it('does not present an old provider observation as a live window', () => {
-    expect(dashboard).toContain("return 'STALE WINDOW'")
+    expect(dashboard).toContain("return 'STALE SAMPLE'")
     expect(dashboard).toContain("providerFreshnessState === 'live'")
     expect(dashboard).toContain('UNSIGNED TAPE')
   })
@@ -113,7 +125,7 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).toMatch(/function primaryReadout/)
     expect(dashboard).toContain('Top premium')
     expect(dashboard).toContain('Sweep-heavy')
-    expect(dashboard).toContain('High flagged share')
+    expect(dashboard).toContain('Flagged ${fractionPercent(flaggedShare(row), 0)}')
     expect(dashboard).toMatch(/@click="openSymbol\(row\.symbol\)"/)
   })
 
@@ -123,16 +135,17 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).toContain('Strike')
     expect(dashboard).toContain('DTE zone')
     expect(dashboard).toContain('REVIEW #{{ reviewRank(major.symbol) }}')
-    expect(dashboard).toContain('DIRECTION NOT READABLE')
+    expect(dashboard).toContain('BULLISH ACTIVITY')
+    expect(dashboard).toContain('BEARISH ACTIVITY')
     expect(dashboard).toContain('BULLISH SIGNED FLOW')
     expect(dashboard).toContain('BEARISH SIGNED FLOW')
-    expect(dashboard).toContain('does not clear the evidence gate')
+    expect(dashboard).toContain('NEUTRAL ACTIVITY')
     expect(dashboard).not.toContain('Explicit model context')
   })
 
   it('uses tape spot when the daily return context is missing', () => {
     expect(dashboard).toMatch(/function priceRead/)
-    expect(dashboard).toContain('Tape spot · return feed unavailable')
-    expect(dashboard).toContain('No underlying price in this snapshot')
+    expect(dashboard).toContain('Tape spot · no return series')
+    expect(dashboard).toContain('No underlying price in this provider sample')
   })
 })
