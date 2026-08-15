@@ -12,6 +12,25 @@ export interface Resource<T> {
   clear: () => void
 }
 
+/** Passive polls must not stack on a slow backend. A keyed clear always starts. */
+export function shouldStartRefresh(inFlight: boolean, opts?: { clear?: boolean }): boolean {
+  return Boolean(opts?.clear) || !inFlight
+}
+
+/**
+ * Keep the last good payload on poll / failed fetch.
+ * Only `clear: true` may blank the tape before the next result.
+ */
+export function nextResourceData<T>(
+  previous: T | null,
+  incoming: T | null,
+  opts?: { clear?: boolean; failed?: boolean },
+): T | null {
+  if (opts?.failed) return opts.clear ? null : previous
+  if (opts?.clear) return incoming
+  return incoming ?? previous
+}
+
 /**
  * Fetch-with-polling primitive.
  *
@@ -65,17 +84,18 @@ export function useResource<T>(
     if (opts?.clear) {
       // Invalidate immediately so consumers keyed on data identity cannot show
       // the previous response under a new selection.
-      data.value = null
+      data.value = nextResourceData(data.value, null, { clear: true })
       error.value = null
     }
     try {
       const result = await loader()
       if (mine !== seq || disposed) return // a newer request already landed
-      data.value = result
+      data.value = nextResourceData(data.value, result, opts)
       error.value = null
       fetchedAt.value = new Date().toISOString()
     } catch (e) {
       if (mine !== seq || disposed) return
+      data.value = nextResourceData(data.value, null, { ...opts, failed: true })
       error.value =
         e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
     } finally {
@@ -95,7 +115,9 @@ export function useResource<T>(
     // Skip ticks while a request is still in flight so a slow backend cannot
     // stack fetches until the tab freezes.
     timer = window.setInterval(() => {
-      if (enabled() && document.visibilityState === 'visible' && !inFlight) void refresh()
+      if (enabled() && document.visibilityState === 'visible' && shouldStartRefresh(inFlight)) {
+        void refresh()
+      }
     }, intervalMs)
   }
 
@@ -107,7 +129,9 @@ export function useResource<T>(
   }
 
   function onVisible(): void {
-    if (enabled() && document.visibilityState === 'visible') void refresh()
+    if (enabled() && document.visibilityState === 'visible' && shouldStartRefresh(inFlight)) {
+      void refresh()
+    }
   }
 
   if (immediate && enabled()) void refresh()

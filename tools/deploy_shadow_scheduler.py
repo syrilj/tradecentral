@@ -16,8 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-PROJECT_ID = os.getenv("GCP_PROJECT", "gen-lang-client-0699310395")
-REGION = os.getenv("GCP_REGION", "us-central1")
+import gcp_config
+
+PROJECT_ID = gcp_config.get_project_id()
+REGION = gcp_config.get_region()
 
 
 def deploy_scheduler_jobs(dry_run: bool = False) -> None:
@@ -27,6 +29,7 @@ def deploy_scheduler_jobs(dry_run: bool = False) -> None:
     print(f"  Project:   {PROJECT_ID}")
     print(f"  Region:    {REGION}")
     print(f"  Dry-run:   {dry_run}")
+    print(f"  Cost:      $0.00 (under 3 free cron jobs limit)")
     print("=" * 60)
 
     jobs = [
@@ -44,6 +47,9 @@ def deploy_scheduler_jobs(dry_run: bool = False) -> None:
         },
     ]
 
+    if len(jobs) > gcp_config.FREE_TIER_LIMITS["cloud_scheduler_jobs"]:
+        raise ValueError(f"Job count ({len(jobs)}) exceeds GCP Free Tier limit of 3 jobs!")
+
     for j in jobs:
         print(f"\nProvisioning job [{j['name']}]...")
         cmd = (
@@ -52,11 +58,12 @@ def deploy_scheduler_jobs(dry_run: bool = False) -> None:
             f"--uri='{j['uri']}' "
             f"--description='{j['description']}' "
             f"--project={PROJECT_ID} --location={REGION} "
-            f"--attempt-deadline=300s || "
+            f"--attempt-deadline=300s --max-retry-attempts=1 --min-backoff=30s || "
             f"gcloud scheduler jobs update http {j['name']} "
             f"--schedule='{j['schedule']}' "
             f"--uri='{j['uri']}' "
-            f"--project={PROJECT_ID} --location={REGION}"
+            f"--project={PROJECT_ID} --location={REGION} "
+            f"--attempt-deadline=300s --max-retry-attempts=1 --min-backoff=30s"
         )
 
         if dry_run:

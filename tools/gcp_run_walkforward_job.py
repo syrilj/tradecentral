@@ -34,7 +34,8 @@ MACHINE_SPEC = {
     "accelerator_type": "ACCELERATOR_TYPE_UNSPECIFIED",
     "accelerator_count": 0,
 }
-DISK_SPEC = {"boot_disk_type": "pd-ssd", "boot_disk_size_gb": 200}
+DISK_SPEC = {"boot_disk_type": "pd-standard", "boot_disk_size_gb": 100}
+JOB_TIMEOUT = 7200  # 2-hour hard timeout safeguard
 OUT_GCS = f"{STAGING_BUCKET}/results/walkforward/results.json"
 OOF_GCS = f"{STAGING_BUCKET}/results/walkforward/oof_inferences.parquet"
 DAILY_GCS = f"{STAGING_BUCKET}/results/walkforward/daily_portfolio_returns.parquet"
@@ -57,7 +58,8 @@ MAX_PACKAGE_MB = 250
 
 def build_repo_package() -> Path:
     """Tar only the files the remote job needs, then stage to GCS."""
-    pkg_path = ROOT / "edge_walkforward_pkg.tar.gz"
+    pkg_path = EDGE / "runs" / "packages" / "edge_walkforward_pkg.tar.gz"
+    pkg_path.parent.mkdir(parents=True, exist_ok=True)
     pkg_path.unlink(missing_ok=True)
     print(f"Building package: {pkg_path}")
 
@@ -138,7 +140,8 @@ def build_remote_command(smoke: bool) -> str:
 
 def submit_vertex_job(smoke: bool = False, dry_run: bool = False) -> str:
     """Submit CustomJob to Vertex AI using Google Cloud AIPlatform SDK."""
-    build_repo_package()
+    if not dry_run:
+        build_repo_package()
     bash_cmd = build_remote_command(smoke)
     display_name = f"multiyear-walkforward-{int(time.time())}"
 
@@ -162,15 +165,20 @@ def submit_vertex_job(smoke: bool = False, dry_run: bool = False) -> str:
 
     try:
         from google.cloud import aiplatform
+        from google.cloud.aiplatform_v1.types import Scheduling
         aiplatform.init(project=PROJECT_ID, location=REGION, staging_bucket=STAGING_BUCKET)
         job = aiplatform.CustomJob(
             display_name=display_name,
             worker_pool_specs=worker_pool_specs,
         )
-        print("Submitting job to Vertex AI...")
-        job.submit()
+        print("Submitting job to Vertex AI on Spot compute...")
+        job.submit(
+            restart_job_on_worker_restart=False,
+            timeout=JOB_TIMEOUT,
+            scheduling_strategy=Scheduling.Strategy.SPOT,
+        )
         job_name = job.resource_name
-        print(f"SUCCESS: Vertex AI Job created: {job_name}")
+        print(f"SUCCESS: Vertex AI Job created: {job_name} (Spot Compute)")
         return job_name
     except Exception as e:
         print(f"ERROR submitting job: {e}")

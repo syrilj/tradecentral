@@ -62,9 +62,25 @@ withDefaults(defineProps<{
       <path d="M4 20V15M9 20V11M14 20V7" />
       <path d="m5 10 5-5 3 3 6-6M15 2h4v4" />
     </template>
+    <template v-else-if="name === 'suggest'">
+      <path d="M12 3v4" />
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M5 12H3M21 12h-2M7.1 7.1 5.7 5.7M16.9 7.1l1.4-1.4" />
+      <path d="M4 19h7M13 19h7" />
+      <path d="M11 17.2 12 19l1-1.8" />
+    </template>
     <template v-else-if="name === 'fintel'">
       <path d="M3 20h18M5 20V9h14v11M8 20v-7M12 20v-7M16 20v-7" />
       <path d="m4 9 8-5 8 5" />
+    </template>
+    <template v-else-if="name === 'calculator'">
+      <rect x="5" y="3" width="14" height="18" rx="1.5" />
+      <path d="M8 7h8M8 11h2M12 11h2M16 11h0.01M8 15h2M12 15h2M16 15h0.01M8 18h2M12 18h2" />
+    </template>
+    <template v-else-if="name === 'insiders'">
+      <circle cx="9" cy="8" r="2.4" />
+      <path d="M4.5 18v-1.2A3.8 3.8 0 0 1 8.3 13h1.4" />
+      <path d="M13 8h7M13 12h7M13 16h5" />
     </template>
     <template v-else-if="name === 'evolution'">
       <circle cx="5" cy="12" r="2" />

@@ -92,6 +92,18 @@ function blankSymbolPulse(): SymbolPulse {
   return { newPrints: 0, newPremium: 0, windowPremiumDelta: 0, rankMove: null }
 }
 
+/**
+ * Apply a provider window without blanking the desk.
+ * A null/empty refresh keeps the last good tape; a new window updates pulse copy.
+ */
+export function applyFlowWindow(
+  previous: FlowPulsePayload | null,
+  next: FlowPulsePayload | null,
+): { window: FlowPulsePayload | null; pulse: FlowPulse | null } {
+  if (!next) return { window: previous, pulse: null }
+  return { window: next, pulse: buildFlowPulse(previous, next) }
+}
+
 export function buildFlowPulse(
   previous: FlowPulsePayload | null,
   current: FlowPulsePayload,

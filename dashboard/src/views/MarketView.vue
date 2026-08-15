@@ -9,6 +9,7 @@ import { sparkline } from '@/charts'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import TrajectoryChart from '@/components/TrajectoryChart.vue'
+import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
 const status = inject<Resource<StatusPayload>>('status')
 const route = useRoute()
@@ -19,6 +20,12 @@ const hits = ref<SearchHit[]>([])
 const searching = ref(false)
 
 const symbol = ref<string>(((route.query.symbol as string) || 'AAPL').toUpperCase())
+const book = ref(loadWatchlist())
+const onBook = computed(() => watchlistHas(book.value, symbol.value))
+
+function toggleBook(): void {
+  book.value = toggleWatchlistSymbol(book.value, symbol.value).symbols
+}
 const win = ref<TrajWindow>('1y')
 const mode = ref<'price' | 'growth'>('price')
 const chartStyle = ref<'candles' | 'line'>('candles')
@@ -456,6 +463,10 @@ const factorRows = computed(() => {
 
         <div class="desk-quick-nav label">
           <span class="nav-tag">VIEW IN:</span>
+          <button type="button" class="nav-qlink" :class="{ on: onBook }" @click="toggleBook">
+            {{ onBook ? 'Pinned' : 'Pin to book' }}
+          </button>
+          <RouterLink :to="{ name: 'flow', query: { setup: symbol } }" class="nav-qlink">Flow</RouterLink>
           <RouterLink :to="{ name: 'options', query: { symbol } }" class="nav-qlink">Options</RouterLink>
           <RouterLink :to="{ name: 'changepoints', query: { symbol } }" class="nav-qlink">Breaks</RouterLink>
           <RouterLink :to="{ name: 'sentiment', query: { symbol } }" class="nav-qlink">Pulse</RouterLink>
@@ -854,10 +865,16 @@ const factorRows = computed(() => {
   text-decoration: none;
   transition: all 0.12s ease;
 }
-.nav-qlink:hover {
+.nav-qlink:hover,
+.nav-qlink.on {
   color: var(--phosphor);
   border-color: var(--phosphor-dim);
   background: var(--phosphor-wash);
+}
+button.nav-qlink {
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
 }
 
 /* ---- switches ------------------------------------------------------------ */

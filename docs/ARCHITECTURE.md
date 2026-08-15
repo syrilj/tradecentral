@@ -176,7 +176,7 @@ Shared resources are polled once in the shell and provided to child views. This 
 
 ### 8.2 Routing
 
-`dashboard/src/router.ts` is the route source of truth. The current primary/specialist route set includes:
+`dashboard/src/router.ts` is the route source of truth. Options/flow operator paths, API handlers, and the daily-plays LSE flow router are specified in `docs/OPTIONS_ROUTE_NOTE.md`. The current primary/specialist route set includes:
 
 - Desk
 - Market
@@ -265,10 +265,14 @@ The API surface is broad but can be grouped into stable domains.
 #### Options and flow
 
 - `/api/options`
+- `/api/options/board`
 - `/api/options/backfill_oi`
+- `/api/options/suggest` and `/api/options/opportunities`
+- `/api/options-calculator`
 - `/api/unusual-flow`
-- flow-state artifacts
-- options-board and related option intelligence helpers
+- flow-state artifacts (daily-bar proxy; not live options tape)
+
+See `docs/OPTIONS_ROUTE_NOTE.md` for the routing contract: sector discovery → unsigned LSE tape → model scan priority. Flow never authorizes `ENTER`.
 
 #### Research artifacts
 
@@ -579,7 +583,10 @@ A successful frontend build proves only that the UI compiles. It is not a model 
 
 ## 20. Deployment model
 
-The supported deployment today is a single research workstation.
+The default deployment is a single research workstation. An authenticated
+single-replica network profile is also supported for a small internal research
+team; see `docs/PRODUCTION_DEPLOYMENT.md`. Horizontal API scaling is not
+supported while jobs, locks, and caches remain process-local.
 
 ### Operator process
 
@@ -587,6 +594,17 @@ The supported deployment today is a single research workstation.
 2. `tools/run_dashboard.sh` starts/builds the frontend.
 3. `tools/api_server.py` serves the API and, in built mode, the SPA.
 4. The browser connects only to localhost.
+
+### Authenticated network process
+
+1. A TLS reverse proxy exposes the built SPA and API on one origin.
+2. The API binds off-loopback only with `EDGE_REQUIRE_AUTH=1`.
+3. Every protected API request verifies its Clerk session JWT and authorized
+   party; `/api/health` remains public for health checks.
+4. Explicit CORS origins, bounded request concurrency, connection timeouts,
+   response compression, and browser request deadlines are enabled.
+5. The API runs as one replica until scan jobs and cache coordination move to
+   durable shared services.
 
 ### Cloud model research
 

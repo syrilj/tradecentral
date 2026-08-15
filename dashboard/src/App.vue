@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ClerkLoaded, ClerkLoading, UserButton, useAuth, useClerk, useUser } from '@clerk/vue'
 import { api, configureApiAuth, type StatusPayload, type Readiness, type MarketClock, type ComparePayload, type ScanDepth } from '@/api'
 import { isAllowedOperatorEmail } from '@/auth'
+import { formatMarketCountdown, marketSessionClass as sessionClassOf, marketSessionLabel as sessionLabelOf } from '@/marketSession'
+import { placeToolsMenuStyle, type ToolsMenuStyle } from '@/toolsMenu'
 import { useResource } from '@/composables/useResource'
 import { num, age, signedPct, tone, usd } from '@/format'
 import AppIcon from '@/components/AppIcon.vue'
@@ -94,13 +96,15 @@ watch(
 
 provide('status', status)
 provide('readiness', readiness)
+provide('marketClock', marketClock)
 
 const primaryNav = [
   { name: 'desk', idx: '01', title: 'Desk', hint: 'Posture · queue · arena', icon: 'desk' },
   { name: 'market', idx: '02', title: 'Market', hint: 'Symbol research', icon: 'market' },
   { name: 'options', idx: '03', title: 'Options', hint: 'One underlier', icon: 'options' },
   { name: 'flow', idx: '04', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
-  { name: 'research', idx: '05', title: 'Research', hint: 'Methods · gates · models', icon: 'research' },
+  { name: 'suggest', idx: '05', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
+  { name: 'research', idx: '06', title: 'Research', hint: 'Methods · gates · models', icon: 'research' },
 ] as const
 
 const marketTools = [
@@ -108,6 +112,8 @@ const marketTools = [
   { name: 'sentiment', idx: 'M2', title: 'Pulse', hint: 'Structure and outliers', icon: 'pulse' },
   { name: 'momentum', idx: 'M3', title: 'Momentum', hint: 'Five pillars scan', icon: 'momentum' },
   { name: 'fintel', idx: 'M4', title: 'Fintel', hint: 'Short, borrow, owners', icon: 'fintel' },
+  { name: 'insiders', idx: 'M5', title: 'Insiders', hint: 'Form 4 · Fintel tape', icon: 'insiders' },
+  { name: 'calculator', idx: 'M6', title: 'Calculator', hint: 'Spot · strike · P/L', icon: 'calculator' },
 ] as const
 
 const researchTools = [
@@ -271,7 +277,13 @@ function navAlert(name: string): boolean {
   if (name === 'desk') return enterCount.value > 0
   if (name === 'flow') {
     const top = topRotations.value.in[0]
-    return volAlert.value || Boolean(top && Math.abs(Number(top.flow_score ?? 0)) > 0.02)
+    let bookHits = 0
+    try {
+      bookHits = Number(localStorage.getItem('edge.flow.alert-unread.v1') || 0)
+    } catch {
+      bookHits = 0
+    }
+    return volAlert.value || bookHits > 0 || Boolean(top && Math.abs(Number(top.flow_score ?? 0)) > 0.02)
   }
   if (name === 'options') return volAlert.value
   return false
@@ -297,40 +309,17 @@ function utcNow(): string {
   return new Date().toISOString().slice(11, 19)
 }
 
-const marketSessionLabel = computed(() => {
-  if (marketClock.error.value) return 'CAL FAULT'
-  const labels: Record<string, string> = {
-    regular: 'RTH OPEN',
-    premarket: 'PREMARKET',
-    after_hours: 'AFTER HOURS',
-    closed: 'MARKET CLOSED',
-    replay: 'REPLAY',
-  }
-  return labels[marketClock.data.value?.market_session ?? ''] ?? 'CAL SYNC'
-})
+const marketSessionLabel = computed(() =>
+  sessionLabelOf(marketClock.data.value?.market_session, { error: Boolean(marketClock.error.value) }),
+)
 
-const marketSessionClass = computed(() => marketClock.data.value?.market_session ?? 'unknown')
+const marketSessionClass = computed(() => sessionClassOf(marketClock.data.value?.market_session))
 
 const marketTransition = computed(() => {
   // Reading clock.value makes this countdown update on the shell's 1s timer.
   void clock.value
   const data = marketClock.data.value
-  if (!data?.next_transition_utc || !data.next_transition) return 'NEXT n/a'
-  const seconds = Math.max(0, Math.floor((Date.parse(data.next_transition_utc) - Date.now()) / 1000))
-  const days = Math.floor(seconds / 86_400)
-  const hours = Math.floor((seconds % 86_400) / 3_600)
-  const minutes = Math.floor((seconds % 3_600) / 60)
-  const secs = seconds % 60
-  const countdown = days > 0
-    ? `${days}D ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
-    : `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
-  const verbs: Record<string, string> = {
-    premarket_opens: 'PRE IN',
-    regular_opens: 'OPEN IN',
-    regular_closes: 'CLOSE IN',
-    after_hours_closes: 'EXT CLOSE',
-  }
-  return `${verbs[data.next_transition] ?? 'NEXT'} ${countdown}`
+  return formatMarketCountdown(data?.next_transition_utc, data?.next_transition, Date.now())
 })
 
 const marketClockTitle = computed(() => {
@@ -367,18 +356,37 @@ function onKey(e: KeyboardEvent): void {
 }
 
 function onOutsidePointer(e: PointerEvent): void {
-  if (!moreOpen.value || !moreWrap.value || !(e.target instanceof Node)) return
-  if (!moreWrap.value.contains(e.target)) moreOpen.value = false
+  if (!moreOpen.value || !(e.target instanceof Node)) return
+  if (moreWrap.value?.contains(e.target) || morePanel.value?.contains(e.target)) return
+  moreOpen.value = false
+}
+
+const morePanelStyle = ref<Partial<ToolsMenuStyle>>({})
+
+function placeToolsMenu(): void {
+  const rect = moreButton.value?.getBoundingClientRect()
+  if (!rect) return
+  morePanelStyle.value = placeToolsMenuStyle(rect, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  })
 }
 
 async function openToolsMenu(edge: 'first' | 'last' = 'first'): Promise<void> {
   moreOpen.value = true
   await nextTick()
+  placeToolsMenu()
   const items = Array.from(
     morePanel.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
   )
   items[edge === 'first' ? 0 : items.length - 1]?.focus()
 }
+
+watch(moreOpen, async (open) => {
+  if (!open) return
+  await nextTick()
+  placeToolsMenu()
+})
 
 function onMoreMenuKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
@@ -431,6 +439,10 @@ function openSymbol(sym: string): void {
   /* Flow is market-wide; a symbol search belongs on Options for one underlier. */
   if (currentName === 'flow' || currentName === 'flowstate') {
     void router.push({ name: 'options', query: { symbol: clean } })
+    return
+  }
+  if (currentName === 'suggest') {
+    void router.push({ name: 'suggest', query: { symbol: clean } })
     return
   }
   /* Always land on Market for symbol research when not already on a symbol workspace. */
@@ -497,6 +509,7 @@ function openVol(): void {
         </li>
       </ul>
 
+      <div class="rail-foot">
       <!-- More: secondary views dropdown -->
       <div ref="moreWrap" class="more-wrap">
         <button
@@ -515,11 +528,13 @@ function openVol(): void {
           <AppIcon class="nav-icon" name="more" :size="18" />
           <span class="nav-title label">Tools</span>
         </button>
+        <Teleport to="body">
         <div
           v-if="moreOpen"
           id="workspace-tools-menu"
           ref="morePanel"
           class="more-panel"
+          :style="morePanelStyle"
           role="menu"
           aria-label="Market and research tools"
           @keydown="onMoreMenuKey"
@@ -572,6 +587,7 @@ function openVol(): void {
             <span class="more-idx fig">{{ n.idx }}</span>
           </RouterLink>
         </div>
+        </Teleport>
       </div>
 
       <div class="clerk-user" :title="operatorEmail || 'Account and sign out'">
@@ -580,6 +596,7 @@ function openVol(): void {
         <button type="button" class="account-signout label" :disabled="signingOut" @click="void signOut()">
           {{ signingOut ? 'EXITING' : 'SIGN OUT' }}
         </button>
+      </div>
       </div>
 
     </nav>
@@ -675,8 +692,10 @@ function openVol(): void {
 
       <div
         class="market-clock"
-        :class="[marketSessionClass, { early: marketClock.data.value?.is_early_close }]"
+        :class="[marketSessionClass, { early: marketClock.data.value?.is_early_close, mapped: Boolean(marketClock.data.value?.market_session) }]"
         :title="marketClockTitle"
+        role="status"
+        aria-live="polite"
       >
         <span class="label market-state">
           {{ marketSessionLabel }}
@@ -787,7 +806,7 @@ function openVol(): void {
   flex-direction: column;
   align-items: stretch;
   gap: var(--s2);
-  padding: var(--s3) 0 var(--s4);
+  padding: var(--s3) 0 0;
   border-right: var(--hair) solid var(--rule);
   background: var(--void-lift);
   z-index: var(--z-rail);
@@ -795,10 +814,27 @@ function openVol(): void {
      size (min-content height) would otherwise force the shared 1fr row —
      and with it #app/.shell/the whole document — to grow past the viewport
      whenever the 13 nav items + logo + find button don't fit. min-height: 0
-     opts out of that, so an overflowing rail scrolls internally instead. */
+     opts out of that; the nav list scrolls so Account stays pinned. */
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
+}
+.nav {
+  list-style: none;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
   overflow-x: hidden;
+  overflow-y: auto;
+}
+.rail-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: auto;
+  overflow: visible;
 }
 
 .mark {
@@ -834,12 +870,6 @@ function openVol(): void {
 }
 
 /* ---- nav ------------------------------------------------------------------ */
-.nav {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
 
 .nav-item {
   position: relative;
@@ -903,7 +933,7 @@ function openVol(): void {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  margin-top: auto;
+  margin-top: 0;
   border-top: var(--hair) solid var(--rule-faint);
 }
 .clerk-user :deep(.cl-avatarBox) {
@@ -940,15 +970,15 @@ function openVol(): void {
   background: transparent;
 }
 .more-panel {
-  position: absolute;
-  left: calc(100% + 2px);
-  top: 0;
-  z-index: calc(var(--z-rail) + 10);
+  position: fixed;
+  z-index: var(--z-overlay);
   background: var(--void-lift);
   border: var(--hair) solid var(--rule-hi);
   min-width: 208px;
   max-height: min(70vh, 520px);
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
@@ -1141,9 +1171,11 @@ function openVol(): void {
   align-items: flex-end;
   gap: 1px;
   flex: 0 0 auto;
+  min-width: 108px;
   padding-left: var(--s4);
   border-left: var(--hair) solid var(--rule);
 }
+.market-clock.mapped .market-next { color: var(--ink); }
 .market-state { color: var(--ink-dim); font-weight: 700; }
 .market-next { color: var(--ink); font-size: var(--t-small); font-weight: 600; }
 .market-clock.regular .market-state { color: var(--phosphor); }
@@ -1268,8 +1300,10 @@ function openVol(): void {
   }
   .nav-item.on::after { top: auto; right: 18%; bottom: 0; left: 18%; width: auto; height: 2px; }
   .nav-pulse { top: 8px; right: calc(50% - 15px); }
+  .rail-foot { flex-direction: row; margin-top: 0; }
   .more-wrap { flex: 0 0 52px; width: 52px; margin-top: 0; }
   .clerk-user {
+    display: flex;
     flex: 0 0 52px;
     width: 52px;
     margin-top: 0;
@@ -1279,7 +1313,6 @@ function openVol(): void {
   }
   .account-signout { display: none; }
   .more-btn { min-height: 64px; height: 64px; }
-  .more-panel { top: auto; right: 0; bottom: calc(100% + 2px); left: auto; }
   .foot { display: none; }
   .gauges { display: flex; flex: 1 1 auto; }
   .gauge-vol,

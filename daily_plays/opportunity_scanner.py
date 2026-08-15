@@ -36,6 +36,20 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _observed_contract_rejections(focus: Mapping[str, Any], spot: Any) -> list[str]:
+    strike = _finite(focus.get("strike"))
+    focus_spot = _finite(focus.get("underlying_price")) or _finite(spot)
+    dte = _finite(focus.get("dte"))
+    reasons: list[str] = []
+    if not focus.get("expiry") or dte is None or not 0 <= dte <= 60:
+        reasons.append("observed Flow contract is outside the 0–60 DTE review window")
+    if strike is None or focus_spot is None or focus_spot <= 0:
+        reasons.append("moneyness cannot be validated without strike and underlying spot")
+    elif abs(strike / focus_spot - 1.0) > 0.25:
+        reasons.append("observed strike is more than 25% from underlying spot")
+    return reasons
+
+
 def _index_by_symbol(rows: list[dict]) -> dict[str, dict]:
     indexed: dict[str, dict] = {}
     for row in rows:
@@ -188,6 +202,463 @@ def _level(value: Any) -> float | None:
     return round(number, 4) if number is not None and number > 0 else None
 
 
+def gex_relative_sell(
+    *,
+    direction: str | None,
+    spot: Any,
+    call_wall: Any,
+    put_wall: Any,
+) -> dict[str, Any]:
+    """Take-profit / sell relative to spot from measured GEX walls only.
+
+    Longs sell into a call wall above spot. Shorts sell into a put/support
+    wall below spot. Missing or wrong-side walls stay unmeasured — never
+    invented from expected-move or any other proxy.
+    """
+    spot_n = _level(spot)
+    call_n = _level(call_wall)
+    put_n = _level(put_wall)
+    empty = {
+        "sell": None,
+        "sell_source": None,
+        "sell_rel_pct": None,
+        "invalidation": None,
+        "invalidation_source": None,
+        "spot": spot_n,
+        "measured": False,
+    }
+    if direction == "long":
+        sell = call_n if call_n is not None and (spot_n is None or call_n > spot_n) else None
+        source = "call_wall" if sell is not None else None
+        invalidation = put_n if put_n is not None and (spot_n is None or put_n < spot_n) else None
+        inv_source = "put_wall" if invalidation is not None else None
+    elif direction == "short":
+        sell = put_n if put_n is not None and (spot_n is None or put_n < spot_n) else None
+        source = "put_wall" if sell is not None else None
+        invalidation = call_n if call_n is not None and (spot_n is None or call_n > spot_n) else None
+        inv_source = "call_wall" if invalidation is not None else None
+    else:
+        return empty
+    rel = None
+    if sell is not None and spot_n is not None and spot_n != 0:
+        rel = round((sell - spot_n) / spot_n, 6)
+    return {
+        "sell": sell,
+        "sell_source": source,
+        "sell_rel_pct": rel,
+        "invalidation": invalidation,
+        "invalidation_source": inv_source,
+        "spot": spot_n,
+        "measured": sell is not None,
+    }
+
+
+def qlib_alignment(
+    direction: str | None,
+    rank: int | None,
+    n_symbols: int | None,
+) -> str:
+    """Map a published qlib rank onto the suggested right without inventing one."""
+    if direction not in {"long", "short"} or rank is None or n_symbols is None or n_symbols < 3:
+        return "unmeasured"
+    if rank < 1 or rank > n_symbols:
+        return "unmeasured"
+    third = n_symbols / 3.0
+    top = rank <= third
+    bottom = rank > n_symbols - third
+    if direction == "long":
+        if top:
+            return "confirms"
+        if bottom:
+            return "conflicts"
+        return "neutral"
+    if top:
+        return "conflicts"
+    if bottom:
+        return "confirms"
+    return "neutral"
+
+
+def qlib_rows_from_panel(panel: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Flatten a published deep-scan/qlib panel. Empty when the panel is missing."""
+    if not isinstance(panel, Mapping):
+        return []
+    by_symbol = panel.get("by_symbol") if isinstance(panel.get("by_symbol"), Mapping) else {}
+    coverage = panel.get("coverage") if isinstance(panel.get("coverage"), Mapping) else {}
+    scored = _finite(coverage.get("scored"))
+    n_symbols = int(scored) if scored is not None else len(by_symbol)
+    rows: list[dict[str, Any]] = []
+    for symbol, rec in by_symbol.items():
+        if not isinstance(rec, Mapping):
+            continue
+        clean = _clean_symbol(rec.get("symbol") or symbol)
+        if not clean:
+            continue
+        rank = _finite(rec.get("qlib_rank"))
+        rows.append({
+            "symbol": clean,
+            "qlib_score": _finite(rec.get("qlib_score")),
+            "qlib_rank": int(rank) if rank is not None else None,
+            "n_symbols": n_symbols,
+            "source": rec.get("source") or panel.get("source"),
+            "score_kind": rec.get("score_kind") or panel.get("score_kind"),
+            "asof": rec.get("asof") or panel.get("asof"),
+        })
+    return rows
+
+
+def _qlib_overlay(row: Mapping[str, Any] | None) -> dict[str, Any]:
+    rec = row or {}
+    score = _finite(rec.get("qlib_score"))
+    rank_n = _finite(rec.get("qlib_rank"))
+    n_symbols = _finite(rec.get("n_symbols"))
+    rank = int(rank_n) if rank_n is not None else None
+    n = int(n_symbols) if n_symbols is not None else None
+    measured = score is not None or rank is not None
+    return {
+        "score": score,
+        "rank": rank,
+        "n_symbols": n,
+        "source": rec.get("source"),
+        "score_kind": rec.get("score_kind"),
+        "asof": rec.get("asof"),
+        "alignment": "unmeasured",
+        "measured": measured,
+    }
+
+
+def build_suggestion(
+    *,
+    direction: str | None,
+    playbook_status: str,
+    blockers: list[str] | tuple[str, ...] | None,
+    spot: Any,
+    call_wall: Any,
+    put_wall: Any,
+    qlib: Mapping[str, Any] | None = None,
+    activity_lean: str | None = None,
+    activity_lean_source: str | None = None,
+    chain_focus: Mapping[str, Any] | None = None,
+    flow_focus: Mapping[str, Any] | None = None,
+    flow_focus_rejections: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Flow+board suggestion: a call or put, or an explicit watch/blocked reason.
+
+    Qlib/deep-scan ranks participate when published. Missing scores stay
+    unmeasured. Conflicting ranks warn; they do not flip the suggested right.
+    """
+    reasons = [str(item) for item in (blockers or ()) if item]
+    lean = str(activity_lean or "").strip().lower()
+    lean_source = str(activity_lean_source or "").strip().lower()
+    bias_direction = "long" if lean == "bullish" else "short" if lean == "bearish" else None
+    # Unsigned premium mix cannot authorize an entry, but suppressing its right
+    # entirely makes the research surface useless. It may name a paper-review
+    # right while the separate entry, quote, liquidity, and stability gates
+    # remain fail-closed.
+    lean_direction_confirmed = lean_source in {"signed_flow", "model_context"}
+    planning_direction = bias_direction if lean_direction_confirmed else None
+    effective_direction = direction or planning_direction or bias_direction
+    risk = gex_relative_sell(
+        direction=effective_direction, spot=spot, call_wall=call_wall, put_wall=put_wall,
+    )
+    qlib_block = _qlib_overlay(qlib)
+    if qlib_block["measured"]:
+        qlib_block["alignment"] = qlib_alignment(
+            effective_direction, qlib_block["rank"], qlib_block["n_symbols"],
+        )
+
+    if direction == "long":
+        right = "call"
+        reason = None
+        status = "plan" if playbook_status == "blocked" else (playbook_status or "research_only")
+        evidence_kind = "directional_context"
+    elif direction == "short":
+        right = "put"
+        reason = None
+        status = "plan" if playbook_status == "blocked" else (playbook_status or "research_only")
+        evidence_kind = "directional_context"
+    elif planning_direction is not None:
+        right = "call" if planning_direction == "long" else "put"
+        status = "plan"
+        evidence_kind = "signed_activity"
+        source = str(activity_lean_source or "unsigned options activity").replace("_", " ")
+        reason = (
+            f"Directional planning context from {lean} {source}. This names a right "
+            "for review; entry eligibility remains a separate gate."
+        )
+    elif bias_direction is not None:
+        right = "call" if bias_direction == "long" else "put"
+        status = "paper_candidate"
+        evidence_kind = "activity_lean"
+        source = str(activity_lean_source or "unsigned options activity").replace("_", " ")
+        reason = (
+            f"{lean.title()} activity bias from {source}, but the provider did not "
+            f"confirm aggressor direction. Paper {right.upper()} candidate only; "
+            "live-entry sizing remains locked."
+        )
+    elif playbook_status == "blocked":
+        right = "blocked"
+        reason = reasons[0] if reasons else "No long/short price or model context."
+        status = "blocked"
+        evidence_kind = "none"
+    else:
+        right = "watch"
+        reason = reasons[0] if reasons else (
+            "No long/short price or model context; call/put identity is not direction."
+        )
+        status = "watch"
+        evidence_kind = "none"
+
+    warnings: list[str] = []
+    if qlib_block["alignment"] == "conflicts":
+        warnings.append("qlib/deep-scan rank conflicts with the suggested right.")
+
+    chain_map = chain_focus if isinstance(chain_focus, Mapping) else {}
+    flow_map = flow_focus if isinstance(flow_focus, Mapping) else {}
+    rejected_flow_map = flow_focus_rejections if isinstance(flow_focus_rejections, Mapping) else {}
+    chain_contract = chain_map.get(right) if right in {"call", "put"} else None
+    observed_contract = flow_map.get(right) if right in {"call", "put"} else None
+    if not isinstance(chain_contract, Mapping) and isinstance(observed_contract, Mapping):
+        rejected_observed = _observed_contract_rejections(observed_contract, spot)
+        if rejected_observed:
+            warnings.append(
+                "Observed Flow contract was rejected before planning: "
+                + "; ".join(rejected_observed)
+                + "."
+            )
+            observed_contract = None
+    if not isinstance(chain_contract, Mapping) and not isinstance(observed_contract, Mapping):
+        excluded = rejected_flow_map.get(right)
+        if isinstance(excluded, (list, tuple)) and excluded:
+            warnings.append(
+                "Observed Flow contracts were excluded from planning: "
+                + "; ".join(str(item) for item in excluded if item)
+                + "."
+            )
+    focus = chain_contract if isinstance(chain_contract, Mapping) else observed_contract
+    contract_plan = None
+    if isinstance(focus, Mapping):
+        from_chain = isinstance(chain_contract, Mapping)
+        bid = _finite(focus.get("bid")) if from_chain else None
+        ask = _finite(focus.get("ask")) if from_chain else None
+        midpoint = _finite(focus.get("midpoint")) if from_chain else None
+        observed_price = _finite(focus.get("price")) if not from_chain else None
+        quote_complete = bool(
+            from_chain
+            and focus.get("quote_complete")
+            and bid is not None and ask is not None and midpoint is not None
+        )
+        quote_reference_only = bool(from_chain and focus.get("quote_reference_only"))
+        reference_debit = (
+            midpoint if from_chain and (quote_complete or quote_reference_only) else observed_price
+        )
+        multiplier = _finite(focus.get("contract_multiplier")) or 100.0
+        strike = _finite(focus.get("strike"))
+        focus_spot = _finite(focus.get("underlying_price")) or _finite(spot)
+        moneyness_pct = (
+            abs(strike / focus_spot - 1.0)
+            if strike is not None and focus_spot is not None and focus_spot > 0 else None
+        )
+        dte_value = int(dte) if (dte := _finite(focus.get("dte"))) is not None else None
+        flow_identity_ok = bool(
+            not from_chain
+            and strike is not None
+            and focus.get("expiry")
+            and dte_value is not None and 0 <= dte_value <= 60
+            and moneyness_pct is not None and moneyness_pct <= 0.25
+        )
+        contract_complete = bool(from_chain and focus.get("contract_complete"))
+        entry_eligible = bool(playbook_status == "candidate" and direction in {"long", "short"})
+        sizing_eligible = bool(entry_eligible and contract_complete and quote_complete)
+        rejection_reasons = list(focus.get("rejection_reasons") or ()) if from_chain else []
+        if not from_chain:
+            if dte_value is None or not 0 <= dte_value <= 60:
+                rejection_reasons.append("observed Flow contract is outside the 0–60 DTE review window")
+            if moneyness_pct is None:
+                rejection_reasons.append("moneyness cannot be validated without strike and underlying spot")
+            elif moneyness_pct > 0.25:
+                rejection_reasons.append("observed strike is more than 25% from underlying spot")
+            rejection_reasons.append("live chain quote has not been matched")
+        if sizing_eligible:
+            action = "BUY_TO_OPEN"
+            contract_stage = "entry_candidate"
+        elif from_chain and quote_reference_only:
+            action = "WAIT_FOR_LIVE_QUOTE"
+            contract_stage = "chain_matched_delayed_reference"
+        elif from_chain and not quote_complete:
+            action = "WAIT_FOR_QUOTE"
+            contract_stage = "chain_matched_quote_missing"
+        elif from_chain and not contract_complete:
+            action = "REVIEW_ONLY"
+            contract_stage = "chain_quote_failed_quality"
+        elif from_chain:
+            action = "REVIEW_ONLY"
+            contract_stage = "chain_matched_setup_gated"
+        else:
+            action = "REVIEW_FLOW_PRINT"
+            contract_stage = "flow_observed_unmatched"
+        reference_max_loss = (
+            round(reference_debit * multiplier, 2)
+            if reference_debit is not None else None
+        )
+        play = None
+        if strike is not None and focus_spot is not None and reference_debit is not None:
+            from .options_calculator import summarize_setup_play
+
+            try:
+                play = summarize_setup_play(
+                    right=right,
+                    spot=focus_spot,
+                    strike=strike,
+                    premium=reference_debit,
+                    dte=dte_value,
+                    expiry=str(focus.get("expiry") or "") or None,
+                    vol=_finite(focus.get("implied_volatility")),
+                    sell=risk.get("sell"),
+                    invalidation=risk.get("invalidation"),
+                    multiplier=multiplier,
+                )
+            except (TypeError, ValueError):
+                play = None
+        contract_plan = {
+            "kind": "chain_selected_contract" if from_chain else "observed_long_option",
+            "right": right,
+            "action": action,
+            "contract_stage": contract_stage,
+            "occ_symbol": focus.get("occ_symbol"),
+            "strike": strike,
+            "expiry": focus.get("expiry"),
+            "dte": dte_value,
+            "moneyness_pct": moneyness_pct,
+            "reference_debit": reference_debit,
+            "sizing_debit": reference_debit if sizing_eligible else None,
+            "reference_debit_estimated": bool(focus.get("price_estimated")) if not from_chain else False,
+            "bid": bid,
+            "ask": ask,
+            "midpoint": midpoint,
+            "spread_pct": _finite(focus.get("spread_pct")) if from_chain else None,
+            "volume": (
+                int(volume) if (volume := _finite(focus.get("volume"))) is not None else None
+            ) if from_chain else None,
+            "open_interest": (
+                int(oi) if (oi := _finite(focus.get("open_interest"))) is not None else None
+            ) if from_chain else None,
+            "implied_volatility": _finite(focus.get("implied_volatility")) if from_chain else None,
+            "delta": _finite(focus.get("delta")) if from_chain else None,
+            "contract_multiplier": int(multiplier),
+            "reference_max_loss": reference_max_loss,
+            "play": play,
+            "take_profit_debit": (
+                round(reference_debit * 1.5, 2)
+                if sizing_eligible and reference_debit is not None else None
+            ),
+            "review_exit_debit": (
+                round(reference_debit * 0.5, 2)
+                if sizing_eligible and reference_debit is not None else None
+            ),
+            "observed_contracts": (
+                int(count) if (count := _finite(focus.get("contracts"))) is not None else None
+            ) if not from_chain else None,
+            "observed_premium": _finite(focus.get("premium")) if not from_chain else None,
+            "observed_at": focus.get("observed_at") if from_chain else focus.get("timestamp"),
+            "source": (
+                focus.get("quote_source") or "selected_chain_quote"
+            ) if from_chain else "observed_flow_print",
+            "quote_status": (
+                str(focus.get("quote_status") or (
+                    "chain_two_sided" if quote_complete else "chain_quote_missing"
+                ))
+            ) if from_chain else "flow_reference_only",
+            "quote_complete": quote_complete,
+            "quote_live": bool(from_chain and focus.get("quote_live")),
+            "quote_reference_only": quote_reference_only,
+            "quote_source": focus.get("quote_source") if from_chain else None,
+            "contract_complete": contract_complete if from_chain else flow_identity_ok,
+            "sizing_eligible": sizing_eligible,
+            "stability_observations": 0,
+            "stability_required": 3,
+            "stable": False,
+            "rejection_reasons": list(dict.fromkeys(str(item) for item in rejection_reasons if item)),
+            "selection_method": focus.get("selection_method") if from_chain else (
+                "Highest-premium observed Flow print with matching CALL/PUT identity."
+            ),
+            "missing_fields": [
+                label for label, value in (
+                    ("live bid" if quote_reference_only else "bid", None if quote_reference_only else bid),
+                    ("live ask" if quote_reference_only else "ask", None if quote_reference_only else ask),
+                    ("open interest", focus.get("open_interest") if from_chain else None),
+                    ("implied volatility", focus.get("implied_volatility") if from_chain else None),
+                    ("delta", focus.get("delta") if from_chain else None),
+                )
+                if value is None
+            ],
+            "note": (
+                "Exact contract identity and delayed bid/ask matched for paper review. "
+                "Sizing stays locked until a live two-sided quote and every gate pass."
+                if quote_reference_only else
+                "Contract identity matched to the available chain. It remains wait-only until "
+                "a two-sided quote, liquidity, stability, and every setup gate pass."
+                if from_chain else
+                "Observed Flow print only. It is not a selected contract and cannot feed sizing "
+                "until the exact live chain identity and two-sided quote are matched."
+            ),
+        }
+        warnings.append(
+            "Delayed exact-contract quote is a paper reference, not execution authorization."
+            if quote_reference_only else
+            "Chain identity is matched, but a point-in-time quote is not execution authorization."
+            if from_chain else
+            "Observed Flow price is excluded from sizing until an exact live chain quote is matched."
+        )
+
+    return {
+        "right": right,
+        "reason": reason,
+        "status": status,
+        "entry_eligible": bool(playbook_status == "candidate" and direction in {"long", "short"}),
+        "setup_tier": (
+            "ready" if playbook_status == "candidate" and direction in {"long", "short"}
+            else "paper" if right in {"call", "put"}
+            else "watch" if right == "watch"
+            else "blocked"
+        ),
+        "bias_right": "call" if bias_direction == "long" else "put" if bias_direction == "short" else None,
+        "bias_confirmed": bool(planning_direction is not None),
+        "evidence_kind": evidence_kind,
+        "direction_source": (
+            "signed_activity" if evidence_kind == "signed_activity" else
+            "activity_lean" if evidence_kind == "activity_lean" else
+            "directional_context" if evidence_kind == "directional_context" else "unavailable"
+        ),
+        "spot": risk["spot"],
+        "sell": risk["sell"],
+        "sell_source": risk["sell_source"],
+        "sell_rel_pct": risk["sell_rel_pct"],
+        "invalidation": risk["invalidation"],
+        "invalidation_source": risk["invalidation_source"],
+        "qlib": qlib_block,
+        "warnings": warnings,
+        "blockers": reasons,
+        "contract_plan": contract_plan,
+    }
+
+
+def _empty_suggestion_payload(reason: str) -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": reason,
+        "decision_authorized": False,
+        "suggestion": {
+            "right": "blocked",
+            "reason": reason,
+            "spot": None,
+            "sell": None,
+            "sell_source": None,
+            "sell_rel_pct": None,
+        },
+    }
+
+
 def _playbook(
     *, board: Mapping[str, Any], direction: str | None, direction_source: str,
     gate_pass: bool, gate_reasons: list[str], freshness_pass: bool,
@@ -205,24 +676,16 @@ def _playbook(
     invalidation = None
     if direction == "long":
         trigger = gamma_flip if gamma_flip is not None and (spot is None or gamma_flip >= spot * 0.98) else spot
-        target = call_wall if call_wall is not None and (spot is None or call_wall > spot) else (
-            round(spot + expected_move, 4) if spot is not None and expected_move is not None else None
-        )
-        invalidation = put_wall if put_wall is not None and (spot is None or put_wall < spot) else (
-            round(spot - expected_move, 4) if spot is not None and expected_move is not None else None
-        )
+        target = call_wall if call_wall is not None and (spot is None or call_wall > spot) else None
+        invalidation = put_wall if put_wall is not None and (spot is None or put_wall < spot) else None
         structure = "call_debit_spread"
         structure_label = "Call debit spread"
         long_leg = "Buy a liquid call near the trigger/spot reference"
         short_leg = "Sell a liquid call near the upside target/barrier"
     elif direction == "short":
         trigger = gamma_flip if gamma_flip is not None and (spot is None or gamma_flip <= spot * 1.02) else spot
-        target = put_wall if put_wall is not None and (spot is None or put_wall < spot) else (
-            round(spot - expected_move, 4) if spot is not None and expected_move is not None else None
-        )
-        invalidation = call_wall if call_wall is not None and (spot is None or call_wall > spot) else (
-            round(spot + expected_move, 4) if spot is not None and expected_move is not None else None
-        )
+        target = put_wall if put_wall is not None and (spot is None or put_wall < spot) else None
+        invalidation = call_wall if call_wall is not None and (spot is None or call_wall > spot) else None
         structure = "put_debit_spread"
         structure_label = "Put debit spread"
         long_leg = "Buy a liquid put near the trigger/spot reference"
@@ -236,8 +699,13 @@ def _playbook(
     blockers = list(gate_reasons)
     if not freshness_pass:
         blockers.append(freshness_reason)
+    direction_confirmed = direction_source != "unsigned_activity_bias"
     if direction is None:
         blockers.append("No long/short price or model context; call/put identity is not direction.")
+    elif not direction_confirmed:
+        blockers.append(
+            "Direction is an unsigned activity bias; paper review only until signed or model context confirms it."
+        )
     if not confidence.get("is_high"):
         blockers.append(
             confidence.get("reason")
@@ -248,8 +716,23 @@ def _playbook(
             f"Directional model state is {confidence.get('state') or 'WATCH'}; setup gate is not active."
         )
 
+    risk_levels_complete = bool(target is not None and invalidation is not None)
+    if direction == "long":
+        if target is None:
+            blockers.append("No measured call wall above spot for the take-profit target.")
+        if invalidation is None:
+            blockers.append("No measured put wall below spot for invalidation.")
+    elif direction == "short":
+        if target is None:
+            blockers.append("No measured put wall below spot for the take-profit target.")
+        if invalidation is None:
+            blockers.append("No measured call wall above spot for invalidation.")
+
     confidence_ready = confidence.get("is_high") and confidence.get("setup_ok") is not False
-    if gate_pass and freshness_pass and direction is not None and confidence_ready:
+    if (
+        gate_pass and freshness_pass and direction is not None and direction_confirmed
+        and confidence_ready and risk_levels_complete
+    ):
         status = "candidate"
     elif gate_pass and freshness_pass and direction is not None:
         status = "research_only"
@@ -266,6 +749,7 @@ def _playbook(
         "trigger": trigger,
         "target": target,
         "invalidation": invalidation,
+        "risk_levels_complete": risk_levels_complete,
         "levels": {
             "spot": spot,
             "call_wall": call_wall,
@@ -322,6 +806,7 @@ def build_live_opportunities(
     board_rows: list[dict] | None = None,
     flow_rows: list[dict] | None = None,
     calibrated_rows: list[dict] | None = None,
+    qlib_rows: list[dict] | None = None,
     filters: OptionsFilters,
     asof_utc: datetime | None = None,
     board_cache_age_seconds: float = 0.0,
@@ -335,13 +820,15 @@ def build_live_opportunities(
     board_rows = list(board_rows or ())
     flow_rows = list(flow_rows or ())
     calibrated_rows = list(calibrated_rows or ())
+    qlib_rows = list(qlib_rows or ())
     board_by_symbol = _index_by_symbol(board_rows)
     flow_by_symbol = _index_by_symbol(flow_rows)
     calibrated_by_symbol = _index_by_symbol(calibrated_rows)
+    qlib_by_symbol = _index_by_symbol(qlib_rows)
     symbols = list(dict.fromkeys([*board_by_symbol, *flow_by_symbol]))
 
     if not symbols:
-        return {"available": False, "reason": "No board or unusual-flow rows were supplied."}
+        return _empty_suggestion_payload("No board or unusual-flow rows were supplied.")
 
     board_scores = {
         symbol: score for symbol, row in board_by_symbol.items()
@@ -351,8 +838,13 @@ def build_live_opportunities(
         symbol: score for symbol, row in flow_by_symbol.items()
         if (score := _finite(row.get("unusual_score"))) is not None
     }
+    qlib_scores = {
+        symbol: score for symbol, row in qlib_by_symbol.items()
+        if (score := _finite(row.get("qlib_score"))) is not None
+    }
     board_z = _zscores(board_scores)
     flow_z = _zscores(flow_scores)
+    qlib_z = _zscores(qlib_scores)
 
     rows: list[dict[str, Any]] = []
     for symbol in symbols:
@@ -365,7 +857,10 @@ def build_live_opportunities(
         else:
             signal_basis = "flow_only"
 
-        components = [z for z in (board_z.get(symbol), flow_z.get(symbol)) if z is not None]
+        components = [
+            z for z in (board_z.get(symbol), flow_z.get(symbol), qlib_z.get(symbol))
+            if z is not None
+        ]
         composite_score = round(fmean(components), 4) if components else None
 
         spread_pct = _finite((board or {}).get("spread_pct"))
@@ -426,11 +921,21 @@ def build_live_opportunities(
 
         confidence = _confidence(board_map, flow_map, calibrated_map)
         direction, direction_source = _direction(board_map, flow_map, calibrated_map)
+        activity_lean = str(flow_map.get("activity_lean") or "").strip().lower()
+        bias_direction = (
+            "long" if activity_lean == "bullish"
+            else "short" if activity_lean == "bearish"
+            else None
+        )
+        review_direction = direction or bias_direction
+        review_direction_source = direction_source if direction is not None else (
+            "unsigned_activity_bias" if bias_direction is not None else direction_source
+        )
         costs = _cost_estimate(spread_pct, filters)
         playbook = _playbook(
             board=board_map,
-            direction=direction,
-            direction_source=direction_source,
+            direction=review_direction,
+            direction_source=review_direction_source,
             gate_pass=gate_pass,
             gate_reasons=gate_reasons,
             freshness_pass=freshness_pass,
@@ -438,9 +943,72 @@ def build_live_opportunities(
             confidence=confidence,
             costs=costs,
         )
-        highlighted = bool(
-            gate_pass and freshness_pass and confidence["is_high"]
-            and confidence.get("setup_ok") is not False and direction is not None
+        qlib_map: Mapping[str, Any] = qlib_by_symbol.get(symbol) or {}
+        suggestion = build_suggestion(
+            direction=direction,
+            playbook_status=str(playbook.get("status") or ""),
+            blockers=list(playbook.get("blockers") or []),
+            spot=board_map.get("spot") if board_map.get("spot") is not None else flow_map.get("spot"),
+            call_wall=board_map.get("call_wall"),
+            put_wall=board_map.get("put_wall"),
+            qlib=qlib_map,
+            activity_lean=activity_lean,
+            activity_lean_source=str(flow_map.get("activity_lean_source") or ""),
+            chain_focus=(
+                board_map.get("contract_focus")
+                if isinstance(board_map.get("contract_focus"), Mapping) else None
+            ),
+            flow_focus=flow_map.get("flow_focus") if isinstance(flow_map.get("flow_focus"), Mapping) else None,
+            flow_focus_rejections=(
+                flow_map.get("flow_focus_rejections")
+                if isinstance(flow_map.get("flow_focus_rejections"), Mapping) else None
+            ),
+        )
+        playbook_target = _finite(playbook.get("target"))
+        playbook_invalidation = _finite(playbook.get("invalidation"))
+        if review_direction == "long":
+            target_source = (
+                "call_wall" if playbook_target is not None and playbook_target == _finite(board_map.get("call_wall"))
+                else None
+            )
+            invalidation_source = (
+                "put_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_map.get("put_wall"))
+                else None
+            )
+        elif review_direction == "short":
+            target_source = (
+                "put_wall" if playbook_target is not None and playbook_target == _finite(board_map.get("put_wall"))
+                else None
+            )
+            invalidation_source = (
+                "call_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_map.get("call_wall"))
+                else None
+            )
+        else:
+            target_source = invalidation_source = None
+        suggestion.update({
+            "plan_target": playbook_target,
+            "plan_target_source": target_source,
+            "plan_invalidation": playbook_invalidation,
+            "plan_invalidation_source": invalidation_source,
+            "risk_levels_complete": bool(playbook.get("risk_levels_complete")),
+            "risk_missing_fields": [
+                label for label, value in (
+                    ("GEX take-profit target", playbook_target),
+                    ("GEX invalidation", playbook_invalidation),
+                ) if value is None
+            ],
+        })
+        highlighted = bool(playbook.get("status") == "candidate")
+        suggestion_plan = (
+            suggestion.get("contract_plan")
+            if isinstance(suggestion.get("contract_plan"), Mapping) else None
+        )
+        live_ready = bool(
+            suggestion.get("entry_eligible")
+            and suggestion_plan
+            and suggestion_plan.get("sizing_eligible")
+            and suggestion_plan.get("quote_complete")
         )
 
         rows.append({
@@ -451,6 +1019,11 @@ def build_live_opportunities(
             "board_squeeze_z": round(board_z[symbol], 4) if symbol in board_z else None,
             "flow_unusual_score": flow_scores.get(symbol),
             "flow_unusual_z": round(flow_z[symbol], 4) if symbol in flow_z else None,
+            "qlib_score": qlib_scores.get(symbol),
+            "qlib_rank": (
+                int(rank) if (rank := _finite((qlib_map or {}).get("qlib_rank"))) is not None else None
+            ),
+            "qlib_z": round(qlib_z[symbol], 4) if symbol in qlib_z else None,
             "gate_pass": gate_pass,
             "gate_reasons": gate_reasons,
             "spread_pct": spread_pct,
@@ -461,7 +1034,7 @@ def build_live_opportunities(
             "premium": _finite((flow or {}).get("premium")),
             "confidence": confidence,
             "highlighted": highlighted,
-            "live_ready": bool(gate_pass and freshness_pass),
+            "live_ready": live_ready,
             "freshness": {
                 "pass": freshness_pass,
                 "status": "FRESH" if freshness_pass else "STALE_OR_PROXY",
@@ -474,6 +1047,7 @@ def build_live_opportunities(
                 "reasons": freshness_reasons,
             },
             "costs": costs,
+            "suggestion": suggestion,
             "barriers": {
                 "spot": _level(board_map.get("spot")),
                 "call_wall": _level(board_map.get("call_wall")),
@@ -521,6 +1095,12 @@ def build_live_opportunities(
             "live_ready": sum(1 for row in rows if row["live_ready"]),
             "uncalibrated": sum(1 for row in rows if row["confidence"]["kind"] == "unavailable"),
             "stale_or_proxy": sum(1 for row in rows if not row["freshness"]["pass"]),
+            "qlib_symbols": len(qlib_by_symbol),
+            "qlib_measured": sum(1 for row in rows if row["suggestion"]["qlib"]["measured"]),
+            "suggested_call": sum(1 for row in rows if row["suggestion"]["right"] == "call"),
+            "suggested_put": sum(1 for row in rows if row["suggestion"]["right"] == "put"),
+            "suggested_watch": sum(1 for row in rows if row["suggestion"]["right"] == "watch"),
+            "suggested_blocked": sum(1 for row in rows if row["suggestion"]["right"] == "blocked"),
         },
         "warnings": warnings,
         "caveats": [
@@ -533,5 +1113,10 @@ def build_live_opportunities(
             "tradability gates; ordinal composite magnitude never creates confidence.",
             "Quote-cost estimates include spread only. Market impact, commissions, and "
             "multi-leg execution risk remain unmeasured until live order details exist.",
+            "suggestion.sell is the measured GEX wall on the correct side of spot "
+            "(call wall for longs, put/support wall for shorts). Missing or wrong-side "
+            "walls stay unmeasured and are never filled from expected-move.",
+            "Published qlib/deep-scan ranks overlay the same union when present; "
+            "missing scores stay unmeasured and never invent a right.",
         ],
     }

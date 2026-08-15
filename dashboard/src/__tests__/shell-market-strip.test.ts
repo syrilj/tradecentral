@@ -51,4 +51,24 @@ describe('application market strip contract', () => {
     expect(app).toContain('@keydown="onMoreMenuKey"')
     expect(app).toContain("document.addEventListener('pointerdown', onOutsidePointer)")
   })
+
+  it('keeps desktop Account visible and teleports Tools so the flyout is not clipped', () => {
+    expect(app).toContain('class="clerk-user"')
+    expect(app).toContain('class="rail-foot"')
+    expect(app).toContain("<Teleport to=\"body\">")
+    expect(app).toContain('id="workspace-tools-menu"')
+    expect(app).toContain('placeToolsMenu')
+    expect(app).toContain("from '@/toolsMenu'")
+    expect(app).toContain('placeToolsMenuStyle')
+    expect(app).not.toMatch(/top: `\$\{Math\.round\(rect\.top\)\}px`/)
+    expect(app).not.toMatch(/@media \(max-width: 1080px\)[\s\S]{0,400}\.clerk-user[\s\S]{0,80}display:\s*none/)
+  })
+
+  it('maps a present market_session instead of staying on CAL SYNC', () => {
+    expect(app).toContain("from '@/marketSession'")
+    expect(app).toContain('sessionLabelOf')
+    expect(app).toContain('formatMarketCountdown')
+    expect(app).toContain('marketClock.data.value?.market_session')
+    expect(app).not.toContain("regular: 'RTH OPEN'")
+  })
 })

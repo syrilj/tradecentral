@@ -13,6 +13,8 @@ import math
 from statistics import median
 from typing import Any, Iterable, Mapping, Sequence
 
+from .activity_lean import describe_activity_lean
+
 
 @dataclass(frozen=True)
 class OptionsFilters:
@@ -200,7 +202,9 @@ def _bucket_time(observed: datetime, selected_range: str) -> datetime:
 
 def _normalize_chain_row(row: Mapping[str, Any], *, asof: datetime, spot: float | None) -> dict[str, Any]:
     expiry = _expiry(_first(row, "expiry", "expiration", "expiration_date"))
-    observed = _timestamp(_first(row, "captured_utc", "asof_utc", "timestamp", "updated_at"))
+    observed = _timestamp(_first(
+        row, "quote_asof_utc", "captured_utc", "asof_utc", "timestamp", "updated_at",
+    ))
     bid = _number(_first(row, "bid", "best_bid"))
     ask = _number(_first(row, "ask", "best_ask"))
     mid = ((bid + ask) / 2.0) if bid is not None and ask is not None and ask >= bid >= 0 else None
@@ -224,6 +228,8 @@ def _normalize_chain_row(row: Mapping[str, Any], *, asof: datetime, spot: float 
         "observed_at": observed,
         "spot": row_spot,
         "occ_symbol": _first(row, "occ_symbol", "contract_symbol", "contractSymbol", "ticker"),
+        "quote_live": bool(row.get("quote_live")),
+        "quote_source": _first(row, "quote_source", "provider"),
     }
 
 
@@ -288,6 +294,151 @@ def _filter_chain(
         ],
     }
     return included, rejected, context
+
+
+def _contract_focus(
+    rows: Sequence[Mapping[str, Any]], *, asof: datetime, spot: float,
+) -> dict[str, dict[str, Any]]:
+    """Choose one inspectable long-option contract for each right.
+
+    This is a deterministic contract router, not a directional signal.  It
+    prefers an executable two-sided quote, roughly 30 DTE, approximately
+    0.45 absolute delta, a tight spread, and observed liquidity.  When delta
+    is absent, distance from spot is the explicit fallback.
+    """
+    normalized = [
+        _normalize_chain_row(raw, asof=asof, spot=spot)
+        for raw in rows
+    ]
+    valid = [
+        row for row in normalized
+        if row.get("right") in {"call", "put"}
+        and row.get("strike") is not None
+        and row.get("expiry") is not None
+        and row.get("dte") is not None
+        and 0 <= int(row["dte"]) <= 60
+        # Corporate-action/provider normalization failures showed up live as
+        # absurd deep-ITM strikes. Keep them out of the contract router.
+        and 0.70 <= float(row["strike"]) / spot <= 1.30
+    ]
+
+    def score(row: Mapping[str, Any]) -> tuple[float, ...]:
+        bid = _number(row.get("bid"))
+        ask = _number(row.get("ask"))
+        mid = _number(row.get("mid"))
+        delta = _number(row.get("delta"))
+        strike = _number(row.get("strike")) or spot
+        dte = int(row.get("dte") or 0)
+        spread = _number(row.get("spread_pct"))
+        open_interest = max(0, int(row.get("open_interest") or 0))
+        volume = max(0, int(row.get("volume") or 0))
+        liquidity = open_interest + volume
+        quote_observed = bool(
+            bid is not None and ask is not None and ask >= bid >= 0 and mid is not None and mid > 0
+        )
+        live_quote_penalty = 0.0 if quote_observed and row.get("quote_live") else 1.0
+        reference_quote_penalty = 0.0 if quote_observed else 1.0
+        delta_missing = 0.0 if delta is not None and 0.05 <= abs(delta) <= 0.95 else 1.0
+        delta_distance = abs(abs(delta) - 0.45) if delta_missing == 0.0 else abs(strike / spot - 1.0)
+        delta_band_penalty = 0.0 if delta is not None and 0.25 <= abs(delta) <= 0.65 else 1.0
+        preferred_dte_penalty = 0.0 if 7 <= dte <= 45 else 1.0
+        liquidity_penalty = 0.0 if open_interest >= 100 and volume >= 10 else 1.0
+        dte_distance = abs(dte - 30) / 30.0
+        spread_penalty = spread if spread is not None and spread >= 0 else 1.5
+        # A log transform keeps one giant OI print from overwhelming quote
+        # quality and strike/expiry suitability.
+        liquidity_reward = -math.log1p(liquidity)
+        return (
+            live_quote_penalty,
+            reference_quote_penalty,
+            preferred_dte_penalty,
+            delta_missing,
+            delta_band_penalty,
+            liquidity_penalty,
+            round(spread_penalty, 8),
+            round(delta_distance, 8),
+            round(dte_distance, 8),
+            liquidity_reward,
+            strike,
+        )
+
+    selected: dict[str, dict[str, Any]] = {}
+    for right in ("call", "put"):
+        candidates = [row for row in valid if row.get("right") == right]
+        if not candidates:
+            continue
+        row = min(candidates, key=score)
+        expiry = row.get("expiry")
+        bid = _number(row.get("bid"))
+        ask = _number(row.get("ask"))
+        midpoint = _number(row.get("mid"))
+        spread_pct = _number(row.get("spread_pct"))
+        volume = int(row.get("volume") or 0)
+        open_interest = int(row.get("open_interest") or 0)
+        dte = int(row["dte"]) if row.get("dte") is not None else None
+        quote_observed = bool(
+            bid is not None and ask is not None and midpoint is not None
+            and midpoint > 0 and ask >= bid >= 0
+        )
+        quote_live = bool(row.get("quote_live"))
+        quote_complete = bool(
+            quote_observed and quote_live
+            and spread_pct is not None and spread_pct <= 0.25
+        )
+        liquidity_complete = bool(open_interest >= 100 and volume >= 10)
+        tenor_complete = bool(dte is not None and 7 <= dte <= 45)
+        rejection_reasons = [
+            label for failed, label in (
+                (not quote_observed, "two-sided quote missing"),
+                (quote_observed and not quote_live, "quote is delayed reference only; live two-sided quote required"),
+                (quote_observed and quote_live and not quote_complete, "live spread is above 25%"),
+                (not liquidity_complete, "requires volume >= 10 and open interest >= 100"),
+                (not tenor_complete, "preferred contract tenor is 7–45 DTE"),
+            )
+            if failed
+        ]
+        selected[right] = {
+            "right": right,
+            "occ_symbol": row.get("occ_symbol"),
+            "strike": _number(row.get("strike")),
+            "expiry": expiry.isoformat() if isinstance(expiry, date) else str(expiry or "") or None,
+            "dte": dte,
+            "bid": bid,
+            "ask": ask,
+            "midpoint": midpoint,
+            "spread_pct": spread_pct,
+            "volume": volume,
+            "open_interest": open_interest,
+            "implied_volatility": _number(row.get("iv")),
+            "delta": _number(row.get("delta")),
+            "contract_multiplier": int(row.get("multiplier") or 100),
+            "observed_at": (
+                row["observed_at"].isoformat()
+                if isinstance(row.get("observed_at"), datetime)
+                else str(row.get("observed_at") or "") or None
+            ),
+            "quote_complete": quote_complete,
+            "quote_observed": quote_observed,
+            "quote_live": quote_live,
+            "quote_reference_only": bool(quote_observed and not quote_live),
+            "quote_source": row.get("quote_source"),
+            "quote_status": (
+                "live_two_sided" if quote_complete
+                else "delayed_reference" if quote_observed and not quote_live
+                else "live_spread_failed" if quote_observed
+                else "missing"
+            ),
+            "liquidity_complete": liquidity_complete,
+            "tenor_complete": tenor_complete,
+            "contract_complete": bool(quote_complete and liquidity_complete and tenor_complete),
+            "rejection_reasons": rejection_reasons,
+            "selection_method": (
+                "Prefer a live or delayed exact quote, 7–45 DTE, |delta| 0.25–0.65, "
+                "and volume/OI gates before fine delta distance. Delayed quotes are "
+                "paper references only and can never unlock sizing."
+            ),
+        }
+    return selected
 
 
 def _latest_chain(rows: Sequence[Mapping[str, Any]]) -> tuple[list[Mapping[str, Any]], datetime | None]:
@@ -430,8 +581,10 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     # Always expose contract identity for the tape (CALL/PUT activity scan).
     activity_side = "call" if right == "call" else "put"
     trade_class, trade_class_source = _normalize_trade_class(row, volume=volume, premium=float(premium))
+    symbol = _underlying_from_row(row)
     return {
         "timestamp": observed,
+        "symbol": symbol,
         "right": right,
         "premium": premium,
         "volume": volume,
@@ -441,6 +594,7 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
         "price": round(price, 4) if price is not None else None,
         "price_estimated": price_estimated,
         "strike": strike,
+        "occ_symbol": _first(row, "occ_symbol", "contract_symbol", "contractSymbol", "ticker"),
         "underlying_price": round(underlying_price, 4) if underlying_price is not None else None,
         "expiry": expiry,
         "dte": dte,
@@ -559,6 +713,292 @@ def _annotate_tape_anomalies(tape: list[dict[str, Any]]) -> None:
             row["aggressor_label"] = "SELL"
         else:
             row["aggressor_label"] = "NO SIDE"
+        row["volume_percentile"] = round(_percentile_rank(volumes, volume), 6)
+    _label_if_classifications(tape)
+
+
+UNUSUAL_MAX_DTE = 35
+UNUSUAL_MIN_OTM = 0.10
+MOONSHOT_MAX_PRICE = 2.50
+MOONSHOT_MIN_OTM = 0.20
+MOMENTUM_REL_VOLUME = 0.50
+FLOW_PRESETS = ("unusual", "sweeps", "momentum", "moonshot")
+TOP_TICKER_CATEGORIES = (
+    "unusual_otm",
+    "unusual_volume",
+    "unusual_premium",
+    "sweeps",
+    "momentum",
+    "call_premium",
+    "put_premium",
+)
+
+
+def print_heat_score(
+    *,
+    size: float,
+    premium: float,
+    open_interest: float | None,
+    dte: float | None,
+    volume: float,
+) -> float:
+    """Transparent aggression/heat in [0, 100] from published print inputs.
+
+    Monotonic in size and premium when the other arguments stay fixed.
+    Smaller open interest versus size, shorter DTE, and larger volume raise heat.
+    """
+    size_f = max(0.0, float(size or 0.0))
+    premium_f = max(0.0, float(premium or 0.0))
+    volume_f = max(0.0, float(volume or 0.0))
+    dte_f = max(0.0, float(dte)) if dte is not None else 30.0
+    size_term = math.log1p(size_f)
+    premium_term = math.log1p(premium_f)
+    volume_term = math.log1p(volume_f)
+    if open_interest is None:
+        oi_term = 0.0
+    else:
+        oi_term = math.log1p(size_f / max(float(open_interest), 1.0))
+    dte_term = 1.0 / (1.0 + dte_f / float(UNUSUAL_MAX_DTE))
+    raw = (
+        0.30 * size_term
+        + 0.30 * premium_term
+        + 0.15 * volume_term
+        + 0.15 * oi_term
+        + 0.10 * dte_term * math.log1p(100.0)
+    )
+    return round(100.0 * (1.0 - math.exp(-raw / 6.0)), 4)
+
+
+def _print_why(row: Mapping[str, Any]) -> list[str]:
+    """Human-readable reasons a print was flagged. Empty when nothing unusual."""
+    reasons: list[str] = []
+    flags = [str(flag) for flag in (row.get("anomaly_flags") or ())]
+    dte = row.get("dte")
+    otm = row.get("otm_pct")
+    if row.get("is_unusual"):
+        if dte is not None:
+            reasons.append(f"{int(float(dte))}d expiry")
+        if otm is not None:
+            reasons.append(f"{float(otm) * 100:.0f}% OTM")
+    if row.get("is_sweep") or "sweep_burst" in flags:
+        source = str(row.get("trade_class_source") or "")
+        reasons.append("vendor sweep" if source == "vendor" else "burst sweep ≤3s")
+    if "premium_outlier" in flags:
+        pct = row.get("premium_percentile")
+        if isinstance(pct, (int, float)):
+            reasons.append(f"premium {float(pct) * 100:.0f}th pct")
+        else:
+            reasons.append("premium outlier")
+    if "volume_outlier" in flags:
+        pct = row.get("volume_percentile")
+        if isinstance(pct, (int, float)):
+            reasons.append(f"size {float(pct) * 100:.0f}th pct")
+        else:
+            reasons.append("size outlier")
+    if "repeat_cluster" in flags:
+        reasons.append("repeat cluster same contract")
+    rel = row.get("relative_volume")
+    if row.get("is_momentum") and isinstance(rel, (int, float)) and rel > 0:
+        reasons.append(f"{float(rel):.1f}x OI")
+    elif row.get("is_momentum"):
+        reasons.append("high tape-relative volume")
+    if row.get("is_moonshot"):
+        reasons.append("cheap far-OTM")
+    if row.get("is_top_position"):
+        reasons.append("size > open interest")
+    return reasons
+
+
+def _underlying_from_row(row: Mapping[str, Any]) -> str | None:
+    for key in ("underlying", "underlying_symbol", "root_symbol", "symbol"):
+        value = str(row.get(key) or "").strip().upper()
+        if value.startswith("EQ."):
+            value = value[3:]
+        if value.endswith(".US"):
+            value = value[:-3]
+        if value and not any(ch.isdigit() for ch in value):
+            return value
+    return None
+
+
+def _label_if_classifications(tape: list[dict[str, Any]]) -> None:
+    """Tag Unusual / sweep / block / top-position / heat / IF presets in place."""
+    volumes = [float(row.get("volume") or 0.0) for row in tape]
+    for row in tape:
+        dte = row.get("dte")
+        otm = row.get("otm_pct")
+        contracts = int(row.get("contracts") or row.get("volume") or 0)
+        oi = row.get("open_interest")
+        price = row.get("price")
+        trade_class = str(row.get("trade_class") or "").strip().lower()
+        is_unusual = (
+            dte is not None
+            and otm is not None
+            and float(dte) <= UNUSUAL_MAX_DTE
+            and float(otm) >= UNUSUAL_MIN_OTM
+        )
+        is_sweep = trade_class == "sweep"
+        is_block = trade_class == "block"
+        is_top_position = oi is not None and contracts > int(oi)
+        if oi is not None:
+            is_momentum = (contracts / max(float(oi), 1.0)) >= MOMENTUM_REL_VOLUME
+        elif len(tape) >= 4:
+            is_momentum = _percentile_rank(volumes, float(row.get("volume") or 0.0)) >= 0.75
+        else:
+            is_momentum = False
+        is_moonshot = (
+            price is not None
+            and float(price) <= MOONSHOT_MAX_PRICE
+            and otm is not None
+            and float(otm) >= MOONSHOT_MIN_OTM
+        )
+        presets = [
+            name
+            for name, flag in (
+                ("unusual", is_unusual),
+                ("sweeps", is_sweep),
+                ("momentum", is_momentum),
+                ("moonshot", is_moonshot),
+            )
+            if flag
+        ]
+        row["is_unusual"] = is_unusual
+        row["is_sweep"] = is_sweep
+        row["is_block"] = is_block
+        row["is_top_position"] = is_top_position
+        row["is_momentum"] = is_momentum
+        row["is_moonshot"] = is_moonshot
+        row["presets"] = presets
+        row["relative_volume"] = (
+            round(contracts / max(float(oi), 1.0), 6) if oi is not None else None
+        )
+        row["heat"] = print_heat_score(
+            size=float(contracts),
+            premium=float(row.get("premium") or 0.0),
+            open_interest=float(oi) if oi is not None else None,
+            dte=float(dte) if dte is not None else None,
+            volume=float(row.get("volume") or contracts),
+        )
+        row["why"] = _print_why(row)
+
+
+def classify_options_tape(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    fallback_spot: float | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize, annotate anomalies, and apply IF labels. Public test/API entry."""
+    tape: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for raw in rows:
+        row = _normalize_flow_row(raw, fallback_spot=fallback_spot)
+        if row is None:
+            continue
+        symbol = _underlying_from_row(raw)
+        if symbol:
+            row["symbol"] = symbol
+        identity = (
+            row["timestamp"], row["right"], row["strike"], row["expiry"],
+            round(row["premium"], 2), row["volume"], row["aggressor"], row.get("symbol"),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        tape.append(row)
+    _annotate_tape_anomalies(tape)
+    return tape
+
+
+def filter_tape_preset(tape: Sequence[Mapping[str, Any]], preset: str) -> list[dict[str, Any]]:
+    key = str(preset or "").strip().lower()
+    if key in {"", "all"}:
+        return [dict(row) for row in tape]
+    return [dict(row) for row in tape if key in (row.get("presets") or ())]
+
+
+def _ticker_direction_share(prints: Sequence[Mapping[str, Any]]) -> tuple[float | None, float | None, str]:
+    signed = [row for row in prints if row.get("signed_premium") is not None]
+    if signed:
+        bull = sum(float(row["signed_premium"]) for row in signed if float(row["signed_premium"]) > 0)
+        bear = sum(-float(row["signed_premium"]) for row in signed if float(row["signed_premium"]) < 0)
+        classified = bull + bear
+        basis = "signed_premium"
+    else:
+        bull = sum(float(row["premium"]) for row in prints if row.get("right") == "call")
+        bear = sum(float(row["premium"]) for row in prints if row.get("right") == "put")
+        classified = bull + bear
+        basis = "call_put_premium"
+    if classified <= 0:
+        return None, None, basis
+    return round(bull / classified, 6), round(bear / classified, 6), basis
+
+
+def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Rank underliers on Unusual OTM/volume/premium, sweeps, momentum, call/put premium."""
+    by_symbol: dict[str, list[Mapping[str, Any]]] = {}
+    for row in tape:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        by_symbol.setdefault(symbol, []).append(row)
+
+    tickers: list[dict[str, Any]] = []
+    for symbol, prints in by_symbol.items():
+        unusual = [row for row in prints if row.get("is_unusual")]
+        sweeps = [row for row in prints if row.get("is_sweep")]
+        momentum = [row for row in prints if row.get("is_momentum") or "momentum" in (row.get("presets") or ())]
+        bull, bear, basis = _ticker_direction_share(prints)
+        metrics = {
+            "unusual_otm": (
+                sum(float(row.get("otm_pct") or 0.0) * float(row.get("premium") or 0.0) for row in unusual)
+                / sum(float(row.get("premium") or 0.0) for row in unusual)
+                if unusual and sum(float(row.get("premium") or 0.0) for row in unusual) > 0
+                else 0.0
+            ),
+            "unusual_volume": float(sum(int(row.get("contracts") or row.get("volume") or 0) for row in unusual)),
+            "unusual_premium": sum(float(row.get("premium") or 0.0) for row in unusual),
+            "sweeps": sum(float(row.get("premium") or 0.0) for row in sweeps),
+            "momentum": sum(float(row.get("premium") or 0.0) for row in momentum),
+            "call_premium": sum(float(row.get("premium") or 0.0) for row in prints if row.get("right") == "call"),
+            "put_premium": sum(float(row.get("premium") or 0.0) for row in prints if row.get("right") == "put"),
+        }
+        tickers.append({
+            "symbol": symbol,
+            "bullish_share": bull,
+            "bearish_share": bear,
+            "share_basis": basis,
+            "print_count": len(prints),
+            "metrics": metrics,
+        })
+
+    categories: dict[str, list[dict[str, Any]]] = {}
+    for name in TOP_TICKER_CATEGORIES:
+        ranked = sorted(tickers, key=lambda row: (-float(row["metrics"][name]), row["symbol"]))
+        categories[name] = [
+            {
+                "symbol": row["symbol"],
+                "score": round(float(row["metrics"][name]), 6),
+                "bullish_share": row["bullish_share"],
+                "bearish_share": row["bearish_share"],
+                "share_basis": row["share_basis"],
+                "print_count": row["print_count"],
+            }
+            for row in ranked
+            if float(row["metrics"][name]) > 0
+        ]
+    return {
+        "categories": categories,
+        "tickers": tickers,
+        "category_labels": {
+            "unusual_otm": "Unusual OTM",
+            "unusual_volume": "Unusual Volume",
+            "unusual_premium": "Unusual Premium",
+            "sweeps": "Sweeps",
+            "momentum": "Momentum",
+            "call_premium": "Call Premium",
+            "put_premium": "Put Premium",
+        },
+    }
 
 
 def _flow_series(
@@ -912,6 +1352,7 @@ def _gex_map(
         "call_wall_pct": call_wall_pct,
         "put_wall": put_wall_strike,
         "put_wall_pct": put_wall_pct,
+        "zero_gamma": round(flip, 4) if flip is not None else None,
         "pin_strike": pin["strike"] if pin else None,
     }
     return mapped, summary, gamma_source, gex_by_expiry, price_profile
@@ -1653,6 +2094,13 @@ def build_options_intelligence(
         }
 
     chain_asof = chain_observed or now
+    contract_focus = _contract_focus(
+        latest_rows,
+        # Contract expiry is selected against the current session in live
+        # mode, even when the provider's quote timestamp is delayed.
+        asof=now if mode_requested == "live" else chain_asof,
+        spot=resolved_spot,
+    )
     filtered_chain, chain_rejected, chain_context = _filter_chain(
         latest_rows,
         asof=chain_asof,
@@ -1670,6 +2118,43 @@ def build_options_intelligence(
         mode_requested=mode_requested,
         spot=resolved_spot,
     )
+    # Keep an exact expiry as the structural/GEX focus, but do not let it turn
+    # a live tape into an unsigned chain proxy when every otherwise-qualified
+    # print is in another expiry. In that narrow case only, widen the tape to
+    # all expiries and label the relaxation explicitly.
+    if (
+        not tape
+        and flow_rows
+        and filters.expiry not in {"all", "nearest"}
+        and int(flow_rejected.get("outside_expiry") or 0) > 0
+    ):
+        requested_expiry = chain_context["selected_expiry"]
+        original_outside_expiry = int(flow_rejected.get("outside_expiry") or 0)
+        (
+            relaxed_series,
+            relaxed_tape,
+            relaxed_rejected,
+            relaxed_signed_observations,
+            relaxed_activity_observations,
+        ) = _flow_series(
+            flow_rows,
+            filters=filters,
+            asof=now,
+            selected_expiry=None,
+            mode_requested=mode_requested,
+            spot=resolved_spot,
+        )
+        if relaxed_tape:
+            flow_series = relaxed_series
+            tape = relaxed_tape
+            flow_rejected = {
+                **relaxed_rejected,
+                "expiry_filter_relaxed": True,
+                "requested_expiry": requested_expiry,
+                "selected_expiry_rejected": original_outside_expiry,
+            }
+            signed_observations = relaxed_signed_observations
+            activity_observations = relaxed_activity_observations
     activity_basis = "trade_tape"
     if not flow_series:
         flow_series = _chain_activity_series(chain_rows, filters=filters, asof=now)
@@ -1709,6 +2194,16 @@ def build_options_intelligence(
     signed_gross = sum(float(row.get("signed_gross_premium") or 0.0) for row in flow_series)
     signed_prints = sum(int(row.get("signed_premium_observations") or 0) for row in flow_series)
     unresolved = sum(float(row["unresolved_premium"]) for row in flow_series)
+    activity_imbalance = (
+        (call_premium - put_premium) / total_premium if total_premium > 0 else None
+    )
+    activity_lean = describe_activity_lean(
+        signed_net_premium=signed_net,
+        signed_print_count=signed_prints,
+        call_premium=call_premium,
+        put_premium=put_premium,
+        call_put_imbalance=activity_imbalance,
+    )
     # Tape age = newest *qualifying* print (what the desk list shows).
     # Feed age = newest provider print before min-premium/volume filters so a
     # live underlier is not marked TAPE STALE just because $25k+ whales are rare.
@@ -1767,6 +2262,11 @@ def build_options_intelligence(
         )
     if filters.expiry not in {"nearest", "all"} and chain_context["selected_expiry"] and not filtered_chain:
         output_warnings.append("The selected expiry has no contracts that pass the active quality filters.")
+    if flow_rejected.get("expiry_filter_relaxed"):
+        output_warnings.append(
+            f"The selected expiry {flow_rejected.get('requested_expiry')} had no qualified trade prints; "
+            "the Flow tape widened to all expiries while GEX remained on the selected expiry."
+        )
     if open_interest_source == "unavailable":
         # Say this before anything renders a zero. An OI-less chain fails the
         # min_oi floor on every contract, so the map empties and the squeeze
@@ -1879,6 +2379,7 @@ def build_options_intelligence(
         },
         "filters": asdict(filters),
         "chain_context": chain_context,
+        "contract_focus": contract_focus,
         "provider": {
             "chain": chain_source, "flow": flow_source,
             "open_interest": open_interest_source,
@@ -1890,7 +2391,11 @@ def build_options_intelligence(
             "call_premium": round(call_premium, 2),
             "put_premium": round(put_premium, 2),
             "call_put_ratio": round(call_premium / put_premium, 4) if put_premium > 0 else None,
-            "activity_imbalance": round((call_premium - put_premium) / total_premium, 6) if total_premium > 0 else None,
+            "activity_imbalance": round(activity_imbalance, 6) if activity_imbalance is not None else None,
+            "activity_lean": activity_lean["activity_lean"],
+            "activity_lean_source": activity_lean["activity_lean_source"],
+            "activity_lean_label": activity_lean["activity_lean_label"],
+            "decision_authorized": False,
             "signed_net_premium": round(signed_net, 2) if signed_net is not None else None,
             "signed_gross_premium": round(signed_gross, 2) if signed_gross > 0 else None,
             "signed_flow_imbalance": signed_flow_imbalance,
@@ -1941,6 +2446,15 @@ def build_options_intelligence(
         "flow_series": flow_series,
         "flow_tape": tape,
         "gex_by_strike": gex,
+        "oi_by_strike": [
+            {
+                "strike": row["strike"],
+                "call_oi": int(row["call_oi"]),
+                "put_oi": int(row["put_oi"]),
+                "total_oi": int(row["call_oi"]) + int(row["put_oi"]),
+            }
+            for row in gex
+        ],
         "gex_by_expiry": gex_by_expiry,
         "gex_price_profile": gex_price_profile,
         "gex_history": gex_history,

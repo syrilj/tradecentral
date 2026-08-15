@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const authSource = readFileSync(join(root, 'auth.ts'), 'utf8')
 const viewSource = readFileSync(join(root, 'views', 'AuthView.vue'), 'utf8')
-const mockSource = readFileSync(join(root, 'components', 'FlowWorkspaceMockup.vue'), 'utf8')
+const accessVisualSource = readFileSync(join(root, 'components', 'OperatorAccessVisual.vue'), 'utf8')
 const appSource = readFileSync(join(root, 'App.vue'), 'utf8')
 const mainSource = readFileSync(join(root, 'main.ts'), 'utf8')
 
@@ -22,7 +22,7 @@ describe('Clerk operator access contract', () => {
 
   it('places Clerk on the right of the landing-to-flow close', () => {
     expect(viewSource).toContain('auth-shell')
-    expect(viewSource).toContain('minmax(390px, 460px)')
+    expect(viewSource).toContain('minmax(400px, 470px)')
     expect(viewSource).toContain('Unlock the instrument')
     expect(viewSource).toContain("safeRedirect(route.query.redirect, '/flow')")
     expect(appSource).toContain("name: 'auth'")
@@ -43,16 +43,20 @@ describe('Clerk operator access contract', () => {
     expect(viewSource).not.toContain('guaranteed returns')
   })
 
-  it('uses a structural Flow mockup with no invented quotes', () => {
-    expect(viewSource).toContain('FlowWorkspaceMockup')
-    expect(mockSource).toContain('SPY')
-    expect(mockSource).toContain('QQQ')
-    expect(mockSource).toContain('IWM')
-    expect(mockSource).toContain('DIA')
-    expect(mockSource).toContain('no invented')
-    expect(mockSource).toContain('Window premium')
-    expect(mockSource).toContain('—')
-    expect(mockSource).not.toContain('5,321.41')
-    expect(mockSource).not.toContain('guaranteed')
+  it('explains the authenticated local research route without a fabricated trading preview', () => {
+    expect(viewSource).toContain('OperatorAccessVisual')
+    expect(accessVisualSource).toContain('Operator session')
+    expect(accessVisualSource).toContain('Local research API')
+    expect(accessVisualSource).toContain('Measured Flow')
+    expect(accessVisualSource).toContain('No demo tape or trade ticket')
+    expect(viewSource).not.toContain('5,321.41')
+    expect(viewSource).not.toContain('guaranteed')
+  })
+
+  it('provides a polished explicit switch between sign in and operator setup', () => {
+    expect(viewSource).toContain('auth-mode-switch')
+    expect(viewSource).toContain('Create access')
+    expect(viewSource).toContain("mode: 'signin'")
+    expect(viewSource).toContain("mode: 'setup'")
   })
 })

@@ -6,6 +6,7 @@ from edge.daily_plays.adapters.flow import (
     load_live_flow_activity,
     load_live_forward_flow,
     load_market_flow_activity,
+    load_symbol_flow_tape,
     lse_circuit_is_open,
     normalize_flow_payload,
     reset_lse_circuit,
@@ -213,3 +214,48 @@ def test_broad_flow_activity_ranks_routed_names_without_authorizing_direction():
     }
     assert all(row["direction"] == "neutral" for row in board["rows"])
     assert all(row["decision_authorized"] is False for row in board["rows"])
+    assert board["rows"][0]["evidence"]["activity_lean"] == "bearish"
+    assert board["rows"][0]["evidence"]["activity_lean_source"] == "call_put_premium"
+    assert board["rows"][0]["evidence"]["activity_lean_label"] == "BEARISH"
+
+
+def test_symbol_flow_tape_filters_window_and_keeps_classification():
+    seen = {}
+
+    def fetcher(*, symbol, min_premium, limit, timeout, since, until):
+        seen.update(symbol=symbol, since=since, until=until, min_premium=min_premium)
+        return [
+            {
+                "id": "old", "underlying": "NVDA", "contract_type": "call",
+                "premium": 90_000, "volume": 10, "strike": 180,
+                "underlying_price": 100, "expiry": "2026-08-20",
+                "ts": "2026-08-01T14:00:00Z",
+            },
+            {
+                "id": "in", "underlying": "NVDA", "contract_type": "put",
+                "premium": 120_000, "volume": 30, "strike": 80,
+                "underlying_price": 100, "expiry": "2026-08-20",
+                "trade_class": "sweep", "ts": "2026-08-10T15:00:00Z",
+            },
+            {
+                "id": "new", "underlying": "NVDA", "contract_type": "call",
+                "premium": 70_000, "volume": 8, "ts": "2026-08-14T16:00:00Z",
+            },
+        ]
+
+    result = load_symbol_flow_tape(
+        "nvda",
+        min_premium=25_000,
+        since="2026-08-09",
+        until="2026-08-12T23:59:59Z",
+        fetcher=fetcher,
+    )
+    assert seen["symbol"] == "NVDA"
+    assert seen["since"] == "2026-08-09"
+    assert result["feed_status"] == "live"
+    assert result["print_count"] == 1
+    row = result["tape"][0]
+    assert row["right"] == "put"
+    assert row["is_sweep"] is True
+    assert row["is_unusual"] is True
+    assert "sweeps" in row["presets"]

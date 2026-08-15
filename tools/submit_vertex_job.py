@@ -39,6 +39,8 @@ def parse_args():
     parser.add_argument("--sync", action="store_true", help="Wait for job completion in terminal instead of background submission")
     parser.add_argument("--skip-package", action="store_true", help="Skip packaging and reuse existing GCS tarball")
     parser.add_argument("--timeout", type=int, default=3600, help="Max execution time in seconds before auto-killing job (default: 3600 = 1 hour)")
+    parser.add_argument("--disk-type", type=str, choices=["pd-standard", "pd-ssd"], default="pd-standard", help="Boot disk type (default: pd-standard for minimal cost)")
+    parser.add_argument("--disk-size-gb", type=int, default=100, help="Boot disk size in GB (default: 100)")
     return parser.parse_args()
 
 def check_credit_safety_notice():
@@ -222,9 +224,9 @@ def main():
         },
         "replica_count": 1,
         "disk_spec": {
-            # 200 GB SSD — large qlib provider data fills ~120 GB
-            "boot_disk_type": "pd-ssd",
-            "boot_disk_size_gb": 200,
+            # Default to pd-standard 100 GB for minimal cost ($0.04/GB/mo billed only during run)
+            "boot_disk_type": args.disk_type,
+            "boot_disk_size_gb": args.disk_size_gb,
         },
         "container_spec": {
             "image_uri": container_uri,
@@ -232,6 +234,8 @@ def main():
             "args": [remote_cmd],
         },
     }]
+
+    from google.cloud.aiplatform_v1.types import Scheduling
 
     job = aiplatform.CustomJob(
         display_name=args.job_name,
@@ -243,6 +247,7 @@ def main():
             service_account=None,
             restart_job_on_worker_restart=False,
             timeout=args.timeout,
+            scheduling_strategy=Scheduling.Strategy.SPOT,
             sync=True,
         )
         print(f"\n[SUCCESS] Job completed! Artifacts saved to {staging_bucket}.")
@@ -251,8 +256,9 @@ def main():
             service_account=None,
             restart_job_on_worker_restart=False,
             timeout=args.timeout,
+            scheduling_strategy=Scheduling.Strategy.SPOT,
         )
-        print("\n[JOB SUBMITTED SUCCESSFULLY] The job is now running on GCP in the background.")
+        print("\n[JOB SUBMITTED SUCCESSFULLY] The job is now running on GCP in the background (Spot Compute).")
         print(f"  Resource ID: {job.resource_name}")
         print(f"  Track live progress in browser: https://console.cloud.google.com/vertex-ai/training/custom-jobs?project={project_id}")
 

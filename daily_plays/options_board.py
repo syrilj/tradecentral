@@ -282,6 +282,9 @@ def summarize_board_row(
     provider = intel.get("provider") if isinstance(intel.get("provider"), Mapping) else {}
     freshness = intel.get("freshness") if isinstance(intel.get("freshness"), Mapping) else {}
     context = intel.get("chain_context") if isinstance(intel.get("chain_context"), Mapping) else {}
+    contract_focus = (
+        intel.get("contract_focus") if isinstance(intel.get("contract_focus"), Mapping) else {}
+    )
 
     row.update({
         "available": True,
@@ -307,6 +310,11 @@ def summarize_board_row(
         "spread_pct": _finite(summary.get("median_spread_pct")),
         "selected_expiry": context.get("selected_expiry"),
         "selected_dte": context.get("selected_dte"),
+        "contract_focus": {
+            str(right): dict(contract)
+            for right, contract in contract_focus.items()
+            if right in {"call", "put"} and isinstance(contract, Mapping)
+        },
         "contracts_included": quality.get("chain_contracts_included"),
         "chain_source": provider.get("chain"),
         "activity_basis": provider.get("activity_basis"),

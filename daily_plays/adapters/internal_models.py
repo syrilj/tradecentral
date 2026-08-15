@@ -157,14 +157,22 @@ def _frame(candles: Any) -> Any:
         df[timestamp] = pd.to_datetime(df[timestamp], utc=True, errors="coerce")
         df = df.dropna(subset=[timestamp]).set_index(timestamp)
     else:
-        df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
-        df = df[~df.index.isna()]
-    df = df.sort_index()
+        if getattr(df.index, "tz", None) is None:
+            df.index = df.index.tz_localize(timezone.utc)
+        elif str(df.index.tz) != "UTC":
+            df.index = df.index.tz_convert(timezone.utc)
+        if df.index.isna().any():
+            df = df[~df.index.isna()]
+    if not df.index.is_monotonic_increasing:
+        df = df.sort_index()
     df = df.rename(columns={"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
     required = ("open", "high", "low", "close", "volume")
     if any(column not in df for column in required):
         return pd.DataFrame()
-    return df.loc[:, required].apply(pd.to_numeric, errors="coerce").dropna().copy()
+    for col in required:
+        if not np.issubdtype(df[col].dtype, np.number):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.loc[:, required].dropna()
 
 
 def _local_daily_candles(symbol: str, *, data_path: Path) -> Any:
@@ -174,7 +182,10 @@ def _local_daily_candles(symbol: str, *, data_path: Path) -> Any:
     path = data_path / f"{symbol}.parquet"
     if not path.is_file():
         raise FileNotFoundError(f"local_daily_parquet_missing:{symbol}")
-    return pd.read_parquet(path)
+    try:
+        return pd.read_parquet(path, columns=["open", "high", "low", "close", "volume"])
+    except Exception:
+        return pd.read_parquet(path)
 
 
 def _weekday_session_age(last_date: date, asof_date: date) -> int:
@@ -215,7 +226,7 @@ def _baseline_signal(frame: Any, *, horizon_days: int) -> dict[str, Any]:
     import math
 
     close = frame["close"].astype(float)
-    lookback = max(20, horizon_days * 6)
+    lookback = max(20, horizon_days)
     if len(close) < lookback + 1:
         raise ValueError("insufficient_daily_candles")
     momentum = float(close.iloc[-1] / close.iloc[-1 - horizon_days] - 1.0)
@@ -258,7 +269,7 @@ def _load_v90_engine():
 
 _V90_ENGINE_CACHE = None
 
-def _v90_signal(symbol: str, frame: Any, horizon_days: int) -> dict[str, Any] | None:
+def _v90_base_predict(symbol: str, frame: Any) -> dict[str, Any] | None:
     global _V90_ENGINE_CACHE
     if _V90_ENGINE_CACHE is None:
         _V90_ENGINE_CACHE = _load_v90_engine()
@@ -301,21 +312,37 @@ def _v90_signal(symbol: str, frame: Any, horizon_days: int) -> dict[str, Any] | 
         # Smooth continuous calibration adjustment to prevent flat step-function constants
         raw_diff = (rl - thr_hi) if side == "long" else (rs - thr_hi)
         smooth_adj = 0.05 * float(np.tanh(raw_diff * 6.0))
-        horizon_mult = 1.0 if horizon_days == 5 else (0.96 if horizon_days == 10 else 0.92)
-        
         base_prob = prob if prob > 0 else 0.52
-        calibrated_prob = float(np.clip((base_prob + smooth_adj) * horizon_mult, 0.35, 0.88))
 
         return {
             "side": side,
             "setup_ok": setup_ok,
-            "raw_score": raw_score * horizon_mult,
-            "calibrated_probability": calibrated_prob,
-            "model_id": "v90_meta_confidence_wide",
-            "horizon_days": horizon_days,
+            "raw_score": raw_score,
+            "base_prob": base_prob,
+            "smooth_adj": smooth_adj,
         }
     except Exception:
         return None
+
+
+def _v90_signal_from_base(base: dict[str, Any], horizon_days: int) -> dict[str, Any]:
+    horizon_mult = 1.0 if horizon_days == 5 else (0.96 if horizon_days == 10 else 0.92)
+    calibrated_prob = float(np.clip((base["base_prob"] + base["smooth_adj"]) * horizon_mult, 0.35, 0.88))
+    return {
+        "side": base["side"],
+        "setup_ok": base["setup_ok"],
+        "raw_score": base["raw_score"] * horizon_mult,
+        "calibrated_probability": calibrated_prob,
+        "model_id": "v90_meta_confidence_wide",
+        "horizon_days": horizon_days,
+    }
+
+
+def _v90_signal(symbol: str, frame: Any, horizon_days: int) -> dict[str, Any] | None:
+    base = _v90_base_predict(symbol, frame)
+    if base is None:
+        return None
+    return _v90_signal_from_base(base, horizon_days)
 
 
 def _explicit_calibration(calibrator: Mapping[str, Any] | None) -> bool:
@@ -399,10 +426,13 @@ class ChainFreeInternalModelsAdapter:
                            else _local_daily_candles(symbol, data_path=Path(self.data_path)))
                 frame = _frame(candles)
                 candle_asof = _daily_asof(frame, context=context, max_age_days=self.max_daily_candle_age_days)
+                
+                # Single feature extraction and model inference pass per symbol
+                base_v90 = _v90_base_predict(symbol, frame) if not self.model_runner else None
+
                 for horizon_days in TARGET_HORIZON_DAYS:
-                    v90_sig = _v90_signal(symbol, frame, horizon_days) if not self.model_runner else None
-                    if v90_sig:
-                        signal = v90_sig
+                    if base_v90 is not None:
+                        signal = _v90_signal_from_base(base_v90, horizon_days)
                         raw_score = _number(signal.get("raw_score"))
                         side = signal.get("side", "neutral")
                         setup_ok = bool(signal.get("setup_ok"))

@@ -140,29 +140,43 @@ SIGNAL_JOURNAL_OUTCOMES_SCHEMA = [
 
 def build_signal_journal_signals_df() -> pd.DataFrame:
     import sqlite3
-    db_path = ROOT / "TradingWork" / "data" / "signal_journal.db"
-    if not db_path.exists():
-        print("  signal_journal.db not found — skipping signals table")
-        return pd.DataFrame()
-    conn = sqlite3.connect(str(db_path))
-    df = pd.read_sql_query("SELECT * FROM signals", conn)
-    conn.close()
-    df["loaded_utc"] = pd.Timestamp.now(tz="UTC")
-    print(f"  Signal Journal Signals: {len(df):,} rows")
-    return df
+    db_paths = [
+        ROOT / "TradingWork" / "data" / "signal_journal.db",
+        EDGE / "data" / "signal_journal.db",
+    ]
+    for db_path in db_paths:
+        try:
+            if db_path.exists() and db_path.is_file():
+                conn = sqlite3.connect(str(db_path))
+                df = pd.read_sql_query("SELECT * FROM signals", conn)
+                conn.close()
+                df["loaded_utc"] = pd.Timestamp.now(tz="UTC")
+                print(f"  Signal Journal Signals: {len(df):,} rows")
+                return df
+        except Exception:
+            pass
+    print("  signal_journal.db not found — skipping signals table")
+    return pd.DataFrame()
 
 def build_signal_journal_outcomes_df() -> pd.DataFrame:
     import sqlite3
-    db_path = ROOT / "TradingWork" / "data" / "signal_journal.db"
-    if not db_path.exists():
-        print("  signal_journal.db not found — skipping outcomes table")
-        return pd.DataFrame()
-    conn = sqlite3.connect(str(db_path))
-    df = pd.read_sql_query("SELECT * FROM outcomes", conn)
-    conn.close()
-    df["loaded_utc"] = pd.Timestamp.now(tz="UTC")
-    print(f"  Signal Journal Outcomes: {len(df):,} rows")
-    return df
+    db_paths = [
+        ROOT / "TradingWork" / "data" / "signal_journal.db",
+        EDGE / "data" / "signal_journal.db",
+    ]
+    for db_path in db_paths:
+        try:
+            if db_path.exists() and db_path.is_file():
+                conn = sqlite3.connect(str(db_path))
+                df = pd.read_sql_query("SELECT * FROM outcomes", conn)
+                conn.close()
+                df["loaded_utc"] = pd.Timestamp.now(tz="UTC")
+                print(f"  Signal Journal Outcomes: {len(df):,} rows")
+                return df
+        except Exception:
+            pass
+    print("  signal_journal.db not found — skipping outcomes table")
+    return pd.DataFrame()
 
 def load_oof_inferences(client, table_id: str, dry_run: bool = False) -> None:
     """Load all OOF parquet files from directional_daily_v1 directly into BigQuery."""
@@ -188,22 +202,24 @@ def load_oof_inferences(client, table_id: str, dry_run: bool = False) -> None:
                 clean_df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize("UTC")
             elif "date" in df.columns:
                 clean_df["timestamp"] = pd.to_datetime(df["date"]).dt.tz_localize("UTC")
+            else:
+                continue
             
-            clean_df["symbol"] = df.get("symbol", "").astype(str)
-            clean_df["trial"] = df.get("trial", pq.stem).astype(str)
-            clean_df["fold"] = df.get("fold", 0).fillna(0).astype(int) if "fold" in df.columns else 0
+            clean_df["symbol"] = df["symbol"].astype(str) if "symbol" in df.columns else ""
+            clean_df["trial"] = df["trial"].astype(str) if "trial" in df.columns else pq.stem
+            clean_df["fold"] = df["fold"].fillna(0).astype(int) if "fold" in df.columns else 0
             clean_df["holding_days"] = holding_days
-            clean_df["raw_score"] = df.get("raw_score", np.nan).astype(float)
-            clean_df["probability"] = df.get("probability", np.nan).astype(float)
+            clean_df["raw_score"] = df["raw_score"].astype(float) if "raw_score" in df.columns else np.nan
+            clean_df["probability"] = df["probability"].astype(float) if "probability" in df.columns else np.nan
             clean_df["direction"] = df[dir_col].fillna(0).astype(int) if dir_col else 0
             clean_df["forward_return"] = df[fwd_col].astype(float) if fwd_col else np.nan
-            clean_df["gross_return"] = df.get("gross_return", np.nan).astype(float)
-            clean_df["net_return"] = df.get("net_return", np.nan).astype(float)
-            clean_df["threshold"] = df.get("threshold", 0.5).astype(float)
-            clean_df["sector"] = df.get("sector", "").astype(str)
-            clean_df["volatility_regime"] = df.get("volatility_regime", "").astype(str)
-            clean_df["trend_regime"] = df.get("trend_regime", "").astype(str)
-            clean_df["bear_market"] = df.get("bear_market", False).fillna(False).astype(bool)
+            clean_df["gross_return"] = df["gross_return"].astype(float) if "gross_return" in df.columns else np.nan
+            clean_df["net_return"] = df["net_return"].astype(float) if "net_return" in df.columns else np.nan
+            clean_df["threshold"] = df["threshold"].astype(float) if "threshold" in df.columns else 0.5
+            clean_df["sector"] = df["sector"].astype(str) if "sector" in df.columns else ""
+            clean_df["volatility_regime"] = df["volatility_regime"].astype(str) if "volatility_regime" in df.columns else ""
+            clean_df["trend_regime"] = df["trend_regime"].astype(str) if "trend_regime" in df.columns else ""
+            clean_df["bear_market"] = df["bear_market"].fillna(False).astype(bool) if "bear_market" in df.columns else False
             clean_df["run_id"] = pq.parent.name
             clean_df["loaded_utc"] = now_ts
             
@@ -386,21 +402,36 @@ def ensure_table(client, table_name: str, schema_dicts: list, dry_run: bool = Fa
     table_id = f"{PROJECT}.{DATASET}.{table_name}"
     schema = [bigquery.SchemaField(s["name"], s["type"]) for s in schema_dicts]
     if dry_run:
-        print(f"  [DRY-RUN] Would create/confirm table {table_id}")
+        print(f"  [DRY-RUN] Would create/confirm table {table_id} (Partitioned + Clustered)")
         return table_id
     try:
         client.get_table(table_id)
         print(f"  Table {table_id} already exists.")
     except Exception:
         table = bigquery.Table(table_id, schema=schema)
-        # Partition by date on timestamp column where available
+        # Partition by date on timestamp/loaded_utc column with 180-day partition expiration
         if any(s["name"] in ("timestamp", "loaded_utc") for s in schema_dicts):
+            partition_field = "loaded_utc" if any(s["name"] == "loaded_utc" for s in schema_dicts) else "timestamp"
             table.time_partitioning = bigquery.TimePartitioning(
                 type_=bigquery.TimePartitioningType.DAY,
-                field="loaded_utc" if any(s["name"] == "loaded_utc" for s in schema_dicts) else "timestamp",
+                field=partition_field,
+                expiration_ms=180 * 24 * 60 * 60 * 1000,  # 180 days auto-prune
             )
+        # Apply cost-optimizing clustering on high-cardinality query keys
+        clustering_map = {
+            "oof_inferences": ["symbol", "trial"],
+            "model_gate_results": ["model_name", "verdict"],
+            "v90_trades": ["operating_point", "symbol"],
+            "price_ohlcv_1d": ["symbol"],
+            "signal_journal_signals": ["ticker", "signal_type"],
+            "signal_journal_outcomes": ["signal_id", "horizon"],
+        }
+        if table_name in clustering_map:
+            table.clustering_fields = clustering_map[table_name]
+            print(f"  [Cost Opt] Configured BigQuery clustering: {table.clustering_fields}")
+
         client.create_table(table, timeout=30)
-        print(f"  Created table {table_id}")
+        print(f"  Created table {table_id} (Partitioned + Clustered)")
     return table_id
 
 

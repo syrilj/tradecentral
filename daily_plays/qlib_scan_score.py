@@ -72,11 +72,17 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+import concurrent.futures
+
 def _normalize_frame(raw: Any) -> pd.DataFrame:
-    if not hasattr(raw, "copy") or not hasattr(raw, "columns"):
+    if not hasattr(raw, "columns") or not hasattr(raw, "index"):
         return pd.DataFrame()
-    frame = raw.copy()
-    frame = frame.rename(columns={str(c): str(c).lower() for c in frame.columns})
+    cols = list(raw.columns)
+    col_map = {c: str(c).lower() for c in cols}
+    if any(c != col_map[c] for c in cols):
+        frame = raw.rename(columns=col_map)
+    else:
+        frame = raw.copy()
     required = {"open", "high", "low", "close", "volume"}
     if not required.issubset(set(frame.columns)):
         return pd.DataFrame()
@@ -85,11 +91,15 @@ def _normalize_frame(raw: Any) -> pd.DataFrame:
             if col in frame.columns:
                 frame = frame.set_index(col)
                 break
-        frame.index = pd.to_datetime(frame.index, errors="coerce")
-    frame = frame[~frame.index.isna()].sort_index()
-    frame.loc[:, list(required)] = frame.loc[:, list(required)].apply(
-        pd.to_numeric, errors="coerce",
-    )
+        if not isinstance(frame.index, pd.DatetimeIndex):
+            frame.index = pd.to_datetime(frame.index, errors="coerce")
+    if frame.index.isna().any():
+        frame = frame[~frame.index.isna()]
+    if not frame.index.is_monotonic_increasing:
+        frame = frame.sort_index()
+    for col in ("open", "high", "low", "close", "volume"):
+        if not np.issubdtype(frame[col].dtype, np.number):
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
     return frame.dropna(subset=["close"])
 
 
@@ -125,81 +135,93 @@ def feature_row_from_frame(frame: pd.DataFrame) -> dict[str, float | None]:
     forward return). Extended fields feed the trained LightGBM scorer.
     """
     empty = {name: None for name in FEATURE_NAMES}
-    if len(frame) < MIN_HISTORY_BARS:
+    n = len(frame)
+    if n < MIN_HISTORY_BARS:
         return empty
 
-    close = frame["close"].astype(float)
-    volume = frame["volume"].astype(float)
-    high = frame["high"].astype(float) if "high" in frame.columns else close
-    low = frame["low"].astype(float) if "low" in frame.columns else close
-    ret1 = close.pct_change()
+    c = np.asarray(frame["close"], dtype=float)
+    v = np.asarray(frame["volume"], dtype=float) if "volume" in frame.columns else np.ones(n, dtype=float)
+    h = np.asarray(frame["high"], dtype=float) if "high" in frame.columns else c
+    l = np.asarray(frame["low"], dtype=float) if "low" in frame.columns else c
 
-    rev1 = _finite(-ret1.iloc[-1]) if len(ret1) else None
+    rev1 = _finite(-((c[-1] / c[-2]) - 1.0)) if n >= 2 and c[-2] != 0 else None
+    
     rev5 = None
     ret_5 = None
-    if len(close) >= 6:
-        r5 = float(close.iloc[-1] / close.iloc[-6] - 1.0)
+    if n >= 6 and c[-6] != 0:
+        r5 = float((c[-1] / c[-6]) - 1.0)
         rev5 = _finite(-r5)
         ret_5 = _finite(r5)
 
     mom12_1 = None
-    if len(close) >= MOM_MIN_BARS:
-        c_lag21 = close.iloc[-22]
-        c_lag252 = close.iloc[-253]
+    if n >= MOM_MIN_BARS:
+        c_lag21 = c[-22]
+        c_lag252 = c[-253]
         if c_lag252 and math.isfinite(float(c_lag252)) and float(c_lag252) != 0:
             mom12_1 = _finite(float(c_lag21) / float(c_lag252) - 1.0)
 
     lowvol = None
-    window = ret1.iloc[-20:]
-    if len(window.dropna()) >= 10:
-        std = float(window.std(ddof=0))
-        if math.isfinite(std):
-            lowvol = -std
+    vol_20 = None
+    vol_ratio = None
+    if n >= 21:
+        c_win = c[-21:]
+        r_win = (c_win[1:] / c_win[:-1]) - 1.0
+        valid_r = r_win[np.isfinite(r_win)]
+        if len(valid_r) >= 10:
+            std20 = float(np.std(valid_r, ddof=0))
+            if math.isfinite(std20):
+                lowvol = -std20
+                if len(valid_r) >= 15:
+                    vol_20 = _finite(std20)
+                if len(valid_r) >= 20:
+                    r5_win = valid_r[-5:]
+                    std5 = float(np.std(r5_win, ddof=0))
+                    if std20 > 1e-12:
+                        vol_ratio = _finite(std5 / std20)
 
     liq = None
     log_adv = None
-    if len(close) >= 20:
-        dollar = (close * volume).iloc[-20:].mean()
-        if math.isfinite(float(dollar)):
-            liq = -float(dollar)
-            if float(dollar) > 0:
-                log_adv = _finite(math.log10(float(dollar)))
+    if n >= 20:
+        c20 = c[-20:]
+        v20 = v[-20:]
+        dollar = float(np.mean(c20 * v20))
+        if math.isfinite(dollar):
+            liq = -dollar
+            if dollar > 0:
+                log_adv = _finite(math.log10(dollar))
 
-    ret_21 = _finite(close.iloc[-1] / close.iloc[-22] - 1.0) if len(close) >= 22 else None
-    ret_63 = _finite(close.iloc[-1] / close.iloc[-64] - 1.0) if len(close) >= 64 else None
+    ret_21 = _finite(float(c[-1] / c[-22] - 1.0)) if n >= 22 and c[-22] != 0 else None
+    ret_63 = _finite(float(c[-1] / c[-64] - 1.0)) if n >= 64 and c[-64] != 0 else None
     mom_accel = None
     if ret_5 is not None and ret_21 is not None:
         mom_accel = _finite(float(ret_5) - float(ret_21))
 
-    vol_20 = _finite(float(ret1.iloc[-20:].std(ddof=0))) if len(ret1.dropna()) >= 15 else None
-    vol_ratio = None
-    if len(ret1.dropna()) >= 20:
-        v5 = float(ret1.iloc[-5:].std(ddof=0))
-        v20 = float(ret1.iloc[-20:].std(ddof=0))
-        if v20 > 1e-12:
-            vol_ratio = _finite(v5 / v20)
-
     volume_z = None
-    if len(volume) >= 40:
-        prior = volume.iloc[-40:-1]
-        mu, sd = float(prior.mean()), float(prior.std(ddof=0))
-        if sd > 1e-12:
-            volume_z = _finite((float(volume.iloc[-1]) - mu) / sd)
+    if n >= 40:
+        prior = v[-40:-1]
+        valid_v = prior[np.isfinite(prior)]
+        if len(valid_v) > 0:
+            mu, sd = float(np.mean(valid_v)), float(np.std(valid_v, ddof=0))
+            if sd > 1e-12 and math.isfinite(v[-1]):
+                volume_z = _finite((float(v[-1]) - mu) / sd)
+
     hl_range = None
-    if len(close) >= 5 and float(close.iloc[-1]) != 0:
-        hl_range = _finite(float(high.iloc[-1] - low.iloc[-1]) / float(close.iloc[-1]))
+    if n >= 5 and c[-1] != 0 and math.isfinite(c[-1]):
+        hl_range = _finite(float(h[-1] - l[-1]) / float(c[-1]))
 
     gap_open = None
-    if "open" in frame.columns and len(close) >= 2 and float(close.iloc[-2]) != 0:
-        open_ = frame["open"].astype(float)
-        gap_open = _finite(float(open_.iloc[-1]) / float(close.iloc[-2]) - 1.0)
+    if "open" in frame.columns and n >= 2 and c[-2] != 0:
+        op = np.asarray(frame["open"], dtype=float)
+        gap_open = _finite(float(op[-1] / c[-2] - 1.0))
 
     max_dd_21 = None
-    if len(close) >= 22:
-        window_c = close.iloc[-21:]
-        peak = window_c.cummax()
-        dd = (window_c / peak - 1.0).min()
-        max_dd_21 = _finite(float(dd))
+    if n >= 22:
+        window_c = c[-21:]
+        peak = np.maximum.accumulate(window_c)
+        peak[peak <= 0] = np.nan
+        dds = (window_c / peak) - 1.0
+        dd = float(np.nanmin(dds))
+        max_dd_21 = _finite(dd)
 
     return {
         "rev1": rev1,
@@ -393,13 +415,17 @@ def _lgb_predict_scores(
 
 
 def _default_loader(symbol: str, data_dirs: Sequence[Path]) -> Any:
+    cols = ["open", "high", "low", "close", "volume"]
     for base in data_dirs:
         path = Path(base) / f"{symbol}.parquet"
         if path.is_file():
             try:
-                return pd.read_parquet(path)
+                return pd.read_parquet(path, columns=cols)
             except Exception:
-                return None
+                try:
+                    return pd.read_parquet(path)
+                except Exception:
+                    return None
     return None
 
 
@@ -497,24 +523,36 @@ def score_cross_section_asof(
     failed = 0
     skipped = 0
 
-    for symbol in requested:
-        attempted += 1
+    def _process_one_symbol(sym: str) -> tuple[str, dict[str, float | None] | None, str | None, str]:
         try:
-            raw = load(symbol)
+            raw = load(sym)
+            if raw is None or (hasattr(raw, "empty") and raw.empty):
+                return sym, None, None, "failed"
             frame = truncate_to_asof(_normalize_frame(raw), asof)
         except Exception:
-            failed += 1
-            continue
+            return sym, None, None, "failed"
         if len(frame) < MIN_HISTORY_BARS:
-            skipped += 1
-            continue
+            return sym, None, None, "skipped"
         feats = feature_row_from_frame(frame)
         if all(v is None for v in feats.values()):
-            skipped += 1
-            continue
-        feature_table[symbol] = feats
+            return sym, None, None, "skipped"
         last_idx = pd.Timestamp(frame.index[-1])
-        bar_asofs[symbol] = last_idx.strftime("%Y-%m-%d")
+        bar_asof = last_idx.strftime("%Y-%m-%d")
+        return sym, feats, bar_asof, "scored"
+
+    workers = min(12, max(1, len(requested)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(_process_one_symbol, requested))
+
+    for symbol, feats, bar_asof, status in results:
+        attempted += 1
+        if status == "scored" and feats is not None and bar_asof is not None:
+            feature_table[symbol] = feats
+            bar_asofs[symbol] = bar_asof
+        elif status == "skipped":
+            skipped += 1
+        else:
+            failed += 1
 
     if not feature_table:
         warnings.append("no_symbols_scored")
@@ -869,6 +907,12 @@ _SHARED_PANEL: dict[str, Any] = {
     "symbol_set": frozenset(),
 }
 DEFAULT_PANEL_TTL_SEC = 300.0
+
+
+def peek_shared_qlib_panel() -> dict[str, Any] | None:
+    """Return the published deep-scan panel, or None. Never rebuilds."""
+    panel = _SHARED_PANEL.get("panel")
+    return dict(panel) if isinstance(panel, dict) else None
 
 
 def publish_shared_qlib_panel(panel: Mapping[str, Any] | None) -> None:

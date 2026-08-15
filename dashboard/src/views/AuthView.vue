@@ -4,7 +4,7 @@ import { SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/vue'
 import { useRoute, useRouter } from 'vue-router'
 import { isAllowedOperatorEmail, safeRedirect } from '@/auth'
 import AppIcon from '@/components/AppIcon.vue'
-import FlowWorkspaceMockup from '@/components/FlowWorkspaceMockup.vue'
+import OperatorAccessVisual from '@/components/OperatorAccessVisual.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
 
 const route = useRoute()
@@ -53,12 +53,12 @@ watch(
 
     <main class="auth-shell">
       <section class="auth-context" aria-labelledby="auth-context-title">
-        <p class="eyebrow"><span aria-hidden="true" /> Sign in · then open Flow</p>
-        <h1 id="auth-context-title">The tape is on the other side of this form.</h1>
+        <p class="eyebrow"><span aria-hidden="true" /> Operator access · measured Flow</p>
+        <h1 id="auth-context-title">One identity.<br>The full instrument.</h1>
         <p class="context-copy">
-          Clerk verifies the operator. After that, Flow shows the measured
-          market-wide window from the local API — not a demo board, not a
-          promised return, not a trade ticket.
+          Clerk verifies the operator; TradeCentral preserves the local boundary.
+          After that, Flow opens the measured market-wide window—not a demo board,
+          promised return, or trade ticket.
         </p>
         <div class="close-row">
           <span>Next: authenticate</span>
@@ -67,11 +67,25 @@ watch(
           <i />
           <span>Inspect one chain</span>
         </div>
-        <FlowWorkspaceMockup compact />
+        <div class="access-route-visual"><OperatorAccessVisual /></div>
       </section>
 
       <section class="auth-panel" aria-labelledby="auth-title">
         <div class="panel-index" aria-hidden="true">ACCESS / 01</div>
+        <nav class="auth-mode-switch" aria-label="Choose access mode">
+          <RouterLink
+            :class="{ active: mode === 'signin' }"
+            :to="{ name: 'auth', query: { mode: 'signin', redirect: redirectTarget } }"
+          >
+            Sign in
+          </RouterLink>
+          <RouterLink
+            :class="{ active: mode === 'setup' }"
+            :to="{ name: 'auth', query: { mode: 'setup', redirect: redirectTarget } }"
+          >
+            Create access
+          </RouterLink>
+        </nav>
         <div class="panel-head">
           <p>{{ mode === 'setup' ? 'Create operator access' : 'Continue to Flow' }}</p>
           <h2 id="auth-title">
@@ -160,6 +174,7 @@ watch(
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr auto;
+  overflow-x: hidden;
   color: var(--auth-paper);
   background:
     linear-gradient(rgba(250, 249, 245, 0.025) 1px, transparent 1px),
@@ -177,7 +192,7 @@ watch(
 }
 
 .auth-topbar {
-  min-height: 76px;
+  min-height: 80px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -188,7 +203,10 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: 11px;
+  padding: 8px 12px 8px 9px;
   color: var(--auth-paper);
+  border: 1px solid #3c3c37;
+  background: #191a18;
 }
 .auth-brand:hover { text-decoration: none; }
 .auth-wordmark { display: grid; line-height: 1.05; }
@@ -219,7 +237,7 @@ watch(
 
 .auth-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(390px, 460px);
+  grid-template-columns: minmax(0, 1fr) minmax(400px, 470px);
   gap: clamp(40px, 6vw, 88px);
   align-items: start;
   padding-block: clamp(48px, 7vh, 88px);
@@ -269,23 +287,58 @@ watch(
 }
 .close-row i { flex: 1; height: 1px; background: var(--auth-rule); }
 
+.access-route-visual { max-width: 660px; }
+
 .auth-panel {
   position: sticky;
   top: 28px;
-  padding: 34px 32px 28px;
+  padding: 28px 32px 30px;
   color: var(--auth-dark);
   background: var(--auth-paper);
-  border-top: 4px solid var(--auth-orange);
+  border: 1px solid #d1cdc3;
+  border-top: 3px solid var(--auth-orange);
+  box-shadow: 18px 22px 0 rgba(106, 155, 204, 0.14);
 }
+.auth-panel::before,
+.auth-panel::after {
+  content: '';
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  pointer-events: none;
+}
+.auth-panel::before { top: -3px; left: -1px; border-top: 1px solid #141413; border-left: 1px solid #141413; }
+.auth-panel::after { right: -1px; bottom: -1px; border-right: 1px solid #141413; border-bottom: 1px solid #141413; }
 .panel-index {
   position: absolute;
-  top: 17px;
-  right: 20px;
-  color: #8d8a82;
+  top: -24px;
+  right: 0;
+  color: #a19e95;
   font-family: var(--font-display);
   font-size: 9px;
   letter-spacing: 0.1em;
 }
+.auth-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 0 0 27px;
+  padding: 4px;
+  border: 1px solid #c9c5bb;
+  background: #ece9e0;
+}
+.auth-mode-switch a {
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  color: #706d65;
+  font-family: var(--font-display);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.auth-mode-switch a:hover { color: #2a2a25; text-decoration: none; }
+.auth-mode-switch a.active { color: #faf9f5; background: #242520; }
 .panel-head p {
   color: var(--auth-orange);
   font-family: var(--font-display);
@@ -332,6 +385,45 @@ watch(
 .auth-panel :deep(.cl-rootBox) { margin-top: 22px; }
 .auth-panel :deep(.cl-cardBox),
 .auth-panel :deep(.cl-card) { width: 100%; }
+.auth-panel :deep(.cl-rootBox) { color: #252521; font-family: var(--font-ui); }
+.auth-panel :deep(.cl-formFieldLabel) { color: #3e3c36; font-size: 12px; font-weight: 650; }
+.auth-panel :deep(.cl-formFieldInput) {
+  min-height: 46px;
+  padding-inline: 13px;
+  color: #1f201d;
+  border: 1px solid #76736a;
+  border-radius: 0;
+  background: #fffefa;
+  box-shadow: none;
+}
+.auth-panel :deep(.cl-formFieldInput::placeholder) { color: #77746c; opacity: 1; }
+.auth-panel :deep(.cl-formFieldInput:focus) { border-color: #8d402b; box-shadow: 0 0 0 2px rgba(141, 64, 43, 0.18); }
+.auth-panel :deep(.cl-formButtonPrimary) {
+  min-height: 47px;
+  color: #fffdf8;
+  border-left: 3px solid #793622;
+  border-radius: 0;
+  background: #b8583c;
+  box-shadow: none;
+}
+.auth-panel :deep(.cl-formButtonPrimary:hover) { background: #873d29; }
+.auth-panel :deep(.cl-socialButtonsBlockButton) {
+  min-height: 46px;
+  color: #292923;
+  border: 1px solid #76736a;
+  border-radius: 0;
+  background: #fffefa;
+  box-shadow: none;
+}
+.auth-panel :deep(.cl-socialButtonsBlockButton:hover) { color: #1e1f1b; border-color: #3f3e38; background: #f0eee8; }
+.auth-panel :deep(.cl-dividerLine) { background: #c7c3b9; }
+.auth-panel :deep(.cl-dividerText),
+.auth-panel :deep(.cl-footerActionText),
+.auth-panel :deep(.cl-identityPreviewText) { color: #5e5b53; }
+.auth-panel :deep(.cl-footerActionLink),
+.auth-panel :deep(.cl-formResendCodeLink),
+.auth-panel :deep(.cl-identityPreviewEditButton) { color: #8d402b; font-weight: 700; }
+.auth-panel :deep(.cl-alertText) { color: #7d2931; }
 
 .security-note {
   margin-top: 26px;
@@ -359,7 +451,7 @@ watch(
 
 @media (max-width: 980px) {
   .auth-shell { grid-template-columns: 1fr; gap: 36px; }
-  .auth-panel { position: static; max-width: 560px; }
+  .auth-panel { position: relative; max-width: 560px; }
 }
 
 @media (max-width: 620px) {
@@ -369,7 +461,7 @@ watch(
   .auth-wordmark small { display: none; }
   .back-link { font-size: 0; gap: 0; }
   .auth-context h1 { font-size: clamp(34px, 12vw, 48px); }
-  .auth-panel { padding: 28px 20px 22px; }
+  .auth-panel { padding: 22px 18px 24px; box-shadow: 9px 11px 0 rgba(106, 155, 204, 0.14); }
   .auth-footer { flex-direction: column; align-items: flex-start; justify-content: center; padding-block: 18px; }
 }
 </style>

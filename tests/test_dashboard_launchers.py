@@ -17,6 +17,7 @@ def test_dashboard_launchers_require_current_flow_contract_and_reuse_vite():
     for launcher in LAUNCHERS:
         source = launcher.read_text()
         assert '"flow_feed_contract": "market-wide-v1"' in source
+        assert '"suggestion_contract": "paper-candidate-contract-v9"' in source
         assert "frontend_is_current" in source
         assert "'/@vite/client'" in source
         assert "'/src/main.ts'" in source

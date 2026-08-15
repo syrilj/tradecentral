@@ -22,6 +22,8 @@ def test_lse_adapter_normalizes_injected_live_payload_without_network():
     assert contract["right"] == "call"
     assert contract["occ_symbol"] == "NVDA260821C00180000"
     assert contract["spread_pct"] == 0.10526315789473684
+    assert contract["quote_live"] is True
+    assert contract["quote_source"] == "lse"
     assert snapshot["capabilities"]["execution_complete_contracts"] == 1
 
 
@@ -52,3 +54,4 @@ def test_yfinance_adapter_is_explicitly_degraded_even_with_complete_fixture():
     assert snapshot["provider"] == "yfinance"
     assert snapshot["degraded"] is True
     assert snapshot["contracts"][0]["provider"] == "yfinance"
+    assert snapshot["contracts"][0]["quote_live"] is False

@@ -1,19 +1,22 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, inject, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api, type StatusPayload } from '@/api'
 import { useResource, type Resource } from '@/composables/useResource'
 import FlowDashboard from '@/components/FlowDashboard.vue'
+import FlowSuggestionDrawer from '@/components/FlowSuggestionDrawer.vue'
 
 const FLOW_LIMIT = 80
 const BASE_FLOW_FLOOR = 25_000
 const FLOW_POLL_MS = 15_000
 
 const router = useRouter()
+const route = useRoute()
 const sharedStatus = inject<Resource<StatusPayload> | null>('status', null)
 const statusPayload = computed(() => sharedStatus?.data.value ?? null)
 const minPremium = ref(BASE_FLOW_FLOOR)
 const forceNext = ref(false)
+const selectedSetup = ref(String(route.query.setup || '').trim().toUpperCase())
 
 const unusual = useResource(
   () => api.unusualFlow({
@@ -38,8 +41,23 @@ async function refreshFlow(): Promise<void> {
 }
 
 function openSymbol(symbol: string): void {
-  void router.push({ name: 'options', query: { symbol } })
+  selectedSetup.value = symbol
+  void router.replace({
+    name: 'flow',
+    query: { ...route.query, setup: symbol },
+  })
 }
+
+function closeSetup(): void {
+  selectedSetup.value = ''
+  const query = { ...route.query }
+  delete query.setup
+  void router.replace({ name: 'flow', query })
+}
+
+watch(() => route.query.setup, (value) => {
+  selectedSetup.value = String(value || '').trim().toUpperCase()
+})
 </script>
 
 <template>
@@ -50,15 +68,17 @@ function openSymbol(symbol: string): void {
         <h1>Options flow</h1>
         <p>
           Track what entered since the prior provider window, read SPY/QQQ/IWM/DIA concentration first,
-          then act on the desk brief: which names to open, where premium is concentrated, and whether
-          the lean is bullish, bearish, or mixed. Signed buy/sell only appears when the provider marks it.
+          then click a name for a live call/put setup, GEX sell level, and risk budget. The chain remains
+          one step away. Signed buy/sell only appears when the provider marks it.
         </p>
       </div>
       <div class="scope-stack">
         <span class="scope-chip label live"><i aria-hidden="true" /> MARKET-WIDE TAPE</span>
         <span class="scope-chip label">UP TO 500 PRINTS</span>
+        <span class="scope-chip label">MY BOOK</span>
+        <span class="scope-chip label">UNUSUAL / SWEEP ALERTS</span>
+        <span class="scope-chip label">ON-DEMAND HISTORY</span>
         <span class="scope-chip label">POLL 15S</span>
-        <span class="scope-chip label">BULLISH / BEARISH LEAN</span>
       </div>
     </header>
 
@@ -72,6 +92,12 @@ function openSymbol(symbol: string): void {
       @refresh="void refreshFlow()"
       @threshold="setPremium"
       @open-symbol="openSymbol"
+    />
+
+    <FlowSuggestionDrawer
+      v-if="selectedSetup"
+      :symbol="selectedSetup"
+      @close="closeSetup"
     />
   </div>
 </template>

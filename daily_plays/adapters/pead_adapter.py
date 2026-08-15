@@ -38,17 +38,26 @@ def _load_broad_universe() -> list[str]:
             "TSLA", "NFLX", "CRM", "ORCL", "NOW", "PLTR", "MU", "QCOM",
             "JPM", "GS", "V", "MA", "UNH", "LLY", "JNJ", "COST", "WMT"]
 
+import concurrent.futures
+
 def _load_symbol_df(sym: str) -> pd.DataFrame:
+    cols = ["open", "high", "low", "close", "volume"]
     for cache_dir in [ROOT / "edge" / "data" / "1d", ROOT / "edge" / "data" / "1d_wide"]:
         p = cache_dir / f"{sym}.parquet"
         if p.exists():
             try:
-                df = pd.read_parquet(p)
+                df = pd.read_parquet(p, columns=cols)
                 df.columns = [c.capitalize() for c in df.columns]
                 if len(df) >= 20:
                     return df.tail(60)
             except Exception:
-                pass
+                try:
+                    df = pd.read_parquet(p)
+                    df.columns = [c.capitalize() for c in df.columns]
+                    if len(df) >= 20:
+                        return df.tail(60)
+                except Exception:
+                    pass
     try:
         df = yf.download(sym, period="30d", progress=False)
         if isinstance(df.columns, pd.MultiIndex):
@@ -56,6 +65,58 @@ def _load_symbol_df(sym: str) -> pd.DataFrame:
         return df
     except Exception:
         return pd.DataFrame()
+
+
+def _eval_single_pead_symbol(sym: str, threshold: float) -> tuple[str, dict[str, Any] | None]:
+    try:
+        df = _load_symbol_df(sym)
+        if df.empty or len(df) < 20:
+            return "unavailable", None
+            
+        open_col = "Open" if "Open" in df else "open"
+        high_col = "High" if "High" in df else "high"
+        low_col = "Low" if "Low" in df else "low"
+        close_col = "Close" if "Close" in df else "close"
+        vol_col = "Volume" if "Volume" in df else "volume"
+
+        open_p = df[open_col].dropna()
+        close_p = df[close_col].dropna()
+        prev_close = close_p.shift(1)
+        high_p = df[high_col].dropna()
+        low_p = df[low_col].dropna()
+        vol = df[vol_col].dropna()
+        
+        if len(close_p) < 20:
+            return "unavailable", None
+
+        tr = np.maximum(high_p - low_p, np.maximum(abs(high_p - prev_close), abs(low_p - prev_close)))
+        atr_20d = tr.rolling(20).mean()
+        atr_pct = (atr_20d / prev_close).iloc[-1]
+        
+        gap_pct = (open_p.iloc[-1] - prev_close.iloc[-1]) / prev_close.iloc[-1]
+        gap_std = float(gap_pct / (atr_pct if atr_pct > 0 else 0.02))
+        
+        vol_20d_sma = vol.rolling(20).mean().iloc[-1]
+        vol_surge = float(vol.iloc[-1] / vol_20d_sma if vol_20d_sma > 0 else 1.0)
+        
+        pead_score = float(gap_std * np.log1p(max(0, vol_surge)))
+        
+        go_long = pead_score >= threshold
+        go_short = pead_score <= -threshold
+        
+        if go_long or go_short:
+            return "evaluated", {
+                "symbol": sym,
+                "pead_score": pead_score,
+                "gap_std": gap_std,
+                "vol_surge": vol_surge,
+                "go_long": go_long,
+                "go_short": go_short,
+            }
+        return "evaluated", None
+    except Exception:
+        return "failed", None
+
 
 def generate_pead_candidates(
     symbols: Sequence[str] | None = None,
@@ -71,52 +132,19 @@ def generate_pead_candidates(
     
     print(f"PEAD Engine scanning broad universe ({len(target_symbols)} symbols)...")
     
-    for sym in target_symbols:
-        try:
-            df = _load_symbol_df(sym)
-            if df.empty or len(df) < 20:
+    workers = min(16, max(1, len(target_symbols)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(_eval_single_pead_symbol, sym, threshold) for sym in target_symbols]
+        for fut in futures:
+            status, item = fut.result()
+            if status == "evaluated":
+                evaluated_symbols += 1
+                if item is not None:
+                    raw_candidates.append(item)
+            elif status == "unavailable":
                 unavailable_symbols += 1
-                continue
-                
-            open_p = df["Open"].dropna()
-            close_p = df["Close"].dropna()
-            prev_close = close_p.shift(1)
-            high_p = df["High"].dropna()
-            low_p = df["Low"].dropna()
-            vol = df["Volume"].dropna()
-            
-            if len(close_p) < 20:
-                unavailable_symbols += 1
-                continue
-
-            evaluated_symbols += 1
-                
-            tr = np.maximum(high_p - low_p, np.maximum(abs(high_p - prev_close), abs(low_p - prev_close)))
-            atr_20d = tr.rolling(20).mean()
-            atr_pct = (atr_20d / prev_close).iloc[-1]
-            
-            gap_pct = (open_p.iloc[-1] - prev_close.iloc[-1]) / prev_close.iloc[-1]
-            gap_std = float(gap_pct / (atr_pct if atr_pct > 0 else 0.02))
-            
-            vol_20d_sma = vol.rolling(20).mean().iloc[-1]
-            vol_surge = float(vol.iloc[-1] / vol_20d_sma if vol_20d_sma > 0 else 1.0)
-            
-            pead_score = float(gap_std * np.log1p(max(0, vol_surge)))
-            
-            go_long = pead_score >= threshold
-            go_short = pead_score <= -threshold
-            
-            if go_long or go_short:
-                raw_candidates.append({
-                    "symbol": sym,
-                    "pead_score": pead_score,
-                    "gap_std": gap_std,
-                    "vol_surge": vol_surge,
-                    "go_long": go_long,
-                    "go_short": go_short,
-                })
-        except Exception:
-            failed_symbols += 1
+            else:
+                failed_symbols += 1
             
     # Sort candidates by absolute PEAD score
     raw_candidates.sort(key=lambda x: abs(x["pead_score"]), reverse=True)

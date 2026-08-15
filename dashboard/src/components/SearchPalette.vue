@@ -38,8 +38,11 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'graph', title: 'Graph', idx: '10', hint: 'Repo knowledge graph' },
   { name: 'adaptive', title: 'Live Blend', idx: '11', hint: 'Regime multi-stream adapt' },
   { name: 'fintel', title: 'Fintel', idx: '12', hint: 'Short · borrow · owners · flow' },
+  { name: 'insiders', title: 'Insiders', idx: '15', hint: 'Form 4 · Fintel insider tape' },
   { name: 'changepoints', title: 'Breaks', idx: '13', hint: 'Bayesian regime breaks' },
   { name: 'momentum', title: 'Momentum', idx: '14', hint: 'Five Pillars · gap scan' },
+  { name: 'suggest', title: 'Setups', idx: '05', hint: 'Call/put · GEX sell' },
+  { name: 'calculator', title: 'Calculator', idx: '16', hint: 'Spot · strike · DTE · P/L' },
   { name: 'flowstate', title: 'Flow State', idx: '15', hint: 'Daily proxy research' },
 ]
 

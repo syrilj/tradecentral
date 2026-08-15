@@ -105,6 +105,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Fintel', index: '12' },
   },
   {
+    path: '/insiders',
+    name: 'insiders',
+    component: () => import('@/views/InsidersView.vue'),
+    meta: { title: 'Insiders', index: '15' },
+  },
+  {
     path: '/changepoints',
     name: 'changepoints',
     component: () => import('@/views/ChangepointsView.vue'),
@@ -115,6 +121,18 @@ const routes: RouteRecordRaw[] = [
     name: 'momentum',
     component: () => import('@/views/MomentumView.vue'),
     meta: { title: 'Momentum', index: '14' },
+  },
+  {
+    path: '/suggest',
+    name: 'suggest',
+    component: () => import('@/views/SuggestView.vue'),
+    meta: { title: 'Setups', index: '05' },
+  },
+  {
+    path: '/calculator',
+    name: 'calculator',
+    component: () => import('@/views/CalculatorView.vue'),
+    meta: { title: 'Calculator', index: '05' },
   },
   {
     path: '/flow-state',

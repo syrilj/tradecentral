@@ -5,12 +5,18 @@
   "type": "module",
   "description": "Live trading instrument panel for the edge/ research stack",
   "scripts": {
+    "predev": "node scripts/check-node.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/check-node.mjs",
     "build": "vue-tsc --noEmit && vite build",
     "build:fast": "vite build",
     "preview": "vite preview",
+    "pretest": "node scripts/check-node.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "@clerk/vue": "^2.4.21",

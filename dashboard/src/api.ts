@@ -8,6 +8,10 @@
  */
 
 const BASE = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+const configuredTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000)
+const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+  ? configuredTimeoutMs
+  : 30_000
 
 type AuthTokenProvider = () => Promise<string | null>
 let authTokenProvider: AuthTokenProvider | null = null
@@ -32,6 +36,14 @@ export class ApiError extends Error {
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
+  const controller = new AbortController()
+  const forwardAbort = () => controller.abort(init?.signal?.reason)
+  if (init?.signal?.aborted) forwardAbort()
+  else init?.signal?.addEventListener('abort', forwardAbort, { once: true })
+  const timeout = window.setTimeout(
+    () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
+    REQUEST_TIMEOUT_MS,
+  )
   try {
     const headers = new Headers(init?.headers)
     headers.set('Accept', 'application/json')
@@ -41,13 +53,20 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       credentials: 'include',
       headers,
+      signal: controller.signal,
     })
   } catch (e) {
+    const timedOut = controller.signal.aborted && !init?.signal?.aborted
     throw new ApiError(
-      `backend unreachable — is api_server.py running on :8787?`,
+      timedOut
+        ? `API request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s: ${path}`
+        : `backend unreachable — is api_server.py running on :8787?`,
       0,
       path,
     )
+  } finally {
+    window.clearTimeout(timeout)
+    init?.signal?.removeEventListener('abort', forwardAbort)
   }
   if (!res.ok) {
     let detail = res.statusText
@@ -202,6 +221,24 @@ export interface ActivityFlagRow {
   sweep_otm_premium?: number
   unusual_contracts?: number
   average_price?: number | null
+  /** Latest underlying price carried from the provider tape when observed. */
+  spot?: number | null
+  flow_focus?: Partial<Record<'call' | 'put', {
+    right: 'call' | 'put'
+    occ_symbol?: string | null
+    strike: number | null
+    expiry: string | null
+    dte?: number | null
+    underlying_price?: number | null
+    otm_pct?: number | null
+    price: number | null
+    price_estimated?: boolean
+    premium: number | null
+    contracts: number | null
+    timestamp: string | null
+    contract_multiplier?: number | null
+  }>>
+  flow_focus_rejections?: Partial<Record<'call' | 'put', string[]>>
   average_dte?: number | null
   signed_print_count?: number
   ret_1d: number | null
@@ -259,6 +296,41 @@ export interface UnusualFlowRow extends Omit<ActivityFlagRow, 'score_kind'> {
   score_kind: 'ordinal_unusual_flow' | string
   unusual_score?: number
   call_put_imbalance?: number | null
+  flagged_contracts?: number | null
+  momentum_contracts?: number | null
+  moonshot_contracts?: number | null
+  top_position_contracts?: number | null
+  average_heat?: number | null
+}
+
+export type TopTickerCategory =
+  | 'unusual_otm'
+  | 'unusual_volume'
+  | 'unusual_premium'
+  | 'sweeps'
+  | 'momentum'
+  | 'call_premium'
+  | 'put_premium'
+
+export interface TopTickerRow {
+  symbol: string
+  score: number
+  bullish_share: number | null
+  bearish_share: number | null
+  share_basis?: string
+  print_count?: number
+}
+
+export interface OptionsTopTickers {
+  categories: Partial<Record<TopTickerCategory, TopTickerRow[]>>
+  category_labels?: Partial<Record<TopTickerCategory, string>>
+  tickers?: Array<{
+    symbol: string
+    bullish_share: number | null
+    bearish_share: number | null
+    share_basis?: string
+    print_count?: number
+  }>
 }
 
 export interface UnusualFlowPayload {
@@ -267,6 +339,8 @@ export interface UnusualFlowPayload {
   generated_at?: string
   rows: UnusualFlowRow[]
   tape?: MarketFlowPrint[]
+  top_tickers?: OptionsTopTickers
+  presets?: Record<string, { label?: string; print_count?: number }>
   summary?: UnusualFlowSummary
   feed_status?: 'live' | 'no_prints' | 'unavailable' | string
   feed_reason?: string | null
@@ -680,10 +754,21 @@ export interface OptionsTapeRow {
   trade_class_source?: 'vendor' | 'size_heuristic' | 'burst_heuristic' | 'unclassified' | string
   /** BULL / BEAR when signed; CALL / PUT activity when not. */
   edge_label?: string
+  /** Why this print was flagged. Empty when nothing unusual. */
+  why?: string[]
   premium_estimated: boolean
   anomaly_flags: ('premium_outlier' | 'volume_outlier' | 'repeat_cluster' | 'sweep_burst' | string)[]
   anomaly_score: number
   premium_percentile: number
+  is_unusual?: boolean
+  is_sweep?: boolean
+  is_block?: boolean
+  is_top_position?: boolean
+  is_momentum?: boolean
+  is_moonshot?: boolean
+  heat?: number | null
+  presets?: Array<'unusual' | 'sweeps' | 'momentum' | 'moonshot' | string>
+  relative_volume?: number | null
 }
 
 export interface OptionsExpiryContext {
@@ -980,6 +1065,121 @@ export interface LiveOpportunityPlaybook {
   warnings: string[]
 }
 
+export type SuggestedRight = 'call' | 'put' | 'watch' | 'blocked'
+
+export interface FlowSuggestionQlib {
+  score: number | null
+  rank: number | null
+  n_symbols: number | null
+  source: string | null
+  score_kind?: string | null
+  asof?: string | null
+  alignment: 'confirms' | 'conflicts' | 'neutral' | 'unmeasured' | string
+  measured: boolean
+}
+
+export interface FlowSuggestion {
+  right: SuggestedRight | string
+  reason: string | null
+  status: string
+  entry_eligible?: boolean
+  setup_tier?: 'ready' | 'paper' | 'watch' | 'blocked' | string
+  evidence_kind?: 'directional_context' | 'signed_activity' | 'activity_lean' | 'none' | string
+  direction_source?: string
+  bias_right?: 'call' | 'put' | null
+  bias_confirmed?: boolean
+  direction_observations?: number
+  direction_required?: number
+  direction_stable?: boolean
+  direction_churned?: boolean
+  review_score?: number
+  review_rank?: number
+  review_label?: 'READY' | 'STRONG PAPER' | 'PAPER' | 'NEW / CHURNING' | 'WATCH' | string
+  review_reasons?: string[]
+  paper_actionable?: boolean
+  paper_action?: 'PAPER_BUY_CALL' | 'PAPER_BUY_PUT' | string | null
+  paper_action_blockers?: string[]
+  plan_target?: number | null
+  plan_target_source?: 'call_wall' | 'put_wall' | 'expected_move' | string | null
+  plan_invalidation?: number | null
+  plan_invalidation_source?: 'call_wall' | 'put_wall' | 'expected_move' | string | null
+  risk_levels_complete?: boolean
+  risk_missing_fields?: string[]
+  contract_plan?: {
+    kind: 'chain_selected_contract' | 'observed_long_option' | string
+    right: string
+    action: string
+    contract_stage: string
+    occ_symbol: string | null
+    strike: number | null
+    expiry: string | null
+    dte: number | null
+    moneyness_pct: number | null
+    reference_debit: number | null
+    sizing_debit: number | null
+    reference_debit_estimated: boolean
+    bid: number | null
+    ask: number | null
+    midpoint: number | null
+    spread_pct: number | null
+    volume: number | null
+    open_interest: number | null
+    implied_volatility: number | null
+    delta: number | null
+    contract_multiplier: number
+    reference_max_loss: number | null
+    take_profit_debit: number | null
+    review_exit_debit: number | null
+    observed_contracts: number | null
+    observed_premium: number | null
+    observed_at: string | null
+    source: string
+    quote_status: string
+    quote_complete: boolean
+    quote_live?: boolean
+    quote_reference_only?: boolean
+    quote_source?: string | null
+    contract_complete: boolean
+    sizing_eligible: boolean
+    paper_actionable?: boolean
+    stability_observations: number
+    stability_required: number
+    stable: boolean
+    rejection_reasons: string[]
+    selection_method: string
+    missing_fields: string[]
+    note: string
+    play?: {
+      strategy: string
+      right: string
+      spot: number
+      strike: number
+      premium: number
+      debit: number
+      breakeven: number
+      max_loss: number
+      vol: number | null
+      vol_source: string
+      greeks: { delta: number; gamma: number; theta: number; vega: number; theo: number } | null
+      theo: number | null
+      pnl_at_spot: number | null
+      pnl_at_sell: number | null
+      pnl_at_invalidation: number | null
+      method: string
+      decision_authorized: false
+    } | null
+  } | null
+  spot: number | null
+  sell: number | null
+  sell_source: 'call_wall' | 'put_wall' | string | null
+  sell_rel_pct: number | null
+  invalidation: number | null
+  invalidation_source: 'call_wall' | 'put_wall' | string | null
+  qlib: FlowSuggestionQlib
+  warnings: string[]
+  blockers: string[]
+}
+
 export interface LiveOpportunityRow {
   symbol: string
   signal_basis: LiveOpportunitySignalBasis
@@ -989,6 +1189,10 @@ export interface LiveOpportunityRow {
   board_squeeze_z: number | null
   flow_unusual_score: number | null
   flow_unusual_z: number | null
+  qlib_score?: number | null
+  qlib_rank?: number | null
+  qlib_z?: number | null
+  suggestion?: FlowSuggestion
   gate_pass: boolean
   /** Populated when gate_pass is false, e.g. ["spread 42% > max 25%"]. */
   gate_reasons: string[]
@@ -1023,6 +1227,15 @@ export interface LiveOpportunitiesCoverage {
   live_ready: number
   uncalibrated: number
   stale_or_proxy: number
+  qlib_symbols?: number
+  qlib_measured?: number
+  suggested_call?: number
+  suggested_put?: number
+  suggested_watch?: number
+  suggested_blocked?: number
+  direction_stable?: number
+  contract_stable?: number
+  paper_actionable?: number
 }
 
 /**
@@ -1037,8 +1250,10 @@ export interface LiveOpportunitiesCoverage {
 export interface LiveOpportunities {
   schema_version?: string
   asof_utc?: string
+  requested_symbol?: string
   available: boolean
   reason?: string
+  suggestion?: FlowSuggestion
   decision_authorized?: false
   /** Always 'ordinal_composite' when available — never a probability. */
   score_kind?: 'ordinal_composite' | string
@@ -1051,7 +1266,9 @@ export interface LiveOpportunities {
   sources?: {
     board?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof_utc?: string | null; scan_asof?: string | null }
     flow?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof?: string | null }
+    qlib?: { published?: boolean; asof?: string | null; source?: string | null; n_symbols?: number }
     scan_depth?: string
+    symbol_specific?: boolean
   }
 }
 
@@ -1086,6 +1303,10 @@ export interface OptionsIntelligence {
     put_premium: number
     call_put_ratio: number | null
     activity_imbalance: number | null
+    activity_lean?: 'bullish' | 'bearish' | 'mixed' | 'neutral' | string
+    activity_lean_source?: string
+    activity_lean_label?: string
+    decision_authorized?: false
     signed_net_premium: number | null
     signed_gross_premium?: number | null
     signed_flow_imbalance?: number | null
@@ -1115,6 +1336,7 @@ export interface OptionsIntelligence {
     call_wall_pct?: number | null
     put_wall: number | null
     put_wall_pct?: number | null
+    zero_gamma?: number | null
     pin_strike: number | null
     squeeze?: OptionsSqueeze
   }
@@ -1124,7 +1346,7 @@ export interface OptionsIntelligence {
     chain_rejected: Record<string, number>
     flow_prints_raw: number
     flow_prints_included: number
-    flow_rejected: Record<string, number>
+    flow_rejected: Record<string, number | string | boolean | null>
     gamma_source: Record<string, number>
     anomaly_sample_size: number
   }
@@ -1132,6 +1354,12 @@ export interface OptionsIntelligence {
   flow_series: OptionsFlowPoint[]
   flow_tape: OptionsTapeRow[]
   gex_by_strike: GexStrikeRow[]
+  oi_by_strike?: Array<{
+    strike: number
+    call_oi: number
+    put_oi: number
+    total_oi: number
+  }>
   gex_by_expiry?: Array<{
     expiry: string
     dte: number | null
@@ -1835,6 +2063,65 @@ export const api = {
   },
 
   /** Standalone market-wide options-flow window (one live LSE request). */
+  optionsCalculator: (opts: {
+    strategy?: 'long_call' | 'long_put' | 'long_straddle' | string
+    spot: number
+    strike: number
+    dte?: number
+    expiry?: string
+    vol?: number
+    rate?: number
+    premium?: number
+    debit?: number
+    quantity?: number
+  }) => {
+    const q = new URLSearchParams()
+    q.set('strategy', String(opts.strategy || 'long_call'))
+    q.set('spot', String(opts.spot))
+    q.set('strike', String(opts.strike))
+    if (opts.dte != null) q.set('dte', String(opts.dte))
+    if (opts.expiry) q.set('expiry', opts.expiry)
+    if (opts.vol != null) q.set('vol', String(opts.vol))
+    if (opts.rate != null) q.set('rate', String(opts.rate))
+    if (opts.premium != null) q.set('premium', String(opts.premium))
+    if (opts.debit != null) q.set('debit', String(opts.debit))
+    if (opts.quantity != null) q.set('quantity', String(opts.quantity))
+    return req<{
+      strategy: string
+      spot: number
+      greeks: { delta: number; gamma: number; theta: number; vega: number; theo: number }
+      pnl_at_expiry: Array<{ spot: number; pnl: number }>
+      legs: Array<Record<string, unknown>>
+      decision_authorized: false
+    }>(`/api/options-calculator?${q.toString()}`)
+  },
+
+  flowTape: (opts: {
+    symbol: string
+    from?: string
+    to?: string
+    minPremium?: number
+    limit?: number
+  }) => {
+    const q = new URLSearchParams()
+    q.set('symbol', opts.symbol)
+    if (opts.from) q.set('from', opts.from)
+    if (opts.to) q.set('to', opts.to)
+    if (opts.minPremium != null) q.set('min_premium', String(opts.minPremium))
+    if (opts.limit != null) q.set('limit', String(opts.limit))
+    return req<{
+      symbol: string
+      from: string | null
+      to: string | null
+      tape: MarketFlowPrint[]
+      print_count: number
+      feed_status: string
+      source: string
+      warnings: string[]
+      decision_authorized: false
+    }>(`/api/flow-tape?${q.toString()}`)
+  },
+
   unusualFlow: (opts?: { limit?: number; minPremium?: number; force?: boolean }) => {
     const q = new URLSearchParams()
     if (opts?.limit != null) q.set('limit', String(opts.limit))
@@ -1856,6 +2143,19 @@ export const api = {
     if (opts?.force) q.set('force', '1')
     const qs = q.toString()
     return req<LiveOpportunities>(`/api/options/opportunities${qs ? `?${qs}` : ''}`)
+  },
+
+  /**
+   * Dedicated Setups path. With a symbol it performs one exact, short-cached
+   * chain read for the Flow drawer; without one it returns the cached union.
+   */
+  flowSuggestions: (opts?: { limit?: number; force?: boolean; symbol?: string }) => {
+    const q = new URLSearchParams()
+    if (opts?.limit != null) q.set('limit', String(opts.limit))
+    if (opts?.force) q.set('force', '1')
+    if (opts?.symbol) q.set('symbol', opts.symbol.trim().toUpperCase())
+    const qs = q.toString()
+    return req<LiveOpportunities>(`/api/options/suggest${qs ? `?${qs}` : ''}`)
   },
 
   /** Genetic evolution lab (research-only artifacts under runs/ga/). */

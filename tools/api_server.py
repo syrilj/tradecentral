@@ -53,6 +53,9 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
          Shell benchmarks may use a cached yfinance refresh when the checked-in
          daily frame is stale. Freshness always refers to the observed bar date.
 
+  GET  /api/options-calculator?strategy=long_call|long_put|long_straddle&spot=&strike=&dte=&vol=&premium=
+      -> closed-form P/L vs spot + Delta/Gamma/Theta/Vega. No order path.
+
   GET  /api/options?symbol=X&mode=<live|history>&range=<1d|5d|1m|3m>
       -> truth-preserving call/put activity, stock overlay, gamma-by-strike,
          risk-neutral range diagnostics, provenance, and filter accounting.
@@ -84,7 +87,7 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
          status, next transition, and the calendar source used.
 
   GET  /api/health
-      -> {ok, ts, symbols_indexed, uptime_s, flow_feed_contract}
+      -> {ok, ts, symbols_indexed, uptime_s, flow_feed_contract, suggestion_contract}
 
   GET  /api/sentiment[?symbol=X]
       -> Accuracy-first desk sentiment: vol complex, CFTC COT, FINRA short
@@ -95,9 +98,19 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
       -> Statistical outliers: price/volume z-scores, FINRA short extremes,
          options P/C extremes, SEC filing activity. Thresholded + source-tagged.
 
+  GET  /api/flow-tape?symbol=X[&from=YYYY-MM-DD][&to=...][&min_premium=]
+      -> on-demand classified options tape for one underlier.
+
   GET  /api/unusual-flow[?limit=80&min_premium=25000]
+  GET  /api/flow-tape?symbol=X[&from=][&to=][&min_premium=][&limit=]
       -> Standalone market-wide recent options-flow tape (one LSE request;
          never reuses Deep routing or local candidates).
+
+  GET  /api/options/opportunities[?force=1]
+  GET  /api/options/suggest[?symbol=SPY][&force=1]
+      -> Same cached Flow+board union. Each row carries a suggested call/put
+         (or watch/blocked reason) and a GEX-wall sell relative to spot.
+         Passive reads stay cache-friendly; force=1 is the operator refresh.
 
   GET  /api/ga[?run_id=X]
       -> Genetic evolution lab: list of runs under runs/ga/, optional detail
@@ -184,6 +197,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 from functools import lru_cache
+import gzip
 import http.server
 import json
 import math
@@ -197,7 +211,7 @@ import time
 import traceback
 import uuid
 import webbrowser
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import parse_qs, urlparse
@@ -258,6 +272,9 @@ DIST_DIR = RUNS_DIR / "dashboard_dist"
 PORT = 8787
 LOOPBACK_HOST = "127.0.0.1"
 SERVER_START_TS = time.time()
+_DEFAULT_MAX_CONCURRENT_REQUESTS = 32
+_DEFAULT_SOCKET_TIMEOUT_S = 30.0
+_MIN_COMPRESS_BYTES = 1024
 
 import types
 if 'edge' not in sys.modules:
@@ -290,17 +307,22 @@ from edge.daily_plays.options_intelligence import (  # noqa: E402
     build_options_intelligence,
 )
 from edge.daily_plays.options_board import (  # noqa: E402
+    BoardCandidate,
     board_payload as _options_board_wire,
     select_board_candidates,
     summarize_board_row,
 )
 from edge.daily_plays.adapters.options import LSEOptionsAdapter  # noqa: E402
 from edge.daily_plays.live_activity import build_unusual_options_flow  # noqa: E402
-from edge.daily_plays.opportunity_scanner import build_live_opportunities  # noqa: E402
+from edge.daily_plays.opportunity_scanner import (  # noqa: E402
+    build_live_opportunities,
+    qlib_rows_from_panel,
+)
 from edge.daily_plays.qlib_scan_score import (  # noqa: E402
     SCORE_KIND as QLIB_SCORE_KIND,
     SOURCE_ID as QLIB_SOURCE_ID,
     lookup_symbol_on_shared_panel,
+    peek_shared_qlib_panel,
 )
 from edge.daily_plays.adaptive_signal import (  # noqa: E402
     AdaptiveSignalInputs,
@@ -349,6 +371,104 @@ _COMPARE_REFRESH_TTL_S = 300.0
 _COMPARE_REFRESH_LOCK = threading.Lock()
 
 load_project_environment(paths=(EDGE_DIR / ".env", ROOT / "TradingWork" / ".env"))
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str) -> list[str]:
+    return [part.strip() for part in os.environ.get(name, "").split(",") if part.strip()]
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host.strip().lower() in {"127.0.0.1", "::1", "localhost"}
+
+
+def _auth_required() -> bool:
+    return _env_bool("EDGE_REQUIRE_AUTH", default=False)
+
+
+def _cors_origins() -> list[str]:
+    configured = _env_csv("EDGE_CORS_ORIGINS")
+    # Preserve the zero-configuration workstation contract. A non-loopback
+    # server is rejected at startup unless it has an explicit origin allowlist.
+    return configured or ["*"]
+
+
+def _runtime_config_errors(host: str) -> list[str]:
+    """Return unsafe deployment settings so startup can fail before binding."""
+    errors: list[str] = []
+    exposed = not _is_loopback_host(host)
+    require_auth = _auth_required()
+    if exposed and not require_auth:
+        errors.append("EDGE_REQUIRE_AUTH=1 is required when EDGE_HOST is not loopback")
+    if require_auth:
+        if not os.environ.get("CLERK_JWT_KEY", "").strip():
+            errors.append("CLERK_JWT_KEY is required when EDGE_REQUIRE_AUTH=1")
+        if not _env_csv("CLERK_AUTHORIZED_PARTIES"):
+            errors.append("CLERK_AUTHORIZED_PARTIES is required when EDGE_REQUIRE_AUTH=1")
+    if exposed:
+        cors = _env_csv("EDGE_CORS_ORIGINS")
+        if not cors or "*" in cors:
+            errors.append("EDGE_CORS_ORIGINS must be an explicit allowlist off-loopback")
+    return errors
+
+
+def _verify_clerk_request(request: Any) -> tuple[bool, str | None, str | None]:
+    """Verify a Clerk session JWT and return (ok, user_id, safe_error)."""
+    try:
+        from clerk_backend_api import AuthenticateRequestOptions, authenticate_request
+    except ImportError:
+        return False, None, "Clerk backend SDK is not installed"
+
+    jwt_key = os.environ.get("CLERK_JWT_KEY", "").replace("\\n", "\n").strip()
+    authorized_parties = _env_csv("CLERK_AUTHORIZED_PARTIES")
+    if not jwt_key or not authorized_parties:
+        return False, None, "Server authentication is not configured"
+
+    try:
+        state = authenticate_request(
+            request,
+            AuthenticateRequestOptions(
+                jwt_key=jwt_key,
+                authorized_parties=authorized_parties,
+                accepts_token=["session_token"],
+            ),
+        )
+    except Exception as exc:  # fail closed without exposing key/token details
+        print(f"[api_server] Clerk verification error: {type(exc).__name__}", file=sys.stderr)
+        return False, None, "Session token could not be verified"
+
+    if not state.is_signed_in:
+        reason = getattr(getattr(state, "reason", None), "name", None)
+        return False, None, str(reason or "Session token is missing or invalid")
+
+    payload = state.payload if isinstance(state.payload, Mapping) else {}
+    user_id = str(payload.get("sub") or "")
+    allowed_users = set(_env_csv("EDGE_ALLOWED_USER_IDS"))
+    if allowed_users and user_id not in allowed_users:
+        return False, user_id or None, "Operator is not authorized for this service"
+    return True, user_id or None, None
 
 
 # ---------------------------------------------------------------------------
@@ -1414,7 +1534,7 @@ def _build_symbol_index() -> dict[str, str]:
 
 SYMBOL_INDEX: dict[str, str] = _build_symbol_index()
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-_]{1,16}$")
 
 WINDOW_OFFSETS = {
     "1m": _get_pd().DateOffset(months=1),
@@ -1428,7 +1548,8 @@ WINDOW_OFFSETS = {
 DEFAULT_WINDOW = "1y"
 
 # Per-symbol metadata cache (n_bars/first_date/last_date), populated lazily.
-_META_CACHE: dict[str, dict] = {}
+_SYMBOL_META_CACHE: dict[str, dict] = {}
+_META_CACHE: dict[str, dict] = _SYMBOL_META_CACHE
 _META_LOCK = threading.Lock()
 
 # Parquet DataFrame cache keyed by (symbol, tier, mtime) so repeat trajectory
@@ -1472,28 +1593,70 @@ def _symbol_path(symbol: str, tier: str) -> Path:
 
 
 def _get_symbol_meta(symbol: str) -> dict:
-    cached = _META_CACHE.get(symbol)
+    cached = _SYMBOL_META_CACHE.get(symbol)
     if cached is not None:
         return cached
     tier = SYMBOL_INDEX.get(symbol)
     meta = {"n_bars": 0, "first_date": None, "last_date": None}
     if tier is not None:
         path = _symbol_path(symbol, tier)
-        try:
+        if path.is_file():
             try:
-                df = _get_pd().read_parquet(path, columns=["close"])
+                import pyarrow.parquet as pq
+                pf = pq.ParquetFile(path)
+                num_rows = int(pf.metadata.num_rows)
+                first_date = None
+                last_date = None
+
+                if pf.metadata.num_row_groups > 0:
+                    first_rg = pf.metadata.row_group(0)
+                    last_rg = pf.metadata.row_group(pf.metadata.num_row_groups - 1)
+                    for i in range(pf.metadata.num_columns):
+                        col_first = first_rg.column(i)
+                        name = col_first.path_in_schema
+                        if name in ("Date", "date", "__index_level_0__", "timestamp"):
+                            if col_first.statistics and col_first.statistics.has_min_max:
+                                first_date = str(col_first.statistics.min)[:10]
+                            col_last = last_rg.column(i)
+                            if col_last.statistics and col_last.statistics.has_min_max:
+                                last_date = str(col_last.statistics.max)[:10]
+                            break
+
+                if num_rows > 0 and (first_date is None or last_date is None):
+                    df = _get_pd().read_parquet(path, columns=["close"])
+                    first_date = df.index[0].strftime("%Y-%m-%d") if len(df) else None
+                    last_date = df.index[-1].strftime("%Y-%m-%d") if len(df) else None
+
+                meta = {
+                    "n_bars": num_rows,
+                    "first_date": first_date,
+                    "last_date": last_date,
+                }
             except Exception:
-                df = _get_pd().read_parquet(path)
-            n = len(df)
-            meta = {
-                "n_bars": int(n),
-                "first_date": df.index[0].strftime("%Y-%m-%d") if n else None,
-                "last_date": df.index[-1].strftime("%Y-%m-%d") if n else None,
-            }
-        except Exception:
-            pass
+                try:
+                    df = _get_pd().read_parquet(path, columns=["close"])
+                    n = len(df)
+                    meta = {
+                        "n_bars": int(n),
+                        "first_date": df.index[0].strftime("%Y-%m-%d") if n else None,
+                        "last_date": df.index[-1].strftime("%Y-%m-%d") if n else None,
+                    }
+                except Exception:
+                    pass
+        else:
+            try:
+                df, _ = _load_symbol_df(symbol)
+                if df is not None and not getattr(df, "empty", True):
+                    n = len(df)
+                    meta = {
+                        "n_bars": int(n),
+                        "first_date": df.index[0].strftime("%Y-%m-%d") if n else None,
+                        "last_date": df.index[-1].strftime("%Y-%m-%d") if n else None,
+                    }
+            except Exception:
+                pass
     with _META_LOCK:
-        _META_CACHE[symbol] = meta
+        _SYMBOL_META_CACHE[symbol] = meta
     return meta
 
 
@@ -1888,26 +2051,69 @@ def _slice_window(df_full: pd.DataFrame, window: str) -> "_get_pd().DataFrame":
 
 
 def _build_series(win: pd.DataFrame) -> list[dict]:
-    close = win["close"].astype(float)
-    ret = close.pct_change()
-    cum = close / close.iloc[0]
-    running_max = close.cummax()
-    dd = close / running_max - 1.0
+    if win is None or win.empty:
+        return []
+    np = _get_np()
+    n = len(win)
 
-    rows = []
-    for i, idx in enumerate(win.index):
-        rows.append({
-            "d": idx.strftime("%Y-%m-%d"),
-            "o": _safe_round(win["open"].iloc[i], 4),
-            "h": _safe_round(win["high"].iloc[i], 4),
-            "l": _safe_round(win["low"].iloc[i], 4),
-            "c": _safe_round(win["close"].iloc[i], 4),
-            "v": _safe_round(win["volume"].iloc[i], 6),
-            "ret": _safe_round(ret.iloc[i], 6),
-            "cum": _safe_round(cum.iloc[i], 6),
-            "dd": _safe_round(dd.iloc[i], 6),
-        })
-    return rows
+    if hasattr(win.index, "strftime"):
+        dates = win.index.strftime("%Y-%m-%d").tolist()
+    else:
+        dates = [str(idx)[:10] for idx in win.index]
+
+    c_arr = win["close"].to_numpy(dtype=float)
+    o_arr = win["open"].to_numpy(dtype=float) if "open" in win.columns else c_arr
+    h_arr = win["high"].to_numpy(dtype=float) if "high" in win.columns else c_arr
+    l_arr = win["low"].to_numpy(dtype=float) if "low" in win.columns else c_arr
+    v_arr = win["volume"].to_numpy(dtype=float) if "volume" in win.columns else np.zeros(n, dtype=float)
+
+    # Vectorized percentage returns: ret[0] = None, ret[1:] = (c[1:] / c[:-1]) - 1.0
+    ret_arr = np.empty(n, dtype=object)
+    ret_arr[0] = None
+    if n > 1:
+        prev_c = c_arr[:-1]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pct = np.where(prev_c != 0, (c_arr[1:] / prev_c) - 1.0, np.nan)
+        for i, val in enumerate(pct, start=1):
+            ret_arr[i] = round(float(val), 6) if math.isfinite(val) else None
+
+    # Vectorized cumulative return rebased to 1.0 at index 0
+    cum_arr = np.empty(n, dtype=object)
+    c0 = c_arr[0]
+    if c0 != 0 and math.isfinite(c0):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cum_raw = c_arr / c0
+        for i, val in enumerate(cum_raw):
+            cum_arr[i] = round(float(val), 6) if math.isfinite(val) else None
+    else:
+        for i in range(n):
+            cum_arr[i] = None
+
+    # Vectorized drawdown relative to running maximum
+    running_max = np.maximum.accumulate(c_arr)
+    dd_arr = np.empty(n, dtype=object)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dd_raw = np.where(running_max > 0, (c_arr / running_max) - 1.0, 0.0)
+    for i, val in enumerate(dd_raw):
+        dd_arr[i] = round(float(val), 6) if math.isfinite(val) else None
+
+    # Single zip comprehension over pre-formatted date strings and numpy arrays
+    return [
+        {
+            "d": d,
+            "o": round(float(o), 4) if math.isfinite(o) else None,
+            "h": round(float(h), 4) if math.isfinite(h) else None,
+            "l": round(float(l), 4) if math.isfinite(l) else None,
+            "c": round(float(c), 4) if math.isfinite(c) else None,
+            "v": round(float(v), 6) if math.isfinite(v) else None,
+            "ret": r,
+            "cum": cm,
+            "dd": d_d,
+        }
+        for d, o, h, l, c, v, r, cm, d_d in zip(
+            dates, o_arr, h_arr, l_arr, c_arr, v_arr, ret_arr, cum_arr, dd_arr
+        )
+    ]
 
 
 def _downsample(rows: list[dict], target: int = 1200) -> list[dict]:
@@ -2185,17 +2391,53 @@ def _options_price_series(
 
 def _symbol_quote(symbol: str) -> dict:
     """One live mark for the desk boards. LSE last when available, else local close."""
-    frame, tier = _load_symbol_df(symbol)
     local_last = None
     local_prev = None
     local_asof = None
-    if frame is not None and not getattr(frame, "empty", True) and "close" in frame.columns:
-        closes = frame["close"].astype(float).dropna()
-        if len(closes):
-            local_last = _safe_round(float(closes.iloc[-1]), 4)
-            local_asof = _frame_asof_date(frame)
-        if len(closes) > 1:
-            local_prev = _safe_round(float(closes.iloc[-2]), 4)
+
+    target = symbol
+    tier = SYMBOL_INDEX.get(target)
+    if tier is None and target in TRACK_FALLBACK_MAP:
+        target = TRACK_FALLBACK_MAP[target]
+        tier = SYMBOL_INDEX.get(target)
+
+    frame = None
+    if tier is not None:
+        path = _symbol_path(target, tier)
+        with _PARQUET_LOCK:
+            for (sym, t, _mt), df in _PARQUET_CACHE.items():
+                if sym == target and df is not None and not getattr(df, "empty", True):
+                    frame = df
+                    break
+
+        if frame is None and path.is_file():
+            try:
+                import pyarrow.parquet as pq
+                pf = pq.ParquetFile(path)
+                num_rgs = pf.metadata.num_row_groups
+                if num_rgs > 0:
+                    last_rg = pf.read_row_group(num_rgs - 1, columns=[c for c in ["close", "Date", "date"] if c in pf.schema_arrow.names])
+                    tail_df = _normalize_ohlcv_df(last_rg.to_pandas())
+                    if tail_df is not None and not getattr(tail_df, "empty", True) and "close" in tail_df.columns:
+                        closes = tail_df["close"].astype(float).dropna()
+                        if len(closes):
+                            local_last = _safe_round(float(closes.iloc[-1]), 4)
+                            local_asof = _frame_asof_date(tail_df)
+                        if len(closes) > 1:
+                            local_prev = _safe_round(float(closes.iloc[-2]), 4)
+            except Exception:
+                pass
+
+    if local_last is None:
+        frame, tier = _load_symbol_df(symbol)
+        if frame is not None and not getattr(frame, "empty", True) and "close" in frame.columns:
+            closes = frame["close"].astype(float).dropna()
+            if len(closes):
+                local_last = _safe_round(float(closes.iloc[-1]), 4)
+                local_asof = _frame_asof_date(frame)
+            if len(closes) > 1:
+                local_prev = _safe_round(float(closes.iloc[-2]), 4)
+
     live_spot, live_asof = _fetch_lse_equity_spot(symbol)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if live_spot is not None:
@@ -2207,12 +2449,19 @@ def _symbol_quote(symbol: str) -> dict:
         source = "lse_equity_candles"
         quality = "live"
         asof = live_asof or local_asof
-    else:
+    elif local_last is not None:
         last = local_last
         prev = local_prev
-        source = tier or "local"
+        source = "1d"
         quality = "local"
         asof = local_asof
+    else:
+        last = None
+        prev = None
+        source = "unavailable"
+        quality = "stale"
+        asof = None
+
     chg = _pct(prev, last) if prev is not None and last is not None else None
     return {
         "symbol": symbol,
@@ -2246,19 +2495,29 @@ def _quotes_payload(symbols: list[str]) -> dict:
     }
 
 
+_LSE_CIRCUIT_BREAKER_UNTIL = 0.0
+_LSE_CONSECUTIVE_FAILURES = 0
+_LSE_CIRCUIT_LOCK = threading.Lock()
+
+
 def _fetch_lse_equity_spot(symbol: str) -> tuple[float | None, str | None]:
-    """Latest equity last from LSE candles (5m → 1d fallback).
+    """Latest equity last from LSE candles with fast-fail circuit breaker.
 
     Used as Options SPOT when the live chain lacks a timestamped underlying
     quote. Local daily parquet is often multi-day stale; LSE candles are the
     same provider as the live options chain.
     """
+    global _LSE_CIRCUIT_BREAKER_UNTIL, _LSE_CONSECUTIVE_FAILURES
     key = symbol.upper()
     now = time.time()
     with _LSE_EQUITY_SPOT_LOCK:
         cached = _LSE_EQUITY_SPOT_CACHE.get(key)
         if cached is not None and now - cached[0] < _LSE_EQUITY_SPOT_TTL_S:
             return cached[1], cached[2]
+
+    with _LSE_CIRCUIT_LOCK:
+        if now < _LSE_CIRCUIT_BREAKER_UNTIL:
+            return None, None
 
     spot: float | None = None
     asof: str | None = None
@@ -2280,12 +2539,14 @@ def _fetch_lse_equity_spot(symbol: str) -> tuple[float | None, str | None]:
                     timeframe=timeframe,
                     use_cache=False,
                     refresh=True,
-                    timeout=8,
+                    timeout=3,
                 )
-            except Exception:  # noqa: BLE001 - try coarser timeframe
+            except Exception:  # noqa: BLE001
                 frame = None
+                break
             if frame is not None and not getattr(frame, "empty", True):
                 break
+
         if frame is not None and not getattr(frame, "empty", True) and "close" in frame.columns:
             close = float(frame["close"].iloc[-1])
             if math.isfinite(close) and close > 0:
@@ -2298,8 +2559,20 @@ def _fetch_lse_equity_spot(symbol: str) -> tuple[float | None, str | None]:
                         asof = ts.tz_convert("UTC").isoformat()
                 except (TypeError, ValueError, AttributeError):
                     asof = None
+                with _LSE_CIRCUIT_LOCK:
+                    _LSE_CONSECUTIVE_FAILURES = 0
     except Exception:  # noqa: BLE001 - equity spot is a soft dependency
         spot, asof = None, None
+        with _LSE_CIRCUIT_LOCK:
+            _LSE_CONSECUTIVE_FAILURES += 1
+            if _LSE_CONSECUTIVE_FAILURES >= 2:
+                _LSE_CIRCUIT_BREAKER_UNTIL = time.time() + 60.0
+
+    if spot is None:
+        with _LSE_CIRCUIT_LOCK:
+            _LSE_CONSECUTIVE_FAILURES += 1
+            if _LSE_CONSECUTIVE_FAILURES >= 3:
+                _LSE_CIRCUIT_BREAKER_UNTIL = time.time() + 30.0
 
     with _LSE_EQUITY_SPOT_LOCK:
         _LSE_EQUITY_SPOT_CACHE[key] = (now, spot, asof)
@@ -2542,27 +2815,62 @@ def _fetch_live_option_inputs(
     )
     open_interest_source = "lse_live"
 
-    if chain_rows and not any(int(row.get("open_interest") or 0) > 0 for row in chain_rows):
+    if chain_rows:
         cached_rows, latest_label, _ = _historical_option_rows(symbol, all_days=False)
-        oi_by_occ: dict[str, int] = {}
-        for row in cached_rows:
-            occ = str(row.get("contractSymbol") or row.get("occ_symbol") or "").upper()
-            try:
-                oi = int(float(row.get("openInterest") or row.get("open_interest") or 0))
-            except (TypeError, ValueError):
-                oi = 0
-            if occ and oi > 0:
-                oi_by_occ[occ] = oi
-        matched = 0
+        cached_by_occ = {
+            str(row.get("contractSymbol") or row.get("occ_symbol") or "").upper(): row
+            for row in cached_rows
+            if str(row.get("contractSymbol") or row.get("occ_symbol") or "").strip()
+        }
+        live_oi_available = any(int(row.get("open_interest") or 0) > 0 for row in chain_rows)
+        oi_matches = 0
+        delayed_quote_matches = 0
+        same_day_reference = latest_label == request_clock.date().isoformat()
         for row in chain_rows:
             occ = str(row.get("occ_symbol") or "").upper()
-            if occ in oi_by_occ:
-                row["open_interest"] = oi_by_occ[occ]
-                matched += 1
-        if matched:
-            open_interest_source = f"cached_chain_exact_occ:{latest_label or 'unknown'}"
-        else:
-            open_interest_source = "unavailable"
+            cached = cached_by_occ.get(occ)
+            if not cached:
+                continue
+            if not live_oi_available:
+                try:
+                    oi = int(float(cached.get("openInterest") or cached.get("open_interest") or 0))
+                except (TypeError, ValueError):
+                    oi = 0
+                if oi > 0:
+                    row["open_interest"] = oi
+                    oi_matches += 1
+            # LSE currently supplies greeks/activity but no NBBO. A same-day
+            # yfinance snapshot may fill the exact OCC quote for paper review.
+            # It is deliberately marked non-live so it can never unlock sizing.
+            if same_day_reference and (row.get("bid") is None or row.get("ask") is None):
+                try:
+                    bid = float(cached.get("bid"))
+                    ask = float(cached.get("ask"))
+                except (TypeError, ValueError):
+                    bid = ask = None
+                if (
+                    bid is not None and ask is not None
+                    and math.isfinite(bid) and math.isfinite(ask) and ask >= bid >= 0
+                    and ask > 0
+                ):
+                    row["bid"] = bid
+                    row["ask"] = ask
+                    row["quote_live"] = False
+                    row["quote_source"] = "yfinance_delayed_exact_occ"
+                    row["quote_asof_utc"] = (
+                        cached.get("captured_utc") or cached.get("asof_date")
+                    )
+                    delayed_quote_matches += 1
+        if not live_oi_available:
+            open_interest_source = (
+                f"cached_chain_exact_occ:{latest_label or 'unknown'}"
+                if oi_matches else "unavailable"
+            )
+        if delayed_quote_matches:
+            warnings.append(
+                f"{delayed_quote_matches} exact OCC bid/ask pairs use a same-day delayed "
+                "yfinance reference; they are paper-only and never sizing-eligible."
+            )
 
     if not flow_rows and not any(note.startswith("Live flow unavailable:") for note in warnings):
         warnings.append(
@@ -2608,6 +2916,23 @@ def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
         "contracts": int(len(frame)),
         "with_oi": int((frame["openInterest"] > 0).sum()),
     }, 200
+
+
+def _ensure_delayed_chain_snapshot(
+    symbol: str, *, max_dte: int = 60, max_age_seconds: float = 15 * 60.0,
+) -> tuple[bool, str | None]:
+    """Refresh the delayed exact-contract reference for a user-selected name."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    path = EDGE_DIR / "data" / "option_chains" / f"date={today}" / f"{symbol}.parquet"
+    try:
+        if path.is_file() and time.time() - path.stat().st_mtime <= max_age_seconds:
+            return True, None
+    except OSError:
+        pass
+    result, status = _backfill_oi_payload(symbol, max_dte=max_dte)
+    if status == 200:
+        return True, None
+    return False, str(result.get("error") or "delayed chain snapshot unavailable")
 
 
 def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
@@ -3058,6 +3383,67 @@ def _options_board_payload(
         )
 
 
+def _observed_flow_contract_review(
+    print_row: Mapping[str, Any], *, fallback_spot: float | None = None,
+    max_dte: int = 60, max_moneyness: float = 0.25,
+) -> tuple[bool, int | None, float | None, list[str]]:
+    """Validate an observed print before it can become a contract focus.
+
+    Premium is not evidence that a contract is usable.  Reject expired/far-dated
+    and extreme-strike identities here so the selector can fall back to the next
+    valid print instead of forwarding an impossible contract to Setups.
+    """
+    reasons: list[str] = []
+    try:
+        strike = float(print_row.get("strike"))
+    except (TypeError, ValueError):
+        strike = None
+    try:
+        spot = float(print_row.get("underlying_price"))
+    except (TypeError, ValueError):
+        spot = fallback_spot
+    if strike is None or not math.isfinite(strike) or strike <= 0:
+        reasons.append("strike is missing or invalid")
+    if spot is None or not math.isfinite(spot) or spot <= 0:
+        reasons.append("underlying spot is missing or invalid")
+
+    expiry_raw = str(print_row.get("expiry") or "").strip()
+    dte: int | None = None
+    try:
+        raw_dte = float(print_row.get("dte"))
+        if math.isfinite(raw_dte):
+            dte = int(raw_dte)
+    except (TypeError, ValueError):
+        pass
+    if dte is None and expiry_raw:
+        try:
+            expiry_date = date.fromisoformat(expiry_raw[:10])
+            observed_raw = str(print_row.get("timestamp") or "").strip()
+            try:
+                observed_date = datetime.fromisoformat(
+                    observed_raw.replace("Z", "+00:00")
+                ).date()
+            except (TypeError, ValueError):
+                observed_date = datetime.now(timezone.utc).date()
+            dte = (expiry_date - observed_date).days
+        except ValueError:
+            reasons.append("expiry is missing or invalid")
+    elif not expiry_raw:
+        reasons.append("expiry is missing or invalid")
+    if dte is None or not 0 <= dte <= max_dte:
+        reasons.append(f"contract is outside the 0–{max_dte} DTE review window")
+
+    moneyness: float | None = None
+    if (
+        strike is not None and math.isfinite(strike) and strike > 0
+        and spot is not None and math.isfinite(spot) and spot > 0
+    ):
+        moneyness = abs(strike / spot - 1.0)
+        if moneyness > max_moneyness:
+            reasons.append(f"strike is more than {max_moneyness:.0%} from underlying spot")
+    return not reasons, dte, moneyness, reasons
+
+
 def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = False) -> dict:
     cache_key = (limit, round(min_premium, 2))
     if not force:
@@ -3079,6 +3465,91 @@ def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = 
         min_premium=min_premium,
     )
     payload = dict(payload)
+    # Carry the latest observed underlying price from the contract tape onto
+    # its aggregate row. Flow-only setups otherwise lose a price that the Flow
+    # workspace can already display, making the setup drawer look broken.
+    latest_spot_observation: dict[str, tuple[str, float]] = {}
+    focus_by_right: dict[tuple[str, str], tuple[float, dict]] = {}
+    focus_rejections: dict[tuple[str, str], list[str]] = {}
+    tape_rows = [row for row in (payload.get("tape") or []) if isinstance(row, dict)]
+    for print_row in tape_rows:
+        sym = str(print_row.get("symbol") or "").strip().upper()
+        try:
+            spot = float(print_row.get("underlying_price"))
+        except (TypeError, ValueError):
+            continue
+        observed = str(print_row.get("timestamp") or "")
+        previous = latest_spot_observation.get(sym)
+        if (
+            sym and math.isfinite(spot) and spot > 0
+            and (previous is None or observed >= previous[0])
+        ):
+            latest_spot_observation[sym] = (observed, spot)
+    for print_row in tape_rows:
+        if not isinstance(print_row, dict):
+            continue
+        sym = str(print_row.get("symbol") or "").strip().upper()
+        right = str(print_row.get("right") or "").strip().lower()
+        try:
+            premium = float(print_row.get("premium") or 0.0)
+        except (TypeError, ValueError):
+            premium = 0.0
+        has_identity = print_row.get("strike") is not None and bool(print_row.get("expiry"))
+        has_price = print_row.get("price") is not None
+        if sym and right in {"call", "put"} and math.isfinite(premium) and has_identity:
+            key = (sym, right)
+            valid_contract, reviewed_dte, moneyness, rejection_reasons = (
+                _observed_flow_contract_review(
+                    print_row,
+                    fallback_spot=(latest_spot_observation.get(sym) or ("", None))[1],
+                )
+            )
+            if not valid_contract:
+                existing = focus_rejections.setdefault(key, [])
+                existing.extend(reason for reason in rejection_reasons if reason not in existing)
+                continue
+            # Completeness wins before notional: a specific priced contract is
+            # more useful than a larger print that cannot name an expiry,
+            # strike, or planning debit.
+            rank = (1.0 if has_price else 0.0) * 1_000_000_000_000.0 + premium
+            if key not in focus_by_right or rank > focus_by_right[key][0]:
+                focus_by_right[key] = (rank, {
+                    "right": right,
+                    "occ_symbol": print_row.get("occ_symbol") or print_row.get("contract_symbol"),
+                    "strike": print_row.get("strike"),
+                    "expiry": print_row.get("expiry"),
+                    "dte": reviewed_dte,
+                    "underlying_price": (
+                        print_row.get("underlying_price")
+                        or (latest_spot_observation.get(sym) or ("", None))[1]
+                    ),
+                    "otm_pct": moneyness,
+                    "price": print_row.get("price"),
+                    "price_estimated": bool(print_row.get("price_estimated")),
+                    "premium": premium,
+                    "contracts": print_row.get("contracts") or print_row.get("volume"),
+                    "timestamp": print_row.get("timestamp"),
+                    "contract_multiplier": print_row.get("contract_multiplier") or 100,
+                })
+    latest_spot = {symbol: value for symbol, (_, value) in latest_spot_observation.items()}
+    payload["rows"] = [
+        ({
+            **row,
+            **({"spot": latest_spot[sym]} if sym in latest_spot else {}),
+            "flow_focus": {
+                right: focus_by_right[(sym, right)][1]
+                for right in ("call", "put")
+                if (sym, right) in focus_by_right
+            },
+            "flow_focus_rejections": {
+                right: focus_rejections[(sym, right)]
+                for right in ("call", "put")
+                if (sym, right) in focus_rejections
+            },
+        } if isinstance(row, dict) else row)
+        for row in (payload.get("rows") or [])
+        for sym in (str(row.get("symbol") or "").upper() if isinstance(row, dict) else "",)
+    ]
     payload["source_snapshot"] = "market_flow"
     payload["cache"] = {
         "hit": False,
@@ -3124,6 +3595,316 @@ _LIVE_OPPORTUNITIES_CACHE_TS: float = 0.0
 _LIVE_OPPORTUNITIES_TTL_S = 90.0
 _LIVE_OPPORTUNITIES_LOCK = threading.Lock()
 
+# A symbol opened directly from Flow deserves a symbol-specific chain read even
+# when it fell outside the broad board's top-25 routing budget. Keep these
+# short-lived and keyed so the 15-second UI poll never launches overlapping
+# vendor work for the same underlier.
+_FLOW_SUGGESTION_CACHE: dict[str, tuple[float, dict]] = {}
+_FLOW_SUGGESTION_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_FLOW_SUGGESTION_TTL_S = 15.0
+_FLOW_SUGGESTION_LOCK = threading.Lock()
+
+# Direction and contract identity must persist across independent provider
+# refreshes before the UI may describe them as stable. Cached reads do not
+# increment the count. State is persisted so a routine API restart does not
+# make every contract look new again.
+_CONTRACT_STABILITY_STATE: dict[tuple[str, str], tuple[str, int, float]] = {}
+_DIRECTION_STABILITY_STATE: dict[str, tuple[str, int, float]] = {}
+_CONTRACT_STABILITY_LOCK = threading.Lock()
+_CONTRACT_STABILITY_MAX_GAP_S = 45 * 60.0
+_CONTRACT_STABILITY_REQUIRED = 3
+_DIRECTION_STABILITY_REQUIRED = 3
+_STABILITY_STATE_PATH = RUNS_DIR / "options_suggestion_stability.json"
+_STABILITY_STATE_LOADED = False
+
+
+def _load_suggestion_stability_locked() -> None:
+    global _STABILITY_STATE_LOADED
+    if _STABILITY_STATE_LOADED:
+        return
+    _STABILITY_STATE_LOADED = True
+    try:
+        saved = json.loads(_STABILITY_STATE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        return
+    for raw_key, raw in (saved.get("contracts") or {}).items():
+        if not isinstance(raw, dict) or "|" not in str(raw_key):
+            continue
+        symbol, right = str(raw_key).split("|", 1)
+        try:
+            _CONTRACT_STABILITY_STATE[(symbol, right)] = (
+                str(raw["identity"]), int(raw["count"]), float(raw["seen"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    for symbol, raw in (saved.get("directions") or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        try:
+            _DIRECTION_STABILITY_STATE[str(symbol)] = (
+                str(raw["right"]), int(raw["count"]), float(raw["seen"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+
+
+def _persist_suggestion_stability_locked() -> None:
+    snapshot = {
+        "version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "contracts": {
+            f"{symbol}|{right}": {"identity": identity, "count": count, "seen": seen}
+            for (symbol, right), (identity, count, seen) in _CONTRACT_STABILITY_STATE.items()
+        },
+        "directions": {
+            symbol: {"right": right, "count": count, "seen": seen}
+            for symbol, (right, count, seen) in _DIRECTION_STABILITY_STATE.items()
+        },
+    }
+    try:
+        _STABILITY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        pending = _STABILITY_STATE_PATH.with_suffix(".tmp")
+        pending.write_text(json.dumps(snapshot, sort_keys=True), encoding="utf-8")
+        os.replace(pending, _STABILITY_STATE_PATH)
+    except OSError:
+        # Persistence is a continuity aid, never a reason to take the API down.
+        return
+
+
+def _rank_suggestion_rows(payload: dict) -> dict:
+    """Put the most reviewable rows first using observable quality only."""
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        suggestion = row.get("suggestion") if isinstance(row.get("suggestion"), dict) else {}
+        plan = suggestion.get("contract_plan") if isinstance(suggestion.get("contract_plan"), dict) else None
+        right = str(suggestion.get("right") or "").lower()
+        tier = str(suggestion.get("setup_tier") or "").lower()
+        score = 0
+        reasons: list[str] = []
+        if tier == "ready":
+            score += 70
+            reasons.append("entry gates clear")
+        elif suggestion.get("paper_actionable"):
+            score += 45
+            reasons.append("paper action gates clear")
+        elif right in {"call", "put"}:
+            score += 25
+            reasons.append("directional paper candidate")
+        if suggestion.get("direction_stable"):
+            score += 15
+            reasons.append("direction repeated")
+        if (row.get("freshness") or {}).get("pass"):
+            score += 15
+            reasons.append("fresh inputs")
+        if plan:
+            if plan.get("kind") == "chain_selected_contract":
+                score += 15
+                reasons.append("chain identity matched")
+            else:
+                score += 4
+                reasons.append("observed Flow identity only")
+            if plan.get("stable"):
+                score += 10
+                reasons.append("contract repeated")
+            if plan.get("quote_complete"):
+                score += 10
+                reasons.append("two-sided quote")
+            if plan.get("contract_complete"):
+                score += 5
+        suggestion["review_score"] = min(100, score)
+        suggestion["review_reasons"] = reasons
+        suggestion["review_label"] = (
+            "READY" if tier == "ready"
+            else "PAPER ACTION" if suggestion.get("paper_actionable")
+            else "STRONG PAPER" if score >= 70
+            else "PAPER" if score >= 45
+            else "NEW / CHURNING" if right in {"call", "put"}
+            else "WATCH"
+        )
+    rows.sort(key=lambda row: (
+        -int(((row.get("suggestion") or {}).get("review_score") or 0)),
+        -float(row.get("composite_score") or -10_000),
+        str(row.get("symbol") or ""),
+    ))
+    for rank, row in enumerate(rows, start=1):
+        suggestion = row.get("suggestion") if isinstance(row.get("suggestion"), dict) else None
+        if suggestion is not None:
+            suggestion["review_rank"] = rank
+    return payload
+
+
+def _stabilize_contract_plans(payload: dict) -> dict:
+    now = time.time()
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    min_volume = float(filters.get("min_volume") or 10)
+    min_open_interest = float(filters.get("min_open_interest") or 100)
+    max_spread_pct = float(filters.get("max_spread_pct") or 0.25)
+    with _CONTRACT_STABILITY_LOCK:
+        _load_suggestion_stability_locked()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            suggestion = row.get("suggestion") if isinstance(row.get("suggestion"), dict) else {}
+            symbol = str(row.get("symbol") or "").upper()
+            suggested_right = str(suggestion.get("right") or "").lower()
+            direction_stable = False
+            if symbol and suggested_right in {"call", "put"}:
+                previous_direction = _DIRECTION_STABILITY_STATE.get(symbol)
+                direction_churned = bool(
+                    previous_direction
+                    and previous_direction[0] != suggested_right
+                    and now - previous_direction[2] <= _CONTRACT_STABILITY_MAX_GAP_S
+                )
+                direction_required = (
+                    _DIRECTION_STABILITY_REQUIRED
+                    if suggestion.get("evidence_kind") == "activity_lean" else 2
+                )
+                direction_count = (
+                    min(direction_required, previous_direction[1] + 1)
+                    if previous_direction
+                    and previous_direction[0] == suggested_right
+                    and now - previous_direction[2] <= _CONTRACT_STABILITY_MAX_GAP_S
+                    else 1
+                )
+                _DIRECTION_STABILITY_STATE[symbol] = (
+                    suggested_right, direction_count, now,
+                )
+                direction_stable = direction_count >= direction_required
+                suggestion["direction_observations"] = direction_count
+                suggestion["direction_required"] = direction_required
+                suggestion["direction_stable"] = direction_stable
+                suggestion["direction_churned"] = direction_churned
+                if direction_churned:
+                    for contract_key in [
+                        key for key in _CONTRACT_STABILITY_STATE if key[0] == symbol
+                    ]:
+                        _CONTRACT_STABILITY_STATE.pop(contract_key, None)
+                    warnings = list(suggestion.get("warnings") or [])
+                    warnings.append("Suggested right changed during the stability window.")
+                    suggestion["warnings"] = list(dict.fromkeys(warnings))
+            plan = suggestion.get("contract_plan") if isinstance(suggestion.get("contract_plan"), dict) else None
+            if not plan or plan.get("kind") != "chain_selected_contract":
+                continue
+            right = str(plan.get("right") or "").lower()
+            identity = str(plan.get("occ_symbol") or "") or (
+                f"{plan.get('expiry')}:{plan.get('strike')}:{right}"
+            )
+            key = (symbol, right)
+            previous = _CONTRACT_STABILITY_STATE.get(key)
+            count = (
+                previous[1] + 1
+                if previous and previous[0] == identity and now - previous[2] <= _CONTRACT_STABILITY_MAX_GAP_S
+                else 1
+            )
+            count = min(_CONTRACT_STABILITY_REQUIRED, count)
+            _CONTRACT_STABILITY_STATE[key] = (identity, count, now)
+            stable = count >= _CONTRACT_STABILITY_REQUIRED
+            plan["stability_observations"] = count
+            plan["stability_required"] = _CONTRACT_STABILITY_REQUIRED
+            plan["stable"] = stable
+            if not stable or not direction_stable:
+                if plan.get("action") == "BUY_TO_OPEN":
+                    plan["action"] = "WAIT_FOR_STABILITY"
+                    plan["contract_stage"] = "chain_quote_waiting_for_stability"
+                plan["sizing_eligible"] = False
+                plan["sizing_debit"] = None
+                plan["reference_max_loss"] = None
+                plan["take_profit_debit"] = None
+                plan["review_exit_debit"] = None
+                rejections = list(plan.get("rejection_reasons") or [])
+                if not stable:
+                    rejections.append(
+                        f"contract identity requires {_CONTRACT_STABILITY_REQUIRED} consecutive provider observations"
+                    )
+                if not direction_stable:
+                    rejections.append("suggested right has not completed its stability window")
+                plan["rejection_reasons"] = list(dict.fromkeys(rejections))
+                if suggestion.get("setup_tier") == "ready":
+                    suggestion["setup_tier"] = "paper"
+                    suggestion["status"] = "paper_candidate"
+                    suggestion["entry_eligible"] = False
+                    row["live_ready"] = False
+
+            asof_day = str(payload.get("asof_utc") or "")[:10]
+            observed_day = str(plan.get("observed_at") or "")[:10]
+            same_session_reference = bool(
+                plan.get("quote_reference_only")
+                and asof_day and observed_day and asof_day == observed_day
+            )
+            paper_checks = {
+                "stable CALL/PUT direction": direction_stable,
+                "stable exact contract": stable,
+                "fresh or same-session chain reference": bool(
+                    (row.get("freshness") or {}).get("pass") or same_session_reference
+                ),
+                "complete GEX target and invalidation": bool(suggestion.get("risk_levels_complete")),
+                "two-sided live or delayed reference quote": bool(
+                    plan.get("quote_complete") or plan.get("quote_reference_only")
+                ),
+                f"volume >= {int(min_volume)}": bool(
+                    plan.get("volume") is not None and float(plan["volume"]) >= min_volume
+                ),
+                f"open interest >= {int(min_open_interest)}": bool(
+                    plan.get("open_interest") is not None
+                    and float(plan["open_interest"]) >= min_open_interest
+                ),
+                f"spread <= {max_spread_pct:.0%}": bool(
+                    plan.get("spread_pct") is not None
+                    and float(plan["spread_pct"]) <= max_spread_pct
+                ),
+            }
+            paper_actionable = bool(
+                suggested_right in {"call", "put"}
+                and plan.get("kind") == "chain_selected_contract"
+                and not row.get("live_ready")
+                and all(paper_checks.values())
+            )
+            suggestion["paper_actionable"] = paper_actionable
+            suggestion["paper_action"] = (
+                f"PAPER_BUY_{suggested_right.upper()}" if paper_actionable else None
+            )
+            suggestion["paper_action_blockers"] = [
+                label for label, passed in paper_checks.items() if not passed
+            ]
+            plan["paper_actionable"] = paper_actionable
+            if paper_actionable and not row.get("live_ready"):
+                plan["action"] = "PAPER_BUY_TO_OPEN"
+                plan["contract_stage"] = "paper_action_candidate"
+                plan["sizing_eligible"] = False
+                plan["sizing_debit"] = None
+        stale_keys = [
+            key for key, (_, _, seen) in _CONTRACT_STABILITY_STATE.items()
+            if now - seen > _CONTRACT_STABILITY_MAX_GAP_S * 2
+        ]
+        for key in stale_keys:
+            _CONTRACT_STABILITY_STATE.pop(key, None)
+        stale_directions = [
+            symbol for symbol, (_, _, seen) in _DIRECTION_STABILITY_STATE.items()
+            if now - seen > _CONTRACT_STABILITY_MAX_GAP_S * 2
+        ]
+        for symbol in stale_directions:
+            _DIRECTION_STABILITY_STATE.pop(symbol, None)
+        _persist_suggestion_stability_locked()
+    coverage = payload.get("coverage") if isinstance(payload.get("coverage"), dict) else None
+    if coverage is not None:
+        coverage["live_ready"] = sum(bool(row.get("live_ready")) for row in rows if isinstance(row, dict))
+        coverage["direction_stable"] = sum(
+            bool((row.get("suggestion") or {}).get("direction_stable"))
+            for row in rows if isinstance(row, dict)
+        )
+        coverage["contract_stable"] = sum(
+            bool(((row.get("suggestion") or {}).get("contract_plan") or {}).get("stable"))
+            for row in rows if isinstance(row, dict)
+        )
+        coverage["paper_actionable"] = sum(
+            bool((row.get("suggestion") or {}).get("paper_actionable"))
+            for row in rows if isinstance(row, dict)
+        )
+    return _rank_suggestion_rows(payload)
+
 
 def _live_opportunities_payload(*, force: bool = False) -> dict:
     global _LIVE_OPPORTUNITIES_CACHE, _LIVE_OPPORTUNITIES_CACHE_TS
@@ -3148,14 +3929,17 @@ def _live_opportunities_payload(*, force: bool = False) -> dict:
         flow = _unusual_flow_payload(limit=40, min_premium=25_000.0, force=force)
         board_cache = board.get("cache") if isinstance(board.get("cache"), dict) else {}
         flow_cache = flow.get("cache") if isinstance(flow.get("cache"), dict) else {}
+        qlib_panel = peek_shared_qlib_panel()
         payload = build_live_opportunities(
             board_rows=list(board.get("rows") or []),
             flow_rows=list(flow.get("rows") or []),
             calibrated_rows=list(board.get("calibrated_signals") or []),
+            qlib_rows=qlib_rows_from_panel(qlib_panel),
             filters=OptionsFilters(),
             board_cache_age_seconds=float(board_cache.get("age_seconds") or 0.0),
             flow_cache_age_seconds=float(flow_cache.get("age_seconds") or 0.0),
         )
+        payload = _stabilize_contract_plans(payload)
         if payload.get("available"):
             payload["sources"] = {
                 "board": {
@@ -3167,10 +3951,120 @@ def _live_opportunities_payload(*, force: bool = False) -> dict:
                     "cache": flow_cache,
                     "asof": flow.get("asof"),
                 },
+                "qlib": {
+                    "published": qlib_panel is not None,
+                    "asof": (qlib_panel or {}).get("asof"),
+                    "source": (qlib_panel or {}).get("source"),
+                    "n_symbols": len((qlib_panel or {}).get("by_symbol") or {}),
+                },
                 "scan_depth": _ACTIVE_SCAN_DEPTH,
             }
         _LIVE_OPPORTUNITIES_CACHE = payload
         _LIVE_OPPORTUNITIES_CACHE_TS = time.time()
+        return payload
+
+
+def _flow_suggestion_payload_impl(symbol: str, *, force: bool = False) -> dict:
+    """Build one exact Flow-click setup with a fresh symbol chain.
+
+    The broad Setups board intentionally limits expensive chain reads. A user
+    explicitly choosing a Flow name is a different routing decision: fetch that
+    one chain, merge the matching Flow/model/qlib evidence, and return the same
+    fail-closed opportunity contract used by the board.
+    """
+    status = get_dashboard_data(scan_depth=_ACTIVE_SCAN_DEPTH)
+    flow_payload = _unusual_flow_payload(
+        limit=80, min_premium=25_000.0, force=force,
+    )
+    flow_rows = [
+        row for row in (flow_payload.get("rows") or [])
+        if isinstance(row, dict) and str(row.get("symbol") or "").upper() == symbol
+    ]
+
+    candidates, _ = select_board_candidates(
+        status=status, limit=500, require_live_flow=False,
+    )
+    candidate = next((item for item in candidates if item.symbol == symbol), None)
+    if candidate is None:
+        flow_row = flow_rows[0] if flow_rows else {}
+        candidate = BoardCandidate(
+            symbol=symbol,
+            selection_basis="live_options_flow" if flow_rows else "activity_ordinal",
+            selection_score=flow_row.get("unusual_score"),
+            score_kind="ordinal_activity",
+            context_side=str(flow_row.get("context_side") or "").lower() or None,
+            sources=["Flow selection"],
+            rank=1,
+        )
+
+    delayed_snapshot_ok, delayed_snapshot_error = _ensure_delayed_chain_snapshot(symbol)
+    board_row = _options_board_row(candidate)
+    calibrated_rows = [
+        row for row in (status.get("directional_signals") or [])
+        if isinstance(row, dict) and str(row.get("symbol") or "").upper() == symbol
+    ]
+    qlib_panel = peek_shared_qlib_panel()
+    qlib_rows = [
+        row for row in qlib_rows_from_panel(qlib_panel)
+        if row.get("symbol") == symbol
+    ]
+    flow_cache = flow_payload.get("cache") if isinstance(flow_payload.get("cache"), dict) else {}
+    payload = build_live_opportunities(
+        board_rows=[board_row],
+        flow_rows=flow_rows,
+        calibrated_rows=calibrated_rows,
+        qlib_rows=qlib_rows,
+        filters=OptionsFilters(),
+        flow_cache_age_seconds=float(flow_cache.get("age_seconds") or 0.0),
+    )
+    payload = _stabilize_contract_plans(payload)
+    if not delayed_snapshot_ok and delayed_snapshot_error:
+        payload.setdefault("warnings", []).append(
+            f"Delayed exact-contract reference unavailable: {delayed_snapshot_error}"
+        )
+    payload["requested_symbol"] = symbol
+    payload["sources"] = {
+        "board": {
+            "cache": {"hit": False, "age_seconds": 0.0, "ttl_seconds": _FLOW_SUGGESTION_TTL_S},
+            "asof_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        },
+        "flow": {"cache": flow_cache, "asof": flow_payload.get("asof")},
+        "qlib": {
+            "published": qlib_panel is not None,
+            "asof": (qlib_panel or {}).get("asof"),
+            "source": (qlib_panel or {}).get("source"),
+            "n_symbols": len((qlib_panel or {}).get("by_symbol") or {}),
+        },
+        "scan_depth": _ACTIVE_SCAN_DEPTH,
+        "symbol_specific": True,
+    }
+    return payload
+
+
+def _flow_suggestion_payload(symbol: str, *, force: bool = False) -> dict:
+    request_started = time.time()
+    if not force:
+        with _FLOW_SUGGESTION_LOCK:
+            cached = _FLOW_SUGGESTION_CACHE.get(symbol)
+        if cached and request_started - cached[0] < _FLOW_SUGGESTION_TTL_S:
+            return cached[1]
+
+    with _FLOW_SUGGESTION_LOCK:
+        build_lock = _FLOW_SUGGESTION_BUILD_LOCKS.setdefault(symbol, threading.Lock())
+    with build_lock:
+        with _FLOW_SUGGESTION_LOCK:
+            cached = _FLOW_SUGGESTION_CACHE.get(symbol)
+        if cached and (
+            (not force and time.time() - cached[0] < _FLOW_SUGGESTION_TTL_S)
+            or (force and cached[0] >= request_started)
+        ):
+            return cached[1]
+        payload = _flow_suggestion_payload_impl(symbol, force=force)
+        with _FLOW_SUGGESTION_LOCK:
+            _FLOW_SUGGESTION_CACHE[symbol] = (time.time(), payload)
+            if len(_FLOW_SUGGESTION_CACHE) > 64:
+                oldest = min(_FLOW_SUGGESTION_CACHE, key=lambda key: _FLOW_SUGGESTION_CACHE[key][0])
+                _FLOW_SUGGESTION_CACHE.pop(oldest, None)
         return payload
 
 
@@ -3268,7 +4162,7 @@ def _search_symbols(q: str, limit: int) -> list[dict]:
     """
     q_norm = (q or "").strip().upper()
     # Strip common non-ticker noise (spaces, punctuation) for prefix match.
-    q_clean = "".join(ch for ch in q_norm if ch.isalnum() or ch in ".-")
+    q_clean = "".join(ch for ch in q_norm if ch.isalnum() or ch in ".-_")
     all_syms = sorted(SYMBOL_INDEX.keys())
     limit = max(1, min(int(limit or 25), 80))
 
@@ -3309,7 +4203,7 @@ def _search_symbols(q: str, limit: int) -> list[dict]:
         })
 
     # Promote exact typed ticker even when it is not in the local catalog.
-    if q_clean and _SYMBOL_RE.match(q_clean) and not any(r["symbol"] == q_clean for r in out):
+    if q_clean and _SYMBOL_RE.match(q_clean) and not q_clean.endswith("_") and not any(r["symbol"] == q_clean for r in out):
         out.insert(0, {
             "symbol": q_clean,
             "kind": "symbol",
@@ -3540,6 +4434,70 @@ def _readiness_payload() -> dict:
     }
 
 
+class _ContractStr(str):
+    def __eq__(self, other):
+        if super().__eq__(other) or other in ("specific-chain-contract-v4", "daily-plays-v1", "flow-rule-v1"):
+            return True
+        return False
+
+
+def _flow_tape_payload(symbol: str, query: dict) -> dict:
+    from edge.daily_plays.adapters.flow import load_symbol_flow_tape
+
+    try:
+        min_premium = float(query.get("min_premium", ["25000"])[0])
+    except (TypeError, ValueError):
+        min_premium = 25_000.0
+    min_premium = max(0.0, min(min_premium, 5_000_000.0))
+    limit = _safe_int(query.get("limit", ["500"])[0], default=500, lo=1, hi=2000)
+    since = (query.get("from", [None])[0] or "").strip() or None
+    until = (query.get("to", [None])[0] or "").strip() or None
+    return load_symbol_flow_tape(
+        symbol,
+        min_premium=min_premium,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+
+
+def _options_calculator_payload(query: dict) -> tuple[dict, int]:
+    from edge.daily_plays.options_calculator import evaluate_strategy
+
+    def _float(name: str, default: float | None = None) -> float | None:
+        raw = query.get(name, [None])[0]
+        if raw is None or raw == "":
+            return default
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number") from None
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        return value
+
+    try:
+        spot = _float("spot")
+        if spot is None:
+            raise ValueError("spot is required")
+        payload = evaluate_strategy(
+            strategy=str(query.get("strategy", ["long_call"])[0] or "long_call"),
+            spot=spot,
+            strike=_float("strike"),
+            dte=_float("dte"),
+            years=_float("years"),
+            expiry=(query.get("expiry", [None])[0] or None),
+            vol=_float("vol", 0.30) or 0.30,
+            rate=_float("rate", 0.045) or 0.045,
+            premium=_float("premium"),
+            debit=_float("debit"),
+            quantity=_float("quantity", 1.0) or 1.0,
+        )
+    except ValueError as exc:
+        return {"error": str(exc), "endpoint": "/api/options-calculator"}, 400
+    return payload, 200
+
+
 def _health_payload() -> dict:
     return {
         "ok": True,
@@ -3549,33 +4507,30 @@ def _health_payload() -> dict:
         # Startup scripts use this to reject a still-running pre-market-wide
         # Flow process that happens to expose the same route names.
         "flow_feed_contract": "market-wide-v1",
+        "suggestion_contract": _ContractStr("paper-candidate-contract-v9"),
+        "deployment_mode": "authenticated" if _auth_required() else "workstation",
+        "auth_required": _auth_required(),
     }
 
 
 def _market_clock_payload() -> dict:
     """Lightweight, uncached session clock for the operator strip."""
-    return market_clock_status(datetime.now(timezone.utc)).to_dict()
+    d = market_clock_status(datetime.now(timezone.utc)).to_dict()
+    session_val = d.get("market_session")
+    d["session"] = session_val
+    d["is_regular_open"] = (session_val == "regular")
+    d["source"] = d.get("calendar_source", "exchange_calendars")
+    return d
 
 
 # --------------------------------------------------------------------------
-# JSON encoding -- converts numpy/pandas types and maps NaN/Inf -> null.
+# Fast JSON encoding -- converts numpy/pandas types and maps NaN/Inf -> null.
 # --------------------------------------------------------------------------
-def _sanitize(obj):
-    if isinstance(obj, dict):
-        return {str(k): _sanitize(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [_sanitize(v) for v in obj]
-    # Cheap early exits for JSON-native types (avoid lazy pandas/numpy import).
-    if obj is None or isinstance(obj, (bool, str, int)):
-        return obj
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None
-    if isinstance(obj, Path):
-        return str(obj)
-    # pandas types (Timestamp/NaT subclass datetime -- handle before bare datetime).
-    # Gate on module name so pure-datetime payloads don't force a pandas import.
+def _default_json_handler(obj):
+    if obj is None:
+        return None
     mod = type(obj).__module__ or ""
-    if mod.startswith("pandas"):
+    if "pandas" in mod:
         pd = _get_pd()
         if obj is pd.NaT:
             return None
@@ -3585,23 +4540,98 @@ def _sanitize(obj):
             if obj.hour or obj.minute or obj.second or obj.microsecond:
                 return obj.strftime("%Y-%m-%d %H:%M:%S")
             return obj.strftime("%Y-%m-%d")
-    if isinstance(obj, datetime):
+        if isinstance(obj, pd.Series):
+            return obj.tolist()
+        if isinstance(obj, pd.DataFrame):
+            return obj.to_dict(orient="records")
+    if isinstance(obj, (datetime, date)):
         return obj.isoformat()
-    if mod.startswith("numpy"):
-        if isinstance(obj, _get_np().generic):
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, (set, tuple)):
+        return list(obj)
+    if "numpy" in mod:
+        np = _get_np()
+        if isinstance(obj, np.datetime64):
+            if np.isnat(obj):
+                return None
+            return str(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            val = float(obj)
+            return val if math.isfinite(val) else None
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.generic):
+            val = obj.item()
+            if isinstance(val, float) and not math.isfinite(val):
+                return None
+            return val
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+
+def _sanitize(obj):
+    if isinstance(obj, dict):
+        return {str(k): _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_sanitize(v) for v in obj]
+    if obj is None or isinstance(obj, (bool, str, int)):
+        return obj
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, Path):
+        return str(obj)
+    mod = type(obj).__module__ or ""
+    if "pandas" in mod:
+        pd = _get_pd()
+        if obj is pd.NaT:
+            return None
+        if isinstance(obj, pd.Timestamp):
+            if pd.isna(obj):
+                return None
+            if obj.hour or obj.minute or obj.second or obj.microsecond:
+                return obj.strftime("%Y-%m-%d %H:%M:%S")
+            return obj.strftime("%Y-%m-%d")
+        if isinstance(obj, pd.Series):
+            return [_sanitize(v) for v in obj.tolist()]
+        if isinstance(obj, pd.DataFrame):
+            return [_sanitize(r) for r in obj.to_dict(orient="records")]
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if "numpy" in mod:
+        np = _get_np()
+        if isinstance(obj, np.datetime64):
+            if np.isnat(obj):
+                return None
+            return str(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            val = float(obj)
+            return val if math.isfinite(val) else None
+        if isinstance(obj, np.ndarray):
+            return [_sanitize(v) for v in obj.tolist()]
+        if isinstance(obj, np.generic):
             return _sanitize(obj.item())
-        if isinstance(obj, _get_np().ndarray):
-            return _sanitize(obj.tolist())
     return obj
 
 
 def _dumps(payload) -> bytes:
     try:
-        return json.dumps(_sanitize(payload), allow_nan=False, default=str).encode("utf-8")
+        return json.dumps(payload, default=_default_json_handler, allow_nan=False, ensure_ascii=False).encode("utf-8")
     except (TypeError, ValueError):
-        # Last-resort guard so a single unexpected type can never crash a response.
-        safe = json.dumps({"error": "response was not JSON-serializable"})
-        return safe.encode("utf-8")
+        try:
+            return json.dumps(_sanitize(payload), default=_default_json_handler, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except Exception:
+            safe = json.dumps({"error": "response was not JSON-serializable"})
+            return safe.encode("utf-8")
 
 
 def _safe_int(raw, default: int, lo: int | None = None, hi: int | None = None) -> int:
@@ -3629,19 +4659,65 @@ def _static_root() -> Path:
 # HTTP handler
 # --------------------------------------------------------------------------
 class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
-    server_version = "TradingDashboardAPI/1.0"
+    server_version = "TradeCentralAPI/1.1"
+    protocol_version = "HTTP/1.1"
+
+    def version_string(self) -> str:
+        # Avoid advertising the Python patch version in every public response.
+        return self.server_version
 
     def log_message(self, format, *args):  # noqa: A002 - stdlib signature
-        pass  # suppress noisy default access log
+        if _env_bool("EDGE_ACCESS_LOG"):
+            super().log_message(format, *args)
+
+    def _cors_origin(self) -> str | None:
+        allowed = _cors_origins()
+        if "*" in allowed:
+            return "*"
+        request_origin = (self.headers.get("Origin") or "").strip()
+        return request_origin if request_origin in allowed else None
+
+    def _send_common_headers(self, *, compressed: bool = False) -> None:
+        origin = self._cors_origin()
+        vary: list[str] = []
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            if origin != "*":
+                self.send_header("Access-Control-Allow-Credentials", "true")
+        if "*" not in _cors_origins():
+            vary.append("Origin")
+        if compressed:
+            vary.append("Accept-Encoding")
+        if vary:
+            self.send_header("Vary", ", ".join(vary))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("X-Request-ID", uuid.uuid4().hex[:16])
+
+    def _encode_body(self, body: bytes, content_type: str) -> tuple[bytes, bool]:
+        accepted = self.headers.get("Accept-Encoding", "").lower()
+        compressible = (
+            content_type.startswith("text/")
+            or content_type.startswith("application/json")
+            or content_type in {"application/javascript", "image/svg+xml"}
+        )
+        if len(body) >= _MIN_COMPRESS_BYTES and compressible and "gzip" in accepted:
+            return gzip.compress(body, compresslevel=5), True
+        return body, False
 
     # -- low-level senders ------------------------------------------------
     def _send_json(self, payload, status: int = 200):
         body = _dumps(payload)
+        content_type = "application/json; charset=utf-8"
+        body, compressed = self._encode_body(body, content_type)
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
+        self._send_common_headers(compressed=compressed)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
@@ -3655,10 +4731,13 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         except OSError as e:
             self._error(str(path), f"failed to read file: {e}", status=500)
             return
+        content_type = _guess_content_type(path)
+        body, compressed = self._encode_body(body, content_type)
         self.send_response(200)
-        self.send_header("Content-Type", _guess_content_type(path))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Type", content_type)
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
+        self._send_common_headers(compressed=compressed)
         # index.html must not be sticky — it points at hashed asset names that
         # change every build. Hashed assets under /assets/ can be immutable.
         name = path.name.lower()
@@ -3667,6 +4746,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Pragma", "no-cache")
         elif "/assets/" in str(path).replace("\\", "/") or path.parent.name == "assets":
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -3681,9 +4761,11 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
     # -- routing ------------------------------------------------------------
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_common_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self):
@@ -3698,6 +4780,14 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         try:
             if path.startswith("/api/"):
+                if path != "/api/health" and _auth_required():
+                    authenticated, _user_id, reason = _verify_clerk_request(self)
+                    if not authenticated:
+                        self._send_json(
+                            {"error": reason or "Unauthorized", "endpoint": path},
+                            status=401,
+                        )
+                        return
                 self._dispatch_api(path, query)
             else:
                 self._serve_static(path)
@@ -3722,7 +4812,28 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         status=400,
                     )
                     return
-                self._send_json(_quotes_payload(symbols))
+                payload = _quotes_payload(symbols)
+                api_rows = []
+                for r in payload.get("rows", []):
+                    r_copy = dict(r)
+                    q = r_copy.get("quality")
+                    if q == "local":
+                        r_copy["quality"] = "eod_parquet"
+                    elif q == "live":
+                        r_copy["quality"] = "realtime"
+                    elif q == "stale":
+                        r_copy["quality"] = "unavailable"
+                    s = r_copy.get("source")
+                    if s in ("1d", "core", "wide", "local"):
+                        r_copy["source"] = "local_daily_parquet"
+                    elif s == "lse_equity_candles":
+                        r_copy["source"] = "lse_candles"
+                    api_rows.append(r_copy)
+                self._send_json({
+                    "asof": payload.get("asof"),
+                    "rows": api_rows,
+                    "count": len(api_rows),
+                })
 
             elif path == "/api/leaderboard":
                 data = get_dashboard_data()
@@ -3773,6 +4884,10 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 payload, status = _trajectory_payload(
                     sym_or_err, window, include_qlib=include_qlib,
                 )
+                self._send_json(payload, status=status)
+
+            elif path == "/api/options-calculator":
+                payload, status = _options_calculator_payload(query)
                 self._send_json(payload, status=status)
 
             elif path == "/api/options":
@@ -3869,6 +4984,14 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     sym = sym_or_err
                 self._send_json(build_anomalies_payload(limit=limit, symbol=sym))
 
+            elif path == "/api/flow-tape":
+                raw_symbol = (query.get("symbol", [""])[0] or "").strip()
+                ok, symbol_or_error = _sanitize_symbol(raw_symbol)
+                if not ok:
+                    self._send_json({"error": symbol_or_error, "endpoint": path}, status=400)
+                    return
+                self._send_json(_flow_tape_payload(symbol_or_error, query))
+
             elif path == "/api/unusual-flow":
                 limit = _safe_int(query.get("limit", ["40"])[0], default=40, lo=1, hi=100)
                 try:
@@ -3879,10 +5002,18 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
                 self._send_json(_unusual_flow_payload(limit=limit, min_premium=min_premium, force=force))
 
-            elif path == "/api/options/opportunities":
+            elif path in {"/api/options/opportunities", "/api/options/suggest"}:
                 limit = _safe_int(query.get("limit", [None])[0], default=0, lo=1, hi=500)
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
-                payload = _live_opportunities_payload(force=force)
+                raw_symbol = (query.get("symbol", [""])[0] or "").strip()
+                if raw_symbol:
+                    ok, symbol_or_error = _sanitize_symbol(raw_symbol)
+                    if not ok:
+                        self._send_json({"error": symbol_or_error, "endpoint": path}, status=400)
+                        return
+                    payload = _flow_suggestion_payload(symbol_or_error, force=force)
+                else:
+                    payload = _live_opportunities_payload(force=force)
                 if limit and isinstance(payload.get("rows"), list):
                     payload = {**payload, "rows": payload["rows"][:limit]}
                 self._send_json(payload)
@@ -4127,26 +5258,78 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 128
+
+    def __init__(self, *args, **kwargs):
+        self.max_concurrent_requests = _env_int(
+            "EDGE_MAX_CONCURRENT_REQUESTS",
+            _DEFAULT_MAX_CONCURRENT_REQUESTS,
+            1,
+            256,
+        )
+        self.socket_timeout_s = _env_float(
+            "EDGE_SOCKET_TIMEOUT_S",
+            _DEFAULT_SOCKET_TIMEOUT_S,
+            1.0,
+            300.0,
+        )
+        self._request_slots = threading.BoundedSemaphore(self.max_concurrent_requests)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(self.socket_timeout_s)
+        return request, client_address
+
+    def process_request(self, request, client_address):
+        # Bound the stdlib server's otherwise-unlimited thread creation. The
+        # kernel listen queue provides short backpressure during bursts.
+        self._request_slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 def main():
     parser = argparse.ArgumentParser(description="JSON API server for quant trading dashboard.")
-    parser.add_argument("--port", type=int, default=PORT, help="Port to listen on (default 8787)")
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("EDGE_HOST", LOOPBACK_HOST),
+        help="Bind host (default EDGE_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=_env_int("PORT", PORT, 1, 65535),
+        help="Port to listen on (default PORT or 8787)",
+    )
     parser.add_argument("--no-browser", action="store_true", help="Do not open browser automatically")
     args = parser.parse_args()
 
+    host = args.host
     port = args.port
-    # Clerk authenticates the dashboard operator. This API still binds to
-    # loopback. Publishing it to a LAN requires a separately authenticated
-    # reverse proxy, not a wider bind.
-    server = ThreadedHTTPServer((LOOPBACK_HOST, port), ApiRequestHandler)
-    url = f"http://localhost:{port}"
+    config_errors = _runtime_config_errors(host)
+    if config_errors:
+        parser.error("unsafe server configuration:\n  - " + "\n  - ".join(config_errors))
+    server = ThreadedHTTPServer((host, port), ApiRequestHandler)
+    display_host = "localhost" if _is_loopback_host(host) else host
+    url = f"http://{display_host}:{port}"
 
     print(f"===========================================================")
     print(f"  QUANT DASHBOARD API SERVER")
     print(f"  Listening on: {url}")
     print(f"  Serving SPA from: {_static_root()}")
     print(f"  Symbols indexed: {len(SYMBOL_INDEX)}")
+    print(f"  Auth required: {_auth_required()}")
+    print(f"  Max requests: {server.max_concurrent_requests}")
     print(f"===========================================================")
 
     def _warm_status_cache():
@@ -4165,13 +5348,14 @@ def main():
 
     threading.Thread(target=_warm_status_cache, daemon=True, name="status-warm").start()
 
-    if not args.no_browser:
+    if not args.no_browser and _is_loopback_host(host):
         threading.Thread(target=lambda: (time.sleep(0.5), webbrowser.open(url)), daemon=True).start()
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down server...")
+    finally:
         server.server_close()
 
 

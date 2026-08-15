@@ -265,7 +265,10 @@ def fetch_internal_directional_signals(
             path = wide_file if wide_file.is_file() else core_file
             if not path.is_file():
                 raise FileNotFoundError(f"dashboard_daily_parquet_missing:{symbol}")
-            return pd.read_parquet(path)
+            try:
+                return pd.read_parquet(path, columns=["open", "high", "low", "close", "volume"])
+            except Exception:
+                return pd.read_parquet(path)
 
         adapter = ChainFreeInternalModelsAdapter(
             # Weekends + common holiday gaps: allow up to 7 weekday sessions
@@ -806,52 +809,78 @@ def get_dashboard_data(
         QUICK_DIRECTIONAL_LIMIT if scan_depth == "quick" else len(directional_universe)
     )
 
-    # 1. Sector Money Flow first so the quick directional pass can prioritize
-    # names from today's top sleeves instead of an arbitrary first-N slice.
-    report("sector_context", 12, "Reading sector leadership and routing context.")
-    sector_flow = fetch_sector_flow_signals()
-    report("sector_context", 18, "Sector context ready.")
-
-    # 2. PEAD-style gap/volume flags. Deep evaluates the full local catalog;
-    # Quick retains the configured 175-name pass. These are ordinal flags,
-    # not calibrated probabilities or authorized entries.
+    # 1-3. Execute independent scan stages concurrently via ThreadPoolExecutor
     pead_diagnostics: dict = {}
-    pead_symbols = market_universe if scan_depth == "deep" else broad_universe
-    report("pead", 22, f"Evaluating gap and volume flags across {len(pead_symbols)} names.")
-    pead_candidates = generate_pead_candidates(
-        symbols=pead_symbols,
-        diagnostics=pead_diagnostics,
-    )
-    report("pead", 38, f"Qualified {len(pead_candidates)} ordinal PEAD activity flags.")
-
-    # 3. Internal directional signals. Quick mode bounds latency and prefers
-    # top-sector names; deep mode scores the complete frozen model domain.
     directional_diagnostics: dict = {}
-    report(
-        "directional",
-        42,
-        f"Scoring {directional_limit} names inside the calibrated serving domain.",
-    )
-    directional_signals = fetch_internal_directional_signals(
-        candidate_limit=directional_limit,
-        diagnostics=directional_diagnostics,
-        preferred_symbols=(
-            [str(row.get("symbol") or "").upper() for row in pead_candidates]
-            if scan_depth == "quick"
-            else None
-        ),
-        sector_flow=sector_flow if scan_depth == "quick" else None,
-    )
-    report(
-        "directional",
-        55,
-        f"Scored {len(directional_signals)} directional names; calibration boundaries preserved.",
-    )
-    signal_reconciliation = reconcile_pead_directional_signals(
-        pead_candidates,
-        directional_signals,
-    )
-    reconciliation_counts = signal_reconciliation["counts"]
+    pead_symbols = market_universe if scan_depth == "deep" else broad_universe
+
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        fut_sector = executor.submit(fetch_sector_flow_signals)
+        fut_pead = executor.submit(
+            generate_pead_candidates,
+            symbols=pead_symbols,
+            diagnostics=pead_diagnostics,
+        )
+        fut_dir = None
+        if scan_depth == "deep":
+            fut_dir = executor.submit(
+                fetch_internal_directional_signals,
+                candidate_limit=directional_limit,
+                diagnostics=directional_diagnostics,
+                preferred_symbols=None,
+                sector_flow=None,
+            )
+
+        report("sector_context", 12, "Reading sector leadership and routing context.")
+        try:
+            sector_flow = fut_sector.result()
+        except Exception:
+            sector_flow = {}
+        report("sector_context", 18, "Sector context ready.")
+
+        report("pead", 22, f"Evaluating gap and volume flags across {len(pead_symbols)} names.")
+        try:
+            pead_candidates = fut_pead.result()
+        except Exception:
+            pead_candidates = []
+        report("pead", 38, f"Qualified {len(pead_candidates)} ordinal PEAD activity flags.")
+
+        report(
+            "directional",
+            42,
+            f"Scoring {directional_limit} names inside the calibrated serving domain.",
+        )
+        if fut_dir is not None:
+            try:
+                directional_signals = fut_dir.result()
+            except Exception:
+                directional_signals = []
+        else:
+            try:
+                directional_signals = fetch_internal_directional_signals(
+                    candidate_limit=directional_limit,
+                    diagnostics=directional_diagnostics,
+                    preferred_symbols=(
+                        [str(row.get("symbol") or "").upper() for row in pead_candidates]
+                        if scan_depth == "quick"
+                        else None
+                    ),
+                    sector_flow=sector_flow if scan_depth == "quick" else None,
+                )
+            except Exception:
+                directional_signals = []
+        report(
+            "directional",
+            55,
+            f"Scored {len(directional_signals)} directional names; calibration boundaries preserved.",
+        )
+        signal_reconciliation = reconcile_pead_directional_signals(
+            pead_candidates,
+            directional_signals,
+        )
+        reconciliation_counts = signal_reconciliation["counts"]
 
     # 4. Market-wide price/volume activity. Deep additionally routes the top
     # 100 observable names through live LSE flow. This board can flag attention

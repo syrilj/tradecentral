@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { OptionsIntelligence, OptionsTapeRow } from '@/api'
 import type { OptionsDirectionRead } from '@/optionsDirection'
-import { compact, num, pctFrac, usd, DASH } from '@/format'
+import { compact, num, pctFrac, DASH } from '@/format'
 
 const props = defineProps<{
   summary: OptionsIntelligence['summary'] | null | undefined
@@ -162,16 +162,16 @@ const deskAction = computed(() => {
 </script>
 
 <template>
-  <div class="flow-context" :class="premium.tone">
+  <div class="flow-context flow-evidence-bar" :class="premium.tone">
     <section class="flow-hero">
       <div class="flow-hero-copy">
         <span class="label eyebrow">DISPLAYED TAPE · CONTRACT MIX</span>
         <strong class="fig dominant" :class="premium.tone">{{ premium.label }}</strong>
         <small class="label identity-note">CALL = BLUE · PUT = AMBER · IDENTITY, NOT DIRECTION</small>
-        <span class="label feed-state" :class="tapeStatus">
-          <i aria-hidden="true" />{{ tapeTitle }}
-        </span>
       </div>
+      <span class="label feed-state" :class="tapeStatus">
+        <i aria-hidden="true" />{{ tapeTitle }}
+      </span>
       <span class="label conviction" :class="premium.tone">{{ premium.conviction }} SKEW</span>
     </section>
 
@@ -188,12 +188,10 @@ const deskAction = computed(() => {
         <div class="premium-side call">
           <span class="label">CALL</span>
           <strong class="fig">{{ premium.callPct }}%</strong>
-          <small class="fig">${{ compact(premium.call) }}</small>
         </div>
         <div class="premium-side put">
           <span class="label">PUT</span>
           <strong class="fig">{{ premium.putPct }}%</strong>
-          <small class="fig">${{ compact(premium.put) }}</small>
         </div>
       </div>
     </section>
@@ -202,57 +200,19 @@ const deskAction = computed(() => {
       <div class="metric">
         <span class="label">C / P RATIO</span>
         <strong class="fig">{{ premium.ratio == null ? DASH : num(premium.ratio, 2) }}</strong>
-        <small class="label">{{ premium.fromTape ? 'DISPLAYED TAPE' : 'TAPE SUMMARY' }}</small>
       </div>
       <div class="metric">
         <span class="label">QUALIFIED</span>
         <strong class="fig">{{ tape.length }}</strong>
-        <small class="label">PRINTS</small>
       </div>
       <div class="metric">
         <span class="label">BUY / SELL SIDE</span>
         <strong class="fig">{{ signedCoverage == null ? DASH : pctFrac(signedCoverage, 0) }}</strong>
-        <small class="label">{{ signedFlowAvailable ? 'PROVIDER COVERAGE' : 'NOT SUPPLIED' }}</small>
+        <small class="label">{{ signedFlowAvailable ? 'COVERAGE' : 'NOT SUPPLIED' }}</small>
       </div>
       <div class="metric">
         <span class="label">TAPE FLAGS</span>
         <strong class="fig" :class="{ warn: anomalyCount > 0 }">{{ anomalyCount }}</strong>
-        <small class="label">{{ anomalyCount > 0 ? 'HEURISTIC FLAGS' : 'NONE FLAGGED' }}</small>
-      </div>
-    </section>
-
-    <section class="structure-section">
-      <div class="section-head label">
-        <span>MARKET STRUCTURE</span>
-        <span class="regime" :class="summary?.regime">{{ (summary?.regime ?? 'unknown').toUpperCase() }} Γ</span>
-      </div>
-      <div class="structure-primary">
-        <span class="label">NET GEX</span>
-        <strong class="fig" :class="summary?.total_gex_m != null && summary.total_gex_m >= 0 ? 'positive' : 'negative'">
-          {{ summary?.total_gex_m == null ? DASH : `${summary.total_gex_m >= 0 ? '+' : ''}$${num(summary.total_gex_m, 1)}M` }}
-        </strong>
-      </div>
-      <div class="level-list">
-        <div class="level-row">
-          <span class="level-dot put" /><span class="label">PUT WALL</span>
-          <strong class="fig">{{ usd(summary?.put_wall) }}</strong>
-          <small class="fig">{{ putWallDistance == null ? DASH : pctFrac(putWallDistance, 1) }}</small>
-        </div>
-        <div class="level-row">
-          <span class="level-dot flip" /><span class="label">GAMMA FLIP</span>
-          <strong class="fig">{{ usd(summary?.gamma_flip) }}</strong>
-          <small class="fig">{{ flipDistance == null ? DASH : `${flipDistance >= 0 ? '+' : ''}${pctFrac(flipDistance, 1)}` }}</small>
-        </div>
-        <div class="level-row">
-          <span class="level-dot spot" /><span class="label">SPOT</span>
-          <strong class="fig">{{ usd(summary?.spot) }}</strong>
-          <small class="fig">NOW</small>
-        </div>
-        <div class="level-row">
-          <span class="level-dot call" /><span class="label">CALL WALL</span>
-          <strong class="fig">{{ usd(summary?.call_wall) }}</strong>
-          <small class="fig">{{ callWallDistance == null ? DASH : `${callWallDistance >= 0 ? '+' : ''}${pctFrac(callWallDistance, 1)}` }}</small>
-        </div>
       </div>
     </section>
 
@@ -262,111 +222,89 @@ const deskAction = computed(() => {
         <span class="priority-tag">{{ deskAction.priority.toUpperCase() }}</span>
       </div>
       <strong class="fig action-title">{{ deskAction.title }}</strong>
-      <p>{{ deskAction.body }}</p>
-      <small class="label">Research triage · not order authorization</small>
     </section>
-
   </div>
 </template>
 
 <style scoped>
 .flow-context {
   --flow-tone: var(--ink-dim);
-  display: flex;
-  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.95fr) minmax(200px, 1.1fr) minmax(220px, 1fr) minmax(200px, 1.15fr);
+  align-items: stretch;
   min-height: 0;
-  flex-direction: column;
-  overflow: auto;
+  max-height: 72px;
+  overflow: hidden;
   background: var(--panel);
   color: var(--ink);
 }
 .flow-context.call { --flow-tone: var(--call); }
 .flow-context.put { --flow-tone: var(--put); }
-.flow-context.bullish { --flow-tone: var(--long, var(--call)); }
-.flow-context.bearish { --flow-tone: var(--short, var(--put)); }
+.flow-context.bullish { --flow-tone: var(--long); }
+.flow-context.bearish { --flow-tone: var(--short); }
 .flow-context.mixed, .flow-context.neutral { --flow-tone: var(--ink); }
-.dominant.bullish { color: var(--long, var(--call)); }
-.dominant.bearish { color: var(--short, var(--put)); }
+.dominant.bullish { color: var(--long); }
+.dominant.bearish { color: var(--short); }
 .dominant.mixed, .dominant.neutral { color: var(--ink); }
-.conviction.bullish { color: var(--long, var(--call)); }
-.conviction.bearish { color: var(--short, var(--put)); }
-.identity-note { overflow: visible; color: var(--ink-ghost); font-size: var(--t-micro); white-space: normal; text-overflow: clip; }
+.conviction.bullish { color: var(--long); }
+.conviction.bearish { color: var(--short); }
+.identity-note { overflow: hidden; color: var(--ink-ghost); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
 
 .flow-hero {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s3);
-  padding: var(--s4);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 6px 10px;
   border-left: 3px solid var(--flow-tone);
-  border-bottom: var(--hair) solid var(--rule-hi);
-  background: color-mix(in srgb, var(--flow-tone) 7%, var(--void-lift));
+  background: var(--void-lift);
 }
-.flow-hero-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.eyebrow { color: var(--ink-faint); font-size: var(--t-micro); }
-.dominant { color: var(--flow-tone); font-size: var(--t-lead); line-height: 1.2; letter-spacing: -0.02em; }
-.feed-state { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-ghost); font-size: var(--t-micro); }
+.flow-hero-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
+.eyebrow { color: var(--ink-faint); font-size: 9px; }
+.dominant { color: var(--flow-tone); font-size: 12px; line-height: 1.15; letter-spacing: -0.02em; }
+.feed-state { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-ghost); font-size: 9px; }
 .feed-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-ghost); }
 .feed-state.live i { background: var(--phosphor); }
 .feed-state.stale i, .feed-state.warm i { background: var(--warn); }
-.conviction { padding: var(--s1) var(--s2); border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: var(--t-micro); }
+.conviction { padding: 1px 6px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: 9px; }
 .conviction.call { color: var(--call-hi); border-color: color-mix(in srgb, var(--call) 50%, var(--rule)); }
 .conviction.put { color: var(--put-hi); border-color: color-mix(in srgb, var(--put) 50%, var(--rule)); }
 
-.premium-section, .structure-section { padding: var(--s3) var(--s4); border-bottom: var(--hair) solid var(--rule); }
-.section-head { display: flex; justify-content: space-between; gap: var(--s2); color: var(--ink-faint); font-size: var(--t-micro); }
+.premium-section { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 10px; border-left: var(--hair) solid var(--rule); }
+.section-head { display: flex; justify-content: space-between; gap: var(--s2); color: var(--ink-faint); font-size: 9px; }
 .section-head b { color: var(--ink-soft); }
-.premium-track { display: flex; height: 8px; margin: 8px 0 7px; overflow: hidden; background: var(--rule); border: var(--hair) solid var(--rule-hi); }
+.premium-track { display: flex; height: 7px; overflow: hidden; background: var(--rule); border: var(--hair) solid var(--rule-hi); }
 .premium-track i { height: 100%; }
 .call-fill { background: var(--call); }
 .put-fill { background: var(--put); }
-.premium-values { display: flex; justify-content: space-between; gap: 12px; }
-.premium-side { display: grid; grid-template-columns: auto auto; align-items: baseline; gap: 1px 5px; }
-.premium-side:last-child { justify-items: end; }
-.premium-side strong { font-size: 0.95rem; }
-.premium-side small { grid-column: 1 / -1; color: var(--ink-dim); font-size: var(--t-micro); }
+.premium-values { display: flex; justify-content: space-between; gap: 8px; }
+.premium-side { display: flex; align-items: baseline; gap: 4px; }
+.premium-side strong { font-size: 12px; }
 .premium-side.call strong { color: var(--call-hi); }
 .premium-side.put strong { color: var(--put-hi); }
 
-.metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--rule); border-bottom: var(--hair) solid var(--rule); }
-.metric { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: var(--s1) var(--s2); min-width: 0; padding: var(--s3); background: var(--void-lift); }
-.metric .label { color: var(--ink-faint); font-size: var(--t-micro); }
-.metric strong { color: var(--ink-soft); font-size: var(--t-body); }
-.metric small { grid-column: 1 / -1; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; min-width: 0; background: var(--rule); border-left: var(--hair) solid var(--rule); }
+.metric { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 1px; padding: 6px 8px; background: var(--void-lift); }
+.metric .label { color: var(--ink-faint); font-size: 9px; }
+.metric strong { color: var(--ink-soft); font-size: 12px; }
+.metric small { color: var(--ink-ghost); font-size: 9px; }
 .metric .warn { color: var(--warn); }
-
-.regime.positive { color: var(--call-hi); }
-.regime.negative { color: var(--put-hi); }
-.structure-primary { display: flex; align-items: baseline; justify-content: space-between; margin: 7px 0; padding: 7px 0; border-block: var(--hair) solid var(--rule-faint); }
-.structure-primary .label { color: var(--ink-dim); }
-.structure-primary strong { font-size: 1rem; }
-.structure-primary strong.positive { color: var(--call-hi); }
-.structure-primary strong.negative { color: var(--put-hi); }
-.level-list { display: flex; flex-direction: column; }
-.level-row { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto 46px; align-items: center; gap: var(--s2); min-height: 28px; border-bottom: var(--hair) solid var(--rule-faint); }
-.level-row:last-child { border-bottom: 0; }
-.level-row .label { color: var(--ink-dim); font-size: var(--t-micro); }
-.level-row strong { color: var(--ink-soft); font-size: var(--t-small); }
-.level-row small { color: var(--ink-ghost); font-size: var(--t-micro); text-align: right; }
-.level-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
-.level-dot.call { background: var(--call); }
-.level-dot.put { background: var(--put); }
-.level-dot.flip { background: var(--warn); }
-.level-dot.spot { background: var(--ink); }
 
 .desk-action {
   --action-tone: var(--ink-dim);
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: var(--s2);
-  padding: var(--s3) var(--s4);
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 10px;
   border-left: 3px solid var(--action-tone);
-  background: color-mix(in srgb, var(--action-tone) 6%, var(--void-lift));
+  background: var(--void-lift);
 }
-.desk-action.bullish { --action-tone: var(--long, var(--call)); }
-.desk-action.bearish { --action-tone: var(--short, var(--put)); }
+.desk-action.bullish { --action-tone: var(--long); }
+.desk-action.bearish { --action-tone: var(--short); }
 .desk-action.mixed { --action-tone: var(--warn); }
-.desk-action .section-head { margin-bottom: 2px; }
 .priority-tag {
   padding: 1px 5px;
   border: var(--hair) solid var(--rule-hi);
@@ -380,20 +318,26 @@ const deskAction = computed(() => {
 }
 .desk-action.soon .priority-tag {
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 50%, var(--rule));
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
 }
 .action-title {
+  overflow: hidden;
   color: var(--ink);
-  font-size: var(--t-body);
+  font-size: 11px;
   line-height: 1.25;
   letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.desk-action p {
-  margin: 0;
-  color: var(--ink-dim);
-  font-size: var(--t-micro);
-  line-height: 1.45;
-}
-.desk-action > small { color: var(--ink-ghost); font-size: var(--t-micro); }
 
+@media (max-width: 1180px) {
+  .flow-context {
+    grid-template-columns: 1fr 1fr;
+    max-height: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .flow-context { grid-template-columns: 1fr; }
+}
 </style>

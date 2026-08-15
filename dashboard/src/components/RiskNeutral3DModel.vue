@@ -44,6 +44,24 @@ function density(x: number, mu: number, sigma: number): number {
   return (1 / (x * sigma * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * z * z)
 }
 
+function disposeObject3D(obj: THREE.Object3D) {
+  if (!obj) return
+  obj.traverse((child) => {
+    if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+      if (child.geometry) {
+        child.geometry.dispose()
+      }
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose())
+        } else {
+          child.material.dispose()
+        }
+      }
+    }
+  })
+}
+
 function initThree() {
   if (!containerRef.value) return
 
@@ -86,7 +104,7 @@ function initThree() {
   window.addEventListener('mouseup', onMouseUp)
   canvas.addEventListener('wheel', onWheel, { passive: false })
 
-  animate()
+  requestRender()
 }
 
 function updateCameraPosition() {
@@ -95,23 +113,30 @@ function updateCameraPosition() {
   camera.position.y = distance * Math.sin(rotationX)
   camera.position.z = distance * Math.cos(rotationY) * Math.cos(rotationX)
   camera.lookAt(0, 0, 0)
+  requestRender()
 }
 
 function buildSurfaceModel() {
   if (!scene) return
 
-  const probability = props.probability
-  const spot = props.spot
-  const iv = probability?.atm_iv
-  const horizon = probability?.horizon_days
-  if (!probability?.available || !spot || !iv || !horizon) return
-
-  // Remove existing meshes/lines except lights
+  // Remove existing meshes/lines except lights and dispose GPU resources
   const toRemove: THREE.Object3D[] = []
   scene.children.forEach((c) => {
     if (!(c instanceof THREE.Light)) toRemove.push(c)
   })
-  toRemove.forEach((c) => scene?.remove(c))
+  toRemove.forEach((c) => {
+    disposeObject3D(c)
+    scene?.remove(c)
+  })
+
+  const probability = props.probability
+  const spot = props.spot
+  const iv = probability?.atm_iv
+  const horizon = probability?.horizon_days
+  if (!probability?.available || !spot || !iv || !horizon) {
+    requestRender()
+    return
+  }
 
   const T = Math.max(horizon, 1) / 365
   const sigma = iv * Math.sqrt(T)
@@ -202,6 +227,8 @@ function buildSurfaceModel() {
   /* Match flow call/put tokens: --call #5b95b5, --put #c1955e */
   if (props.callWall) addMarkerLine(props.callWall, 0x5b95b5)
   if (props.putWall) addMarkerLine(props.putWall, 0xc1955e)
+
+  requestRender()
 }
 
 function onMouseDown(e: MouseEvent) {
@@ -270,8 +297,18 @@ function onWheel(e: WheelEvent) {
   updateCameraPosition()
 }
 
-function animate() {
-  animFrameId = requestAnimationFrame(animate)
+let needsRender = false
+
+function requestRender() {
+  if (!needsRender) {
+    needsRender = true
+    animFrameId = requestAnimationFrame(render)
+  }
+}
+
+function render() {
+  animFrameId = null
+  needsRender = false
   if (renderer && scene && camera) {
     renderer.render(scene, camera)
   }
@@ -286,10 +323,35 @@ watch([() => props.spot, () => props.probability, () => props.callWall, () => pr
 })
 
 onBeforeUnmount(() => {
-  if (animFrameId != null) cancelAnimationFrame(animFrameId)
+  if (animFrameId != null) {
+    cancelAnimationFrame(animFrameId)
+    animFrameId = null
+  }
+  const canvas = renderer?.domElement
+  if (canvas) {
+    canvas.removeEventListener('mousedown', onMouseDown)
+    canvas.removeEventListener('wheel', onWheel)
+  }
   window.removeEventListener('mousemove', onMouseMove)
   window.removeEventListener('mouseup', onMouseUp)
-  if (renderer) renderer.dispose()
+  if (scene) {
+    const toRemove: THREE.Object3D[] = []
+    scene.children.forEach((c) => toRemove.push(c))
+    toRemove.forEach((c) => {
+      disposeObject3D(c)
+      scene?.remove(c)
+    })
+    scene.clear()
+    scene = null
+  }
+  if (renderer) {
+    renderer.dispose()
+    if (renderer.domElement && renderer.domElement.parentElement) {
+      renderer.domElement.parentElement.removeChild(renderer.domElement)
+    }
+    renderer = null
+  }
+  camera = null
 })
 </script>
 

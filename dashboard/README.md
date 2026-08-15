@@ -21,7 +21,7 @@ bash edge/tools/run_dashboard.sh --serve
 
 The production build is written to `edge/runs/dashboard_dist/` and served by `edge/tools/api_server.py`.
 
-The backend binds to `127.0.0.1`. Clerk authenticates the dashboard operator on `/auth`. That is a workstation session lock, not the authentication required to expose the API on a public or LAN address.
+The backend binds to `127.0.0.1` by default. Clerk authenticates the dashboard operator on `/auth`. The server also has an explicit authenticated network profile that verifies the same Clerk session JWT on every protected API request and refuses unsafe off-loopback startup. See [`../docs/PRODUCTION_DEPLOYMENT.md`](../docs/PRODUCTION_DEPLOYMENT.md).
 
 ## Frontend stack
 

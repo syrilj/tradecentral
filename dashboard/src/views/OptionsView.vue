@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   api,
   ApiError,
+  type FintelIntelPayload,
+  type FintelStatusPayload,
   type LiveOpportunities,
   type LiveOpportunityRow,
   type OptionsIntelligence,
@@ -11,6 +13,7 @@ import {
   type OptionsRange,
   type OptionsTapeRow,
   type SearchHit,
+  type SentimentPayload,
   type StatusPayload,
   type UnusualFlowPayload,
   type UnusualFlowRow,
@@ -24,11 +27,19 @@ import ProbabilityDensityChart from '@/components/ProbabilityDensityChart.vue'
 import OptionsFlowContext from '@/components/OptionsFlowContext.vue'
 import OptionsConvictionBoard from '@/components/OptionsConvictionBoard.vue'
 import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
+
 import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
+import { activityLeanRead, printWhy } from '@/optionsTape'
+import {
+  insiderLean,
+  presentFintelInsiders,
+  presentSecFilings,
+} from '@/insiderDisplay'
+import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
 type NoisePreset = 'strict' | 'balanced' | 'raw'
-type TapeView = 'near' | 'all' | 'whales' | 'anomalies' | 'calls' | 'puts' | 'sweeps' | 'blocks' | 'itm'
+type TapeView = 'near' | 'all' | 'whales' | 'anomalies' | 'calls' | 'puts' | 'sweeps' | 'blocks' | 'itm' | 'unusual' | 'momentum' | 'moonshot'
 type TapeSort = 'near-signed' | 'newest' | 'premium' | 'anomaly'
 type PremiumFloor = 0 | 25_000 | 50_000 | 100_000 | 250_000
 
@@ -64,6 +75,7 @@ const tapeSort = ref<TapeSort>('near-signed')
 /** Upper DTE cutoff for the 'near' view — 0-30d means this calendar month. */
 const nearDteMax = ref(30)
 const tapeDisplayMode = ref<'table' | 'cards'>('table')
+const filterRecoveryNotice = ref<string | null>(null)
 const filtersOpen = ref(false)
 /** Market-wide unusual board is secondary — underlier analysis comes first. */
 const unusualOpen = ref(false)
@@ -78,6 +90,55 @@ const historyAsOfSyncing = ref(false)
  */
 const symbolLoadSyncing = ref(false)
 const PREMIUM_FLOORS: PremiumFloor[] = [0, 25_000, 50_000, 100_000, 250_000]
+const book = ref(loadWatchlist())
+const onBook = computed(() => watchlistHas(book.value, symbol.value))
+
+const filings = useResource<SentimentPayload>(
+  () => api.sentiment(symbol.value),
+  { intervalMs: 0 },
+)
+const fintelStatus = useResource<FintelStatusPayload>(
+  () => api.fintelStatus(),
+  { intervalMs: 300_000 },
+)
+const fintelIntel = useResource<FintelIntelPayload>(
+  () => api.fintelIntel(symbol.value, { country: 'US', depth: 'full' }),
+  { intervalMs: 0, immediate: false },
+)
+
+
+
+function toggleBook(): void {
+  book.value = toggleWatchlistSymbol(book.value, symbol.value).symbols
+}
+
+const historyFrom = ref('')
+const historyTo = ref('')
+const historyLoading = ref(false)
+const historyError = ref<string | null>(null)
+const historyTape = ref<import('@/api').MarketFlowPrint[]>([])
+const historyTapeMeta = ref('')
+
+async function loadHistoryTape(): Promise<void> {
+  historyLoading.value = true
+  historyError.value = null
+  try {
+    const payload = await api.flowTape({
+      symbol: symbol.value,
+      from: historyFrom.value || dateFrom.value || undefined,
+      to: historyTo.value || dateTo.value || undefined,
+      minPremium: minPremium.value,
+    })
+    historyTape.value = payload.tape ?? []
+    historyTapeMeta.value = `${payload.print_count} prints · ${payload.feed_status}`
+    if (payload.warnings?.length) historyError.value = payload.warnings.join(' · ')
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : 'History tape unavailable'
+    historyTape.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
 
 /* Market-style search typeahead */
 const searchHits = ref<SearchHit[]>([])
@@ -112,8 +173,12 @@ const unusualForceNext = ref(false)
 /** Market-wide unusual flow — independent of the selected underlier. */
 const unusual = useResource<UnusualFlowPayload>(
   () => api.unusualFlow({ limit: 40, minPremium: minPremium.value, force: unusualForceNext.value }),
-  { intervalMs: 120_000 },
+  { intervalMs: 120_000, enabled: () => unusualOpen.value },
 )
+
+watch(unusualOpen, (open) => {
+  if (open && !unusual.data.value) void unusual.refresh()
+})
 
 /**
  * Manual "SCAN LIVE FLOW" handler — forces one live backend scan, then reverts the
@@ -142,8 +207,12 @@ const opportunitiesOpen = ref(false)
  *  unusual flow, z-blended) — independent of the selected underlier. */
 const opportunities = useResource<LiveOpportunities>(
   () => api.liveOpportunities({ limit: 40, force: opportunitiesForceNext.value }),
-  { intervalMs: 120_000 },
+  { intervalMs: 120_000, enabled: () => opportunitiesOpen.value },
 )
+
+watch(opportunitiesOpen, (open) => {
+  if (open && !opportunities.data.value) void opportunities.refresh()
+})
 
 /**
  * Manual "SCAN LIVE" handler — forces one live recombination of the cached
@@ -383,6 +452,25 @@ watch(
   },
 )
 
+// An exact expiry can stop clearing the quality gates after Min OI / spread /
+// DTE changes. Falling back to ALL keeps the rest of the chain visible while
+// making the recovery explicit instead of rendering an apparently broken
+// workspace with a now-invalid select value.
+watch(
+  () => resource.data.value,
+  (payload) => {
+    if (!payload || payload.symbol !== symbol.value) return
+    if (selectedExpiry.value === 'all' || selectedExpiry.value === 'nearest') return
+    if (String(payload.filters?.expiry ?? '') !== selectedExpiry.value) return
+    if ((payload.quality?.chain_contracts_raw ?? 0) <= 0) return
+    if ((payload.quality?.chain_contracts_included ?? 0) > 0) return
+    const failedExpiry = selectedExpiry.value
+    selectedExpiry.value = 'all'
+    focusStrike.value = null
+    filterRecoveryNotice.value = `${shortDate(failedExpiry)} has no contracts that clear the active quality filters. Showing all expiries.`
+  },
+)
+
 function selectSymbol(): void {
   loadSymbol(symbolInput.value)
 }
@@ -390,6 +478,8 @@ function selectSymbol(): void {
 /** Watch symbol itself so any path that mutates it (route, search, board click) forces a load. */
 watch(symbol, (next, prev) => {
   if (!next || next === prev) return
+  void filings.refresh({ clear: true })
+  fintelIntel.clear()
   // loadSymbol already refreshes; this catches external mutations only.
   if (resource.data.value?.symbol === next) return
   if (resource.loading.value || symbolLoadSyncing.value) return
@@ -432,6 +522,32 @@ const payloadMatches = computed(() =>
 const d = computed(() => (payloadMatches.value ? resource.data.value : null))
 const s = computed(() => d.value?.summary)
 const p = computed(() => d.value?.probability)
+const leanRead = computed(() => {
+  if (s.value?.activity_lean) {
+    return activityLeanRead({
+      activity_lean: s.value.activity_lean,
+      activity_lean_source: s.value.activity_lean_source,
+      activity_lean_label: s.value.activity_lean_label,
+      decision_authorized: s.value.decision_authorized,
+    })
+  }
+  const call = flowPremSplit.value.call ?? 0
+  const put = flowPremSplit.value.put ?? 0
+  const total = call + put
+  const imb = total > 0 ? (call - put) / total : 0
+  const lean = total <= 0 || Math.abs(imb) < 0.15 ? 'neutral' : imb > 0 ? 'bullish' : 'bearish'
+  return activityLeanRead({
+    activity_lean: lean,
+    activity_lean_source: total > 0 && Math.abs(imb) >= 0.15 ? 'call_put_premium' : 'none',
+    activity_lean_label: lean.toUpperCase(),
+    decision_authorized: false,
+  })
+})
+const secFilings = computed(() => presentSecFilings(filings.data.value?.symbol_filings))
+const form4Filings = computed(() => secFilings.value.filter((row) => row.kind === 'insider'))
+const fintelInsiders = computed(() => presentFintelInsiders(fintelIntel.data.value?.blocks?.insiders))
+const insiderMix = computed(() => insiderLean(fintelInsiders.value))
+const fintelConfigured = computed(() => fintelStatus.data.value?.configured === true)
 const expiry = computed(() => d.value?.chain_context)
 const historyMeta = computed(() => d.value?.history)
 const historyDays = computed(() => historyMeta.value?.available_dates ?? [])
@@ -556,9 +672,12 @@ const visibleTape = computed<OptionsTapeRow[]>(() => {
     if (tapeView.value === 'calls') return row.right === 'call'
     if (tapeView.value === 'puts') return row.right === 'put'
     if (tapeView.value === 'sweeps') {
-      return row.trade_class === 'sweep' || row.anomaly_flags.includes('sweep_burst')
+      return row.trade_class === 'sweep' || row.is_sweep === true || row.anomaly_flags.includes('sweep_burst')
     }
-    if (tapeView.value === 'blocks') return row.trade_class === 'block'
+    if (tapeView.value === 'blocks') return row.trade_class === 'block' || row.is_block === true
+    if (tapeView.value === 'unusual') return row.is_unusual === true || (row.presets ?? []).includes('unusual')
+    if (tapeView.value === 'momentum') return row.is_momentum === true || (row.presets ?? []).includes('momentum')
+    if (tapeView.value === 'moonshot') return row.is_moonshot === true || (row.presets ?? []).includes('moonshot')
     return true
   })
 
@@ -593,18 +712,77 @@ const tapeClassCounts = computed(() => {
   let whales = 0
   let itm = 0
   let near = 0
+  let calls = 0
+  let puts = 0
+  let anomalies = 0
+  let unusual = 0
+  let momentum = 0
+  let moonshot = 0
   for (const r of rows) {
-    if (r.trade_class === 'sweep' || r.anomaly_flags.includes('sweep_burst')) sweeps += 1
-    if (r.trade_class === 'block') blocks += 1
+    if (r.trade_class === 'sweep' || r.is_sweep === true || r.anomaly_flags.includes('sweep_burst')) sweeps += 1
+    if (r.trade_class === 'block' || r.is_block === true) blocks += 1
     if (r.premium >= 100_000) whales += 1
     if (isItm(r)) itm += 1
+    if (r.right === 'call') calls += 1
+    if (r.right === 'put') puts += 1
+    if (r.anomaly_flags.length > 0) anomalies += 1
+    if (r.is_unusual || (r.presets ?? []).includes('unusual')) unusual += 1
+    if (r.is_momentum || (r.presets ?? []).includes('momentum')) momentum += 1
+    if (r.is_moonshot || (r.presets ?? []).includes('moonshot')) moonshot += 1
     if (r.expiry) {
       const dteDays = Math.ceil((new Date(r.expiry).getTime() - now.getTime()) / 86_400_000)
       if (dteDays >= 0 && dteDays <= nearDteMax.value) near += 1
     }
   }
-  return { sweeps, blocks, whales, itm, near }
+  return { all: rows.length, sweeps, blocks, whales, itm, near, calls, puts, anomalies, unusual, momentum, moonshot }
 })
+
+function tapeViewCount(view: TapeView): number {
+  const counts = tapeClassCounts.value
+  return view === 'all' ? counts.all : counts[view]
+}
+
+function tapeViewLabel(view: TapeView): string {
+  return {
+    near: 'Near-dated',
+    all: 'All',
+    whales: 'Whales',
+    anomalies: 'Flags',
+    calls: 'Calls',
+    puts: 'Puts',
+    sweeps: 'Sweeps',
+    blocks: 'Blocks',
+    itm: 'ITM',
+    unusual: 'Unusual',
+    momentum: 'Momentum',
+    moonshot: 'Moonshot',
+  }[view]
+}
+
+function selectTapeView(view: TapeView): void {
+  if (view !== 'all' && tapeViewCount(view) === 0) {
+    filterRecoveryNotice.value = `${tapeViewLabel(view)} has no matches in the current payload. Showing all qualified prints.`
+    tapeView.value = 'all'
+    return
+  }
+  filterRecoveryNotice.value = null
+  tapeView.value = view
+  if (view === 'near') tapeSort.value = 'near-signed'
+}
+
+// A server-side filter refresh can remove every row from the currently active
+// local tab. Recover to ALL instead of leaving a blank table that looks like a
+// failed request; the notice preserves why the view changed.
+watch(
+  [() => d.value?.flow_tape, tapeView, nearDteMax],
+  () => {
+    if (!(d.value?.flow_tape?.length) || tapeView.value === 'all') return
+    if (tapeViewCount(tapeView.value) > 0) return
+    const emptyView = tapeViewLabel(tapeView.value)
+    tapeView.value = 'all'
+    filterRecoveryNotice.value = `${emptyView} has no matches after the filter update. Showing all qualified prints.`
+  },
+)
 
 function anomalyLabel(flag: string): string {
   return {
@@ -735,6 +913,8 @@ const tapeHealth = computed(() => {
   const lag = formatLag(age)
   const tapeLag = formatLag(tapeAge)
   const rejectedBelow = Number(d.value.quality?.flow_rejected?.below_premium ?? 0)
+  const expiryRelaxed = d.value.quality?.flow_rejected?.expiry_filter_relaxed === true
+  const requestedExpiry = String(d.value.quality?.flow_rejected?.requested_expiry ?? '')
 
   if (d.value.mode_resolved === 'history' || d.value.mode_resolved === 'history_fallback') {
     return {
@@ -766,10 +946,14 @@ const tapeHealth = computed(() => {
     return {
       status: live ? 'live' as const : soft ? 'warm' as const : 'stale' as const,
       lamp: live ? 'live' : soft ? 'stale' : 'stale',
-      title: live
+      title: live && expiryRelaxed
+        ? 'LIVE TAPE · ALL EXP'
+        : live
         ? (qualifiedStale ? 'LIVE FEED · THIN WHALES' : 'LIVE TAPE')
         : soft ? 'TAPE WARM' : 'TAPE STALE',
-      sub: live
+      sub: expiryRelaxed
+        ? `${shortDate(requestedExpiry)} had no qualified prints · GEX stays selected, tape shows all expiries`
+        : live
         ? (qualifiedStale
           ? `Feed live · qualified ≥$${compact(minPremium.value)} prints lag ${tapeLag}${rejectedBelow > 0 ? ` · ${rejectedBelow} below min $` : ''}`
           : `Streaming prints for ${d.value.symbol}`)
@@ -817,7 +1001,9 @@ function setPremiumFloor(v: PremiumFloor): void {
   if (v === 100_000) preset.value = 'strict'
   else if (v === 25_000) preset.value = 'balanced'
   else if (v === 0) preset.value = 'raw'
-  void resource.refresh()
+  // The shared filter watcher performs one coalesced refresh. Starting an
+  // immediate second request here can supersede the first response and make a
+  // populated filter result briefly look empty.
 }
 
 function rangeHint(range: OptionsRange): string {
@@ -859,6 +1045,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         <div class="symbol-lockup">
           <span class="active-symbol fig">{{ symbol }}</span>
           <span class="view-label label">OPTIONS INTELLIGENCE</span>
+          <button type="button" class="book-pin label" :class="{ on: onBook }" @click="toggleBook">
+            {{ onBook ? 'PINNED TO BOOK' : 'PIN TO BOOK' }}
+          </button>
         </div>
       </div>
 
@@ -924,6 +1113,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <div class="command-right">
         <span class="scope-chip label">{{ mode === 'live' ? 'LIVE / DELAYED' : 'HISTORICAL' }}</span>
         <RouterLink class="market-flow-link label" :to="{ name: 'flow' }">MARKET FLOW</RouterLink>
+        <RouterLink class="market-flow-link label" :to="{ name: 'insiders', query: { symbol } }">INSIDERS</RouterLink>
+        <RouterLink class="market-flow-link label" :to="{ name: 'calculator' }">CALCULATOR</RouterLink>
         <button class="tune label" type="button" :class="{ on: filtersOpen }" @click="filtersOpen = !filtersOpen">
           TUNE {{ filtersOpen ? '▴' : '▾' }}
         </button>
@@ -968,6 +1159,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           @click="setPreset(item)"
         >{{ item.slice(0, 3).toUpperCase() }}</button>
       </div>
+    </section>
+
+    <section v-if="filterRecoveryNotice" class="filter-recovery rise" role="status">
+      <span class="label">FILTER RECOVERED</span>
+      <p>{{ filterRecoveryNotice }}</p>
+      <button type="button" class="label" @click="filterRecoveryNotice = null">DISMISS</button>
     </section>
 
     <section v-if="filtersOpen" class="filter-deck rise">
@@ -1062,6 +1259,24 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       :read="directionRead"
     />
 
+    <section class="lean-auth rise" :class="leanRead.lean" :title="leanRead.title">
+      <div class="lean-auth-sign">
+        <span class="label">ACTIVITY SIGN</span>
+        <strong class="fig">{{ leanRead.label }}</strong>
+        <em class="label">{{ leanRead.sourceLabel.toUpperCase() }}</em>
+      </div>
+      <p class="lean-auth-copy">
+        {{ leanRead.lean === 'neutral'
+          ? 'No bullish/bearish activity sign on this tape. Call/put identity is not a trade side.'
+          : `${leanRead.label} is an activity sign from ${leanRead.sourceLabel}. It is not an aggressor and not a ticket.` }}
+      </p>
+      <div class="lean-auth-gate">
+        <span class="label">AUTHORIZED</span>
+        <strong class="fig">NO</strong>
+        <em class="label">TAPE CANNOT ENTER</em>
+      </div>
+    </section>
+
     <!-- Dense structure KPI rail -->
     <section class="kpi-rail rise">
       <div class="kpi spot">
@@ -1103,6 +1318,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         </strong>
         <em class="label">RATIO {{ flowPremSplit.ratio == null ? DASH : num(flowPremSplit.ratio, 2) }}</em>
       </div>
+      <div class="kpi" :class="leanRead.lean">
+        <span class="label">LEAN</span>
+        <strong class="fig">{{ leanRead.label }}</strong>
+        <em class="label">ACTIVITY · NOT AUTH</em>
+      </div>
       <div class="kpi squeeze-kpi">
         <span class="label">SQUEEZE</span>
         <div class="kpi-squeeze-body">
@@ -1118,8 +1338,74 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       </div>
     </section>
 
-    <!-- Dense workbench: setup, dominant GEX canvas, and flow context. -->
+    <Panel
+      label="INSIDERS + FILINGS"
+      index="02"
+      class="insider-panel rise"
+      :meta="`${form4Filings.length} FORM 4 · ${fintelInsiders.length} FINTEL`"
+    >
+      <div class="insider-grid">
+        <div>
+          <h3 class="label">SEC Form 4 / events</h3>
+          <p v-if="filings.error.value" class="note">{{ filings.error.value }}</p>
+          <p v-else-if="filings.loading.value && !secFilings.length" class="note">Loading EDGAR…</p>
+          <ul v-else-if="secFilings.length" class="insider-list">
+            <li v-for="(row, i) in secFilings.slice(0, 6)" :key="`${row.form}-${row.filed}-${i}`">
+              <span class="kind label" :class="row.kind">{{ row.kind.toUpperCase() }}</span>
+              <span class="fig">{{ row.form }}</span>
+              <span class="dim">{{ row.filed || DASH }}</span>
+              <a v-if="row.url" :href="row.url" target="_blank" rel="noopener" class="label">doc</a>
+            </li>
+          </ul>
+          <p v-else class="note">No recent Form 4 / 8-K / 13D for this ticker, or ticker not in the SEC map.</p>
+        </div>
+        <div>
+          <h3 class="label">Fintel insider tape</h3>
+          <p v-if="!fintelConfigured" class="note">
+            FINTEL_API_KEY is not configured. Form 4 still loads from EDGAR.
+          </p>
+          <p v-else-if="fintelIntel.error.value" class="note">{{ fintelIntel.error.value }}</p>
+          <p v-else-if="!fintelIntel.data.value" class="note">
+            Full Fintel insiders burn monthly weight.
+            <button type="button" class="label raw-btn" :disabled="fintelIntel.loading.value" @click="void fintelIntel.refresh({ clear: true })">
+              {{ fintelIntel.loading.value ? 'LOADING…' : 'LOAD FINTEL INSIDERS' }}
+            </button>
+          </p>
+          <template v-else>
+            <p class="note">{{ insiderMix.buys }} buy / {{ insiderMix.sells }} sell · {{ insiderMix.label }} · not authorized</p>
+            <ul v-if="fintelInsiders.length" class="insider-list">
+              <li v-for="(row, i) in fintelInsiders.slice(0, 6)" :key="`${row.who}-${i}`">
+                <span class="kind label" :class="row.side">{{ row.side.toUpperCase() }}</span>
+                <span class="fig">{{ row.who }}</span>
+                <span class="dim">{{ row.detail }}</span>
+              </li>
+            </ul>
+            <p v-else class="note">Fintel returned no insider rows.</p>
+          </template>
+        </div>
+      </div>
+      <RouterLink class="label insider-more" :to="{ name: 'insiders', query: { symbol } }">OPEN INSIDERS DESK →</RouterLink>
+    </Panel>
+
+    <!-- Dense workbench: compact flow bar, then squeeze + dominant GEX. -->
     <div class="workbench">
+      <Panel
+        label="FLOW EVIDENCE"
+        index="03"
+        flush
+        class="cell flow-context-cell flow-context-bar"
+      >
+        <OptionsFlowContext
+          :summary="s"
+          :tape="d?.flow_tape ?? []"
+          :anomaly-count="d?.anomalies.count ?? 0"
+          :signed-flow-available="signedFlowAvailable"
+          :tape-status="tapeHealth.status"
+          :tape-title="tapeHealth.title"
+          :direction="directionRead"
+        />
+      </Panel>
+
       <div class="workbench-top">
         <Panel
           label="SQUEEZE SETUP"
@@ -1174,6 +1460,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <span class="gex-meta-badge">EXPOSURE {{ !gexMeasurable || s?.total_gex_m == null ? DASH : `$${num(s.total_gex_m, 1)}M` }}</span>
               <span class="gex-meta-badge">SPOT {{ usd(s?.spot) }}</span>
               <span v-if="s?.gamma_flip != null" class="gex-meta-badge flip">FLIP {{ usd(s.gamma_flip) }}</span>
+              <span v-if="s?.zero_gamma != null" class="gex-meta-badge flip">ZERO-GAMMA {{ usd(s.zero_gamma) }}</span>
             </div>
           </template>
           <LoadingState v-if="loadingSymbol && !d" label="Loading GEX" compact />
@@ -1218,31 +1505,40 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               :spot="s?.spot ?? 0"
               :call-wall="s?.call_wall ?? null"
               :put-wall="s?.put_wall ?? null"
-              :gamma-flip="s?.gamma_flip ?? null"
+              :gamma-flip="s?.gamma_flip ?? s?.zero_gamma ?? null"
               :focus-strike="focusStrike"
               @update:focus-strike="focusStrike = $event"
             />
+            <div v-if="d?.oi_by_strike?.length" class="oi-by-strike">
+              <span class="label">OI by strike</span>
+              <span
+                v-for="row in d.oi_by_strike.slice(0, 12)"
+                :key="row.strike"
+                class="label"
+              >{{ usd(row.strike) }} · C {{ compact(row.call_oi) }} / P {{ compact(row.put_oi) }}</span>
+            </div>
           </template>
-        </Panel>
-
-        <Panel
-          label="FLOW EVIDENCE"
-          index="03"
-          flush
-          class="cell flow-context-cell"
-        >
-          <OptionsFlowContext
-            :summary="s"
-            :tape="d?.flow_tape ?? []"
-            :anomaly-count="d?.anomalies.count ?? 0"
-            :signed-flow-available="signedFlowAvailable"
-            :tape-status="tapeHealth.status"
-            :tape-title="tapeHealth.title"
-            :direction="directionRead"
-          />
         </Panel>
       </div>
     </div>
+
+    <p class="calc-handoff">
+      <span class="label">Spot / strike / DTE / vol calculator lives on its own workspace.</span>
+      <RouterLink
+        class="market-flow-link label"
+        :to="{
+          name: 'calculator',
+          query: {
+            symbol,
+            strategy: 'long_call',
+            ...(s?.spot != null ? { spot: String(s.spot) } : {}),
+            ...(s?.call_wall != null ? { strike: String(s.call_wall) } : {}),
+            ...(p?.atm_iv != null ? { vol: String(p.atm_iv) } : {}),
+            ...(p?.horizon_days != null ? { dte: String(p.horizon_days) } : {}),
+          },
+        }"
+      >OPEN CALCULATOR</RouterLink>
+    </p>
 
     <!-- Panel 04: Risk-Neutral Probability & Target Calculator -->
     <Panel
@@ -1289,27 +1585,36 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         <!-- Row 1: view tabs on left, sort/status controls on right -->
         <div class="tape-toolbar-main">
           <div class="tape-tabs">
-            <button type="button" class="label near-tab" :class="{ on: tapeView === 'near' }" @click="tapeView = 'near'; tapeSort = 'near-signed'" title="Near-dated flow (this month). Signed prints bubble to top.">
-              NEAR<span v-if="tapeClassCounts.near" class="near-count">&nbsp;{{ tapeClassCounts.near }}</span>
+            <button type="button" class="label near-tab" :class="{ on: tapeView === 'near' }" :disabled="tapeClassCounts.near === 0" @click="selectTapeView('near')" title="Near-dated flow (this month). Signed prints bubble to top.">
+              NEAR<span class="near-count">&nbsp;{{ tapeClassCounts.near }}</span>
             </button>
-            <button type="button" class="label" :class="{ on: tapeView === 'all' }" @click="tapeView = 'all'">ALL</button>
-            <button type="button" class="label whale-tab" :class="{ on: tapeView === 'whales' }" @click="tapeView = 'whales'">
-              WHALES<span v-if="tapeClassCounts.whales" class="tab-count">{{ tapeClassCounts.whales }}</span>
+            <button type="button" class="label" :class="{ on: tapeView === 'all' }" @click="selectTapeView('all')">ALL&nbsp;{{ tapeClassCounts.all }}</button>
+            <button type="button" class="label whale-tab" :class="{ on: tapeView === 'whales' }" :disabled="tapeClassCounts.whales === 0" @click="selectTapeView('whales')">
+              WHALES<span class="tab-count">{{ tapeClassCounts.whales }}</span>
             </button>
-            <button type="button" class="label" :class="{ on: tapeView === 'itm' }" @click="tapeView = 'itm'">
-              ITM<span v-if="tapeClassCounts.itm" class="tab-count">{{ tapeClassCounts.itm }}</span>
+            <button type="button" class="label" :class="{ on: tapeView === 'itm' }" :disabled="tapeClassCounts.itm === 0" @click="selectTapeView('itm')">
+              ITM<span class="tab-count">{{ tapeClassCounts.itm }}</span>
             </button>
-            <button type="button" class="label" :class="{ on: tapeView === 'sweeps' }" @click="tapeView = 'sweeps'">
-              SWEEPS<span v-if="tapeClassCounts.sweeps" class="tab-count">{{ tapeClassCounts.sweeps }}</span>
+            <button type="button" class="label" :class="{ on: tapeView === 'unusual' }" :disabled="tapeClassCounts.unusual === 0" @click="selectTapeView('unusual')">
+              UNUSUAL<span class="tab-count">{{ tapeClassCounts.unusual }}</span>
             </button>
-            <button type="button" class="label" :class="{ on: tapeView === 'blocks' }" @click="tapeView = 'blocks'">
-              BLOCKS<span v-if="tapeClassCounts.blocks" class="tab-count">{{ tapeClassCounts.blocks }}</span>
+            <button type="button" class="label" :class="{ on: tapeView === 'sweeps' }" :disabled="tapeClassCounts.sweeps === 0" @click="selectTapeView('sweeps')">
+              SWEEPS<span class="tab-count">{{ tapeClassCounts.sweeps }}</span>
             </button>
-            <button type="button" class="label" :class="{ on: tapeView === 'anomalies' }" @click="tapeView = 'anomalies'">
-              FLAGS<span v-if="d?.anomalies.count" class="tab-count">{{ d.anomalies.count }}</span>
+            <button type="button" class="label" :class="{ on: tapeView === 'momentum' }" :disabled="tapeClassCounts.momentum === 0" @click="selectTapeView('momentum')">
+              MOMENTUM<span class="tab-count">{{ tapeClassCounts.momentum }}</span>
             </button>
-            <button type="button" class="label" :class="{ on: tapeView === 'calls' }" @click="tapeView = 'calls'">CALLS</button>
-            <button type="button" class="label" :class="{ on: tapeView === 'puts' }" @click="tapeView = 'puts'">PUTS</button>
+            <button type="button" class="label" :class="{ on: tapeView === 'moonshot' }" :disabled="tapeClassCounts.moonshot === 0" @click="selectTapeView('moonshot')">
+              MOONSHOT<span class="tab-count">{{ tapeClassCounts.moonshot }}</span>
+            </button>
+            <button type="button" class="label" :class="{ on: tapeView === 'blocks' }" :disabled="tapeClassCounts.blocks === 0" @click="selectTapeView('blocks')">
+              BLOCKS<span class="tab-count">{{ tapeClassCounts.blocks }}</span>
+            </button>
+            <button type="button" class="label" :class="{ on: tapeView === 'anomalies' }" :disabled="tapeClassCounts.anomalies === 0" @click="selectTapeView('anomalies')">
+              FLAGS<span class="tab-count">{{ tapeClassCounts.anomalies }}</span>
+            </button>
+            <button type="button" class="label" :class="{ on: tapeView === 'calls' }" :disabled="tapeClassCounts.calls === 0" @click="selectTapeView('calls')">CALLS&nbsp;{{ tapeClassCounts.calls }}</button>
+            <button type="button" class="label" :class="{ on: tapeView === 'puts' }" :disabled="tapeClassCounts.puts === 0" @click="selectTapeView('puts')">PUTS&nbsp;{{ tapeClassCounts.puts }}</button>
           </div>
           <div class="tape-toolbar-right">
             <div v-if="tapeView === 'near'" class="near-window-control">
@@ -1373,6 +1678,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <span class="exp-tag label">{{ row.expiry ? shortDate(row.expiry) : '—' }}</span>
               <span class="agg label" :class="aggressorLabel(row).cls">{{ aggressorLabel(row).label }}</span>
               <span v-for="flag in row.anomaly_flags" :key="flag" class="flag-chip label" :class="flag">{{ anomalyLabel(flag) }}</span>
+              <span v-if="printWhy(row).length" class="why-line label" :title="printWhy(row).join(' · ')">{{ printWhy(row).join(' · ') }}</span>
             </div>
           </div>
         </div>
@@ -1396,6 +1702,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <th class="label num-col tape-premium-head">Premium</th>
               <th class="label tape-col-group">Aggressor</th>
               <th class="label num-col">Notional edge</th>
+              <th class="label">Why</th>
             </tr>
           </thead>
           <tbody>
@@ -1462,13 +1769,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <template v-else>${{ compact(row.premium) }} · unsig</template>
                 </span>
               </td>
+              <td class="why-cell label" :title="printWhy(row).join(' · ') || 'No unusual flags'">
+                {{ printWhy(row).join(' · ') || '—' }}
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
       <div v-else-if="d?.flow_tape.length" class="no-tape compact-empty">
         <strong>NO PRINTS MATCH THIS TABLE VIEW</strong>
-        <p>The source tape is loaded; change the Calls / Puts / Anomalies filter above.</p>
+        <p>The source tape is loaded. Reset the local view to show the qualified prints.</p>
+        <button type="button" class="label raw-btn" @click="selectTapeView('all')">SHOW ALL {{ d.flow_tape.length }}</button>
       </div>
       <div v-else class="no-tape">
         <strong>NO QUALIFIED TRADE TAPE</strong>
@@ -1507,6 +1818,38 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             CLEAR DATE FILTERS
           </button>
         </div>
+      </div>
+    </Panel>
+
+    <Panel label="On-demand historical tape" index="05b" class="rise">
+      <div class="history-tape-bar">
+        <label><span class="label">From</span><input v-model="historyFrom" type="date"></label>
+        <label><span class="label">To</span><input v-model="historyTo" type="date"></label>
+        <button type="button" class="label raw-btn" :disabled="historyLoading" @click="void loadHistoryTape()">
+          {{ historyLoading ? 'LOADING…' : `LOAD ${symbol} TAPE` }}
+        </button>
+        <span class="label">{{ historyTapeMeta }}</span>
+      </div>
+      <p v-if="historyError" class="note pad">{{ historyError }}</p>
+      <div v-else-if="historyTape.length" class="table-scroll">
+        <table class="tape-table">
+          <thead>
+            <tr>
+              <th class="label">Time</th>
+              <th class="label">Right</th>
+              <th class="label">Tags</th>
+              <th class="label num">Premium</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in historyTape.slice(0, 50)" :key="`${row.timestamp}-${row.strike}-${row.premium}`">
+              <td class="fig">{{ shortDate(row.timestamp) }}</td>
+              <td class="fig">{{ row.right }} {{ row.strike ?? '—' }}</td>
+              <td class="label">{{ (row.presets ?? []).join(' · ') || row.trade_class || '—' }}</td>
+              <td class="fig num">{{ usd(row.premium, 0) }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </Panel>
 
@@ -1834,6 +2177,23 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   margin-right: 4px;
 }
 .symbol-lockup { display: grid; align-items: start; gap: var(--s1); line-height: 1; }
+.book-pin {
+  justify-self: start;
+  min-height: 22px;
+  padding: 0 7px;
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule-hi);
+  background: transparent;
+  cursor: pointer;
+}
+.book-pin.on { color: var(--phosphor); border-color: var(--phosphor-dim); }
+.history-tape-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  align-items: end;
+  padding: var(--s3);
+}
 .active-symbol { font-size: 1.7rem; font-weight: 720; letter-spacing: -.05em; color: var(--ink); }
 .slash { font: 300 1rem var(--font-display); color: var(--rule-hi); }
 .view-name { font: 700 0.85rem var(--font-display); letter-spacing: .1em; color: var(--ink-dim); }
@@ -1908,7 +2268,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--panel-raise);
   max-height: 220px;
   overflow: auto;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
 }
 .search-hits li {
   display: grid;
@@ -2011,8 +2370,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-size: 9px;
   letter-spacing: 0.08em;
 }
-.side-pill.pos { color: var(--call); border-color: color-mix(in srgb, var(--call) 40%, var(--rule)); }
-.side-pill.neg { color: var(--put); border-color: color-mix(in srgb, var(--put) 40%, var(--rule)); }
+.side-pill.pos { color: var(--long); border-color: color-mix(in srgb, var(--long) 40%, var(--rule)); }
+.side-pill.neg { color: var(--short); border-color: color-mix(in srgb, var(--short) 40%, var(--rule)); }
 .side-pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--rule)); }
 .side-pill.neutral { color: var(--ink-ghost); }
 
@@ -2105,6 +2464,18 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .live-filter-bar.history {
   border-left: 3px solid var(--ink-dim);
 }
+.filter-recovery {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid var(--warn);
+  border-left-width: 3px;
+  background: var(--warn-wash);
+}
+.filter-recovery > span { flex: 0 0 auto; color: var(--warn); }
+.filter-recovery p { flex: 1 1 auto; margin: 0; color: var(--ink-dim); font-size: var(--t-tiny); }
+.filter-recovery button { padding: 3px 7px; color: var(--warn); border: var(--hair) solid var(--warn); }
 .live-badge {
   display: flex;
   align-items: center;
@@ -2330,10 +2701,72 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .data-notes li { padding-left: 12px; border-left: 2px solid var(--rule-hi); line-height: 1.4; }
 
+.lean-auth {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) 1fr minmax(120px, 160px);
+  gap: var(--s4);
+  align-items: center;
+  padding: var(--s3) var(--s4);
+  border: var(--hair) solid var(--rule);
+  background: var(--panel);
+}
+.lean-auth.bullish { box-shadow: inset 3px 0 var(--long); }
+.lean-auth.bearish { box-shadow: inset 3px 0 var(--short); }
+.lean-auth.mixed { box-shadow: inset 3px 0 var(--warn); }
+.lean-auth-sign,
+.lean-auth-gate { display: grid; gap: 2px; }
+.lean-auth-sign strong,
+.lean-auth-gate strong {
+  font: 700 var(--t-display) / 1 var(--font-display);
+  letter-spacing: 0.04em;
+}
+.lean-auth.bullish .lean-auth-sign strong { color: var(--long); }
+.lean-auth.bearish .lean-auth-sign strong { color: var(--short); }
+.lean-auth-gate strong { color: var(--ink-dim); }
+.lean-auth-copy {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  max-width: 72ch;
+}
+.insider-panel { margin-top: var(--s3); }
+.insider-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s4);
+  padding: var(--s3) var(--s4);
+}
+.insider-grid h3 { margin: 0 0 var(--s2); color: var(--ink-soft); }
+.insider-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.insider-list li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.insider-list .dim { color: var(--ink-ghost); }
+.kind { padding: 1px 6px; border: var(--hair) solid var(--rule); }
+.kind.buy, .kind.insider { color: var(--long); }
+.kind.sell { color: var(--short); }
+.kind.event, .kind.holder { color: var(--ink-soft); }
+.insider-more { display: inline-block; margin: 0 var(--s4) var(--s3); color: var(--phosphor); }
+.why-cell, .why-line {
+  color: var(--ink-ghost);
+  font-size: 10px;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 900px) {
+  .lean-auth, .insider-grid { grid-template-columns: 1fr; }
+}
+
 /* ---- compact KPI rail ------------------------------------------------- */
 .kpi-rail {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 1px;
   padding: 1px;
   background: var(--rule);
@@ -2391,7 +2824,16 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-weight: 700;
 }
 
-/* ---- workbench: squeeze (narrower) + GEX map (dominant width) ----------- */
+/* ---- workbench: flow bar, then squeeze + dominant GEX ------------------- */
+.calc-handoff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: var(--hair) solid var(--rule);
+  background: var(--panel);
+}
 .workbench {
   display: flex;
   flex-direction: column;
@@ -2400,25 +2842,34 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .workbench-top {
   display: grid;
-  grid-template-columns: minmax(260px, 300px) minmax(500px, 1fr) minmax(250px, 290px);
-  grid-auto-rows: clamp(430px, 46vh, 500px);
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  grid-template-rows: minmax(560px, 62vh);
   gap: 8px;
   min-width: 0;
   align-items: stretch;
 }
 @media (max-width: 1180px) {
-  .workbench-top { grid-template-columns: 1fr; }
+  .workbench-top {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(520px, 58vh);
+  }
 }
 
 .workbench .cell {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
 }
-.workbench .gex-full { width: 100%; }
+.workbench-top .cell { height: 100%; }
+.workbench .gex-full { width: 100%; min-height: 560px; }
+.workbench .gex-full :deep(.body) { overflow: hidden; }
+.workbench .flow-context-cell {
+  flex: 0 0 auto;
+  height: auto;
+}
 .workbench .flow-context-cell :deep(.body) { overflow: hidden; }
-.workbench :deep(.panel) {
+.workbench .flow-context-bar :deep(.panel) { height: auto; }
+.workbench-top :deep(.panel) {
   height: 100%;
   min-height: 0;
 }
@@ -2430,11 +2881,23 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 0;
   overflow: auto;
 }
+.workbench .flow-context-bar :deep(.body) {
+  overflow: hidden;
+  flex: 0 0 auto;
+}
 .workbench :deep(.head) {
   padding: 6px 12px;
   min-height: 32px;
 }
 .gex-meta-badge.flip { color: var(--warn); }
+.oi-by-strike {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: var(--s3);
+  border-top: var(--hair) solid var(--rule);
+}
+.oi-by-strike > .label:first-child { color: var(--phosphor); }
 
 .view-label {
   font-size: var(--t-micro);
@@ -2615,6 +3078,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-tabs button:first-child { border-left: var(--hair) solid var(--rule); }
 .tape-tabs button:hover:not(.on) { color: var(--ink-soft); background: var(--panel-hi); }
 .tape-tabs button.on { color: var(--ink); background: var(--panel-hi); font-weight: 700; box-shadow: inset 0 -2px var(--phosphor); }
+.tape-tabs button:disabled { color: var(--ink-ghost); opacity: 0.45; cursor: not-allowed; background: transparent; }
 /* Tab count badge */
 .tab-count {
   display: inline-block;
@@ -2760,8 +3224,8 @@ td.put { color: var(--put); }
 .agg.buy { color: var(--long); background: var(--long-wash); border-color: color-mix(in srgb, var(--long) 40%, var(--rule)); font-weight: 800; }
 .agg.sell { color: var(--short); background: var(--short-wash); border-color: color-mix(in srgb, var(--short) 40%, var(--rule)); font-weight: 800; }
 .agg.unknown { color: var(--ink-faint); font-size: var(--t-micro); }
-.bias-chip.bull, .edge-chip.bull { color: var(--call); border-color: color-mix(in srgb, var(--call) 50%, var(--rule)); background: var(--call-wash); }
-.bias-chip.bear, .edge-chip.bear { color: var(--put); border-color: color-mix(in srgb, var(--put) 50%, var(--rule)); background: var(--put-wash); }
+.bias-chip.bull, .edge-chip.bull { color: var(--long); border-color: color-mix(in srgb, var(--long) 50%, var(--rule)); background: var(--long-wash); }
+.bias-chip.bear, .edge-chip.bear { color: var(--short); border-color: color-mix(in srgb, var(--short) 50%, var(--rule)); background: var(--short-wash); }
 .bias-chip.call { color: var(--call); border-color: color-mix(in srgb, var(--call) 40%, var(--rule)); background: var(--call-wash); }
 .bias-chip.put { color: var(--put); border-color: color-mix(in srgb, var(--put) 40%, var(--rule)); background: var(--put-wash); }
 .bias-chip.unsigned, .edge-chip.unsigned { color: var(--ink-ghost); background: var(--panel-hi); border-color: var(--rule); }
@@ -2979,12 +3443,12 @@ tr.isMegaWhale:hover {
   transition: background var(--dur-fast) var(--ease-out);
 }
 .tape-stalker-card.bull {
-  border-left: 3px solid var(--call);
-  background: var(--call-wash);
+  border-left: 3px solid var(--long);
+  background: var(--panel);
 }
 .tape-stalker-card.bear {
-  border-left: 3px solid var(--put);
-  background: var(--put-wash);
+  border-left: 3px solid var(--short);
+  background: var(--panel);
 }
 .tape-stalker-card.isWhale {
   border-color: color-mix(in srgb, var(--warn) 55%, var(--rule));
@@ -3009,8 +3473,8 @@ tr.isMegaWhale:hover {
   font: 700 9px var(--font-display);
   padding: 1px 5px;
 }
-.lean-pill.bull { color: var(--call-hi, var(--call)); }
-.lean-pill.bear { color: var(--put-hi, var(--put)); }
+.lean-pill.bull { color: var(--long); }
+.lean-pill.bear { color: var(--short); }
 .ts-time { font: 500 10px var(--font-data); color: var(--ink-dim); margin-left: auto; }
 .card-body-row {
   display: flex;

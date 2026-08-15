@@ -57,10 +57,16 @@ backend_is_current() {
     *'"flow_feed_contract": "market-wide-v1"'*) ;;
     *) return 1 ;;
   esac
+  case "$health" in
+    *'"suggestion_contract": "paper-candidate-contract-v9"'*) ;;
+    *) return 1 ;;
+  esac
   for path in /api/ga /api/factors /api/graph /api/changepoints /api/flow-state /api/scan_status; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' "${base}${path}" 2>/dev/null || echo 000)"
     [ "$code" = "200" ] || return 1
   done
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "${base}/api/flow-tape?symbol=SPY" 2>/dev/null || echo 000)"
+  [ "$code" = "200" ] || return 1
   return 0
 }
 

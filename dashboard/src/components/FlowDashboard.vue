@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
-import type {
-  DirectionalSignal,
-  MarketFlowPrint,
-  StatusPayload,
-  UnusualFlowPayload,
-  UnusualFlowRow,
+import {
+  api,
+  type DirectionalSignal,
+  type MarketFlowPrint,
+  type StatusPayload,
+  type TopTickerCategory,
+  type UnusualFlowPayload,
+  type UnusualFlowRow,
 } from '@/api'
 import { age, compact, DASH, num, pctFrac, pick, shortDate, signedPct, tone, usd } from '@/format'
 import AppIcon from '@/components/AppIcon.vue'
 import LoadingState from '@/components/LoadingState.vue'
 import Panel from '@/components/Panel.vue'
 import {
+  applyFlowWindow,
   buildFlowPulse,
   compareFlowReviewRows,
   flowPrintKey,
@@ -19,6 +22,28 @@ import {
   type FlowPulsePayload,
   type SymbolPulse,
 } from '@/flowPulse'
+import {
+  FIRST_WINDOW_BASELINE,
+  NO_STRIKE_IN_TAPE,
+  concentrationLabel,
+  flowLeanTokenClass,
+  flowPriorityTokenClass,
+  mixShareLabel,
+  pulseWindowCopy,
+  signedPrintTokenClass,
+} from '@/flowDisplay'
+import {
+  loadWatchlist,
+  toggleWatchlistSymbol,
+  watchlistHas,
+} from '@/watchlist'
+import {
+  collectWatchlistAlerts,
+  loadSeenAlertKeys,
+  saveSeenAlertKeys,
+  saveUnreadAlertCount,
+  type FlowAlert,
+} from '@/flowAlerts'
 
 const props = defineProps<{
   payload: UnusualFlowPayload | null
@@ -41,9 +66,29 @@ const MAX_TAPE_ROWS = 100
 const PULSE_STORAGE_KEY = 'edge.flow.previous-window.v1'
 
 type ActivityFilter = 'all' | 'incoming' | 'sweeps' | 'flagged' | 'near'
+type TapePreset = 'all' | 'book' | 'unusual' | 'sweeps' | 'momentum' | 'moonshot'
 type RightFilter = 'all' | 'call' | 'put'
 type DteFilter = 'all' | 'week' | 'month' | 'dated'
 type SortKey = 'review' | 'incoming' | 'premium' | 'sweeps' | 'flagged' | 'expiry'
+
+const TAPE_PRESETS: Array<{ id: TapePreset; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'book', label: 'My book' },
+  { id: 'unusual', label: 'Unusual' },
+  { id: 'sweeps', label: 'Sweeps' },
+  { id: 'momentum', label: 'Momentum' },
+  { id: 'moonshot', label: 'Moonshot' },
+]
+
+const TOP_TICKER_CATEGORIES: Array<{ id: TopTickerCategory; label: string }> = [
+  { id: 'unusual_otm', label: 'Unusual OTM' },
+  { id: 'unusual_volume', label: 'Unusual Volume' },
+  { id: 'unusual_premium', label: 'Unusual Premium' },
+  { id: 'sweeps', label: 'Sweeps' },
+  { id: 'momentum', label: 'Momentum' },
+  { id: 'call_premium', label: 'Call Premium' },
+  { id: 'put_premium', label: 'Put Premium' },
+]
 
 interface ProjectedSummary {
   totalPremium: number
@@ -127,6 +172,18 @@ const EMPTY_SYMBOL_PULSE: SymbolPulse = {
 const nowMs = ref(Date.now())
 const symbolQuery = ref('')
 const activityFilter = ref<ActivityFilter>('all')
+const tapePreset = ref<TapePreset>('all')
+const book = ref<string[]>(loadWatchlist())
+const bookAlerts = ref<FlowAlert[]>([])
+const seenAlertKeys = ref<Set<string>>(loadSeenAlertKeys())
+const historySymbol = ref(loadWatchlist()[0] ?? 'NVDA')
+const historyFrom = ref('')
+const historyTo = ref('')
+const historyLoading = ref(false)
+const historyError = ref<string | null>(null)
+const historyTape = ref<MarketFlowPrint[]>([])
+const historyMeta = ref('')
+const topTickerCategory = ref<TopTickerCategory>('unusual_premium')
 const rightFilter = ref<RightFilter>('all')
 const dteFilter = ref<DteFilter>('all')
 const sortKey = ref<SortKey>('review')
@@ -167,13 +224,16 @@ function persistPulsePayload(payload: FlowPulsePayload): void {
 }
 
 watch(() => props.payload, (next) => {
-  if (!next) return
-  const token = `${next.generated_at ?? ''}|${next.asof}`
-  if (token === previousSnapshotToken) return
-  pulse.value = buildFlowPulse(previousPulsePayload, next)
-  previousPulsePayload = next
-  previousSnapshotToken = token
-  persistPulsePayload(next)
+  const applied = applyFlowWindow(previousPulsePayload, next)
+  if (!applied.window) return
+  const token = `${applied.window.generated_at ?? ''}|${applied.window.asof}`
+  if (next && token === previousSnapshotToken) return
+  if (applied.pulse) pulse.value = applied.pulse
+  if (next) {
+    previousPulsePayload = applied.window
+    previousSnapshotToken = token
+    persistPulsePayload(applied.window)
+  }
 }, { immediate: true })
 
 onMounted(() => {
@@ -198,6 +258,14 @@ function clamp01(value: number): number {
 
 function moneyCompact(value: unknown): string {
   return finite(value) == null ? DASH : `$${compact(value)}`
+}
+
+function tickerScore(value: unknown): string {
+  const number = finite(value)
+  if (number == null) return DASH
+  if (topTickerCategory.value === 'unusual_otm') return fractionPercent(number, 1)
+  if (topTickerCategory.value === 'unusual_volume') return exactCount(number)
+  return moneyCompact(number)
 }
 
 function exactCount(value: unknown): string {
@@ -232,7 +300,28 @@ function sweepShare(row: UnusualFlowRow): number {
 
 function flaggedShare(row: UnusualFlowRow): number {
   const contracts = finite(row.contract_count) ?? 0
-  return contracts > 0 ? clamp01((finite(row.unusual_contracts) ?? 0) / contracts) : 0
+  const flagged = finite(row.flagged_contracts) ?? finite(row.unusual_contracts) ?? 0
+  return contracts > 0 ? clamp01(flagged / contracts) : 0
+}
+
+function printMatchesPreset(row: MarketFlowPrint): boolean {
+  if (tapePreset.value === 'all') return true
+  if (tapePreset.value === 'book') return watchlistHas(book.value, row.symbol)
+  const presets = row.presets ?? []
+  if (presets.includes(tapePreset.value)) return true
+  if (tapePreset.value === 'unusual') return row.is_unusual === true
+  if (tapePreset.value === 'sweeps') return row.is_sweep === true || row.trade_class === 'sweep'
+  if (tapePreset.value === 'momentum') return row.is_momentum === true
+  return row.is_moonshot === true
+}
+
+function aggregateMatchesPreset(row: UnusualFlowRow): boolean {
+  if (tapePreset.value === 'all') return true
+  if (tapePreset.value === 'book') return watchlistHas(book.value, row.symbol)
+  if (tapePreset.value === 'unusual') return (finite(row.unusual_contracts) ?? 0) > 0
+  if (tapePreset.value === 'sweeps') return (finite(row.sweep_count) ?? 0) > 0
+  if (tapePreset.value === 'momentum') return (finite(row.momentum_contracts) ?? 0) > 0
+  return (finite(row.moonshot_contracts) ?? 0) > 0
 }
 
 function inDteBand(value: unknown): boolean {
@@ -264,6 +353,7 @@ const filteredRows = computed<UnusualFlowRow[]>(() => {
   const rows = qualifiedRows.value.filter((row) =>
     (!query || row.symbol.toUpperCase().includes(query))
       && aggregateMatchesActivity(row)
+      && aggregateMatchesPreset(row)
       && aggregateMatchesRight(row)
       && inDteBand(row.average_dte),
   )
@@ -309,7 +399,8 @@ const qualifiedTapeRows = computed<MarketFlowPrint[]>(() =>
       && filteredSymbols.value.has(row.symbol)
       && (rightFilter.value === 'all' || row.right === rightFilter.value)
       && inDteBand(row.dte)
-      && tapeMatchesActivity(row),
+      && tapeMatchesActivity(row)
+      && printMatchesPreset(row),
   ),
 )
 
@@ -713,17 +804,17 @@ function actionInsight(row: UnusualFlowRow): ActionInsight {
   if (priority === 'skip') {
     action = 'Refresh feed before chain work — provider sample is stale'
   } else if (direction.state === 'mixed') {
-    action = 'Open chain · reconcile conflicting lean vs model before size'
+    action = 'Build setup · reconcile conflicting lean vs model before size'
   } else if (direction.state.includes('bullish')) {
     action = nearExpiry
-      ? 'Open chain · map near-dated call strikes + upside walls'
-      : 'Open chain · confirm call side liquidity and call wall'
+      ? 'Build setup · map near-dated call strikes + upside walls'
+      : 'Build setup · confirm call side liquidity and call wall'
   } else if (direction.state.includes('bearish')) {
     action = nearExpiry
-      ? 'Open chain · map near-dated put strikes + downside walls'
-      : 'Open chain · confirm put side liquidity and put wall'
+      ? 'Build setup · map near-dated put strikes + downside walls'
+      : 'Build setup · confirm put side liquidity and put wall'
   } else if (incoming) {
-    action = 'Open chain · new prints just landed; read structure first'
+    action = 'Build setup · new prints just landed; read structure first'
   } else {
     action = 'Park for later · no clear lean; keep in review queue'
   }
@@ -913,10 +1004,78 @@ const directionPolicy = computed(() => {
 const activeFilterCount = computed(() =>
   Number(symbolQuery.value.trim().length > 0)
     + Number(activityFilter.value !== 'all')
+    + Number(tapePreset.value !== 'all')
     + Number(rightFilter.value !== 'all')
     + Number(dteFilter.value !== 'all')
     + Number(sortKey.value !== 'review'),
 )
+
+const topTickerRows = computed(() =>
+  props.payload?.top_tickers?.categories?.[topTickerCategory.value] ?? [],
+)
+
+const bookHits = computed(() =>
+  qualifiedRows.value.filter((row) => watchlistHas(book.value, row.symbol)),
+)
+
+function onBook(symbol: string): boolean {
+  return watchlistHas(book.value, symbol)
+}
+
+function toggleBook(symbol: string): void {
+  book.value = toggleWatchlistSymbol(book.value, symbol).symbols
+}
+
+watch(
+  [() => props.payload, pulse, book],
+  () => {
+    const tape = props.payload?.tape ?? []
+    const incoming = collectWatchlistAlerts({
+      watchlist: book.value,
+      prints: tape,
+      seenKeys: seenAlertKeys.value,
+      newPrintKeys: pulse.value.baseline ? [] : pulse.value.newPrintKeys,
+    })
+    if (!incoming.length) return
+    bookAlerts.value = [...incoming, ...bookAlerts.value].slice(0, 20)
+    const nextSeen = new Set(seenAlertKeys.value)
+    for (const alert of incoming) nextSeen.add(alert.key)
+    seenAlertKeys.value = nextSeen
+    saveSeenAlertKeys(nextSeen)
+    saveUnreadAlertCount(bookAlerts.value.length)
+  },
+)
+
+function dismissAlerts(): void {
+  bookAlerts.value = []
+  saveUnreadAlertCount(0)
+}
+
+async function loadHistoryTape(): Promise<void> {
+  const symbol = historySymbol.value.trim().toUpperCase()
+  if (!symbol) {
+    historyError.value = 'Enter a symbol'
+    return
+  }
+  historyLoading.value = true
+  historyError.value = null
+  try {
+    const payload = await api.flowTape({
+      symbol,
+      from: historyFrom.value || undefined,
+      to: historyTo.value || undefined,
+      minPremium: props.minPremium,
+    })
+    historyTape.value = payload.tape ?? []
+    historyMeta.value = `${payload.symbol} · ${payload.print_count} prints · ${payload.feed_status}`
+    if (payload.warnings?.length) historyError.value = payload.warnings.join(' · ')
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : 'History tape unavailable'
+    historyTape.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
 
 const reviewMeta = computed(() =>
   `SHOWING ${reviewRows.value.length} OF ${filteredRows.value.length} · ≥ $${compact(props.minPremium)}`,
@@ -930,6 +1089,7 @@ const tapeMeta = computed(() => {
 function clearFilters(): void {
   symbolQuery.value = ''
   activityFilter.value = 'all'
+  tapePreset.value = 'all'
   rightFilter.value = 'all'
   dteFilter.value = 'all'
   sortKey.value = 'review'
@@ -952,11 +1112,22 @@ function callShare(row: UnusualFlowRow): number | null {
 }
 
 function putShareLabel(row: UnusualFlowRow): string {
-  return fractionPercent(putShare(row), 0)
+  return mixShareLabel(putShare(row), fractionPercent(putShare(row), 0))
 }
 
 function callShareLabel(row: UnusualFlowRow): string {
-  return fractionPercent(callShare(row), 0)
+  return mixShareLabel(callShare(row), fractionPercent(callShare(row), 0))
+}
+
+function symbolPulseCopy(symbol: string): string {
+  if (pulse.value.baseline) return FIRST_WINDOW_BASELINE
+  const row = symbolPulse(symbol)
+  return pulseWindowCopy({
+    baseline: false,
+    newPrints: row.newPrints,
+    newPremiumLabel: `+${moneyCompact(row.newPremium)}`,
+    windowDeltaLabel: signedMoneyCompact(row.windowPremiumDelta),
+  })
 }
 
 function putBarWidth(row: UnusualFlowRow): string {
@@ -1014,7 +1185,9 @@ function heatWidth(value: unknown): string {
 }
 
 function openSymbol(symbol: string | null | undefined): void {
-  if (symbol) emit('openSymbol', symbol)
+  if (!symbol) return
+  historySymbol.value = symbol
+  emit('openSymbol', symbol)
 }
 
 type CsvCell = string | number | boolean | null | undefined
@@ -1165,6 +1338,68 @@ function downloadTapeCsv(): void {
       </button>
     </header>
 
+    <section class="alert-tray rise" :class="{ empty: !bookAlerts.length }" role="status">
+      <header>
+        <span class="label">Book alerts</span>
+        <strong v-if="bookAlerts.length">
+          {{ bookAlerts.length }} Unusual / Sweep print{{ bookAlerts.length === 1 ? '' : 's' }} on pinned names
+        </strong>
+        <strong v-else>Watching {{ book.join(', ') || 'no names' }} for Unusual and Sweep</strong>
+      </header>
+      <ul v-if="bookAlerts.length">
+        <li v-for="alert in bookAlerts.slice(0, 6)" :key="alert.key">
+          <button type="button" class="fig" @click="openSymbol(alert.symbol)">{{ alert.symbol }}</button>
+          <span class="label">{{ alert.kind.toUpperCase() }}</span>
+          <span class="fig">{{ moneyCompact(alert.premium) }}</span>
+          <small>{{ alert.right }} {{ alert.strike ?? '—' }} · {{ shortDate(alert.timestamp) }}</small>
+        </li>
+      </ul>
+      <p v-else class="ticker-empty">
+        New Unusual or Sweep prints on the personal book land here after the next provider window. Pin names below or on Desk.
+      </p>
+      <button v-if="bookAlerts.length" type="button" class="label" @click="dismissAlerts">CLEAR</button>
+    </section>
+
+    <section class="history-panel rise" aria-labelledby="history-tape-title">
+      <header class="majors-head">
+        <div>
+          <span class="label section-kicker">One symbol</span>
+          <h2 id="history-tape-title">On-demand historical tape</h2>
+        </div>
+        <p>Pull classified prints for one underlier. Date bounds go to the provider and are applied again after classify.</p>
+      </header>
+      <div class="history-tape-bar">
+        <input v-model="historySymbol" type="text" maxlength="10" placeholder="SYMBOL" aria-label="History symbol">
+        <input v-model="historyFrom" type="date" aria-label="History from">
+        <input v-model="historyTo" type="date" aria-label="History to">
+        <button type="button" class="panel-action label" :disabled="historyLoading" @click="void loadHistoryTape()">
+          {{ historyLoading ? 'LOADING…' : 'LOAD HISTORY' }}
+        </button>
+        <small v-if="historyMeta">{{ historyMeta }}</small>
+        <small v-if="historyError">{{ historyError }}</small>
+      </div>
+      <div v-if="historyTape.length" class="table-scroll tape-scroll">
+        <table class="grid tape-table">
+          <thead>
+            <tr>
+              <th class="label">Time UTC</th>
+              <th class="label">Right</th>
+              <th class="label">Tags</th>
+              <th class="label num">Premium</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in historyTape.slice(0, 40)" :key="flowPrintKey(row)">
+              <td class="fig">{{ shortDate(row.timestamp) }}</td>
+              <td class="fig">{{ row.right }} {{ row.strike ?? '—' }}</td>
+              <td class="label">{{ (row.presets ?? []).join(' · ') || row.trade_class || '—' }}</td>
+              <td class="fig num">{{ moneyCompact(row.premium) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <p v-if="error" class="error-strip" role="alert">
       <strong class="label">Flow feed error</strong>
       <span>{{ error }}</span>
@@ -1223,8 +1458,8 @@ function downloadTapeCsv(): void {
           :key="pick.key"
           type="button"
           class="triage-pick"
-          :class="pick.leanState"
-          :aria-label="`Open ${pick.symbol} options — ${pick.eyebrow}`"
+          :class="[pick.leanState, flowLeanTokenClass(pick.leanState)]"
+          :aria-label="`Build ${pick.symbol} live options setup — ${pick.eyebrow}`"
           @click="openSymbol(pick.symbol)"
         >
           <span class="triage-index fig">0{{ index + 1 }}</span>
@@ -1233,13 +1468,13 @@ function downloadTapeCsv(): void {
             <strong class="fig">{{ pick.symbol }}</strong>
             <b class="fig">{{ pick.value }}</b>
           </span>
-          <span class="triage-lean label" :class="pick.leanState">{{ pick.lean }}</span>
+          <span class="triage-lean label" :class="[pick.leanState, flowLeanTokenClass(pick.leanState)]">{{ pick.lean }}</span>
           <small class="triage-action">{{ pick.detail }}</small>
           <small class="triage-focus">Focus: {{ pick.action }}</small>
           <span class="triage-tags">
             <span v-for="tag in pick.tags" :key="tag.label" class="label" :class="tag.kind">{{ tag.label }}</span>
           </span>
-          <span class="triage-open label">OPEN CHAIN →</span>
+          <span class="triage-open label">VIEW LIVE SETUP →</span>
         </button>
       </section>
 
@@ -1268,6 +1503,20 @@ function downloadTapeCsv(): void {
             <button type="button" :class="{ active: activityFilter === 'near' }" @click="activityFilter = 'near'">≤7D</button>
           </div>
           <small>Flags mark unusual prints for inspection; they do not establish direction.</small>
+        </fieldset>
+
+        <fieldset class="seg-filter preset-filter">
+          <legend class="label">Tape presets</legend>
+          <div>
+            <button
+              v-for="preset in TAPE_PRESETS"
+              :key="preset.id"
+              type="button"
+              :class="{ active: tapePreset === preset.id }"
+              @click="tapePreset = preset.id"
+            >{{ preset.label }}</button>
+          </div>
+          <small>My book is the same personal list as Desk. Unusual is DTE ≤ 35 and ≥ 10% OTM. Momentum is relative volume. Moonshot is cheap, far OTM.</small>
         </fieldset>
 
         <fieldset class="seg-filter">
@@ -1307,6 +1556,68 @@ function downloadTapeCsv(): void {
         </button>
       </section>
 
+      <section class="top-tickers rise" aria-labelledby="top-tickers-title">
+        <header class="majors-head">
+          <div>
+            <span class="label section-kicker">Options-only leaders</span>
+            <h2 id="top-tickers-title">Top Tickers</h2>
+          </div>
+          <p>
+            Ranked from this tape. Bullish/bearish share uses signed premium when the provider marks a side; otherwise call/put premium.
+          </p>
+        </header>
+        <div class="ticker-cats" role="tablist" aria-label="Top Tickers categories">
+          <button
+            v-for="category in TOP_TICKER_CATEGORIES"
+            :key="category.id"
+            type="button"
+            role="tab"
+            :class="{ active: topTickerCategory === category.id }"
+            @click="topTickerCategory = category.id"
+          >{{ category.label }}</button>
+        </div>
+        <div v-if="topTickerRows.length" class="ticker-grid">
+          <button
+            v-for="(row, index) in topTickerRows.slice(0, 8)"
+            :key="`${topTickerCategory}-${row.symbol}`"
+            type="button"
+            class="ticker-card"
+            @click="openSymbol(row.symbol)"
+          >
+            <span class="fig">{{ String(index + 1).padStart(2, '0') }} {{ row.symbol }}</span>
+            <strong class="fig">{{ tickerScore(row.score) }}</strong>
+            <small>
+              {{ row.bullish_share == null ? 'No classified share' : `${fractionPercent(row.bullish_share, 0)} bullish / ${fractionPercent(row.bearish_share, 0)} bearish` }}
+            </small>
+          </button>
+        </div>
+        <p v-else class="ticker-empty label">No names in this category for the latest provider sample.</p>
+      </section>
+
+      <section class="book-hits rise" aria-labelledby="book-hits-title">
+        <header class="majors-head">
+          <div>
+            <span class="label section-kicker">Personal book</span>
+            <h2 id="book-hits-title">Watchlist hits on this tape</h2>
+          </div>
+          <p>{{ book.length }} pinned on Desk · {{ bookHits.length }} printed in the latest sample. Pin a name to follow it here without cloning Discord or a second watchlist.</p>
+        </header>
+        <div v-if="bookHits.length" class="ticker-grid">
+          <button
+            v-for="row in bookHits.slice(0, 12)"
+            :key="`book-${row.symbol}`"
+            type="button"
+            class="ticker-card"
+            @click="openSymbol(row.symbol)"
+          >
+            <span class="fig">{{ row.symbol }}</span>
+            <strong class="fig">{{ moneyCompact(row.premium) }}</strong>
+            <small>{{ exactCount(row.print_count) }} prints · {{ (row.unusual_contracts ?? 0) > 0 ? 'Unusual' : 'On tape' }}</small>
+          </button>
+        </div>
+        <p v-else class="ticker-empty label">None of the pinned names printed in this sample. Add names from Desk or pin a row below.</p>
+      </section>
+
       <section class="majors-section rise" aria-labelledby="majors-title">
         <header class="majors-head">
           <div>
@@ -1315,7 +1626,7 @@ function downloadTapeCsv(): void {
           </div>
           <p>
             <strong class="label">{{ directionPolicy }}</strong><br>
-            Activity lean is descriptive; signed buy/sell and ENTER-state models upgrade evidence. Open chain only to confirm walls and liquidity.
+            Activity lean is descriptive; signed buy/sell and ENTER-state models upgrade evidence. Open a live setup to combine walls, gates, and sizing.
           </p>
         </header>
 
@@ -1343,12 +1654,12 @@ function downloadTapeCsv(): void {
                   <strong class="fig">{{ moneyCompact(major.row.premium) }}</strong>
                 </div>
                 <div>
-                  <span class="label">{{ pulse.baseline ? 'Tracking state' : 'New this refresh' }}</span>
-                  <strong class="fig">{{ pulse.baseline ? 'STARTS NOW' : moneyCompact(symbolPulse(major.symbol).newPremium) }}</strong>
+                  <span class="label">{{ pulse.baseline ? 'First window' : 'Vs previous window' }}</span>
+                  <strong class="fig">{{ pulse.baseline ? FIRST_WINDOW_BASELINE : moneyCompact(symbolPulse(major.symbol).newPremium) }}</strong>
                 </div>
               </div>
 
-              <div class="major-direction" :class="directionRead(major.symbol).state">
+              <div class="major-direction" :class="[directionRead(major.symbol).state, flowLeanTokenClass(directionRead(major.symbol).state)]">
                 <span class="direction-arrow" aria-hidden="true">
                   {{ directionRead(major.symbol).state.includes('bullish') ? '↑' : directionRead(major.symbol).state.includes('bearish') ? '↓' : directionRead(major.symbol).state === 'mixed' ? '↕' : '·' }}
                 </span>
@@ -1373,11 +1684,11 @@ function downloadTapeCsv(): void {
               <dl class="major-concentration">
                 <div>
                   <dt class="label">Strike</dt>
-                  <dd class="fig">{{ tapeStats(major.symbol)?.topStrike ?? 'Unavailable' }}</dd>
+                  <dd class="fig">{{ concentrationLabel(tapeStats(major.symbol)?.topStrike, NO_STRIKE_IN_TAPE) }}</dd>
                 </div>
                 <div>
                   <dt class="label">DTE zone</dt>
-                  <dd class="fig">{{ tapeStats(major.symbol)?.topDteBucket ?? 'Unavailable' }}</dd>
+                  <dd class="fig">{{ concentrationLabel(tapeStats(major.symbol)?.topDteBucket, 'NO DTE IN TAPE') }}</dd>
                 </div>
                 <div>
                   <dt class="label">Spot</dt>
@@ -1385,12 +1696,12 @@ function downloadTapeCsv(): void {
                   <small :class="priceRead(major.row).tone">{{ priceRead(major.row).move }}</small>
                 </div>
               </dl>
-              <p class="major-action label" :class="actionInsight(major.row).leanState">
+              <p class="major-action label" :class="[actionInsight(major.row).leanState, flowLeanTokenClass(actionInsight(major.row).leanState)]">
                 <span>{{ actionInsight(major.row).priority.toUpperCase() }}</span>
                 {{ actionInsight(major.row).action }}
               </p>
               <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
-                OPEN {{ major.symbol }} CHAIN <span aria-hidden="true">→</span>
+                SUGGEST {{ major.symbol }} SETUP <span aria-hidden="true">→</span>
               </button>
             </template>
             <template v-else>
@@ -1402,7 +1713,7 @@ function downloadTapeCsv(): void {
                 <p>No qualifying {{ major.symbol }} aggregate cleared ${{ compact(minPremium) }}.</p>
               </div>
               <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
-                OPEN {{ major.symbol }} CHAIN <span aria-hidden="true">→</span>
+                SUGGEST {{ major.symbol }} SETUP <span aria-hidden="true">→</span>
               </button>
             </template>
           </article>
@@ -1451,7 +1762,7 @@ function downloadTapeCsv(): void {
                 <th class="label">Concentration</th>
                 <th class="label">Underlying</th>
                 <th class="label">Activity lean</th>
-                <th><span class="sr-only">Open symbol</span></th>
+                <th><span class="sr-only">Open live setup</span></th>
               </tr>
             </thead>
             <tbody>
@@ -1461,10 +1772,17 @@ function downloadTapeCsv(): void {
                   <button type="button" class="symbol-button fig" @click="openSymbol(row.symbol)">
                     {{ row.symbol }}
                   </button>
+                  <button
+                    type="button"
+                    class="book-pin label"
+                    :class="{ on: onBook(row.symbol) }"
+                    :aria-label="onBook(row.symbol) ? `Remove ${row.symbol} from book` : `Pin ${row.symbol} to book`"
+                    @click="toggleBook(row.symbol)"
+                  >{{ onBook(row.symbol) ? 'PINNED' : 'PIN' }}</button>
                   <span v-if="!pulse.baseline" class="table-rank-move fig" :class="rankMoveClass(row.symbol)">{{ rankMoveLabel(row.symbol) }}</span>
                 </td>
-                <td class="reason-cell action-cell" :class="actionInsight(row).leanState">
-                  <span class="priority-chip label" :class="actionInsight(row).priority">{{ actionInsight(row).priority.toUpperCase() }}</span>
+                <td class="reason-cell action-cell" :class="[actionInsight(row).leanState, flowLeanTokenClass(actionInsight(row).leanState)]">
+                  <span class="priority-chip label" :class="[actionInsight(row).priority, flowPriorityTokenClass(actionInsight(row).priority)]">{{ actionInsight(row).priority.toUpperCase() }}</span>
                   <strong>{{ actionInsight(row).action }}</strong>
                   <small>Focus {{ actionInsight(row).focus }} · {{ actionInsight(row).why }}</small>
                   <span class="tag-line">
@@ -1480,11 +1798,9 @@ function downloadTapeCsv(): void {
                 </td>
                 <td class="activity-cell num">
                   <strong class="fig">{{ moneyCompact(row.premium) }}</strong>
-                  <small v-if="pulse.baseline" class="fig">latest sample · {{ exactCount(row.contract_count) }} contracts</small>
-                  <small v-else-if="symbolPulse(row.symbol).newPrints > 0" class="fig incoming-copy">
-                    +{{ moneyCompact(symbolPulse(row.symbol).newPremium) }} · {{ symbolPulse(row.symbol).newPrints }} new vs prior sample
+                  <small class="fig" :class="{ 'incoming-copy': !pulse.baseline && symbolPulse(row.symbol).newPrints > 0 }">
+                    {{ pulse.baseline ? `${FIRST_WINDOW_BASELINE} · ${exactCount(row.contract_count)} contracts` : symbolPulseCopy(row.symbol) }}
                   </small>
-                  <small v-else class="fig">{{ signedMoneyCompact(symbolPulse(row.symbol).windowPremiumDelta) }} vs prior sample</small>
                 </td>
                 <td class="identity-cell">
                   <div class="identity-labels fig">
@@ -1498,20 +1814,20 @@ function downloadTapeCsv(): void {
                   <small class="identity-note">CONTRACT TYPE · NOT BUY / SELL</small>
                 </td>
                 <td class="structure-cell fig">
-                  <strong>{{ tapeStats(row.symbol)?.topStrike ?? (row.average_dte == null ? DASH : `${num(row.average_dte, 1)}D avg`) }}</strong>
+                  <strong>{{ concentrationLabel(tapeStats(row.symbol)?.topStrike, row.average_dte == null ? NO_STRIKE_IN_TAPE : `${num(row.average_dte, 1)}D avg`) }}</strong>
                   <small>{{ tapeStats(row.symbol)?.topDteBucket ?? `${fractionPercent(row.average_otm_pct)} avg OTM` }}</small>
                 </td>
                 <td class="price-cell">
                   <strong class="fig">{{ priceRead(row).spot }}</strong>
                   <small :class="priceRead(row).tone">{{ priceRead(row).move }} · {{ priceRead(row).detail }}</small>
                 </td>
-                <td class="direction-cell" :class="directionRead(row.symbol).state">
+                <td class="direction-cell" :class="[directionRead(row.symbol).state, flowLeanTokenClass(directionRead(row.symbol).state)]">
                   <span class="direction-chip label">{{ directionRead(row.symbol).label }}</span>
                   <small>{{ directionRead(row.symbol).detail }}</small>
                 </td>
                 <td class="open-cell">
-                  <button type="button" class="row-open label" :aria-label="`Review ${row.symbol} options`" @click="openSymbol(row.symbol)">
-                    OPEN <span aria-hidden="true">→</span>
+                  <button type="button" class="row-open label" :aria-label="`Build ${row.symbol} live setup`" @click="openSymbol(row.symbol)">
+                    SETUP <span aria-hidden="true">→</span>
                   </button>
                 </td>
               </tr>
@@ -1561,6 +1877,37 @@ function downloadTapeCsv(): void {
             <button type="button" class="panel-action label" :disabled="!tapeRows.length" @click="downloadTapeCsv">
               EXPORT TAPE CSV
             </button>
+          </div>
+          <div class="history-tape-bar">
+            <span class="label">On-demand history</span>
+            <input v-model="historySymbol" type="text" maxlength="10" placeholder="SYMBOL" aria-label="History symbol">
+            <input v-model="historyFrom" type="date" aria-label="History from">
+            <input v-model="historyTo" type="date" aria-label="History to">
+            <button type="button" class="panel-action label" :disabled="historyLoading" @click="void loadHistoryTape()">
+              {{ historyLoading ? 'LOADING…' : 'LOAD HISTORY' }}
+            </button>
+            <small v-if="historyMeta">{{ historyMeta }}</small>
+            <small v-if="historyError">{{ historyError }}</small>
+          </div>
+          <div v-if="historyTape.length" class="table-scroll tape-scroll">
+            <table class="grid tape-table">
+              <thead>
+                <tr>
+                  <th class="label">Time UTC</th>
+                  <th class="label">Right</th>
+                  <th class="label">Tags</th>
+                  <th class="label num">Premium</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in historyTape.slice(0, 40)" :key="flowPrintKey(row)">
+                  <td class="fig">{{ shortDate(row.timestamp) }}</td>
+                  <td class="fig">{{ row.right }} {{ row.strike ?? '—' }}</td>
+                  <td class="label">{{ (row.presets ?? []).join(' · ') || row.trade_class || '—' }}</td>
+                  <td class="fig num">{{ moneyCompact(row.premium) }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <div v-if="tapeRows.length" class="table-scroll tape-scroll">
@@ -1616,7 +1963,12 @@ function downloadTapeCsv(): void {
                       <span class="fig">{{ fractionPercent(row.premium_percentile, 0) }}</span>
                     </div>
                   </td>
-                  <td><span class="aggressor label">{{ aggressorLabel(row) }}</span></td>
+                  <td>
+                    <span
+                      class="aggressor label"
+                      :class="signedPrintTokenClass(row.aggressor ?? row.aggressor_label)"
+                    >{{ aggressorLabel(row) }}</span>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -1747,7 +2099,7 @@ function downloadTapeCsv(): void {
   font-family: var(--font-data);
   font-size: var(--t-tiny);
   font-weight: 700;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 .thresholds button:last-child { border-right: 0; }
 
@@ -1793,11 +2145,11 @@ function downloadTapeCsv(): void {
   font-size: 10px;
   letter-spacing: var(--track-label);
   border-radius: 2px;
-  transition: all var(--dur-fast) ease;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .refresh-button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--phosphor) 85%, #fff);
+  background: var(--phosphor-dim);
 }
 
 button:disabled {
@@ -1903,6 +2255,106 @@ button:disabled {
 
 .section-kicker { color: var(--phosphor); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
 
+.top-tickers {
+  padding: var(--s5);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-raised);
+}
+.ticker-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+.ticker-cats button {
+  min-height: 28px;
+  padding: 0 var(--s3);
+  color: var(--text-secondary);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.ticker-cats button.active {
+  color: var(--void);
+  border-color: var(--phosphor);
+  background: var(--phosphor);
+}
+.ticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--s3);
+  margin-top: var(--s4);
+}
+.ticker-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 88px;
+  padding: var(--s3);
+  color: inherit;
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  text-align: left;
+  cursor: pointer;
+}
+.ticker-card:hover { border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
+.ticker-card strong { color: var(--text-primary); }
+.ticker-card small { color: var(--text-tertiary); font-size: var(--t-micro); }
+.ticker-empty { margin-top: var(--s3); color: var(--text-tertiary); }
+.book-hits {
+  padding: var(--s5);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-raised);
+}
+.book-pin {
+  margin-left: 6px;
+  min-height: 22px;
+  padding: 0 6px;
+  color: var(--text-tertiary);
+  border: var(--hair) solid var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+}
+.book-pin.on { color: var(--phosphor); border-color: var(--phosphor-dim); }
+.alert-tray {
+  display: grid;
+  gap: var(--s3);
+  padding: var(--s4);
+  border: var(--hair) solid var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
+.alert-tray.empty {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+.history-panel {
+  padding: var(--s5);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-raised);
+}
+.alert-tray ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.alert-tray li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.alert-tray button.fig { color: var(--phosphor); background: none; border: 0; cursor: pointer; }
+.history-tape-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  align-items: center;
+  padding: var(--s3) 0;
+}
+.history-tape-bar input {
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--ink);
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void-lift);
+}
+
 /* ── Live Pulse Banner ───────────────────────────────────────────────────── */
 .live-pulse {
   display: grid;
@@ -1964,7 +2416,7 @@ button:disabled {
   text-align: left;
   background: var(--surface-raised);
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .triage-pick:hover {
@@ -1999,20 +2451,20 @@ button:disabled {
 }
 .triage-lean.bullish,
 .triage-lean.model-bullish {
-  color: #52c78f;
-  border-color: #52c78f;
-  background: rgba(82, 199, 143, 0.14);
+  color: var(--long);
+  border-color: var(--long);
+  background: var(--long-wash);
 }
 .triage-lean.bearish,
 .triage-lean.model-bearish {
-  color: #f06d7b;
-  border-color: #f06d7b;
-  background: rgba(240, 109, 123, 0.14);
+  color: var(--short);
+  border-color: var(--short);
+  background: var(--short-wash);
 }
 .triage-lean.mixed {
-  color: #e5b048;
-  border-color: #e5b048;
-  background: rgba(229, 176, 72, 0.14);
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
 }
 
 .triage-action {
@@ -2052,10 +2504,10 @@ button:disabled {
   letter-spacing: 0.05em;
 }
 .triage-pick.bullish,
-.triage-pick.model-bullish { border-top-color: #52c78f; }
+.triage-pick.model-bullish { border-top-color: var(--long); }
 .triage-pick.bearish,
-.triage-pick.model-bearish { border-top-color: #f06d7b; }
-.triage-pick.mixed { border-top-color: #e5b048; }
+.triage-pick.model-bearish { border-top-color: var(--short); }
+.triage-pick.mixed { border-top-color: var(--warn); }
 
 /* ── Filter Shelf ────────────────────────────────────────────────────────── */
 .filter-shelf {
@@ -2135,7 +2587,7 @@ button:disabled {
   font-family: var(--font-data);
   font-size: var(--t-tiny);
   font-weight: 700;
-  transition: all var(--dur-fast) ease;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 .seg-filter button:last-child { border-right: 0; }
 .seg-filter button:hover:not(.active) { color: var(--text-primary); background: var(--surface-overlay); }
@@ -2291,11 +2743,11 @@ button.major-symbol:hover { color: var(--ink); }
 }
 .major-direction strong { display: block; color: inherit; font-size: 11px; font-weight: 800; }
 .major-direction small { display: block; margin-top: 1px; color: var(--text-tertiary); font-size: var(--t-micro); }
-.major-direction.bullish { color: #52c78f; border-color: #52c78f; background: rgba(82, 199, 143, 0.14); }
-.major-direction.bearish { color: #f06d7b; border-color: #f06d7b; background: rgba(240, 109, 123, 0.14); }
-.major-direction.mixed { color: #e5b048; border-color: #e5b048; background: rgba(229, 176, 72, 0.14); }
-.major-direction.model-bullish { color: #52c78f; border-color: color-mix(in srgb, #52c78f 45%, var(--border-strong)); }
-.major-direction.model-bearish { color: #f06d7b; border-color: color-mix(in srgb, #f06d7b 45%, var(--border-strong)); }
+.major-direction.bullish { color: var(--long); border-color: var(--long); background: var(--long-wash); }
+.major-direction.bearish { color: var(--short); border-color: var(--short); background: var(--short-wash); }
+.major-direction.mixed { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.major-direction.model-bullish { color: var(--long); border-color: color-mix(in srgb, var(--long) 45%, var(--border-strong)); }
+.major-direction.model-bearish { color: var(--short); border-color: color-mix(in srgb, var(--short) 45%, var(--border-strong)); }
 
 .major-identity { margin-top: var(--s2); }
 .major-identity small { display: block; margin-top: 4px; color: var(--text-tertiary); font-size: var(--t-micro); }
@@ -2351,10 +2803,10 @@ button.major-symbol:hover { color: var(--ink); }
   letter-spacing: 0.05em;
 }
 .major-action.bullish > span,
-.major-action.model-bullish > span { color: #52c78f; }
+.major-action.model-bullish > span { color: var(--long); }
 .major-action.bearish > span,
-.major-action.model-bearish > span { color: #f06d7b; }
-.major-action.mixed > span { color: #e5b048; }
+.major-action.model-bearish > span { color: var(--short); }
+.major-action.mixed > span { color: var(--warn); }
 
 .major-open {
   width: 100%;
@@ -2370,7 +2822,7 @@ button.major-symbol:hover { color: var(--ink); }
   letter-spacing: 0.05em;
   border-radius: 2px;
   cursor: pointer;
-  transition: all var(--dur-fast) ease;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .major-open:hover {
   color: var(--void);
@@ -2537,14 +2989,14 @@ button.major-symbol:hover { color: var(--ink); }
   font-size: 9px;
 }
 .priority-chip.now {
-  color: #52c78f;
-  border-color: #52c78f;
-  background: rgba(82, 199, 143, 0.14);
+  color: var(--long);
+  border-color: var(--long);
+  background: var(--long-wash);
 }
 .priority-chip.soon {
-  color: #e5b048;
-  border-color: #e5b048;
-  background: rgba(229, 176, 72, 0.14);
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
 }
 .priority-chip.watch { color: var(--text-secondary); border-color: var(--border-strong); }
 .priority-chip.skip { color: var(--text-tertiary); opacity: 0.85; border-color: var(--border-subtle); }
@@ -2564,28 +3016,34 @@ button.major-symbol:hover { color: var(--ink); }
   font-size: 10px;
   border: var(--hair) solid currentColor;
 }
-.direction-cell.bullish .direction-chip { color: #52c78f; border-color: #52c78f; background: rgba(82, 199, 143, 0.14); }
-.direction-cell.bearish .direction-chip { color: #f06d7b; border-color: #f06d7b; background: rgba(240, 109, 123, 0.14); }
-.direction-cell.mixed .direction-chip { color: #e5b048; border-color: #e5b048; background: rgba(229, 176, 72, 0.14); }
-.direction-cell.model-bullish .direction-chip { color: #52c78f; border-color: color-mix(in srgb, #52c78f 45%, var(--border-strong)); }
-.direction-cell.model-bearish .direction-chip { color: #f06d7b; border-color: color-mix(in srgb, #f06d7b 45%, var(--border-strong)); }
+.direction-cell.bullish .direction-chip { color: var(--long); border-color: var(--long); background: var(--long-wash); }
+.direction-cell.bearish .direction-chip { color: var(--short); border-color: var(--short); background: var(--short-wash); }
+.direction-cell.mixed .direction-chip { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.direction-cell.model-bullish .direction-chip { color: var(--long); border-color: color-mix(in srgb, var(--long) 45%, var(--border-strong)); }
+.direction-cell.model-bearish .direction-chip { color: var(--short); border-color: color-mix(in srgb, var(--short) 45%, var(--border-strong)); }
+
+.token-long { color: var(--long); border-color: var(--long); }
+.token-short { color: var(--short); border-color: var(--short); }
+.token-warn { color: var(--warn); border-color: var(--warn); }
+.token-unsigned { color: var(--ink-dim); border-color: var(--rule-hi); }
+.token-ink { color: var(--ink-dim); }
 
 .row-open {
   min-height: 26px;
   padding: 3px 8px;
-  color: var(--call-hi);
+  color: var(--ink);
   border: var(--hair) solid var(--border-strong);
   background: var(--surface-base);
   font-size: 10px;
   font-weight: 750;
   border-radius: 2px;
   cursor: pointer;
-  transition: all var(--dur-fast) ease;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .row-open:hover {
   color: var(--void);
-  background: var(--call-hi);
-  border-color: var(--call-hi);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
 }
 
 .queue-footer {

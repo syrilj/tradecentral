@@ -42,13 +42,13 @@ REGION = os.getenv("GCP_REGION", "us-central1")
 STAGING_BUCKET = os.getenv("GCS_BUCKET", "gs://edge-artifacts-gen-lang-client-0699310395")
 CONTAINER_URI = "us-docker.pkg.dev/vertex-ai/training/tf-cpu.2-12.py310:latest"
 
-# Pinned CPU-only machine for all validation jobs (Spot pricing, 200GB SSD)
+# Pinned CPU-only machine for all validation jobs (Spot pricing, 100GB Standard Disk)
 MACHINE_SPEC = {
     "machine_type": "n1-standard-8",  # 8 vCPU / 30 GB RAM — headroom for qlib Alpha158
     "accelerator_type": "ACCELERATOR_TYPE_UNSPECIFIED",
     "accelerator_count": 0,
 }
-DISK_SPEC = {"boot_disk_type": "pd-ssd", "boot_disk_size_gb": 200}
+DISK_SPEC = {"boot_disk_type": "pd-standard", "boot_disk_size_gb": 100}
 JOB_TIMEOUT = 7200  # 2 hours hard cap per job
 
 # Gate definitions — what each job validates and what metric we expect
@@ -183,6 +183,7 @@ def submit_job(gate_name: str, gate: dict, *, dry_run: bool = False, sync: bool 
         return None
 
     from google.cloud import aiplatform
+    from google.cloud.aiplatform_v1.types import Scheduling
 
     job = aiplatform.CustomJob(
         display_name=display_name,
@@ -190,12 +191,21 @@ def submit_job(gate_name: str, gate: dict, *, dry_run: bool = False, sync: bool 
     )
 
     if sync:
-        job.run(restart_job_on_worker_restart=False, timeout=JOB_TIMEOUT, sync=True)
+        job.run(
+            restart_job_on_worker_restart=False,
+            timeout=JOB_TIMEOUT,
+            scheduling_strategy=Scheduling.Strategy.SPOT,
+            sync=True,
+        )
         print(f"  [DONE] Job completed: {job.resource_name}")
     else:
-        job.submit(restart_job_on_worker_restart=False, timeout=JOB_TIMEOUT)
+        job.submit(
+            restart_job_on_worker_restart=False,
+            timeout=JOB_TIMEOUT,
+            scheduling_strategy=Scheduling.Strategy.SPOT,
+        )
         resource_id = job.resource_name.split("/")[-1] if job.resource_name else "UNKNOWN"
-        print(f"  [SUBMITTED] Job ID: {resource_id}")
+        print(f"  [SUBMITTED] Job ID: {resource_id} (Spot Compute)")
         print(f"  Console: https://console.cloud.google.com/vertex-ai/training/custom-jobs?project={PROJECT_ID}")
 
     return job

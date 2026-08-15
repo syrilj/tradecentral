@@ -83,17 +83,20 @@ RAW_FEATURES = (
     "return_1d", "return_2d", "return_5d", "return_10d", "return_20d",
     "return_63d", "return_126d", "return_252d", "volatility_5d",
     "volatility_20d", "volatility_63d", "downside_volatility_20d",
-    "atr_pct_14d", "rsi_14d", "range_position_20d", "range_position_63d",
-    "gap_1d", "intraday_return_1d", "volume_z_20d", "dollar_volume_z_20d",
-    "amihud_20d", "market_return_1d", "market_return_5d", "market_return_20d",
-    "market_return_63d", "market_volatility_20d", "market_above_sma_200d",
-    "sector_relative_return_5d", "sector_relative_return_20d",
+    "vol_scaled_return_20d", "atr_pct_14d", "rsi_14d", "range_position_20d",
+    "range_position_63d", "gap_1d", "intraday_return_1d", "volume_z_20d",
+    "dollar_volume_z_20d", "amihud_20d", "market_return_1d", "market_return_5d",
+    "market_return_20d", "market_return_63d", "market_volatility_20d",
+    "market_above_sma_200d", "gex_regime_proxy", "sector_relative_return_5d",
+    "sector_relative_return_10d", "sector_relative_return_20d",
     "sector_relative_return_63d",
 )
 RANK_BASES = (
-    "return_1d", "return_5d", "return_20d", "return_63d", "return_126d",
-    "volatility_20d", "range_position_20d", "volume_z_20d", "gap_1d",
-    "sector_relative_return_20d", "sector_relative_return_63d",
+    "return_1d", "return_5d", "return_10d", "return_20d", "return_63d",
+    "return_126d", "volatility_20d", "vol_scaled_return_20d",
+    "range_position_20d", "volume_z_20d", "gap_1d",
+    "sector_relative_return_10d", "sector_relative_return_20d",
+    "sector_relative_return_63d",
 )
 FEATURE_COLUMNS = RAW_FEATURES + tuple(f"cross_sectional_rank_{name}" for name in RANK_BASES)
 
@@ -135,6 +138,7 @@ def _symbol_features(frame: pd.DataFrame) -> pd.DataFrame:
         out[f"volatility_{window}d"] = returns.rolling(window, min_periods=window).std(ddof=0)
     downside = returns.clip(upper=0.0)
     out["downside_volatility_20d"] = downside.rolling(20, min_periods=20).std(ddof=0)
+    out["vol_scaled_return_20d"] = out["return_20d"].div(out["volatility_20d"].replace(0.0, np.nan))
     out["atr_pct_14d"] = true_range.ewm(alpha=1.0 / 14, adjust=False).mean().div(close)
     out["rsi_14d"] = _rsi(close).div(100.0)
     for window in (20, 63):
@@ -185,10 +189,18 @@ def build_decision_features(bars: pd.DataFrame, sectors: Mapping[str, str]) -> p
     ).astype(float)
     features["market_above_sma_200d"] = timestamps.map(benchmark_above)
 
-    temp = features.loc[:, ["return_5d", "return_20d", "return_63d"]].copy()
+    # GEX & Volatility-Regime proxy feature:
+    mkt_vol = features["market_volatility_20d"]
+    rp20 = features["range_position_20d"]
+    features["gex_regime_proxy"] = np.where(
+        (mkt_vol < 0.012) & (rp20 > 0.5), 1.0,
+        np.where((mkt_vol > 0.020) | (rp20 < 0.2), -1.0, 0.0),
+    )
+
+    temp = features.loc[:, ["return_5d", "return_10d", "return_20d", "return_63d"]].copy()
     temp["timestamp_key"] = timestamps
     temp["sector_key"] = sector.to_numpy()
-    for horizon in (5, 20, 63):
+    for horizon in (5, 10, 20, 63):
         group_mean = temp.groupby(["timestamp_key", "sector_key"], sort=False)[f"return_{horizon}d"].transform("mean")
         features[f"sector_relative_return_{horizon}d"] = temp[f"return_{horizon}d"].sub(group_mean)
     for name in RANK_BASES:
@@ -277,7 +289,7 @@ def _make_model(name: str, *, seed: int) -> Any:
             ("imputer", SimpleImputer(strategy="median")),
             ("scale", RobustScaler(quantile_range=(10.0, 90.0))),
             ("model", LogisticRegression(
-                penalty="elasticnet", solver="saga", C=0.10, l1_ratio=0.25,
+                penalty="elasticnet", solver="saga", C=0.05, l1_ratio=0.50,
                 max_iter=5_000, tol=1e-3, random_state=seed,
             )),
         ])
@@ -285,8 +297,8 @@ def _make_model(name: str, *, seed: int) -> Any:
         return Pipeline([
             ("imputer", SimpleImputer(strategy="median")),
             ("model", HistGradientBoostingClassifier(
-                learning_rate=0.04, max_iter=180, max_leaf_nodes=15,
-                min_samples_leaf=100, l2_regularization=5.0,
+                learning_rate=0.02, max_iter=120, max_leaf_nodes=8,
+                min_samples_leaf=150, l2_regularization=10.0,
                 random_state=seed,
             )),
         ])
@@ -294,8 +306,8 @@ def _make_model(name: str, *, seed: int) -> Any:
         return Pipeline([
             ("imputer", SimpleImputer(strategy="median")),
             ("model", ExtraTreesClassifier(
-                n_estimators=300, max_depth=8, min_samples_leaf=80,
-                max_features=0.70, class_weight="balanced_subsample",
+                n_estimators=300, max_depth=5, min_samples_leaf=120,
+                max_features=0.50, class_weight="balanced_subsample",
                 n_jobs=-1, random_state=seed,
             )),
         ])
@@ -305,9 +317,9 @@ def _make_model(name: str, *, seed: int) -> Any:
         except (ImportError, ModuleNotFoundError) as exc:
             raise RuntimeError("xgboost is required for the fixed bake-off menu") from exc
         return XGBClassifier(
-            n_estimators=240, max_depth=3, learning_rate=0.025,
-            min_child_weight=40, subsample=0.80, colsample_bytree=0.70,
-            reg_alpha=0.20, reg_lambda=8.0, objective="binary:logistic",
+            n_estimators=180, max_depth=2, learning_rate=0.015,
+            min_child_weight=60, subsample=0.75, colsample_bytree=0.60,
+            reg_alpha=0.50, reg_lambda=15.0, objective="binary:logistic",
             eval_metric="logloss", tree_method="hist", device="cpu",
             n_jobs=-1, random_state=seed, verbosity=0,
         )

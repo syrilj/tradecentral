@@ -4,7 +4,10 @@ import { api, type MarketClock, type Readiness, type StatusPayload } from '@/api
 import { useResource, type Resource } from '@/composables/useResource'
 import { age, DASH, num, shortDate } from '@/format'
 import AppIcon from '@/components/AppIcon.vue'
-import FlowWorkspaceMockup from '@/components/FlowWorkspaceMockup.vue'
+import EvidenceLayerVisual from '@/components/EvidenceLayerVisual.vue'
+import GexFlowVisual from '@/components/GexFlowVisual.vue'
+import LiveStateVisual from '@/components/LiveStateVisual.vue'
+import ResearchLoopVisual from '@/components/ResearchLoopVisual.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
 
 /**
@@ -65,6 +68,7 @@ const contacting = computed(() => status.loading.value && !status.data.value && 
 
 const capabilities = [
   {
+    kind: 'market',
     icon: 'radar',
     index: '01',
     title: 'Market structure',
@@ -72,6 +76,7 @@ const capabilities = [
     detail: 'Price · regimes · sectors · outliers',
   },
   {
+    kind: 'options',
     icon: 'options',
     index: '02',
     title: 'Options & flow',
@@ -79,21 +84,14 @@ const capabilities = [
     detail: 'GEX · flow · ranges · contract context',
   },
   {
+    kind: 'governance',
     icon: 'gate',
     index: '03',
     title: 'Research governance',
     copy: 'Trace every claim back to point-in-time tests, pre-registered gates, run artifacts, and explicit shadow evidence.',
     detail: 'Methods · diagnostics · gates · ledgers',
   },
-]
-
-const workspaces = [
-  { icon: 'desk', name: 'Desk', path: '/desk', question: 'Posture, queue, and what needs attention now.' },
-  { icon: 'market', name: 'Market', path: '/market', question: 'One symbol in market and peer context.' },
-  { icon: 'options', name: 'Options', path: '/options', question: 'Positioning and structure for one underlier.' },
-  { icon: 'flow', name: 'Flow', path: '/flow', question: 'Where market-wide activity is concentrating.' },
-  { icon: 'research', name: 'Research', path: '/research', question: 'The evidence behind methods and models.' },
-]
+] as const
 
 const principles = [
   {
@@ -121,44 +119,46 @@ const principles = [
 
 <template>
   <div class="landing-page">
-    <header class="topbar landing-inner">
-      <RouterLink class="brand" to="/" aria-label="TradeCentral home">
-        <TradeCentralMark :size="34" />
-        <span class="wordmark">
-          <strong>TradeCentral</strong>
-          <small>Quantitative research instrument</small>
-        </span>
-      </RouterLink>
-
-      <nav class="topnav" aria-label="Product overview">
-        <a href="#product">Product</a>
-        <a href="#workspaces">Workspaces</a>
-        <a href="#method">Method</a>
-      </nav>
-
-      <div class="top-actions">
-        <RouterLink class="sign-in" :to="{ name: 'auth', query: { mode: 'signin', redirect: '/flow' } }">
-          Sign in
+    <header class="topbar-shell">
+      <div class="topbar landing-inner">
+        <RouterLink class="brand" to="/" aria-label="TradeCentral home">
+          <span class="brand-mark"><TradeCentralMark :size="32" /></span>
+          <span class="wordmark">
+            <strong>TradeCentral</strong>
+            <small>Quantitative research instrument</small>
+          </span>
         </RouterLink>
-        <RouterLink class="button button-paper" :to="{ name: 'auth', query: { redirect: '/flow' } }">
-          Open Flow <AppIcon name="arrow-right" :size="15" />
-        </RouterLink>
+
+        <nav class="topnav" aria-label="Product overview">
+          <a href="#product"><small>01</small>Product</a>
+          <a href="#workspaces"><small>02</small>Workspaces</a>
+          <a href="#method"><small>03</small>Method</a>
+        </nav>
+
+        <div class="top-actions">
+          <RouterLink class="sign-in" :to="{ name: 'auth', query: { mode: 'signin', redirect: '/flow' } }">
+            Sign in
+          </RouterLink>
+          <RouterLink class="button button-paper nav-access" :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }">
+            Create access <AppIcon name="arrow-right" :size="15" />
+          </RouterLink>
+        </div>
       </div>
     </header>
 
     <main>
       <section class="hero landing-inner">
         <div class="hero-copy reveal reveal-1">
-          <p class="eyebrow"><span aria-hidden="true" /> Local-first · US equities &amp; options</p>
-          <h1>See the evidence<br>before the opinion.</h1>
+          <p class="eyebrow"><span aria-hidden="true" /> US equities · options intelligence</p>
+          <h1>Read the market<br>beneath the price.</h1>
           <p class="lede">
-            TradeCentral brings market structure, options intelligence, model
-            diagnostics, and readiness controls into one research workstation—so
-            every decision starts with what was actually measured.
+            TradeCentral brings dealer positioning, options flow, and research
+            controls into one evidence-first view—so a move has context before it
+            has a narrative.
           </p>
           <div class="hero-actions">
             <RouterLink class="button button-accent" :to="{ name: 'auth', query: { redirect: '/flow' } }">
-              Sign in and open Flow <AppIcon name="arrow-right" :size="16" />
+              Explore market flow <AppIcon name="arrow-right" :size="16" />
             </RouterLink>
             <a class="button button-quiet" href="#product">
               See what you get <AppIcon name="arrow-down" :size="15" />
@@ -171,75 +171,31 @@ const principles = [
         </div>
 
         <div class="hero-visual reveal reveal-2">
-          <FlowWorkspaceMockup />
+          <GexFlowVisual />
         </div>
       </section>
 
-      <aside class="instrument-card landing-inner reveal" aria-label="Live instrument state from the local API">
-          <div class="card-register" aria-hidden="true"><span>TC / LIVE STATE</span><span>01—04</span></div>
-          <header class="instrument-head">
-            <div>
-              <p>Instrument state</p>
-              <h2>Measured locally</h2>
-            </div>
-            <span class="session-pill" :class="{ live: sessionLive }">
-              <i aria-hidden="true" />{{ session }}
-            </span>
-          </header>
-
-          <div v-if="apiDown" class="state-down" role="status">
-            <AppIcon name="alert" :size="18" />
-            <div>
-              <strong>Local API unavailable</strong>
-              <p>Nothing is shown in its place. Start the workstation to restore measured state.</p>
-              <code>bash edge/tools/run_dashboard.sh</code>
-            </div>
-          </div>
-
-          <template v-else>
-            <div class="primary-readout">
-              <span>Market session · XNYS</span>
-              <strong>{{ session }}</strong>
-              <small>{{ sessionNote || `Data as of ${dataAsof}` }}</small>
-            </div>
-
-            <dl class="state-grid">
-              <div>
-                <dt><AppIcon name="radar" :size="15" />Broad universe</dt>
-                <dd>{{ universe }}<small> symbols</small></dd>
-              </div>
-              <div>
-                <dt><AppIcon name="search" :size="15" />Searchable</dt>
-                <dd>{{ searchable }}<small> symbols</small></dd>
-              </div>
-              <div>
-                <dt><AppIcon name="gate" :size="15" />Live readiness</dt>
-                <dd :class="cleared ? 'state-clear' : 'state-blocked'">
-                  {{ readinessLabel }}
-                  <small v-if="blockers !== null && !cleared"> · {{ blockers }} blocking</small>
-                </dd>
-              </div>
-              <div>
-                <dt><AppIcon name="session" :size="15" />Shadow evidence</dt>
-                <dd>{{ shadow }}<small> sessions</small></dd>
-              </div>
-            </dl>
-
-            <div v-if="gates" class="gate-line" aria-label="Current gate verdict counts">
-              <span>Gates</span>
-              <strong class="gate-go">{{ num(gates.go, 0) }} GO</strong>
-              <strong class="gate-no">{{ num(gates.no_go, 0) }} NO-GO</strong>
-              <strong class="gate-unknown">{{ num(gates.unknown, 0) }} UNKNOWN</strong>
-            </div>
-
-            <footer class="instrument-foot">
-              <span v-if="apiStale" class="stale">Last-good state · Refresh fault</span>
-              <span v-else-if="contacting">Contacting local API…</span>
-              <span v-else>Source · 127.0.0.1 · No illustrative values</span>
-              <i class="signal-line" aria-hidden="true" />
-            </footer>
-          </template>
-      </aside>
+      <section class="live-proof-section paper-section">
+        <LiveStateVisual
+          class="landing-inner reveal"
+          :session="session"
+          :session-live="sessionLive"
+          :session-note="sessionNote"
+          :data-asof="dataAsof"
+          :universe="universe"
+          :searchable="searchable"
+          :readiness-label="readinessLabel"
+          :cleared="cleared"
+          :blockers="blockers"
+          :shadow="shadow"
+          :gate-go="num(gates?.go, 0)"
+          :gate-no-go="num(gates?.no_go, 0)"
+          :gate-unknown="num(gates?.unknown, 0)"
+          :api-down="apiDown"
+          :api-stale="apiStale"
+          :contacting="contacting"
+        />
+      </section>
 
       <section class="trust-strip" aria-label="Product boundaries">
         <div class="landing-inner trust-inner">
@@ -266,8 +222,9 @@ const principles = [
 
           <div class="capability-grid">
             <article v-for="capability in capabilities" :key="capability.index" class="capability">
+              <EvidenceLayerVisual :kind="capability.kind" />
               <header>
-                <span class="capability-icon"><AppIcon :name="capability.icon" :size="25" /></span>
+                <span class="capability-icon"><AppIcon :name="capability.icon" :size="19" /></span>
                 <span class="capability-index">{{ capability.index }}</span>
               </header>
               <h3>{{ capability.title }}</h3>
@@ -282,39 +239,17 @@ const principles = [
         <div class="landing-inner workspace-layout">
           <div class="workspace-copy">
             <p class="section-index">WORKSPACES / 02</p>
-            <h2>Move from signal<br>to source.</h2>
+            <h2>A research path.<br>Not a menu.</h2>
             <p>
-              The five primary workspaces follow the research loop. Specialist
-              surfaces stay grouped behind them, so the interface remains legible
-              as the system grows.
+              Each workspace answers one question, then hands its context forward.
+              The path stays visible, while specialist tools remain adjacent.
             </p>
             <RouterLink class="text-link" :to="{ name: 'auth', query: { redirect: '/flow' } }">
               Open Flow now <AppIcon name="arrow-right" :size="15" />
             </RouterLink>
           </div>
 
-          <div class="workspace-board" aria-label="Primary product workspaces">
-            <div class="board-head">
-              <span>TradeCentral / workspace map</span>
-              <span>LOCAL</span>
-            </div>
-            <RouterLink
-              v-for="(workspace, index) in workspaces"
-              :key="workspace.path"
-              class="workspace-row"
-              :to="{ name: 'auth', query: { redirect: workspace.path } }"
-            >
-              <span class="workspace-number">0{{ index + 1 }}</span>
-              <span class="workspace-symbol"><AppIcon :name="workspace.icon" :size="19" /></span>
-              <span class="workspace-name">{{ workspace.name }}</span>
-              <span class="workspace-question">{{ workspace.question }}</span>
-              <AppIcon class="workspace-arrow" name="arrow-right" :size="15" />
-            </RouterLink>
-            <div class="board-foot">
-              <span>Specialist tools</span>
-              <span>Sectors · Pulse · Momentum · Fintel · Gates · Graph · Cloud</span>
-            </div>
-          </div>
+          <ResearchLoopVisual />
         </div>
       </section>
 
@@ -351,7 +286,7 @@ const principles = [
 
       <section class="final-cta">
         <div class="landing-inner final-inner">
-          <p class="section-index">LOCAL-FIRST RESEARCH</p>
+          <p class="section-index">THE RESEARCH LOOP</p>
           <h2>Build conviction from evidence,<br>not presentation.</h2>
           <p>One workstation for market context, options structure, and accountable research.</p>
           <RouterLink class="button button-accent" :to="{ name: 'auth', query: { redirect: '/flow' } }">
@@ -432,15 +367,23 @@ const principles = [
   margin-inline: auto;
 }
 
+.topbar-shell {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  border-bottom: 1px solid rgba(250, 249, 245, 0.15);
+  background: rgba(20, 20, 19, 0.90);
+  backdrop-filter: blur(18px);
+}
 .topbar {
-  min-height: 74px;
+  min-height: 78px;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  border-bottom: 1px solid var(--brand-rule);
 }
 .brand { display: inline-flex; align-items: center; gap: 11px; color: var(--brand-paper); }
 .brand:hover { text-decoration: none; }
+.brand-mark { width: 42px; height: 42px; display: grid; place-items: center; color: var(--brand-paper); border: 1px solid #44443f; background: #191a18; }
 .wordmark { display: grid; line-height: 1; }
 .wordmark strong {
   font-family: 'Poppins', var(--font-ui);
@@ -456,7 +399,7 @@ const principles = [
   letter-spacing: 0.11em;
   text-transform: uppercase;
 }
-.topnav { display: flex; align-items: center; gap: 28px; }
+.topnav { display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid #3a3a36; background: #191a18; }
 .topnav a,
 .sign-in {
   color: #c7c5bd;
@@ -464,9 +407,13 @@ const principles = [
   font-size: 12px;
   font-weight: 540;
 }
+.topnav a { min-height: 34px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; }
+.topnav a small { color: #706f69; font-family: var(--font-data); font-size: 7px; }
 .topnav a:hover,
-.sign-in:hover { color: var(--brand-paper); text-decoration: none; }
+.sign-in:hover { color: var(--brand-paper); background: #252622; text-decoration: none; }
 .top-actions { justify-self: end; display: flex; align-items: center; gap: 20px; }
+.sign-in { min-height: 38px; display: inline-flex; align-items: center; padding: 0 3px; }
+.nav-access { border-left: 3px solid var(--brand-orange); }
 
 .button {
   min-height: 46px;
@@ -494,9 +441,9 @@ const principles = [
 .hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(480px, 1.08fr);
+  grid-template-columns: minmax(0, 0.86fr) minmax(500px, 1.14fr);
   align-items: center;
-  gap: clamp(52px, 7vw, 105px);
+  gap: clamp(54px, 6.5vw, 94px);
   min-height: 680px;
   padding-block: 82px;
 }
@@ -512,8 +459,7 @@ const principles = [
   mask-image: linear-gradient(to right, transparent 0, #000 52%, #000 100%);
 }
 .hero-copy,
-.hero-visual,
-.instrument-card { position: relative; z-index: 1; }
+.hero-visual { position: relative; z-index: 1; }
 .hero-visual { min-width: 0; width: 100%; }
 .eyebrow,
 .section-index {
@@ -528,9 +474,9 @@ const principles = [
 .hero h1 {
   margin-top: 25px;
   font-family: 'Poppins', var(--font-ui);
-  font-size: clamp(52px, 5.6vw, 80px);
+  font-size: clamp(52px, 5.2vw, 74px);
   font-weight: 560;
-  line-height: 0.98;
+  line-height: 0.96;
   letter-spacing: -0.058em;
 }
 .lede {
@@ -554,166 +500,7 @@ const principles = [
 .hero-boundary strong { color: #c9c7be; font-weight: 620; }
 .hero-boundary .app-icon { color: var(--brand-green); }
 
-.instrument-card {
-  min-width: 0;
-  margin-bottom: 56px;
-  padding: 28px;
-  border: 1px solid #393934;
-  border-top: 2px solid var(--brand-blue);
-  background: #101112;
-}
-.instrument-card::before,
-.instrument-card::after {
-  content: '';
-  position: absolute;
-  width: 13px;
-  height: 13px;
-  pointer-events: none;
-}
-.instrument-card::before { top: -1px; left: -1px; border-top: 1px solid var(--brand-paper); border-left: 1px solid var(--brand-paper); }
-.instrument-card::after { right: -1px; bottom: -1px; border-right: 1px solid var(--brand-paper); border-bottom: 1px solid var(--brand-paper); }
-.card-register {
-  display: flex;
-  justify-content: space-between;
-  padding-bottom: 16px;
-  color: #6f706c;
-  border-bottom: 1px solid #2a2b29;
-  font-family: var(--font-display);
-  font-size: 8px;
-  letter-spacing: 0.1em;
-}
-.instrument-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 22px 0 19px;
-}
-.instrument-head p {
-  color: var(--brand-blue);
-  font-family: var(--font-display);
-  font-size: 9px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-.instrument-head h2 {
-  margin-top: 5px;
-  font-family: 'Poppins', var(--font-ui);
-  font-size: 22px;
-  font-weight: 560;
-  letter-spacing: -0.03em;
-}
-.session-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #9a9993;
-  font-family: var(--font-display);
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-.session-pill i { width: 7px; height: 7px; background: #555651; border-radius: 50%; }
-.session-pill.live { color: #a8bb82; }
-.session-pill.live i { background: var(--brand-green); animation: state-pulse 2s ease-in-out infinite; }
-.primary-readout {
-  padding: 18px 19px;
-  border: 1px solid #2b2d2b;
-  border-left: 3px solid var(--brand-green);
-  background: #151716;
-}
-.primary-readout > span {
-  color: #85857f;
-  font-family: var(--font-display);
-  font-size: 8px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-.primary-readout strong {
-  display: block;
-  margin-top: 8px;
-  font-family: var(--font-data);
-  font-size: 24px;
-  font-weight: 500;
-  letter-spacing: -0.035em;
-}
-.primary-readout small {
-  display: block;
-  margin-top: 5px;
-  color: #85857f;
-  font-family: var(--font-data);
-  font-size: 9px;
-}
-.state-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  margin-top: 13px;
-  border-top: 1px solid #2b2d2b;
-  border-left: 1px solid #2b2d2b;
-}
-.state-grid > div { min-width: 0; padding: 15px; border-right: 1px solid #2b2d2b; border-bottom: 1px solid #2b2d2b; }
-.state-grid dt {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #7f807b;
-  font-family: var(--font-display);
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.state-grid dt .app-icon { color: var(--brand-blue); }
-.state-grid dd {
-  margin-top: 9px;
-  font-family: var(--font-data);
-  font-size: 14px;
-  color: #e7e5de;
-}
-.state-grid dd small { color: #777872; font-size: 9px; }
-.state-grid .state-clear { color: #9bb873; }
-.state-grid .state-blocked { color: #d8a65c; }
-.gate-line {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 13px;
-  padding: 12px 14px;
-  border: 1px solid #2b2d2b;
-  font-family: var(--font-data);
-  font-size: 9px;
-}
-.gate-line > span { margin-right: auto; color: #777872; font-family: var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; }
-.gate-go { color: #6fa884; }
-.gate-no { color: #c97978; }
-.gate-unknown { color: #868782; }
-.instrument-foot {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  margin-top: 17px;
-  color: #747570;
-  font-family: var(--font-display);
-  font-size: 8px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-.instrument-foot .stale { color: #d8a65c; }
-.signal-line { position: relative; flex: 1; height: 1px; overflow: hidden; background: #2b2d2b; }
-.signal-line::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -30%;
-  width: 30%;
-  height: 1px;
-  background: var(--brand-blue);
-  animation: signal-scan 3.8s var(--ease-in-out) infinite;
-}
-.state-down { display: grid; grid-template-columns: auto 1fr; gap: 13px; padding: 22px; color: #d8a65c; border: 1px solid #4a3f2c; }
-.state-down strong { color: #e8e6dc; font-family: var(--font-ui); font-size: 13px; }
-.state-down p { margin-top: 7px; color: #aaa79f; font-family: var(--font-ui); font-size: 12px; line-height: 1.55; }
-.state-down code { display: inline-block; margin-top: 12px; padding: 7px 9px; color: #c9c7c0; border: 1px solid #373835; font-family: var(--font-data); font-size: 9px; }
-
+.live-proof-section { background: #faf9f5; }
 .trust-strip { border-top: 1px solid var(--brand-rule); border-bottom: 1px solid var(--brand-rule); background: #181817; }
 .trust-inner { display: grid; grid-template-columns: repeat(4, 1fr); }
 .trust-inner > div {
@@ -732,6 +519,9 @@ const principles = [
 .trust-inner small { color: #85827b; font-family: var(--font-ui); font-size: 10px; line-height: 1.35; }
 
 .paper-section { color: var(--brand-dark); background: var(--brand-paper); }
+.product-section,
+.workspace-section,
+.method-section { scroll-margin-top: 78px; }
 .product-section { padding-block: 112px; }
 .section-heading {
   display: grid;
@@ -757,51 +547,25 @@ const principles = [
   font-size: 15px;
   line-height: 1.72;
 }
-.capability-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 67px; border-top: 1px solid #ccc9bf; }
-.capability { padding: 29px 30px 0; border-left: 1px solid #ccc9bf; }
-.capability:first-child { padding-left: 0; border-left: 0; }
-.capability:last-child { padding-right: 0; }
-.capability header { display: flex; align-items: center; justify-content: space-between; }
-.capability-icon { width: 50px; height: 50px; display: grid; place-items: center; color: var(--brand-dark); background: var(--brand-light-gray); }
+.capability-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 67px; }
+.capability { min-width: 0; display: flex; flex-direction: column; padding: 0 0 1px; }
+.capability header { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; padding-bottom: 14px; border-bottom: 1px solid #d3d0c7; }
+.capability-icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--brand-dark); border: 1px solid #cbc8be; background: transparent; }
 .capability:nth-child(1) .capability-icon { color: #3d6791; }
 .capability:nth-child(2) .capability-icon { color: #a95f46; }
 .capability:nth-child(3) .capability-icon { color: #63794d; }
 .capability-index { color: #8b8880; font-family: var(--font-data); font-size: 10px; }
-.capability h3 { margin-top: 31px; font-family: 'Poppins', var(--font-ui); font-size: 22px; font-weight: 590; letter-spacing: -0.03em; }
+.capability h3 { margin-top: 20px; font-family: 'Poppins', var(--font-ui); font-size: 22px; font-weight: 590; letter-spacing: -0.03em; }
 .capability > p { margin-top: 14px; color: #68665f; font-family: var(--font-ui); font-size: 13px; line-height: 1.65; }
-.capability footer { margin-top: 29px; padding: 16px 0; color: #706d65; border-top: 1px solid #d8d5cc; font-family: var(--font-display); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
+.capability footer { margin-top: auto; padding: 22px 0 16px; color: #706d65; font-family: var(--font-display); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
 
 .workspace-section { padding-block: 112px; color: var(--brand-paper); background: #191a19; border-top: 1px solid var(--brand-rule); border-bottom: 1px solid var(--brand-rule); }
-.workspace-layout { display: grid; grid-template-columns: minmax(290px, 0.55fr) minmax(560px, 1fr); gap: clamp(60px, 9vw, 130px); align-items: center; }
+.workspace-layout { display: grid; grid-template-columns: minmax(270px, 0.42fr) minmax(620px, 1fr); gap: clamp(54px, 7vw, 100px); align-items: center; }
 .workspace-copy { align-self: start; padding-top: 18px; }
 .workspace-copy .section-index { color: var(--brand-blue); }
 .workspace-copy > p:not(.section-index) { margin-top: 25px; color: #aaa79f; }
 .text-link { display: inline-flex; align-items: center; gap: 10px; margin-top: 29px; color: var(--brand-paper); font-family: var(--font-display); font-size: 9px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
 .text-link:hover { color: var(--brand-blue); text-decoration: none; }
-.workspace-board { border: 1px solid #393a36; border-top: 2px solid var(--brand-green); background: #111211; }
-.board-head,
-.board-foot { display: flex; align-items: center; justify-content: space-between; gap: 20px; color: #777872; font-family: var(--font-display); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
-.board-head { padding: 14px 17px; border-bottom: 1px solid #30312e; }
-.workspace-row {
-  display: grid;
-  grid-template-columns: 30px 34px 100px 1fr auto;
-  align-items: center;
-  gap: 14px;
-  min-height: 64px;
-  padding: 0 17px;
-  color: #d9d7d0;
-  border-bottom: 1px solid #292a28;
-  transition: color var(--dur-fast), background var(--dur-fast), padding var(--dur-fast);
-}
-.workspace-row:hover { padding-left: 22px; color: var(--brand-paper); background: #1b1d1b; text-decoration: none; }
-.workspace-number { color: #656661; font-family: var(--font-data); font-size: 9px; }
-.workspace-symbol { color: var(--brand-blue); }
-.workspace-name { font-family: 'Poppins', var(--font-ui); font-size: 13px; font-weight: 560; }
-.workspace-question { color: #888983; font-family: var(--font-ui); font-size: 11px; }
-.workspace-arrow { color: var(--brand-green); opacity: 0; transform: translateX(-5px); transition: opacity var(--dur-fast), transform var(--dur-fast); }
-.workspace-row:hover .workspace-arrow { opacity: 1; transform: none; }
-.board-foot { padding: 15px 17px; }
-
 .method-section { padding-block: 112px; }
 .method-heading { align-items: center; }
 .principle-grid { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 64px; border-top: 1px solid #cbc8be; border-bottom: 1px solid #cbc8be; }
@@ -811,7 +575,7 @@ const principles = [
 .principle-grid h3 { margin-top: 24px; font-family: 'Poppins', var(--font-ui); font-size: 16px; font-weight: 600; letter-spacing: -0.025em; }
 .principle-grid p { margin-top: 10px; color: #6b6962; font-family: var(--font-ui); font-size: 12px; line-height: 1.6; }
 .method-flow { display: flex; align-items: center; gap: 14px; margin-top: 48px; }
-.method-flow span { display: inline-flex; align-items: center; gap: 8px; color: #55534e; font-family: var(--font-display); font-size: 8px; font-weight: 700; letter-spacing: 0.08em; }
+.method-flow span { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 10px; color: #55534e; border: 1px solid #cbc8be; background: #f2f0e8; font-family: var(--font-display); font-size: 8px; font-weight: 700; letter-spacing: 0.08em; }
 .method-flow span:nth-of-type(1) .app-icon,
 .method-flow span:nth-of-type(2) .app-icon { color: var(--brand-blue); }
 .method-flow span:nth-of-type(3) .app-icon { color: var(--brand-orange); }
@@ -843,14 +607,6 @@ const principles = [
   from { opacity: 0; transform: translateY(15px); }
   to { opacity: 1; transform: none; }
 }
-@keyframes signal-scan {
-  from { transform: translateX(0); }
-  to { transform: translateX(440%); }
-}
-@keyframes state-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.38; }
-}
 @keyframes trace-drift {
   to { stroke-dashoffset: -120; }
 }
@@ -860,7 +616,6 @@ const principles = [
 @media (max-width: 1080px) {
   .hero { grid-template-columns: 1fr; min-height: auto; padding-block: 76px; }
   .hero-copy { max-width: 720px; }
-  .instrument-card { width: 100%; }
   .trust-inner { grid-template-columns: repeat(2, 1fr); }
   .trust-inner > div:nth-child(3) { border-left: 0; }
   .workspace-layout { grid-template-columns: 1fr; }
@@ -879,8 +634,7 @@ const principles = [
   .capability-grid { grid-template-columns: 1fr; }
   .capability,
   .capability:first-child,
-  .capability:last-child { padding: 27px 0; border-left: 0; border-bottom: 1px solid #ccc9bf; }
-  .workspace-row { grid-template-columns: 30px 34px 90px 1fr auto; }
+  .capability:last-child { padding: 0 0 27px; border-left: 0; border-bottom: 1px solid #ccc9bf; }
   .method-flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; }
   .method-flow i { display: none; }
   .footer-inner { grid-template-columns: 1fr auto; }
@@ -889,20 +643,17 @@ const principles = [
 
 @media (max-width: 580px) {
   .landing-inner { width: min(100% - 30px, 1280px); }
-  .topbar { min-height: 68px; grid-template-columns: 1fr; }
+  .topbar { min-height: 68px; grid-template-columns: 1fr auto; gap: 14px; }
   .wordmark small { display: none; }
-  .top-actions { display: none; }
+  .brand-mark { width: 36px; height: 36px; }
+  .top-actions { gap: 0; }
+  .top-actions .sign-in { display: none; }
+  .nav-access { min-height: 36px; padding-inline: 12px; font-size: 8px; }
   .hero { gap: 49px; padding-block: 57px; }
   .hero h1 { font-size: 42px; line-height: 1.02; }
   .lede { font-size: 14px; }
   .hero-actions { display: grid; }
   .hero-actions .button { width: 100%; }
-  .instrument-card { padding: 20px 16px; }
-  .instrument-head { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .session-pill { max-width: none; text-align: left; }
-  .state-grid { grid-template-columns: 1fr; }
-  .gate-line { align-items: flex-start; flex-wrap: wrap; }
-  .gate-line > span { width: 100%; }
   .trust-inner { grid-template-columns: 1fr; }
   .trust-inner > div,
   .trust-inner > div:first-child { padding: 18px 0; border-left: 0; border-top: 1px solid var(--brand-rule); }
@@ -913,9 +664,6 @@ const principles = [
   .section-heading h2,
   .workspace-copy h2,
   .final-inner h2 { font-size: clamp(38px, 11.5vw, 52px); }
-  .workspace-row { grid-template-columns: 24px 28px 1fr auto; min-height: 60px; gap: 10px; }
-  .workspace-question { display: none; }
-  .board-foot { align-items: flex-start; flex-direction: column; }
   .principle-grid { grid-template-columns: 1fr; }
   .principle-grid article,
   .principle-grid article:first-child { padding: 24px 0; border-left: 0; border-top: 1px solid #cbc8be; }
@@ -928,11 +676,8 @@ const principles = [
 
 @media (prefers-reduced-motion: reduce) {
   .reveal,
-  .session-pill.live i,
-  .signal-line::after,
   .cta-traces path { animation: none; }
   .button,
-  .workspace-row,
-  .workspace-arrow { transition: none; }
+  .topnav a { transition: none; }
 }
 </style>

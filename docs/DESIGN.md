@@ -45,9 +45,12 @@ The shell should keep the highest-frequency jobs in a small, stable primary set:
 | **Market** | What is happening in this symbol and relative to peers? |
 | **Options** | What is the positioning/structure for one underlier? |
 | **Flow** | Where is market-wide activity concentrating? |
+| **Setups** | What call or put does Flow + GEX suggest, and where is the sell? |
+
+Options URL, API, and LSE flow-router contracts: `docs/OPTIONS_ROUTE_NOTE.md`. Do not add a second options home or a Dark Pool surface.
 | **Research** | What methods, models, gates, and diagnostics support the claims? |
 
-These five workspaces are the primary navigation model already represented in `App.vue`.
+These workspaces are the primary navigation model already represented in `App.vue`.
 
 ### 3.2 Specialist surfaces
 

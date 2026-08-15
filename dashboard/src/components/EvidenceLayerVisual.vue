@@ -1,0 +1,177 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import AppIcon from '@/components/AppIcon.vue'
+
+const props = defineProps<{
+  kind: 'market' | 'options' | 'governance'
+}>()
+
+const meta = computed(() => ({
+  market: {
+    code: 'MKT / STRUCTURE',
+    icon: 'radar',
+    label: 'Market structure map',
+  },
+  options: {
+    code: 'OPT / POSITIONING',
+    icon: 'options',
+    label: 'Options positioning profile',
+  },
+  governance: {
+    code: 'RSH / CONTROL',
+    icon: 'gate',
+    label: 'Research governance path',
+  },
+}[props.kind]))
+</script>
+
+<template>
+  <figure class="evidence-visual" :class="`evidence-${kind}`" :aria-label="meta.label">
+    <figcaption>
+      <span class="visual-symbol"><AppIcon :name="meta.icon" :size="16" /></span>
+      <span>{{ meta.code }}</span>
+      <i aria-hidden="true" />
+    </figcaption>
+
+    <svg v-if="kind === 'market'" viewBox="0 0 360 148" role="img" aria-label="Price path moving through regime and sector context">
+      <g class="grid-lines">
+        <path d="M18 25H342M18 61H342M18 97H342M18 133H342" />
+        <path d="M53 12V136M126 12V136M199 12V136M272 12V136" />
+      </g>
+      <path class="context-band" d="M18 104C66 94 91 113 126 86s65-12 97-30 66-13 119-30v45c-44 20-80 15-116 33s-73 1-108 17-68 6-100 10Z" />
+      <path class="primary-trace" d="M18 116C48 110 64 90 88 96s34 21 56 4 31-46 58-39 32 29 58 15 42-43 82-52" />
+      <g class="trace-points">
+        <circle cx="88" cy="96" r="4" />
+        <circle cx="202" cy="61" r="4" />
+        <circle cx="342" cy="24" r="4" />
+      </g>
+      <path class="register-mark" d="M18 17h15M18 17v15M327 133h15M342 118v15" />
+      <text x="23" y="44">REGIME</text>
+      <text x="252" y="124">PEER CONTEXT</text>
+    </svg>
+
+    <svg v-else-if="kind === 'options'" viewBox="0 0 360 148" role="img" aria-label="Call and put gamma separated around a balance line">
+      <g class="grid-lines">
+        <path d="M18 27H342M18 74H342M18 121H342" />
+        <path d="M62 14V134M114 14V134M166 14V134M218 14V134M270 14V134M322 14V134" />
+      </g>
+      <path class="balance-line" d="M18 74H342" />
+      <g class="position-bars call-bars">
+        <path d="M43 74V49M95 74V36M147 74V55M199 74V23M251 74V44M303 74V31" />
+      </g>
+      <g class="position-bars put-bars">
+        <path d="M43 74v14M95 74v32M147 74v45M199 74v19M251 74v38M303 74v22" />
+      </g>
+      <path class="flip-line" d="M176 16V132" />
+      <circle class="spot-dot" cx="225" cy="74" r="5" />
+      <text x="183" y="25">FLIP</text>
+      <text x="234" y="69">SPOT</text>
+      <text x="20" y="67">CALL</text>
+      <text x="20" y="91">PUT</text>
+    </svg>
+
+    <svg v-else viewBox="0 0 360 148" role="img" aria-label="Evidence passing through research gates into a fail-closed readiness state">
+      <g class="governance-path">
+        <path d="M28 74H332" />
+        <path d="M82 74 104 52l22 22-22 22Z" />
+        <path d="M174 74 196 52l22 22-22 22Z" />
+        <path d="M266 74 288 52l22 22-22 22Z" />
+      </g>
+      <g class="governance-node">
+        <circle cx="28" cy="74" r="8" />
+        <circle cx="104" cy="74" r="7" />
+        <circle cx="196" cy="74" r="7" />
+        <circle cx="288" cy="74" r="7" />
+        <circle cx="332" cy="74" r="8" />
+      </g>
+      <path class="register-mark" d="M18 17h15M18 17v15M327 133h15M342 118v15" />
+      <text x="18" y="111">SOURCE</text>
+      <text x="79" y="36">METHOD</text>
+      <text x="177" y="119">GATE</text>
+      <text x="261" y="36">SHADOW</text>
+      <text x="301" y="111">READINESS</text>
+    </svg>
+
+    <footer>
+      <span>Evidence layer</span>
+      <span>Source visible</span>
+    </footer>
+  </figure>
+</template>
+
+<style scoped>
+.evidence-visual {
+  --plate-accent: #6a9bcc;
+  position: relative;
+  min-height: 220px;
+  margin: 0;
+  padding: 15px 15px 11px;
+  overflow: hidden;
+  color: #242520;
+  border: 1px solid #cbc8be;
+  border-top: 2px solid var(--plate-accent);
+  background:
+    linear-gradient(rgba(20, 20, 19, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(20, 20, 19, 0.035) 1px, transparent 1px),
+    #efede5;
+  background-size: 27px 27px;
+}
+.evidence-options { --plate-accent: #d97757; }
+.evidence-governance { --plate-accent: #788c5d; }
+.evidence-visual::before,
+.evidence-visual::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+.evidence-visual::before { top: -1px; left: -1px; border-top: 1px solid #141413; border-left: 1px solid #141413; }
+.evidence-visual::after { right: -1px; bottom: -1px; border-right: 1px solid #141413; border-bottom: 1px solid #141413; }
+figcaption,
+footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #686760;
+  font-family: var(--font-display);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+figcaption { padding-bottom: 10px; border-bottom: 1px solid #cfccc3; }
+figcaption i { flex: 1; height: 1px; background: #cfccc3; }
+.visual-symbol {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  color: var(--plate-accent);
+  border: 1px solid #c4c1b8;
+  background: #faf9f5;
+}
+svg { display: block; width: 100%; height: 142px; margin-top: 7px; overflow: visible; }
+.grid-lines { fill: none; stroke: rgba(20, 20, 19, 0.10); stroke-width: 1; }
+.context-band { fill: rgba(106, 155, 204, 0.12); stroke: none; }
+.primary-trace { fill: none; stroke: #426f98; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.trace-points circle { fill: #faf9f5; stroke: #426f98; stroke-width: 2; }
+.register-mark { fill: none; stroke: #6e6d66; stroke-width: 1; }
+text { fill: #77766f; font-family: var(--font-display); font-size: 7px; font-weight: 700; letter-spacing: 0.08em; }
+.balance-line { fill: none; stroke: #6c6a63; stroke-width: 1; stroke-dasharray: 4 4; }
+.position-bars { fill: none; stroke-width: 11; }
+.call-bars { stroke: #6a9bcc; }
+.put-bars { stroke: #d97757; }
+.flip-line { stroke: #c1694e; stroke-width: 1; stroke-dasharray: 3 3; }
+.spot-dot { fill: #faf9f5; stroke: #788c5d; stroke-width: 2; }
+.governance-path { fill: none; stroke: #8d8a81; stroke-width: 1; }
+.governance-node { fill: #faf9f5; stroke: #788c5d; stroke-width: 2; }
+.governance-node circle:nth-child(3) { stroke: #d97757; }
+footer { justify-content: space-between; padding-top: 9px; border-top: 1px solid #cfccc3; }
+footer span:last-child { color: var(--plate-accent); }
+
+@media (max-width: 800px) {
+  .evidence-visual { min-height: 205px; }
+  svg { height: 126px; }
+}
+</style>

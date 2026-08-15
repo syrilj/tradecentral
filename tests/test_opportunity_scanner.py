@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from edge.daily_plays.opportunity_scanner import build_live_opportunities
+from edge.daily_plays.opportunity_scanner import (
+    build_live_opportunities,
+    build_suggestion,
+    gex_relative_sell,
+    qlib_rows_from_panel,
+)
 from edge.daily_plays.options_intelligence import OptionsFilters
 
 
@@ -201,7 +206,10 @@ class TestDegradedInput:
 
     def test_both_empty_returns_unavailable_with_reason(self):
         result = build_live_opportunities(board_rows=[], flow_rows=[], filters=OptionsFilters())
-        assert result == {"available": False, "reason": "No board or unusual-flow rows were supplied."}
+        assert result["available"] is False
+        assert result["reason"] == "No board or unusual-flow rows were supplied."
+        assert result["suggestion"]["right"] == "blocked"
+        assert result["suggestion"]["sell"] is None
 
     def test_rows_missing_symbols_are_ignored_not_crashed_on(self):
         board_rows = [{"squeeze_score": 1.0}, "not-a-dict", _board_row("AAA")]
@@ -341,6 +349,8 @@ class TestConfidenceFreshnessAndPlaybook:
         assert row["freshness"]["pass"] is False
         assert row["highlighted"] is False
         assert row["playbook"]["status"] == "blocked"
+        assert row["suggestion"]["status"] == "plan"
+        assert row["suggestion"]["entry_eligible"] is False
         assert any("chain age" in reason for reason in row["freshness"]["reasons"])
 
     def test_defined_risk_playbook_uses_measured_barriers_and_size_formula(self):
@@ -370,3 +380,395 @@ class TestConfidenceFreshnessAndPlaybook:
         assert costs["one_way_half_spread_bps"] == pytest.approx(500)
         assert costs["complete"] is False
         assert costs["market_impact"] is None
+
+
+class TestSuggestionAndRisk(TestConfidenceFreshnessAndPlaybook):
+    def test_flow_only_long_suggests_call_with_unmeasured_sell(self):
+        result = build_live_opportunities(
+            board_rows=[],
+            flow_rows=[_flow_row("AAA", context_side="long")],
+            filters=OptionsFilters(),
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["sell"] is None
+        assert sug["sell_source"] is None
+        assert sug["spot"] is None
+        assert sug["qlib"]["measured"] is False
+        assert sug["qlib"]["score"] is None
+        assert sug["qlib"]["alignment"] == "unmeasured"
+
+    def test_flow_only_short_suggests_put(self):
+        result = build_live_opportunities(
+            board_rows=[],
+            flow_rows=[_flow_row("AAA", context_side="short")],
+            filters=OptionsFilters(),
+        )
+        assert result["rows"][0]["suggestion"]["right"] == "put"
+
+    def test_call_wall_above_spot_is_the_long_sell(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board(spot=100, call_wall=108, put_wall=96)],
+            flow_rows=[self._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["sell"] == pytest.approx(108)
+        assert sug["sell_source"] == "call_wall"
+        assert sug["sell_rel_pct"] == pytest.approx(0.08)
+        assert sug["invalidation"] == pytest.approx(96)
+        assert sug["invalidation_source"] == "put_wall"
+
+    def test_put_wall_below_spot_is_the_short_sell(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board(context_side="short", spot=100, call_wall=108, put_wall=94)],
+            flow_rows=[self._live_flow(context_side="short")],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "put"
+        assert sug["sell"] == pytest.approx(94)
+        assert sug["sell_source"] == "put_wall"
+        assert sug["sell_rel_pct"] == pytest.approx(-0.06)
+
+    def test_wrong_side_walls_stay_unmeasured(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board(spot=100, call_wall=95, put_wall=110)],
+            flow_rows=[self._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["sell"] is None
+        assert sug["sell_source"] is None
+        assert sug["sell_rel_pct"] is None
+        assert sug["invalidation"] is None
+
+    def test_missing_walls_do_not_invent_an_expected_move_sell(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board(spot=100, call_wall=None, put_wall=None, expected_move=4)],
+            flow_rows=[self._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["sell"] is None
+        assert sug["sell"] != pytest.approx(104)
+        assert sug["plan_target"] is None
+        assert sug["plan_invalidation"] is None
+        assert sug["risk_levels_complete"] is False
+        assert sug["risk_missing_fields"] == [
+            "GEX take-profit target",
+            "GEX invalidation",
+        ]
+        assert result["rows"][0]["playbook"]["target"] is None
+        assert result["rows"][0]["playbook"]["invalidation"] is None
+        assert result["rows"][0]["playbook"]["status"] == "research_only"
+        assert result["rows"][0]["highlighted"] is False
+        assert any("call wall above spot" in item for item in sug["blockers"])
+        assert any("put wall below spot" in item for item in sug["blockers"])
+
+    def test_wrong_side_risk_levels_cannot_become_ready(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board(spot=100, call_wall=99, put_wall=101)],
+            flow_rows=[self._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        assert row["confidence"]["band"] == "HIGH"
+        assert row["gate_pass"] is True
+        assert row["freshness"]["pass"] is True
+        assert row["playbook"]["risk_levels_complete"] is False
+        assert row["suggestion"]["entry_eligible"] is False
+        assert row["suggestion"]["setup_tier"] == "paper"
+        assert row["live_ready"] is False
+        assert result["coverage"]["live_ready"] == 0
+
+    def test_no_direction_is_watch_or_blocked_with_an_explicit_reason(self):
+        result = build_live_opportunities(
+            board_rows=[_board_row("AAA")],
+            flow_rows=[_flow_row("AAA")],
+            filters=OptionsFilters(),
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] in {"watch", "blocked"}
+        assert sug["reason"]
+        assert any("long/short" in item.lower() for item in sug["blockers"])
+
+    def test_unsigned_activity_lean_becomes_unsized_paper_candidate(self):
+        result = build_live_opportunities(
+            board_rows=[],
+            flow_rows=[_flow_row(
+                "AAA",
+                activity_lean="bullish",
+                activity_lean_source="call_put_premium",
+                spot=123.45,
+                flow_focus={
+                    "call": {
+                        "right": "call", "strike": 125, "expiry": "2026-09-18",
+                        "dte": 35, "price": 2.5, "premium": 250_000,
+                        "contracts": 1000, "timestamp": "2026-08-13T20:00:00Z",
+                    },
+                },
+            )],
+            filters=OptionsFilters(),
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["status"] == "paper_candidate"
+        assert sug["setup_tier"] == "paper"
+        assert sug["evidence_kind"] == "activity_lean"
+        assert sug["entry_eligible"] is False
+        assert sug["bias_right"] == "call"
+        assert sug["bias_confirmed"] is False
+        assert sug["spot"] == pytest.approx(123.45)
+        assert "paper call candidate" in sug["reason"].lower()
+        assert sug["contract_plan"]["action"] == "REVIEW_FLOW_PRINT"
+        assert sug["contract_plan"]["sizing_eligible"] is False
+        assert sug["contract_plan"]["sizing_debit"] is None
+        play = sug["contract_plan"]["play"]
+        assert play["strategy"] == "long_call"
+        assert play["breakeven"] == pytest.approx(127.5)
+        assert play["max_loss"] == pytest.approx(250.0)
+        assert play["decision_authorized"] is False
+        assert play["vol_source"] == "unmeasured"
+
+    def test_invalid_observed_flow_contract_is_not_forwarded_as_a_plan(self):
+        result = build_live_opportunities(
+            board_rows=[],
+            flow_rows=[_flow_row(
+                "AAA",
+                activity_lean="bullish",
+                activity_lean_source="call_put_premium",
+                spot=100.0,
+                flow_focus={
+                    "call": {
+                        "right": "call", "strike": 5, "expiry": "2026-12-18",
+                        "dte": 126, "price": 95.0, "premium": 9_500_000,
+                        "contracts": 1000, "timestamp": "2026-08-14T16:00:00Z",
+                    },
+                },
+            )],
+            filters=OptionsFilters(),
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["contract_plan"] is None
+        assert any("rejected before planning" in item for item in sug["warnings"])
+
+    def test_upstream_flow_contract_rejections_are_explicit(self):
+        result = build_live_opportunities(
+            board_rows=[],
+            flow_rows=[_flow_row(
+                "AAA",
+                activity_lean="bullish",
+                activity_lean_source="call_put_premium",
+                spot=100.0,
+                flow_focus={},
+                flow_focus_rejections={
+                    "call": ["contract is outside the 0–60 DTE review window"],
+                },
+            )],
+            filters=OptionsFilters(),
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["contract_plan"] is None
+        assert any("excluded from planning" in item for item in sug["warnings"])
+        assert any("0–60 DTE" in item for item in sug["warnings"])
+
+    def test_chain_contract_wins_and_returns_a_complete_specific_plan(self):
+        board = _board_row(
+            "AAA",
+            spot=120,
+            contract_focus={
+                "call": {
+                    "right": "call", "strike": 125, "expiry": "2026-09-18", "dte": 35,
+                    "bid": 2.4, "ask": 2.6, "midpoint": 2.5, "spread_pct": 0.08,
+                    "volume": 320, "open_interest": 1800, "implied_volatility": 0.34,
+                    "delta": 0.46, "contract_multiplier": 100,
+                    "observed_at": "2026-08-13T20:00:00Z", "quote_complete": True,
+                    "liquidity_complete": True, "tenor_complete": True,
+                    "contract_complete": True, "rejection_reasons": [],
+                    "selection_method": "fixture selector",
+                },
+            },
+        )
+        result = build_live_opportunities(
+            board_rows=[board],
+            flow_rows=[_flow_row(
+                "AAA", activity_lean="bullish", activity_lean_source="signed_flow",
+            )],
+            filters=OptionsFilters(),
+        )
+        plan = result["rows"][0]["suggestion"]["contract_plan"]
+        assert plan["kind"] == "chain_selected_contract"
+        assert plan["action"] == "REVIEW_ONLY"
+        assert plan["strike"] == pytest.approx(125)
+        assert plan["reference_debit"] == pytest.approx(2.5)
+        assert plan["reference_max_loss"] == pytest.approx(250.0)
+        assert plan["take_profit_debit"] is None
+        assert plan["review_exit_debit"] is None
+        assert plan["play"]["breakeven"] == pytest.approx(127.5)
+        assert plan["play"]["vol_source"] == "contract_iv"
+        assert plan["play"]["greeks"]["delta"] > 0
+        assert plan["play"]["decision_authorized"] is False
+        assert plan["open_interest"] == 1800
+        assert plan["quote_status"] == "chain_two_sided"
+        assert plan["sizing_eligible"] is False
+
+    def test_delayed_exact_quote_is_visible_but_never_sizing_eligible(self):
+        board = _board_row(
+            "AAA",
+            contract_focus={
+                "call": {
+                    "right": "call", "strike": 125, "expiry": "2026-09-18", "dte": 35,
+                    "bid": 2.4, "ask": 2.6, "midpoint": 2.5, "spread_pct": 0.08,
+                    "volume": 320, "open_interest": 1800, "implied_volatility": 0.34,
+                    "delta": 0.46, "contract_multiplier": 100,
+                    "observed_at": "2026-08-13T20:00:00Z", "quote_complete": False,
+                    "quote_live": False, "quote_reference_only": True,
+                    "quote_status": "delayed_reference",
+                    "quote_source": "yfinance_delayed_exact_occ",
+                    "liquidity_complete": True, "tenor_complete": True,
+                    "contract_complete": False,
+                    "rejection_reasons": [
+                        "quote is delayed reference only; live two-sided quote required",
+                    ],
+                    "selection_method": "fixture delayed selector",
+                },
+            },
+        )
+        result = build_live_opportunities(
+            board_rows=[board],
+            flow_rows=[_flow_row(
+                "AAA", activity_lean="bullish", activity_lean_source="signed_flow",
+            )],
+            filters=OptionsFilters(),
+        )
+        plan = result["rows"][0]["suggestion"]["contract_plan"]
+        assert plan["action"] == "WAIT_FOR_LIVE_QUOTE"
+        assert plan["quote_status"] == "delayed_reference"
+        assert plan["bid"] == pytest.approx(2.4)
+        assert plan["midpoint"] == pytest.approx(2.5)
+        assert plan["ask"] == pytest.approx(2.6)
+        assert plan["reference_debit"] == pytest.approx(2.5)
+        assert plan["sizing_debit"] is None
+        assert plan["sizing_eligible"] is False
+        assert "live bid" in plan["missing_fields"]
+        assert "live ask" in plan["missing_fields"]
+        assert result["rows"][0]["live_ready"] is False
+        assert result["coverage"]["live_ready"] == 0
+
+    def test_neutral_activity_without_direction_remains_blocked(self):
+        result = build_live_opportunities(
+            board_rows=[],
+            flow_rows=[_flow_row("AAA", activity_lean="neutral")],
+            filters=OptionsFilters(),
+        )
+        assert result["rows"][0]["suggestion"]["right"] == "blocked"
+
+    def test_qlib_rank_confirms_a_long_call_when_present(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board()],
+            flow_rows=[self._live_flow()],
+            qlib_rows=[{
+                "symbol": "AAA",
+                "qlib_score": 0.55,
+                "qlib_rank": 2,
+                "n_symbols": 12,
+                "source": "qlib_scan_lgb_v2",
+                "score_kind": "ordinal_qlib_xs",
+            }],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["qlib"]["measured"] is True
+        assert sug["qlib"]["score"] == pytest.approx(0.55)
+        assert sug["qlib"]["rank"] == 2
+        assert sug["qlib"]["alignment"] == "confirms"
+        assert result["rows"][0]["qlib_score"] == pytest.approx(0.55)
+
+    def test_qlib_conflict_is_reported_not_used_to_flip_the_right(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board()],
+            flow_rows=[self._live_flow()],
+            qlib_rows=[{
+                "symbol": "AAA",
+                "qlib_score": -0.4,
+                "qlib_rank": 11,
+                "n_symbols": 12,
+                "source": "qlib_scan_lgb_v2",
+            }],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        sug = result["rows"][0]["suggestion"]
+        assert sug["right"] == "call"
+        assert sug["qlib"]["alignment"] == "conflicts"
+        assert any("qlib" in w.lower() for w in sug["warnings"])
+
+    def test_missing_qlib_stays_unmeasured(self):
+        result = build_live_opportunities(
+            board_rows=[self._live_board()],
+            flow_rows=[self._live_flow()],
+            qlib_rows=[],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        qlib = result["rows"][0]["suggestion"]["qlib"]
+        assert qlib["score"] is None
+        assert qlib["rank"] is None
+        assert qlib["alignment"] == "unmeasured"
+        assert qlib["measured"] is False
+
+    def test_empty_union_exposes_a_blocked_suggestion_not_a_silent_gap(self):
+        result = build_live_opportunities(board_rows=[], flow_rows=[], filters=OptionsFilters())
+        assert result["available"] is False
+        assert result["suggestion"]["right"] == "blocked"
+        assert result["suggestion"]["sell"] is None
+        assert result["suggestion"]["reason"]
+
+    def test_gex_relative_sell_is_the_shipped_risk_entry(self):
+        measured = gex_relative_sell(direction="long", spot=50, call_wall=55, put_wall=46)
+        assert measured["sell"] == pytest.approx(55)
+        assert measured["sell_rel_pct"] == pytest.approx(0.10)
+        absent = gex_relative_sell(direction="long", spot=50, call_wall=None, put_wall=46)
+        assert absent["sell"] is None
+        assert absent["measured"] is False
+
+    def test_build_suggestion_is_the_shipped_right_entry(self):
+        sug = build_suggestion(
+            direction="short",
+            playbook_status="research_only",
+            blockers=["Calibrated probability is below 65%."],
+            spot=200,
+            call_wall=210,
+            put_wall=188,
+            qlib={"qlib_score": 0.1, "qlib_rank": 20, "n_symbols": 21, "source": "deep"},
+        )
+        assert sug["right"] == "put"
+        assert sug["sell"] == pytest.approx(188)
+        assert sug["qlib"]["alignment"] == "confirms"
+
+    def test_qlib_rows_from_panel_do_not_invent_missing_symbols(self):
+        rows = qlib_rows_from_panel({
+            "quality": "ok",
+            "source": "qlib_scan_lgb_v2",
+            "coverage": {"scored": 2},
+            "by_symbol": {
+                "AAA": {"symbol": "AAA", "qlib_score": 0.2, "qlib_rank": 1},
+            },
+        })
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "AAA"
+        assert rows[0]["n_symbols"] == 2
+        assert qlib_rows_from_panel(None) == []
+        assert qlib_rows_from_panel({"by_symbol": {}}) == []

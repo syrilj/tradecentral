@@ -13,6 +13,9 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(root, 'views', 'LandingView.vue'), 'utf8')
 const preview = readFileSync(join(root, 'components', 'FlowWorkspaceMockup.vue'), 'utf8')
+const evidenceVisual = readFileSync(join(root, 'components', 'EvidenceLayerVisual.vue'), 'utf8')
+const liveVisual = readFileSync(join(root, 'components', 'LiveStateVisual.vue'), 'utf8')
+const researchVisual = readFileSync(join(root, 'components', 'ResearchLoopVisual.vue'), 'utf8')
 
 const FORBIDDEN_CLAIMS = [
   'actionable insight',
@@ -32,7 +35,7 @@ describe('Landing page honours the product boundary', () => {
 
   it('contains no fabricated market-board values', () => {
     for (const bad of FORBIDDEN_ILLUSTRATIVE_DATA) expect(src).not.toContain(bad)
-    expect(src).toContain('No illustrative values')
+    expect(liveVisual).toContain('No illustrative values')
   })
 
   it('does not introduce pricing before the product needs it', () => {
@@ -44,15 +47,15 @@ describe('Landing page honours the product boundary', () => {
     expect(src).toContain('api.marketClock')
     expect(src).toMatch(/inject<Resource<StatusPayload>>\('status'\)/)
     expect(src).toMatch(/inject<Resource<Readiness>>\('readiness'\)/)
-    expect(src).toContain('Local API unavailable')
-    expect(src).toContain('bash edge/tools/run_dashboard.sh')
+    expect(liveVisual).toContain('Local API unavailable')
+    expect(liveVisual).toContain('bash edge/tools/run_dashboard.sh')
   })
 
   it('routes entry calls to the operator access flow', () => {
     expect(src).toContain("name: 'auth'")
     expect(src).toContain("redirect: '/flow'")
     expect(src).toContain('Sign in')
-    expect(src).toContain('FlowWorkspaceMockup')
+    expect(src).toContain('GexFlowVisual')
   })
 
   it('uses the product mark and shared icon vocabulary', () => {
@@ -74,5 +77,30 @@ describe('Landing page honours the product boundary', () => {
       expect(src.toLowerCase()).toContain(color)
     }
     expect(src).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
+  it('foregrounds market flow instead of local-first marketing language', () => {
+    expect(src).toContain('GexFlowVisual')
+    expect(src).toContain('Explore market flow')
+    expect(src.toLowerCase()).not.toContain('local-first')
+  })
+
+  it('uses custom evidence diagrams and the shared professional symbol system', () => {
+    expect(src).toContain('EvidenceLayerVisual')
+    expect(evidenceVisual).toContain('<svg')
+    expect(evidenceVisual).toContain('AppIcon')
+    expect(evidenceVisual).toContain("'market' | 'options' | 'governance'")
+    expect(evidenceVisual).not.toMatch(/[🚀📈💡🔒]/u)
+  })
+
+  it('uses authored live-state and workspace compositions instead of dashboard boxes', () => {
+    expect(src).toContain('LiveStateVisual')
+    expect(src).toContain('ResearchLoopVisual')
+    expect(liveVisual).toContain('state-aperture')
+    expect(liveVisual).toContain('aperture-orbits')
+    expect(researchVisual).toContain('research-map')
+    expect(researchVisual).toContain('path-main')
+    expect(src).not.toContain('workspace-board')
+    expect(src).not.toContain('instrument-card')
   })
 })

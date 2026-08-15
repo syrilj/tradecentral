@@ -26,6 +26,8 @@ def _chain(right: str, strike: float, gamma: float = 0.02) -> dict:
         "gamma": gamma,
         "multiplier": 100,
         "captured_utc": ASOF.isoformat(),
+        "quote_live": True,
+        "quote_source": "fixture_live",
         "spot": 100,
     }
 
@@ -90,6 +92,91 @@ def test_tape_back_solves_price_with_multiplier_and_preserves_vendor_block():
     assert row["aggressor_label"] == "NO SIDE"
 
 
+def test_contract_focus_names_a_specific_liquid_contract_for_each_right():
+    chain = [
+        _chain("call", 100) | {"delta": 0.72, "bid": 7.0, "ask": 7.8},
+        _chain("call", 105) | {"delta": 0.46, "bid": 3.9, "ask": 4.1, "occ_symbol": "TEST260828C00105000"},
+        _chain("put", 95) | {"delta": -0.44, "bid": 3.7, "ask": 3.9, "occ_symbol": "TEST260828P00095000"},
+    ]
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=chain,
+        flow_rows=[],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=0, min_volume=0),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+
+    call = result["contract_focus"]["call"]
+    put = result["contract_focus"]["put"]
+    assert call["occ_symbol"] == "TEST260828C00105000"
+    assert call["strike"] == pytest.approx(105)
+    assert call["midpoint"] == pytest.approx(4.0)
+    assert call["spread_pct"] == pytest.approx(0.05)
+    assert call["quote_complete"] is True
+    assert call["liquidity_complete"] is True
+    assert call["contract_complete"] is True
+    assert put["strike"] == pytest.approx(95)
+    assert "volume/OI gates before fine delta distance" in call["selection_method"]
+
+
+def test_contract_focus_prefers_liquidity_and_keeps_delayed_quotes_paper_only():
+    chain = [
+        _chain("call", 105) | {
+            "delta": 0.45, "open_interest": 3, "volume": 20,
+            "quote_live": False, "quote_source": "yfinance_delayed_exact_occ",
+            "occ_symbol": "TEST260828C00105000",
+        },
+        _chain("call", 107) | {
+            "delta": 0.52, "open_interest": 1200, "volume": 300,
+            "quote_live": False, "quote_source": "yfinance_delayed_exact_occ",
+            "occ_symbol": "TEST260828C00107000",
+        },
+    ]
+    result = build_options_intelligence(
+        symbol="TEST", chain_rows=chain, flow_rows=[],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
+        spot=100, filters=OptionsFilters(range="1d", min_premium=0, min_volume=0),
+        mode_requested="live", mode_resolved="live", chain_source="fixture",
+        flow_source="fixture", asof_utc=ASOF,
+    )
+
+    call = result["contract_focus"]["call"]
+    assert call["occ_symbol"] == "TEST260828C00107000"
+    assert call["open_interest"] == 1200
+    assert call["quote_status"] == "delayed_reference"
+    assert call["quote_reference_only"] is True
+    assert call["quote_complete"] is False
+    assert call["contract_complete"] is False
+    assert any("delayed reference only" in reason for reason in call["rejection_reasons"])
+
+
+def test_contract_focus_rejects_extreme_strikes_from_provider_normalization():
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[
+            _chain("call", 5) | {"delta": 0.45},
+            _chain("put", 950) | {"delta": -0.45},
+        ],
+        flow_rows=[],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=0, min_volume=0),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+
+    assert result["contract_focus"] == {}
+
+
 def test_large_untagged_print_is_not_certified_as_vendor_block():
     result = _payload([{
         "contract_type": "call", "premium": 750_000, "volume": 50,
@@ -122,6 +209,7 @@ def test_sweep_burst_promotes_trade_class():
     result = _payload(rows)
     assert all(r["trade_class"] == "sweep" for r in result["flow_tape"])
     assert any("sweep_burst" in r["anomaly_flags"] for r in result["flow_tape"])
+    assert any("burst sweep ≤3s" in (r.get("why") or []) for r in result["flow_tape"])
 
 
 def test_call_put_identity_and_stale_quote_proxy_stay_unsigned():
@@ -135,6 +223,13 @@ def test_call_put_identity_and_stale_quote_proxy_stay_unsigned():
     assert result["provider"]["signed_flow_available"] is False
     assert result["summary"]["signed_net_premium"] is None
     assert result["summary"]["unresolved_premium"] == 125_000
+    assert result["summary"]["activity_lean"] == "bullish"
+    assert result["summary"]["activity_lean_source"] == "call_put_premium"
+    assert result["summary"]["activity_lean_label"] == "BULLISH"
+    assert result["summary"]["decision_authorized"] is False
+    assert result["flow_tape"][0]["bias"] is None
+    assert result["flow_tape"][0]["edge_label"] == "CALL"
+    assert "why" in result["flow_tape"][0]
 
 
 def test_unsigned_call_put_mix_never_drives_squeeze_direction():
@@ -511,6 +606,45 @@ def test_nearest_expiry_is_explicit_and_filters_structural_calculations():
     assert result["quality"]["chain_rejected"]["outside_expiry"] == 2
     assert result["summary"]["call_wall"] == 105
     assert result["summary"]["put_wall"] == 95
+
+
+def test_exact_expiry_keeps_gex_focus_but_relaxes_an_empty_trade_tape():
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[_chain("call", 105), _chain("put", 95)],
+        flow_rows=[
+            {
+                "contract_type": "call", "premium": 1_000, "volume": 10,
+                "strike": 105, "expiry": "2026-08-28",
+                "timestamp": "2026-07-31T14:45:00Z",
+            },
+            {
+                "contract_type": "put", "premium": 125_000, "volume": 20,
+                "strike": 90, "expiry": "2026-09-18",
+                "timestamp": "2026-07-31T14:46:00Z",
+            },
+        ],
+        price_series=[],
+        spot=100,
+        filters=OptionsFilters(
+            range="1d", min_premium=50_000, min_volume=1,
+            expiry="2026-08-28",
+        ),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+
+    assert result["chain_context"]["selected_expiry"] == "2026-08-28"
+    assert result["summary"]["call_wall"] == 105
+    assert len(result["flow_tape"]) == 1
+    assert result["flow_tape"][0]["expiry"] == "2026-09-18"
+    assert result["provider"]["activity_basis"] == "trade_tape"
+    assert result["quality"]["flow_rejected"]["expiry_filter_relaxed"] is True
+    assert result["quality"]["flow_rejected"]["requested_expiry"] == "2026-08-28"
+    assert any("Flow tape widened to all expiries" in item for item in result["warnings"])
 
 
 def test_tape_anomalies_use_robust_observable_rules_and_respect_depth_limit():

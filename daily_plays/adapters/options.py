@@ -95,6 +95,11 @@ def normalize_contract(
     dte: int | None = None
     if expiry and asof_utc:
         dte = (date.fromisoformat(expiry) - asof_utc.astimezone(timezone.utc).date()).days
+    quote_asof = _utc(_pick(row, "quote_asof_utc", "quote_timestamp", "nbbo_updated_at"))
+    quote_live = bool(
+        bid is not None and ask is not None and quote_asof is not None
+        and provider == "lse"
+    )
     return {
         "underlying": contract_underlying,
         "right": _right(_pick(row, "right", "option_type", "contract_type", "type")),
@@ -119,7 +124,9 @@ def normalize_contract(
         # A request timestamp, record-update timestamp, or last-trade time is
         # not an NBBO timestamp.  Missing quote time must stay missing so the
         # execution gate cannot manufacture freshness from the run clock.
-        "quote_asof_utc": _utc(_pick(row, "quote_asof_utc", "quote_timestamp", "nbbo_updated_at")),
+        "quote_asof_utc": quote_asof,
+        "quote_live": quote_live,
+        "quote_source": str(_pick(row, "quote_source") or provider),
         "last_trade_asof_utc": _utc(_pick(row, "last_trade_at", "last_trade_date")),
         "provider": provider,
         # Adjusted options do not always use the standard deliverable.  Never

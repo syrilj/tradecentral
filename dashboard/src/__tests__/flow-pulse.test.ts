@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MarketFlowPrint, UnusualFlowRow } from '@/api'
-import { buildFlowPulse, flowPrintKey, type FlowPulsePayload } from '@/flowPulse'
+import { applyFlowWindow, buildFlowPulse, flowPrintKey, type FlowPulsePayload } from '@/flowPulse'
 
 function aggregate(symbol: string, rank: number, premium: number): UnusualFlowRow {
   return {
@@ -105,5 +105,28 @@ describe('flow snapshot pulse', () => {
     const pulse = buildFlowPulse(before, after)
     expect(pulse.newPrintCount).toBe(1)
     expect(pulse.newPremium).toBe(40_000)
+  })
+
+  it('keeps the last good window when a poll arrives without a new payload', () => {
+    const current = snapshot('2026-08-11T17:00:00Z', [aggregate('SPY', 1, 100_000)], [
+      print('SPY', '2026-08-11T16:59:59Z', 25_000),
+    ])
+    const held = applyFlowWindow(current, null)
+    expect(held.window).toBe(current)
+    expect(held.window?.rows).toHaveLength(1)
+    expect(held.window?.tape).toHaveLength(1)
+    expect(held.pulse).toBeNull()
+  })
+
+  it('updates pulse copy when a new provider window lands', () => {
+    const retained = print('SPY', '2026-08-11T16:59:59Z', 25_000)
+    const incoming = print('SPY', '2026-08-11T17:00:14Z', 80_000)
+    const before = snapshot('2026-08-11T17:00:00Z', [aggregate('SPY', 1, 100_000)], [retained])
+    const after = snapshot('2026-08-11T17:00:14Z', [aggregate('SPY', 1, 180_000)], [incoming, retained])
+    const applied = applyFlowWindow(before, after)
+    expect(applied.window).toBe(after)
+    expect(applied.pulse?.baseline).toBe(false)
+    expect(applied.pulse?.newPrintCount).toBe(1)
+    expect(applied.pulse?.newPremium).toBe(80_000)
   })
 })

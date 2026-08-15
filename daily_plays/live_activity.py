@@ -23,7 +23,9 @@ from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
 
+from .activity_lean import _activity_lean
 from .adapters.flow import load_live_flow_activity, load_market_flow_activity
+from .options_intelligence import FLOW_PRESETS, build_options_top_tickers
 from .qlib_scan_score import (
     SCORE_KIND as QLIB_SCORE_KIND,
     SOURCE_ID as QLIB_SOURCE_ID,
@@ -280,108 +282,6 @@ def _context_side(row: Mapping[str, Any] | None) -> str | None:
     return side if side in {"long", "short"} else None
 
 
-def _activity_lean(
-    *,
-    signed_net_premium: float | None = None,
-    signed_print_count: int = 0,
-    context_side: str | None = None,
-    call_premium: float | None = None,
-    put_premium: float | None = None,
-    call_put_imbalance: float | None = None,
-    price_impulse: str | None = None,
-    ret_1d: float | None = None,
-) -> dict[str, Any]:
-    """Describe whether detected activity leans bullish or bearish.
-
-    This is an activity lean for the desk — not a trade authorization. Priority:
-    1) provider-signed premium, 2) model/PEAD context, 3) call/put premium mix
-    with price impulse confirmation, 4) price impulse alone.
-    """
-    signed_count = max(0, int(signed_print_count or 0))
-    if signed_count > 0 and signed_net_premium is not None:
-        net = float(signed_net_premium)
-        if abs(net) < 1e-9:
-            lean = "mixed"
-        else:
-            lean = "bullish" if net > 0 else "bearish"
-        return {
-            "activity_lean": lean,
-            "activity_lean_source": "signed_flow",
-            "activity_lean_label": lean.upper(),
-        }
-
-    ctx = str(context_side or "").strip().lower()
-    if ctx in {"long", "bullish"}:
-        return {
-            "activity_lean": "bullish",
-            "activity_lean_source": "model_context",
-            "activity_lean_label": "BULLISH",
-        }
-    if ctx in {"short", "bearish"}:
-        return {
-            "activity_lean": "bearish",
-            "activity_lean_source": "model_context",
-            "activity_lean_label": "BEARISH",
-        }
-    if ctx == "mixed":
-        return {
-            "activity_lean": "mixed",
-            "activity_lean_source": "model_context",
-            "activity_lean_label": "MIXED",
-        }
-
-    imbalance = call_put_imbalance
-    if imbalance is None:
-        call_p = float(call_premium or 0.0)
-        put_p = float(put_premium or 0.0)
-        total = call_p + put_p
-        if total > 0:
-            imbalance = (call_p - put_p) / total
-
-    prem_lean: str | None = None
-    if imbalance is not None and abs(float(imbalance)) >= 0.15:
-        prem_lean = "bullish" if float(imbalance) > 0 else "bearish"
-
-    impulse = str(price_impulse or "").strip().lower()
-    price_lean: str | None = None
-    if impulse == "up" or (ret_1d is not None and float(ret_1d) > 0):
-        price_lean = "bullish"
-    elif impulse == "down" or (ret_1d is not None and float(ret_1d) < 0):
-        price_lean = "bearish"
-
-    if prem_lean and price_lean:
-        if prem_lean == price_lean:
-            return {
-                "activity_lean": prem_lean,
-                "activity_lean_source": "premium_and_price",
-                "activity_lean_label": prem_lean.upper(),
-            }
-        # Options activity still has a side when premium is skewed; surface that
-        # lean and mark that spot moved the other way in the source label.
-        return {
-            "activity_lean": prem_lean,
-            "activity_lean_source": "call_put_premium_vs_price",
-            "activity_lean_label": prem_lean.upper(),
-        }
-    if prem_lean:
-        return {
-            "activity_lean": prem_lean,
-            "activity_lean_source": "call_put_premium",
-            "activity_lean_label": prem_lean.upper(),
-        }
-    if price_lean:
-        return {
-            "activity_lean": price_lean,
-            "activity_lean_source": "price_impulse",
-            "activity_lean_label": price_lean.upper(),
-        }
-    return {
-        "activity_lean": "neutral",
-        "activity_lean_source": "none",
-        "activity_lean_label": "NEUTRAL",
-    }
-
-
 def _signal_alignment(pead_side: str | None, directional_side: str | None) -> str:
     """Classify two differently-timed signals without pretending they are peers.
 
@@ -565,6 +465,11 @@ def _merge_activity_rows(
             "sweep_otm_contracts": int(evidence.get("sweep_otm_contracts") or 0),
             "sweep_otm_premium": _finite(evidence.get("sweep_otm_premium")) or 0.0,
             "unusual_contracts": int(evidence.get("unusual_contracts") or 0),
+            "flagged_contracts": int(evidence.get("flagged_contracts") or 0),
+            "momentum_contracts": int(evidence.get("momentum_contracts") or 0),
+            "moonshot_contracts": int(evidence.get("moonshot_contracts") or 0),
+            "top_position_contracts": int(evidence.get("top_position_contracts") or 0),
+            "average_heat": _finite(evidence.get("average_heat")),
             "average_price": _finite(evidence.get("average_price")),
             "average_dte": _finite(evidence.get("average_dte")),
             "signed_print_count": signed_prints,
@@ -733,6 +638,11 @@ def build_unusual_options_flow(
             "sweep_otm_contracts": int(evidence.get("sweep_otm_contracts") or 0),
             "sweep_otm_premium": _finite(evidence.get("sweep_otm_premium")) or 0.0,
             "unusual_contracts": int(evidence.get("unusual_contracts") or 0),
+            "flagged_contracts": int(evidence.get("flagged_contracts") or 0),
+            "momentum_contracts": int(evidence.get("momentum_contracts") or 0),
+            "moonshot_contracts": int(evidence.get("moonshot_contracts") or 0),
+            "top_position_contracts": int(evidence.get("top_position_contracts") or 0),
+            "average_heat": _finite(evidence.get("average_heat")),
             "average_price": _finite(evidence.get("average_price")),
             "average_dte": _finite(evidence.get("average_dte")),
             "signed_print_count": signed_prints,
@@ -759,6 +669,17 @@ def build_unusual_options_flow(
     ]
     tape.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
     tape_print_count = len(tape)
+    all_prints = [
+        dict(print_row)
+        for flow_row in flow_rows
+        for print_row in (flow_row.get("prints") or [])
+        if isinstance(print_row, Mapping)
+    ]
+    top_tickers = build_options_top_tickers(all_prints)
+    preset_counts = {
+        name: sum(1 for row in all_prints if name in (row.get("presets") or ()))
+        for name in FLOW_PRESETS
+    }
     tape = tape[:max(100, min(500, int(row_limit) * 10))]
 
     visible_board = board[:max(1, int(row_limit))]
@@ -834,6 +755,11 @@ def build_unusual_options_flow(
         "generated_at": generated_at,
         "rows": visible_board,
         "tape": tape,
+        "top_tickers": top_tickers,
+        "presets": {
+            name: {"label": name.replace("_", " ").title(), "print_count": preset_counts[name]}
+            for name in FLOW_PRESETS
+        },
         "summary": summary,
         "feed_status": feed_status,
         "feed_reason": feed_reason,

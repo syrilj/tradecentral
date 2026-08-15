@@ -241,18 +241,34 @@ MODEL_TRIAL_MAP = {
 }
 
 
-def run_query(client, sql: str, label: str, dry_run: bool) -> None:
+def run_query(client, sql: str, label: str, dry_run: bool, max_bytes_billed: int = 500 * 1024 * 1024) -> None:
+    from google.cloud import bigquery
     if dry_run:
         print(f"\n{'─'*60}")
         print(f"  [DRY-RUN] {label}")
-        print(f"  SQL:\n{sql[:300]}...")
+        if client:
+            try:
+                job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+                dry_job = client.query(sql, job_config=job_config)
+                mb = dry_job.total_bytes_processed / (1024 * 1024)
+                print(f"  Estimated bytes to scan: {mb:.2f} MB ($0.00 — free tier)")
+            except Exception as e:
+                print(f"  Dry-run query estimation notice: {e}")
+        else:
+            print(f"  SQL:\n{sql[:300]}...")
         return
 
     print(f"\n{'─'*60}")
     print(f"  Running: {label}")
     try:
-        result = client.query(sql).to_dataframe()
-        print(f"  Rows returned: {len(result)}")
+        job_config = bigquery.QueryJobConfig(
+            maximum_bytes_billed=max_bytes_billed,
+            use_query_cache=True,
+        )
+        query_job = client.query(sql, job_config=job_config)
+        result = query_job.to_dataframe()
+        bytes_scanned_mb = (query_job.total_bytes_billed or 0) / (1024 * 1024)
+        print(f"  Rows returned: {len(result)} (Bytes billed: {bytes_scanned_mb:.2f} MB, Cost: $0.00 Free Tier)")
         if not result.empty:
             print(result.to_string(index=False, max_rows=50))
     except Exception as e:
@@ -280,15 +296,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Cost:     $0.00  (~50MB processed, free tier = 1TB/month)")
     print("=" * 70)
 
-    if not args.dry_run:
-        try:
-            from google.cloud import bigquery
-        except ImportError:
+    client = None
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project=PROJECT)
+    except Exception:
+        if not args.dry_run:
             print("ERROR: pip3 install google-cloud-bigquery pandas-gbq pyarrow")
             return 1
-        client = bigquery.Client(project=PROJECT)
-    else:
-        client = None
 
     for key in to_run:
         label, sql_template = ANALYSES[key]

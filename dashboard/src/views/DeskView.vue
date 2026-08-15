@@ -14,6 +14,7 @@ import {
 import type { Resource } from '@/composables/useResource'
 import { num, pctFrac, signedPct, tone, usd, DASH } from '@/format'
 import { sparkline } from '@/charts'
+import { loadWatchlist, saveWatchlist as persistWatchlist, toggleWatchlistSymbol } from '@/watchlist'
 import Panel from '@/components/Panel.vue'
 import VerdictChip from '@/components/VerdictChip.vue'
 
@@ -51,7 +52,7 @@ const ACTIONABLE_EDGE = 0.55
 const customTickerInput = ref('')
 const probing = ref(false)
 const probeErr = ref<string | null>(null)
-const customWatchlist = ref<string[]>(['NVDA', 'TSLA', 'AMD'])
+const customWatchlist = ref<string[]>(loadWatchlist())
 const probeResults = ref<Record<string, Trajectory | null>>({})
 const liveMarks = ref<Record<string, QuoteMark>>({})
 
@@ -59,18 +60,15 @@ let watchlistTimer: number | undefined
 let marksTimer: number | undefined
 let appliedScanAsof = ''
 
-onMounted(() => {
-  try {
-    const saved = localStorage.getItem('edge_custom_watchlist')
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        customWatchlist.value = parsed.map((s) => String(s).toUpperCase())
-      }
-    }
-  } catch {
-    /* fallback to default */
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible') {
+    void refreshBoardMarks()
   }
+}
+
+onMounted(() => {
+  customWatchlist.value = loadWatchlist()
+  document.addEventListener('visibilitychange', onVisibilityChange)
   void probeWatchlist(true)
   void resumeScanJob()
   void refreshBoardMarks()
@@ -82,17 +80,14 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   scanPollToken += 1
   if (watchlistTimer !== undefined) clearInterval(watchlistTimer)
   if (marksTimer !== undefined) clearInterval(marksTimer)
 })
 
 function saveWatchlist(): void {
-  try {
-    localStorage.setItem('edge_custom_watchlist', JSON.stringify(customWatchlist.value))
-  } catch {
-    /* ignore storage errors */
-  }
+  customWatchlist.value = persistWatchlist(customWatchlist.value)
 }
 
 async function probeSymbol(sym: string): Promise<void> {
@@ -106,8 +101,7 @@ async function probeSymbol(sym: string): Promise<void> {
     const t = await api.trajectory(clean, '1m', { includeQlib: false })
     probeResults.value[clean] = t
     if (!customWatchlist.value.includes(clean)) {
-      customWatchlist.value.push(clean)
-      saveWatchlist()
+      customWatchlist.value = toggleWatchlistSymbol(customWatchlist.value, clean).symbols
     }
     customTickerInput.value = ''
   } catch (e) {
@@ -144,12 +138,8 @@ watch(
 )
 
 function removeWatchlistSymbol(sym: string): void {
-  const idx = customWatchlist.value.indexOf(sym)
-  if (idx >= 0) {
-    customWatchlist.value.splice(idx, 1)
-    delete probeResults.value[sym]
-    saveWatchlist()
-  }
+  customWatchlist.value = toggleWatchlistSymbol(customWatchlist.value, sym).symbols
+  delete probeResults.value[sym]
 }
 
 /** Prefer stats.last_price; fall back to last bar close so rows never go blank when series exists. */
@@ -336,6 +326,12 @@ const reconciliation = computed(() => d.value?.signal_reconciliation)
 const reconciledBySymbol = computed(() => new Map(
   (reconciliation.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row]),
 ))
+const signalsBySymbol = computed(() => new Map(
+  signals.value.map((s) => [s.symbol?.toUpperCase() ?? '', s]),
+))
+const peadBySymbol = computed(() => new Map(
+  pead.value.map((p) => [p.symbol?.toUpperCase() ?? '', p]),
+))
 
 watch(
   () => scan.value?.depth,
@@ -509,11 +505,13 @@ function momentumBarPct(value: number | null | undefined): number {
 
 /** Join desk signals onto a watchlist symbol for edge / momentum chips. */
 function signalFor(sym: string): SignalRow | null {
-  return signals.value.find((s) => s.symbol?.toUpperCase() === sym.toUpperCase()) ?? null
+  if (!sym) return null
+  return signalsBySymbol.value.get(sym.toUpperCase()) ?? null
 }
 
 function peadFor(sym: string): PeadRow | null {
-  return pead.value.find((row) => row.symbol?.toUpperCase() === sym.toUpperCase()) ?? null
+  if (!sym) return null
+  return peadBySymbol.value.get(sym.toUpperCase()) ?? null
 }
 
 function relationFor(sym: string): 'agree' | 'conflict' | 'none' {
@@ -554,13 +552,26 @@ function activityLean(row: ActivityFlagRow): { label: string; cls: string; title
   return { label: 'NEUTRAL', cls: 'neutral', title: 'No clear bullish/bearish activity lean' }
 }
 
+const sparkCache = new Map<string, { key: string; path: string }>()
+
 const watchSparks = computed(() => {
   const out: Record<string, string> = {}
   for (const [sym, traj] of Object.entries(probeResults.value)) {
-    const closes = traj?.series?.map((b) => b.c) ?? []
-    if (closes.length > 2) {
-      out[sym] = sparkline(closes.slice(-40), 88, 22, 2).d
+    const series = traj?.series
+    if (!series || series.length <= 2) continue
+
+    const lastBar = series[series.length - 1]
+    const cacheKey = `${series.length}_${lastBar?.d}_${lastBar?.c}`
+    const cached = sparkCache.get(sym)
+    if (cached && cached.key === cacheKey) {
+      out[sym] = cached.path
+      continue
     }
+
+    const closes = series.map((b) => b.c)
+    const path = sparkline(closes.slice(-40), 88, 22, 2).d
+    sparkCache.set(sym, { key: cacheKey, path })
+    out[sym] = path
   }
   return out
 })
@@ -643,10 +654,11 @@ function navTo(name: string): void {
       </div>
     </header>
 
-    <!-- ── 00 Summary KPI Deck ─────────────────────────────────────────── -->
+    <!-- ── 00 Summary KPI Deck (3 Structured Zones) ───────────────────── -->
     <section class="desk-summary" aria-label="Desk session overview metrics">
+      <!-- Zone 1: Session Posture & Capital Status -->
       <!-- 01 Capital Status Card -->
-      <div class="kpi-card" :class="r?.cleared_for_live ? 'armed' : 'held'">
+      <div class="kpi-card kpi-posture-card" :class="r?.cleared_for_live ? 'armed' : 'held'">
         <div class="kpi-head-row">
           <span class="label kpi-label">Capital Status</span>
           <span class="kpi-badge" :class="r?.cleared_for_live ? 'armed' : 'held'">
@@ -664,7 +676,7 @@ function navTo(name: string): void {
       </div>
 
       <!-- 02 Confidence Posture Card -->
-      <div class="kpi-card" :class="confidencePosture.tone">
+      <div class="kpi-card kpi-posture-card" :class="confidencePosture.tone">
         <div class="kpi-head-row">
           <span class="label kpi-label">Confidence Posture</span>
           <span class="kpi-badge" :class="sigHighConf > 0 ? 'enter' : 'held'">
@@ -681,8 +693,9 @@ function navTo(name: string): void {
         </span>
       </div>
 
+      <!-- Zone 2: Market Breadth & Flow -->
       <!-- 03 Activity Flags Card -->
-      <div class="kpi-card">
+      <div class="kpi-card kpi-breadth-card">
         <div class="kpi-head-row">
           <span class="label kpi-label">Activity Flags</span>
           <span class="kpi-badge flat">{{ scan?.depth?.toUpperCase() ?? 'SCAN' }}</span>
@@ -696,11 +709,12 @@ function navTo(name: string): void {
         </span>
       </div>
 
-      <!-- 04 Top Sector Flow (Clickable) -->
-      <button class="kpi-card clickable" type="button" aria-label="Open Sectors for top sector flow" @click="navTo('sectors')">
+      <!-- Zone 3: Macro & Strategy Navigation -->
+      <!-- 04 Top Sector Flow (Interactive Navigation Button) -->
+      <button class="kpi-card kpi-nav-card" type="button" aria-label="Open Sectors for top sector flow" @click="navTo('sectors')">
         <div class="kpi-head-row">
           <span class="label kpi-label">Top Sector Flow</span>
-          <span class="kpi-action-hint label">OPEN →</span>
+          <span class="kpi-nav-badge">OPEN →</span>
         </div>
         <div class="kpi-val-row">
           <span class="kpi-val sym">{{ topSector ? topSector.etf : '—' }}</span>
@@ -713,11 +727,11 @@ function navTo(name: string): void {
         </span>
       </button>
 
-      <!-- 05 Top Alpha Strategy (Clickable) -->
-      <button class="kpi-card clickable" type="button" aria-label="Open Gates for the top alpha strategy" @click="navTo('gates')">
+      <!-- 05 Top Alpha Strategy (Interactive Navigation Button) -->
+      <button class="kpi-card kpi-nav-card" type="button" aria-label="Open Gates for the top alpha strategy" @click="navTo('gates')">
         <div class="kpi-head-row">
           <span class="label kpi-label">Top Alpha Strategy</span>
-          <span class="kpi-action-hint label">OPEN →</span>
+          <span class="kpi-nav-badge">OPEN →</span>
         </div>
         <div class="kpi-val-row">
           <span class="kpi-val strat-name">{{ topStrategy ? topStrategy.strategy : '—' }}</span>
@@ -729,7 +743,7 @@ function navTo(name: string): void {
       </button>
     </section>
 
-    <!-- ── High-Confidence Queue ───────────────────────────────────────── -->
+    <!-- ── High-Confidence Authorization Queue ─────────────────────────── -->
     <section class="confidence-queue w-full" :class="{ 'has-items': highConfidenceQueue.length > 0 }" aria-label="High confidence directional queue">
       <div class="confidence-queue-head">
         <div class="confidence-queue-title">
@@ -785,7 +799,7 @@ function navTo(name: string): void {
       </div>
     </section>
 
-    <!-- ── Scan Console ────────────────────────────────────────────────── -->
+    <!-- ── Scan Operations Console ─────────────────────────────────────── -->
     <section class="scan-console w-full" aria-label="Market scan depth and controls">
       <div class="scan-console-head">
         <div class="scan-title-block">
@@ -970,20 +984,24 @@ function navTo(name: string): void {
               </td>
               <td class="col-dir">
                 <div class="signal-context">
-                  <span v-if="row.pead_side" class="context-source label">GAP {{ sideWord(row.pead_side) }}</span>
-                  <span v-if="row.directional_side" class="context-source label">5D {{ sideWord(row.directional_side) }}</span>
-                  <span
-                    class="alignment-chip label"
-                    :class="row.signal_alignment || 'none'"
-                  >
-                    {{ row.signal_alignment === 'agree' ? 'AGREE'
-                      : row.signal_alignment === 'conflict' ? 'CONFLICT'
-                        : row.signal_alignment === 'pead_only' ? 'EVENT ONLY'
-                          : row.signal_alignment === 'directional_only' ? 'MODEL ONLY' : 'NO VIEW' }}
-                  </span>
-                  <small v-if="row.calibrated_probability != null && hasActionableEdge(row.calibrated_probability)" class="context-edge">
-                    model {{ pctFrac(row.calibrated_probability, 1) }}
-                  </small>
+                  <div class="signal-context-top">
+                    <span v-if="row.pead_side" class="context-source label">GAP {{ sideWord(row.pead_side) }}</span>
+                    <span v-if="row.directional_side" class="context-source label">5D {{ sideWord(row.directional_side) }}</span>
+                  </div>
+                  <div class="signal-context-bottom">
+                    <span
+                      class="alignment-chip label"
+                      :class="row.signal_alignment || 'none'"
+                    >
+                      {{ row.signal_alignment === 'agree' ? 'AGREE'
+                        : row.signal_alignment === 'conflict' ? 'CONFLICT'
+                          : row.signal_alignment === 'pead_only' ? 'EVENT ONLY'
+                            : row.signal_alignment === 'directional_only' ? 'MODEL ONLY' : 'NO VIEW' }}
+                    </span>
+                    <small v-if="row.calibrated_probability != null && hasActionableEdge(row.calibrated_probability)" class="context-edge">
+                      model {{ pctFrac(row.calibrated_probability, 1) }}
+                    </small>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -1038,7 +1056,7 @@ function navTo(name: string): void {
           type="button"
           @click="dualViewMode = 'split'"
         >
-          SPLIT VIEW
+          SPLIT VIEW ({{ pead.length + signals.length }})
         </button>
         <button
           class="view-tab label"
@@ -1083,7 +1101,7 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table v-if="filteredPead.length" class="grid table-pead">
+        <table v-if="filteredPead.length" class="grid table-pead" :class="{ 'is-split': dualViewMode === 'split' }">
           <thead>
             <tr>
               <th class="label col-sym">Symbol</th>
@@ -1091,8 +1109,8 @@ function navTo(name: string): void {
               <th class="label num col-chg">1D</th>
               <th class="label col-side">Side</th>
               <th class="label num col-score">Strength</th>
-              <th class="label num col-gap">Gap / ATR</th>
-              <th class="label num col-vol">Volume</th>
+              <th v-if="dualViewMode !== 'split'" class="label num col-gap">Gap / ATR</th>
+              <th v-if="dualViewMode !== 'split'" class="label num col-vol">Volume</th>
               <th class="label col-5d">5D Forecast</th>
               <th class="label col-state">State</th>
               <th class="label col-chain">Options</th>
@@ -1113,8 +1131,8 @@ function navTo(name: string): void {
                 </span>
               </td>
               <td class="fig num col-score" :class="tone(c.evidence?.pead_score)">{{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}</td>
-              <td class="fig num col-gap" :class="tone(c.evidence?.gap_std)">{{ num(c.evidence?.gap_std, 2) }}</td>
-              <td class="fig num col-vol">{{ num(c.evidence?.vol_surge, 2) }}×</td>
+              <td v-if="dualViewMode !== 'split'" class="fig num col-gap" :class="tone(c.evidence?.gap_std)">{{ num(c.evidence?.gap_std, 2) }}</td>
+              <td v-if="dualViewMode !== 'split'" class="fig num col-vol">{{ num(c.evidence?.vol_surge, 2) }}×</td>
               <td class="col-5d">
                 <span
                   v-if="signalFor(c.symbol)"
@@ -1178,7 +1196,7 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table v-if="filteredSignals.length" class="grid table-directional">
+        <table v-if="filteredSignals.length" class="grid table-directional" :class="{ 'is-split': dualViewMode === 'split' }">
           <thead>
             <tr>
               <th class="label col-sym">Symbol</th>
@@ -1187,7 +1205,7 @@ function navTo(name: string): void {
               <th class="label col-side">Side</th>
               <th class="label num col-edge">Edge</th>
               <th class="label num col-mom">Momentum</th>
-              <th class="label num col-hz">Hz</th>
+              <th v-if="dualViewMode !== 'split'" class="label num col-hz">Hz</th>
               <th class="label col-gap-event">Gap Event</th>
               <th class="label col-state">State</th>
               <th class="label col-chain">Options</th>
@@ -1248,7 +1266,7 @@ function navTo(name: string): void {
                   <span>{{ num(s.momentum, 2) }}</span>
                 </div>
               </td>
-              <td class="fig num dim col-hz">{{ (s.horizon ?? '').replace(' Days', 'd') }}</td>
+              <td v-if="dualViewMode !== 'split'" class="fig num dim col-hz">{{ (s.horizon ?? '').replace(' Days', 'd') }}</td>
               <td class="col-gap-event">
                 <span
                   v-if="peadFor(s.symbol)"
@@ -1545,11 +1563,11 @@ function navTo(name: string): void {
   font-family: var(--font-data);
 }
 
-/* ── 00 Summary KPI Deck ─────────────────────────────────────────────────── */
+/* ── 00 Summary KPI Deck (3 Structured Zones) ────────────────────────────── */
 .desk-summary {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--s3);
 }
 
@@ -1571,19 +1589,6 @@ function navTo(name: string): void {
   border-color: var(--rule-hi);
   background: var(--panel-hi);
 }
-.kpi-card.clickable {
-  cursor: pointer;
-  border-style: solid;
-}
-.kpi-card.clickable:hover {
-  border-color: var(--phosphor-dim);
-}
-button.kpi-card {
-  width: 100%;
-  appearance: none;
-  text-align: left;
-  font: inherit;
-}
 .kpi-card:focus-visible, .arena-flow-link:focus-visible {
   outline: 2px solid var(--action-focus);
   outline-offset: 2px;
@@ -1595,6 +1600,46 @@ button.kpi-card {
 .kpi-card.held {
   border-left: 3px solid var(--warn);
   background: color-mix(in srgb, var(--warn) 5%, var(--panel));
+}
+.kpi-breadth-card {
+  border-left: 3px solid var(--phosphor-dim);
+}
+
+/* Macro/Strategy Navigation Cards */
+.kpi-nav-card {
+  width: 100%;
+  appearance: none;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  border-left: 3px solid var(--call);
+  background: color-mix(in srgb, var(--call) 4%, var(--panel));
+}
+.kpi-nav-card:hover {
+  border-color: var(--call-hi);
+  border-left-color: var(--call-hi);
+  background: color-mix(in srgb, var(--call) 10%, var(--panel));
+  transform: translateY(-1px);
+}
+.kpi-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--call-hi);
+  background: var(--call-wash);
+  border: var(--hair) solid var(--call);
+  transition: all var(--dur-fast) ease;
+}
+.kpi-nav-card:hover .kpi-nav-badge {
+  color: var(--void);
+  background: var(--call-hi);
+  border-color: var(--call-hi);
 }
 
 .kpi-head-row {
@@ -1613,13 +1658,6 @@ button.kpi-card {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.kpi-action-hint {
-  font-size: 9px;
-  color: var(--phosphor);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  opacity: 0.85;
 }
 
 .kpi-val-row {
@@ -1967,7 +2005,7 @@ button.kpi-card {
 .rank-idx { display: inline-block; width: 3ch; margin-right: var(--s2); color: var(--ink-ghost); font-weight: 700; }
 .activity-row:hover { background: var(--panel-raise); }
 
-/* Lean Chips - High Contrast */
+/* Lean Chips - High Contrast Tokenized */
 .lean-chip {
   display: inline-flex;
   min-height: 22px;
@@ -1980,19 +2018,19 @@ button.kpi-card {
   white-space: nowrap;
 }
 .lean-chip.bullish {
-  color: #52c78f;
-  border: var(--hair) solid #52c78f;
-  background: rgba(82, 199, 143, 0.14);
+  color: var(--long);
+  border: var(--hair) solid var(--long);
+  background: var(--long-wash);
 }
 .lean-chip.bearish {
-  color: #f06d7b;
-  border: var(--hair) solid #f06d7b;
-  background: rgba(240, 109, 123, 0.14);
+  color: var(--short);
+  border: var(--hair) solid var(--short);
+  background: var(--short-wash);
 }
 .lean-chip.mixed {
-  color: #e5b048;
-  border: var(--hair) solid #e5b048;
-  background: rgba(229, 176, 72, 0.14);
+  color: var(--warn);
+  border: var(--hair) solid var(--warn);
+  background: var(--warn-wash);
 }
 .lean-chip.neutral {
   color: var(--ink-soft);
@@ -2056,8 +2094,21 @@ button.kpi-card {
 .local-tag { font-size: 10px; font-weight: 600; }
 .price-ret { font-weight: 750; font-size: 13px; }
 
-/* Signal Context */
-.signal-context { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 240px; }
+/* Signal Context (Structured 2-Line Direction Cell) */
+.signal-context {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 130px;
+  max-width: 220px;
+}
+.signal-context-top,
+.signal-context-bottom {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 .context-source, .coverage-chip {
   padding: 2px 6px;
   border: var(--hair) solid var(--rule-hi);
@@ -2081,19 +2132,19 @@ button.kpi-card {
   border: var(--hair) solid currentColor;
 }
 .alignment-chip.agree {
-  color: #52c78f;
-  border-color: #52c78f;
-  background: rgba(82, 199, 143, 0.14);
+  color: var(--long);
+  border-color: var(--long);
+  background: var(--long-wash);
 }
 .alignment-chip.conflict {
-  color: #f06d7b;
-  border-color: #f06d7b;
-  background: rgba(240, 109, 123, 0.14);
+  color: var(--short);
+  border-color: var(--short);
+  background: var(--short-wash);
 }
 .alignment-chip.pead_only, .alignment-chip.directional_only {
-  color: #e5b048;
-  border-color: #e5b048;
-  background: rgba(229, 176, 72, 0.14);
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
 }
 .context-edge { color: var(--warn); font-size: 10px; font-weight: 700; }
 
@@ -2277,6 +2328,75 @@ button.kpi-card {
 .num { text-align: right; }
 .sym { color: var(--phosphor); font-weight: 750; font-size: 13px; }
 
+/* Split View Column Condensation (.w-half) */
+.w-half .table-pead th,
+.w-half .table-pead td,
+.w-half .table-directional th,
+.w-half .table-directional td {
+  padding: var(--s2) var(--s2);
+}
+.w-half .col-sym {
+  min-width: 54px;
+}
+.w-half .col-last,
+.w-half .col-chg {
+  min-width: 48px;
+  font-size: 12px;
+}
+.w-half .col-side {
+  min-width: 42px;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.w-half .col-score {
+  min-width: 46px;
+  font-size: 12px;
+}
+.w-half .col-5d,
+.w-half .col-gap-event {
+  max-width: 110px;
+  overflow: hidden;
+}
+.w-half .col-state {
+  min-width: 48px;
+}
+.w-half .col-chain {
+  width: 44px;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.w-half .chain-btn {
+  padding: 2px 5px;
+  font-size: 9px;
+}
+.w-half .side-pill {
+  min-width: 36px;
+  font-size: 9px;
+  padding: 1px 3px;
+}
+.w-half .prob-cell {
+  gap: var(--s1);
+}
+.w-half .prob-bar-wrap {
+  width: 32px;
+  height: 4px;
+}
+.w-half .mom-wrap {
+  gap: 4px;
+}
+.w-half .mom-bar {
+  width: 22px;
+  height: 3px;
+}
+.w-half .alignment-chip {
+  font-size: 8px;
+  padding: 1px 4px;
+}
+.w-half .coverage-chip {
+  font-size: 8px;
+  padding: 1px 4px;
+}
+
 /* Side Pills */
 .side-pill {
   display: inline-flex;
@@ -2291,14 +2411,14 @@ button.kpi-card {
   text-align: center;
 }
 .side-pill.pos {
-  color: #52c78f;
-  border: var(--hair) solid #52c78f;
-  background: rgba(82, 199, 143, 0.14);
+  color: var(--long);
+  border: var(--hair) solid var(--long);
+  background: var(--long-wash);
 }
 .side-pill.neg {
-  color: #f06d7b;
-  border: var(--hair) solid #f06d7b;
-  background: rgba(240, 109, 123, 0.14);
+  color: var(--short);
+  border: var(--hair) solid var(--short);
+  background: var(--short-wash);
 }
 .side-pill.neutral {
   color: var(--ink-soft);
@@ -2467,6 +2587,8 @@ button.kpi-card {
 
 @media (max-width: 1400px) {
   .desk-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .kpi-nav-card:nth-child(4) { grid-column: span 1; }
+  .kpi-nav-card:nth-child(5) { grid-column: span 2; }
   .desk { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .scan-console-head { grid-template-columns: 180px 1fr; }
   .scan-controls { grid-column: 1 / -1; border-top: var(--hair) solid var(--rule); justify-content: flex-end; }
@@ -2474,6 +2596,8 @@ button.kpi-card {
 @media (max-width: 1100px) {
   .w-half { grid-column: span 4; }
   .desk-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi-breadth-card { grid-column: 1 / -1; }
+  .kpi-nav-card:nth-child(5) { grid-column: span 1; }
   .reconciliation-stats { grid-template-columns: repeat(2, 1fr); }
   .stat-box:nth-child(2) { border-right: 0; }
   .stat-box:nth-child(-n + 2) { border-bottom: var(--hair) solid var(--rule-hi); }

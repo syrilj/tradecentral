@@ -8,6 +8,7 @@ import sys
 from threading import Thread
 from typing import Any, Callable, Mapping
 
+from ..activity_lean import describe_activity_lean
 from ..options_intelligence import _annotate_tape_anomalies, _normalize_flow_row
 
 
@@ -258,9 +259,13 @@ def normalize_flow_payload(payload: Mapping[str, Any] | None, *, asof_utc: str |
         if otm_distance_denominator > 0
         else None
     )
-    sweep_rows = [row for row in normalized_prints if row.get("trade_class") == "sweep"]
+    sweep_rows = [row for row in normalized_prints if row.get("is_sweep") or row.get("trade_class") == "sweep"]
     sweep_otm_rows = [row for row in sweep_rows if float(row.get("otm_pct") or 0.0) > 0]
-    unusual_rows = [row for row in normalized_prints if row.get("anomaly_flags")]
+    unusual_rows = [row for row in normalized_prints if row.get("is_unusual")]
+    flagged_rows = [row for row in normalized_prints if row.get("anomaly_flags")]
+    momentum_rows = [row for row in normalized_prints if row.get("is_momentum")]
+    moonshot_rows = [row for row in normalized_prints if row.get("is_moonshot")]
+    top_position_rows = [row for row in normalized_prints if row.get("is_top_position")]
     signed_rows = [row for row in normalized_prints if row.get("signed_premium") is not None]
     if signed_rows:
         signed_net = sum(float(row["signed_premium"]) for row in signed_rows)
@@ -270,6 +275,14 @@ def normalize_flow_payload(payload: Mapping[str, Any] | None, *, asof_utc: str |
         # A fully normalized unsigned tape must not inherit direction from C/P.
         side = "neutral"
         sentiment = "neutral"
+    activity_lean = describe_activity_lean(
+        signed_net_premium=(
+            sum(float(row["signed_premium"]) for row in signed_rows) if signed_rows else None
+        ),
+        signed_print_count=len(signed_rows),
+        call_premium=call_premium,
+        put_premium=put_premium,
+    )
     weighted_price = _weighted_average(normalized_prints, "price")
     weighted_dte = _weighted_average(normalized_prints, "dte")
     observed_asof = _first_present(
@@ -306,6 +319,14 @@ def normalize_flow_payload(payload: Mapping[str, Any] | None, *, asof_utc: str |
             "sweep_otm_contracts": sum(int(row.get("contracts") or 0) for row in sweep_otm_rows),
             "sweep_otm_premium": round(sum(float(row["premium"]) for row in sweep_otm_rows), 2),
             "unusual_contracts": sum(int(row.get("contracts") or 0) for row in unusual_rows),
+            "flagged_contracts": sum(int(row.get("contracts") or 0) for row in flagged_rows),
+            "momentum_contracts": sum(int(row.get("contracts") or 0) for row in momentum_rows),
+            "moonshot_contracts": sum(int(row.get("contracts") or 0) for row in moonshot_rows),
+            "top_position_contracts": sum(int(row.get("contracts") or 0) for row in top_position_rows),
+            "average_heat": (
+                round(sum(float(row.get("heat") or 0.0) for row in normalized_prints) / len(normalized_prints), 4)
+                if normalized_prints else None
+            ),
             "average_price": round(weighted_price, 4) if weighted_price is not None else None,
             "average_dte": round(weighted_dte, 2) if weighted_dte is not None else None,
             "signed_print_count": len(signed_rows),
@@ -315,6 +336,9 @@ def normalize_flow_payload(payload: Mapping[str, Any] | None, *, asof_utc: str |
                 sum(abs(float(row["signed_premium"])) for row in signed_rows) / observed_premium,
                 6,
             ) if observed_premium > 0 else None,
+            "activity_lean": activity_lean["activity_lean"],
+            "activity_lean_source": activity_lean["activity_lean_source"],
+            "activity_lean_label": activity_lean["activity_lean_label"],
             "sentiment": sentiment,
             "flow_confidence": first.get("confidence") or first.get("aggressor_label"),
             "data_source": data_source,
@@ -322,6 +346,144 @@ def normalize_flow_payload(payload: Mapping[str, Any] | None, *, asof_utc: str |
         },
         "prints": prints,
         "provenance": {"raw_source": "TradingWork/src/uoa_scanner.py"},
+    }
+
+
+def _timestamp_in_window(value: Any, since: str | None, until: str | None) -> bool:
+    text = str(value or "")
+    if not text:
+        return not since and not until
+    if since and text < since:
+        return False
+    if until and text > until:
+        return False
+    return True
+
+
+def load_symbol_flow_tape(
+    symbol: str,
+    *,
+    min_premium: float = 25_000.0,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 500,
+    timeout_seconds: float = 12.0,
+    fetcher: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """On-demand classified tape for one underlier, optionally time-sliced.
+
+    Uses the same LSE symbol window as live per-name flow. Date bounds are
+    sent to the provider when we own the request, and always applied again
+    after normalize so injected fixtures stay honest.
+    """
+    requested = _canonical_symbol(symbol)
+    since_s = str(since).strip() if since else None
+    until_s = str(until).strip() if until else None
+    empty = {
+        "schema_version": "symbol-flow-tape-v1",
+        "symbol": requested,
+        "from": since_s,
+        "to": until_s,
+        "tape": [],
+        "print_count": 0,
+        "feed_status": "unavailable",
+        "source": "lse_symbol_window",
+        "decision_authorized": False,
+        "warnings": [],
+    }
+    if not requested:
+        return {**empty, "warnings": ["flow_symbol_required"]}
+    if not os.getenv("LSE_API_KEY") and fetcher is None:
+        return {**empty, "warnings": ["flow_lse_credential_missing"]}
+    if fetcher is None and lse_circuit_is_open():
+        return {**empty, "warnings": ["flow_lse_circuit_open"]}
+
+    try:
+        if fetcher is None:
+            source = Path(__file__).resolve().parents[3] / "TradingWork" / "src"
+            if str(source) not in sys.path:
+                sys.path.insert(0, str(source))
+            from lse_provider import LSE_ISO_BASE, get_api_key  # type: ignore[import-not-found]
+            import requests
+
+            api_key = get_api_key()
+            if not api_key:
+                return {**empty, "warnings": ["flow_lse_credential_missing"]}
+
+            def fetcher(
+                *,
+                symbol: str,
+                min_premium: float,
+                limit: int,
+                timeout: float,
+                since: str | None,
+                until: str | None,
+            ) -> Any:
+                params: dict[str, str] = {
+                    "underlying": f"eq.{symbol}",
+                    "premium": f"gte.{max(0.0, float(min_premium))}",
+                    "order": "ts.desc",
+                    "limit": str(max(1, min(int(limit), 2_000))),
+                }
+                clauses: list[str] = []
+                if since:
+                    clauses.append(f"ts.gte.{since}")
+                if until:
+                    clauses.append(f"ts.lte.{until}")
+                if clauses:
+                    params["and"] = f"({','.join(clauses)})"
+                response = requests.get(
+                    f"{LSE_ISO_BASE}/x_options_flow",
+                    headers={"x-api-key": api_key, "Accept": "application/json"},
+                    params=params,
+                    timeout=max(1.0, float(timeout)),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, list):
+                    raise ValueError("flow_symbol_invalid_payload")
+                return payload
+
+        fetched = _bounded_call(
+            lambda: fetcher(
+                symbol=requested,
+                min_premium=max(0.0, float(min_premium)),
+                limit=max(1, min(int(limit), 2_000)),
+                timeout=timeout_seconds,
+                since=since_s,
+                until=until_s,
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+    except TimeoutError:
+        return {**empty, "warnings": ["flow_timeout"]}
+    except Exception as exc:
+        return {**empty, "warnings": [f"flow_unavailable:{type(exc).__name__}"]}
+
+    raw_rows = [dict(row) for row in fetched or [] if isinstance(row, Mapping)]
+    normalized = normalize_flow_payload({
+        "symbol": requested,
+        "alerts": raw_rows,
+        "data_source": "lse_symbol_window",
+    })
+    tape = [
+        row
+        for row in (normalized.get("prints") or [])
+        if isinstance(row, Mapping) and _timestamp_in_window(row.get("timestamp"), since_s, until_s)
+    ]
+    return {
+        "schema_version": "symbol-flow-tape-v1",
+        "symbol": requested,
+        "from": since_s,
+        "to": until_s,
+        "tape": tape,
+        "print_count": len(tape),
+        "feed_status": "live" if tape else "no_prints",
+        "source": "lse_symbol_window",
+        "min_premium": float(min_premium),
+        "decision_authorized": False,
+        "warnings": [],
+        "evidence": normalized.get("evidence") if isinstance(normalized, Mapping) else {},
     }
 
 
