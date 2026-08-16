@@ -13,7 +13,7 @@ from .adapters.internal_models import ChainFreeInternalModelsAdapter
 from .adapters.promoted_models import PromotedLSEModelsAdapter
 from .adapters.directional_research import FrozenDirectionalResearchAdapter
 from .adapters.kronos import load_point_in_time_kronos
-from .adapters.options import LSEOptionsAdapter, OptionsProvider, fetch_provider_snapshots, fetch_provider_snapshots
+from .adapters.options import LSEOptionsAdapter, OptionsProvider, fetch_provider_snapshots
 from .adapters.sector_flow import load_sector_flow_discovery
 from .clock import RunContext
 from .config import DailyPlaysConfig
