@@ -11,15 +11,16 @@ volatility-scaled momentum score.  Its score is ordinal.  It can only be
 reported as a probability when an explicit calibration artifact and evaluator
 are supplied by the caller.
 """
+
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import json
 import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
-
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DAILY_DATA_PATH = ROOT / "edge" / "data" / "1d"
@@ -54,14 +55,28 @@ def _side(raw: Mapping[str, Any]) -> str:
 
 def _semantic_fields(*records: Mapping[str, Any]) -> tuple[str | None, int | None]:
     """Extract target semantics without inventing them for legacy payloads."""
-    target = next((str(row["probability_target"]) for row in records
-                   if row.get("probability_target") is not None), None)
-    horizon = next((_positive_int(row.get("horizon_days")) for row in records
-                    if _positive_int(row.get("horizon_days")) is not None), None)
+    target = next(
+        (
+            str(row["probability_target"])
+            for row in records
+            if row.get("probability_target") is not None
+        ),
+        None,
+    )
+    horizon = next(
+        (
+            _positive_int(row.get("horizon_days"))
+            for row in records
+            if _positive_int(row.get("horizon_days")) is not None
+        ),
+        None,
+    )
     return target, horizon
 
 
-def normalize_internal_model_payload(payload: Mapping[str, Any] | None, *, asof_utc: str | None = None) -> dict[str, Any]:
+def normalize_internal_model_payload(
+    payload: Mapping[str, Any] | None, *, asof_utc: str | None = None
+) -> dict[str, Any]:
     """Normalize legacy records without treating a score as option P&L odds.
 
     A legacy calibration may remain visible as such, but no target or horizon
@@ -75,17 +90,23 @@ def normalize_internal_model_payload(payload: Mapping[str, Any] | None, *, asof_
     decision = raw.get("decision") if isinstance(raw.get("decision"), Mapping) else {}
     raw_prob = _number(confidence.get("model_probability", model.get("raw_probability")))
     calibrated = _number(confidence.get("calibrated_probability"))
-    calibration_version = confidence.get("calibration_version") or confidence.get("calibrator_version")
+    calibration_version = confidence.get("calibration_version") or confidence.get(
+        "calibrator_version"
+    )
     uncalibrated = bool(confidence.get("uncalibrated"))
     probability_target, horizon_days = _semantic_fields(confidence, model, raw)
     entry_threshold = _number(
         confidence.get("entry_threshold", model.get("entry_threshold", raw.get("entry_threshold")))
     )
     threshold_version = (
-        confidence.get("threshold_version") or model.get("threshold_version") or raw.get("threshold_version")
+        confidence.get("threshold_version")
+        or model.get("threshold_version")
+        or raw.get("threshold_version")
     )
     artifact_sha256 = (
-        confidence.get("model_artifact_sha256") or model.get("artifact_sha256") or raw.get("artifact_sha256")
+        confidence.get("model_artifact_sha256")
+        or model.get("artifact_sha256")
+        or raw.get("artifact_sha256")
     )
     promotion_authorized = (
         confidence.get("promotion_authorized") is True
@@ -109,7 +130,9 @@ def normalize_internal_model_payload(payload: Mapping[str, Any] | None, *, asof_
             "probability": probability,
             "raw_score": raw_prob if kind != "calibrated_probability" else None,
             "confidence_kind": kind,
-            "calibration_version": calibration_version if kind == "calibrated_probability" else None,
+            "calibration_version": (
+                calibration_version if kind == "calibrated_probability" else None
+            ),
             "probability_target": probability_target,
             "horizon_days": horizon_days,
             "entry_threshold": entry_threshold,
@@ -128,8 +151,11 @@ def _symbols(path: str | Path, limit: int) -> list[str]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     rows = raw.get("symbols", []) if isinstance(raw, Mapping) else []
     seen: set[str] = set()
-    return [symbol for symbol in (str(item).upper().strip() for item in rows)
-            if symbol and not (symbol in seen or seen.add(symbol))][:limit]
+    return [
+        symbol
+        for symbol in (str(item).upper().strip() for item in rows)
+        if symbol and not (symbol in seen or seen.add(symbol))
+    ][:limit]
 
 
 def _symbols_from_values(values: Sequence[str], limit: int) -> list[str]:
@@ -138,35 +164,58 @@ def _symbols_from_values(values: Sequence[str], limit: int) -> list[str]:
         symbol
         for symbol in (str(item).upper().strip().replace(".US", "") for item in values)
         if symbol and not (symbol in seen or seen.add(symbol))
-    ][:max(1, int(limit))]
+    ][: max(1, int(limit))]
 
 
 def _frame(candles: Any) -> Any:
     import pandas as pd
 
-    if hasattr(candles, "copy") and hasattr(candles, "columns"):
+    if candles is None:
+        return pd.DataFrame()
+    if isinstance(candles, pd.DataFrame):
+        df = candles
+    elif hasattr(candles, "copy") and hasattr(candles, "columns"):
         df = candles.copy()
     else:
         df = pd.DataFrame(list(candles or []))
     if df.empty:
         return pd.DataFrame()
+
+    required = ("open", "high", "low", "close", "volume")
+    has_required = all(column in df.columns for column in required)
+
+    if isinstance(df.index, pd.DatetimeIndex) and has_required:
+        tz = getattr(df.index, "tz", None)
+        if (
+            tz is not None
+            and str(tz) == "UTC"
+            and df.index.is_monotonic_increasing
+            and not df.index.isna().any()
+        ):
+            if all(np.issubdtype(df[col].dtype, np.number) for col in required):
+                return df if list(df.columns) == list(required) else df.loc[:, required]
+
     if not isinstance(df.index, pd.DatetimeIndex):
         timestamp = next((name for name in ("timestamp", "date", "Date") if name in df), None)
         if timestamp is None:
             return pd.DataFrame()
+        df = df.copy()
         df[timestamp] = pd.to_datetime(df[timestamp], utc=True, errors="coerce")
         df = df.dropna(subset=[timestamp]).set_index(timestamp)
     else:
         if getattr(df.index, "tz", None) is None:
+            df = df.copy()
             df.index = df.index.tz_localize(timezone.utc)
         elif str(df.index.tz) != "UTC":
+            df = df.copy()
             df.index = df.index.tz_convert(timezone.utc)
         if df.index.isna().any():
             df = df[~df.index.isna()]
     if not df.index.is_monotonic_increasing:
         df = df.sort_index()
-    df = df.rename(columns={"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
-    required = ("open", "high", "low", "close", "volume")
+    df = df.rename(
+        columns={"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
+    )
     if any(column not in df for column in required):
         return pd.DataFrame()
     for col in required:
@@ -180,10 +229,10 @@ def _local_daily_candles(symbol: str, *, data_path: Path) -> Any:
     import pandas as pd
 
     path = data_path / f"{symbol}.parquet"
-    if not path.is_file():
-        raise FileNotFoundError(f"local_daily_parquet_missing:{symbol}")
     try:
         return pd.read_parquet(path, columns=["open", "high", "low", "close", "volume"])
+    except FileNotFoundError:
+        raise FileNotFoundError(f"local_daily_parquet_missing:{symbol}")
     except Exception:
         return pd.read_parquet(path)
 
@@ -225,14 +274,16 @@ def _baseline_signal(frame: Any, *, horizon_days: int) -> dict[str, Any]:
     """Return an ordinal daily score using only data available at the last bar."""
     import math
 
-    close = frame["close"].astype(float)
+    close_vals = frame["close"].values.astype(np.float64)
     lookback = max(20, horizon_days)
-    if len(close) < lookback + 1:
+    if len(close_vals) < lookback + 1:
         raise ValueError("insufficient_daily_candles")
-    momentum = float(close.iloc[-1] / close.iloc[-1 - horizon_days] - 1.0)
-    volatility = float(close.pct_change().iloc[-20:].std(ddof=0))
+    arr = close_vals[-21:]
+    returns = arr[1:] / arr[:-1] - 1.0
+    volatility = float(np.std(returns, ddof=0))
     if not math.isfinite(volatility) or volatility <= 0:
         raise ValueError("invalid_realized_volatility")
+    momentum = float(close_vals[-1] / close_vals[-1 - horizon_days] - 1.0)
     score = momentum / volatility
     if not math.isfinite(score):
         raise ValueError("invalid_baseline_score")
@@ -244,6 +295,7 @@ def _baseline_signal(frame: Any, *, horizon_days: int) -> dict[str, Any]:
         "setup_ok": score != 0,
     }
 
+
 def _load_v90_engine():
     try:
         v90_wide_dir = ROOT / "edge" / "models" / "v90_wide"
@@ -253,6 +305,7 @@ def _load_v90_engine():
             return None
         import importlib.util
         import sys
+
         engine_path = target_dir / "signal_engine.py"
         module_name = f"v90_engine_{id(engine_path)}"
         if module_name in sys.modules:
@@ -267,7 +320,9 @@ def _load_v90_engine():
     except Exception:
         return None
 
+
 _V90_ENGINE_CACHE = None
+
 
 def _v90_base_predict(symbol: str, frame: Any) -> dict[str, Any] | None:
     global _V90_ENGINE_CACHE
@@ -280,20 +335,20 @@ def _v90_base_predict(symbol: str, frame: Any) -> dict[str, Any] | None:
         feats = _V90_ENGINE_CACHE._feat.build_features(frame).dropna()
         if feats.empty:
             return None
-        
+
         raw_long = _V90_ENGINE_CACHE._predict(_V90_ENGINE_CACHE._long_model, feats)
         raw_short = _V90_ENGINE_CACHE._predict(_V90_ENGINE_CACHE._short_model, feats)
         cal_long = _V90_ENGINE_CACHE._cal_long.apply(raw_long)
         cal_short = _V90_ENGINE_CACHE._cal_short.apply(raw_short)
-        
+
         rl = float(raw_long[-1])
         rs = float(raw_short[-1])
         cl = float(cal_long[-1])
         cs = float(cal_short[-1])
-        
+
         thr_hi = float(getattr(_V90_ENGINE_CACHE, "_enter_hi", 0.5833))
         thr_lo = float(getattr(_V90_ENGINE_CACHE, "_enter_lo", 0.5662))
-        
+
         if rl >= rs and rl >= thr_lo:
             side = "long"
             raw_score = rl
@@ -327,7 +382,9 @@ def _v90_base_predict(symbol: str, frame: Any) -> dict[str, Any] | None:
 
 def _v90_signal_from_base(base: dict[str, Any], horizon_days: int) -> dict[str, Any]:
     horizon_mult = 1.0 if horizon_days == 5 else (0.96 if horizon_days == 10 else 0.92)
-    calibrated_prob = float(np.clip((base["base_prob"] + base["smooth_adj"]) * horizon_mult, 0.35, 0.88))
+    calibrated_prob = float(
+        np.clip((base["base_prob"] + base["smooth_adj"]) * horizon_mult, 0.35, 0.88)
+    )
     return {
         "side": base["side"],
         "setup_ok": base["setup_ok"],
@@ -353,7 +410,9 @@ def _explicit_calibration(calibrator: Mapping[str, Any] | None) -> bool:
     return isinstance(artifact, Mapping) and bool(artifact.get("calibration_type"))
 
 
-def _calibrate_from_artifact(raw_probability: float, calibrator: Mapping[str, Any]) -> dict[str, Any]:
+def _calibrate_from_artifact(
+    raw_probability: float, calibrator: Mapping[str, Any]
+) -> dict[str, Any]:
     """Evaluate a small, explicit local calibration artifact.
 
     This is intentionally narrow: interpolated curves (including the Platt
@@ -364,7 +423,9 @@ def _calibrate_from_artifact(raw_probability: float, calibrator: Mapping[str, An
 
     artifact = calibrator["artifact"]
     kind = str(artifact.get("calibration_type", "")).lower()
-    curve = artifact.get("calibrator") if isinstance(artifact.get("calibrator"), Mapping) else artifact
+    curve = (
+        artifact.get("calibrator") if isinstance(artifact.get("calibrator"), Mapping) else artifact
+    )
     x, y = curve.get("x"), curve.get("y")
     value: float | None = None
     if isinstance(x, list) and isinstance(y, list) and len(x) == len(y) and len(x) >= 2:
@@ -382,11 +443,18 @@ def _calibrate_from_artifact(raw_probability: float, calibrator: Mapping[str, An
     elif kind == "platt" and curve.get("a") is not None and curve.get("b") is not None:
         value = 1.0 / (1.0 + math.exp(-(float(curve["a"]) * raw_probability + float(curve["b"]))))
     if value is None or not math.isfinite(value) or not 0 <= value <= 1:
-        return {"confidence_kind": "ordinal_score", "uncalibrated": True,
-                "reasons": ["invalid_explicit_calibration_artifact"]}
-    return {"state": "WATCH", "confidence_kind": "calibrated_probability",
-            "calibrated_probability": value,
-            "calibration_version": artifact.get("version") or calibrator.get("version"), "reasons": []}
+        return {
+            "confidence_kind": "ordinal_score",
+            "uncalibrated": True,
+            "reasons": ["invalid_explicit_calibration_artifact"],
+        }
+    return {
+        "state": "WATCH",
+        "confidence_kind": "calibrated_probability",
+        "calibrated_probability": value,
+        "calibration_version": artifact.get("version") or calibrator.get("version"),
+        "reasons": [],
+    }
 
 
 @dataclass
@@ -409,7 +477,10 @@ class ChainFreeInternalModelsAdapter:
     last_warnings: list[str] = field(default_factory=list, init=False)
 
     def __call__(
-        self, *, context: Any, config: Any | None = None,
+        self,
+        *,
+        context: Any,
+        config: Any | None = None,
         symbols: Sequence[str] | None = None,
         symbol_context: Mapping[str, Mapping[str, Any]] | None = None,
         **_: Any,
@@ -417,16 +488,42 @@ class ChainFreeInternalModelsAdapter:
         self.last_warnings = []
         path = getattr(config, "universe_path", None) or self.universe_path
         limit = max(1, int(self.candidate_limit))
-        requested = _symbols_from_values(symbols, limit) if symbols is not None else _symbols(path, limit)
+        requested = (
+            _symbols_from_values(symbols, limit) if symbols is not None else _symbols(path, limit)
+        )
         sector_context = symbol_context or {}
-        out: list[Mapping[str, Any]] = []
-        for symbol in requested:
+
+        def _fetch_symbol_candles(symbol: str) -> tuple[str, Any, Exception | None]:
             try:
-                candles = (self.candle_fetcher(symbol, context=context) if self.candle_fetcher
-                           else _local_daily_candles(symbol, data_path=Path(self.data_path)))
+                candles = (
+                    self.candle_fetcher(symbol, context=context)
+                    if self.candle_fetcher
+                    else _local_daily_candles(symbol, data_path=Path(self.data_path))
+                )
+                return symbol, candles, None
+            except Exception as exc:
+                return symbol, None, exc
+
+        if len(requested) > 1:
+            max_workers = min(16, len(requested))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                fetched = list(executor.map(_fetch_symbol_candles, requested))
+        else:
+            fetched = [_fetch_symbol_candles(sym) for sym in requested]
+
+        out: list[Mapping[str, Any]] = []
+        for symbol, candles, exc in fetched:
+            if exc is not None:
+                self.last_warnings.append(
+                    f"internal_model_unavailable:{symbol}:{type(exc).__name__}:{exc}"
+                )
+                continue
+            try:
                 frame = _frame(candles)
-                candle_asof = _daily_asof(frame, context=context, max_age_days=self.max_daily_candle_age_days)
-                
+                candle_asof = _daily_asof(
+                    frame, context=context, max_age_days=self.max_daily_candle_age_days
+                )
+
                 # Single feature extraction and model inference pass per symbol
                 base_v90 = _v90_base_predict(symbol, frame) if not self.model_runner else None
 
@@ -439,19 +536,40 @@ class ChainFreeInternalModelsAdapter:
                         probability = _number(signal.get("calibrated_probability"))
                         model_id = signal.get("model_id", "v90_meta_confidence_wide")
                         calibration = {
-                            "confidence_kind": "calibrated_probability" if probability is not None else "ordinal_score",
+                            "confidence_kind": (
+                                "calibrated_probability"
+                                if probability is not None
+                                else "ordinal_score"
+                            ),
                             "calibrated_probability": probability,
                             "calibration_version": "v90_wide_isotonic_v1",
                             "state": "ENTER" if (probability or 0) >= 0.60 else "WATCH",
                             "reasons": [],
                         }
                     else:
-                        signal = (dict(self.model_runner(symbol=symbol, frame=frame.copy(), model=BASELINE_MODEL_ID,
-                                                          horizon_days=horizon_days) or {})
-                                  if self.model_runner else _baseline_signal(frame, horizon_days=horizon_days))
+                        signal = (
+                            dict(
+                                self.model_runner(
+                                    symbol=symbol,
+                                    frame=frame.copy(),
+                                    model=BASELINE_MODEL_ID,
+                                    horizon_days=horizon_days,
+                                )
+                                or {}
+                            )
+                            if self.model_runner
+                            else _baseline_signal(frame, horizon_days=horizon_days)
+                        )
                         raw_probability = _number(signal.get("raw_probability"))
                         raw_score = _number(signal.get("raw_score", signal.get("weight")))
-                        side = str(signal.get("side") or ("long" if (raw_score or 0) > 0 else "short" if (raw_score or 0) < 0 else "neutral"))
+                        side = str(
+                            signal.get("side")
+                            or (
+                                "long"
+                                if (raw_score or 0) > 0
+                                else "short" if (raw_score or 0) < 0 else "neutral"
+                            )
+                        )
                         setup_ok = bool(signal.get("setup_ok", side != "neutral"))
                         model_id = BASELINE_MODEL_ID
                         calibration: Mapping[str, Any] = {}
@@ -459,50 +577,95 @@ class ChainFreeInternalModelsAdapter:
                             supplied = self.calibrator_loader(BASELINE_MODEL_ID)
                             if _explicit_calibration(supplied):
                                 if self.confidence_evaluator:
-                                    calibration = dict(self.confidence_evaluator(
-                                        raw_probability, model_ok=True, setup_ok=setup_ok,
-                                        freshness={"stale": False, "future_timestamp": False}, model=BASELINE_MODEL_ID,
-                                        calibrator=supplied, horizon_days=horizon_days,
-                                        probability_target=PROBABILITY_TARGET,
-                                        raw_probability_source="explicit_local_calibration_artifact") or {})
+                                    calibration = dict(
+                                        self.confidence_evaluator(
+                                            raw_probability,
+                                            model_ok=True,
+                                            setup_ok=setup_ok,
+                                            freshness={"stale": False, "future_timestamp": False},
+                                            model=BASELINE_MODEL_ID,
+                                            calibrator=supplied,
+                                            horizon_days=horizon_days,
+                                            probability_target=PROBABILITY_TARGET,
+                                            raw_probability_source="explicit_local_calibration_artifact",
+                                        )
+                                        or {}
+                                    )
                                 else:
-                                    calibration = _calibrate_from_artifact(raw_probability, supplied)
+                                    calibration = _calibrate_from_artifact(
+                                        raw_probability, supplied
+                                    )
                         kind = str(calibration.get("confidence_kind") or "ordinal_score")
                         calibrated = _number(calibration.get("calibrated_probability"))
-                        probability = calibrated if kind == "calibrated_probability" and not calibration.get("uncalibrated") else None
-                    out.append({
-                        "source": "local_daily_chain_free_baseline",
-                        "symbol": symbol,
-                        "asof_utc": candle_asof.isoformat(),
-                        "side": side,
-                        "setup_ok": setup_ok,
-                        "sector_flow": dict(sector_context.get(symbol) or {}),
-                        "freshness": {"stale": False, "future_timestamp": False, "source": "local_daily_parquet"},
-                        "model": {
-                            "id": model_id,
-                            "version": model_id,
-                            "probability": probability,
-                            "raw_score": raw_score if raw_score is not None else raw_probability,
-                            "confidence_kind": "calibrated_probability" if probability is not None else "ordinal_score",
-                            "calibration_version": calibration.get("calibration_version") if probability is not None else None,
-                            "probability_target": PROBABILITY_TARGET,
-                            "horizon_days": horizon_days,
-                            "entry_threshold": _number(calibration.get("entry_threshold")),
-                            "threshold_version": calibration.get("threshold_version"),
-                            "artifact_sha256": calibration.get("model_artifact_sha256"),
-                            "promotion_authorized": calibration.get("promotion_authorized") is True,
-                            "state": calibration.get("state", "WATCH"),
-                            "reasons": list(calibration.get("reasons") or (["baseline_score_not_calibrated"] if probability is None else [])),
-                        },
-                        "provenance": {
-                            "data_source": "edge/data/1d local parquet",
-                            "model_artifact": BASELINE_MODEL_ID,
-                            "candle_asof_utc": candle_asof.isoformat(),
-                            "probability_target": PROBABILITY_TARGET,
-                            "horizon_days": horizon_days,
-                            "calibration_version": calibration.get("calibration_version") if probability is not None else None,
-                        },
-                    })
+                        probability = (
+                            calibrated
+                            if kind == "calibrated_probability"
+                            and not calibration.get("uncalibrated")
+                            else None
+                        )
+                    out.append(
+                        {
+                            "source": "local_daily_chain_free_baseline",
+                            "symbol": symbol,
+                            "asof_utc": candle_asof.isoformat(),
+                            "side": side,
+                            "setup_ok": setup_ok,
+                            "sector_flow": dict(sector_context.get(symbol) or {}),
+                            "freshness": {
+                                "stale": False,
+                                "future_timestamp": False,
+                                "source": "local_daily_parquet",
+                            },
+                            "model": {
+                                "id": model_id,
+                                "version": model_id,
+                                "probability": probability,
+                                "raw_score": (
+                                    raw_score if raw_score is not None else raw_probability
+                                ),
+                                "confidence_kind": (
+                                    "calibrated_probability"
+                                    if probability is not None
+                                    else "ordinal_score"
+                                ),
+                                "calibration_version": (
+                                    calibration.get("calibration_version")
+                                    if probability is not None
+                                    else None
+                                ),
+                                "probability_target": PROBABILITY_TARGET,
+                                "horizon_days": horizon_days,
+                                "entry_threshold": _number(calibration.get("entry_threshold")),
+                                "threshold_version": calibration.get("threshold_version"),
+                                "artifact_sha256": calibration.get("model_artifact_sha256"),
+                                "promotion_authorized": calibration.get("promotion_authorized")
+                                is True,
+                                "state": calibration.get("state", "WATCH"),
+                                "reasons": list(
+                                    calibration.get("reasons")
+                                    or (
+                                        ["baseline_score_not_calibrated"]
+                                        if probability is None
+                                        else []
+                                    )
+                                ),
+                            },
+                            "provenance": {
+                                "data_source": "edge/data/1d local parquet",
+                                "model_artifact": BASELINE_MODEL_ID,
+                                "candle_asof_utc": candle_asof.isoformat(),
+                                "probability_target": PROBABILITY_TARGET,
+                                "horizon_days": horizon_days,
+                                "calibration_version": (
+                                    calibration.get("calibration_version")
+                                    if probability is not None
+                                    else None
+                                ),
+                            },
+                        }
+                    )
             except Exception as exc:
-                self.last_warnings.append(f"internal_model_unavailable:{symbol}:{type(exc).__name__}:{exc}")
+                self.last_warnings.append(
+                    f"internal_model_unavailable:{symbol}:{type(exc).__name__}:{exc}"
+                )
         return out
