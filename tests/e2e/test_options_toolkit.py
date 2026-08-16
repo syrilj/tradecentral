@@ -57,3 +57,22 @@ def test_calculator_long_call_pnl_rises_above_strike(api_client):
     low_at = next(point["pnl"] for point in low["pnl_at_expiry"] if abs(point["spot"] - 90) < 1e-6)
     high_at = next(point["pnl"] for point in high["pnl_at_expiry"] if abs(point["spot"] - 120) < 1e-6)
     assert high_at > low_at
+
+
+def test_calculator_prices_a_json_book_of_legs(api_client):
+    import json
+    from urllib.parse import quote
+
+    legs = quote(json.dumps([
+        {"right": "call", "strike": 100, "quantity": 1, "premium": 5},
+        {"right": "put", "strike": 100, "quantity": 1, "premium": 5},
+    ]))
+    response = api_client.get(
+        f"/api/options-calculator?strategy=custom&spot=100&dte=0&vol=0.3&legs={legs}"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["legs"]) == 2
+    assert body["decision_authorized"] is False
+    at_spot = next(point["pnl"] for point in body["pnl_at_expiry"] if abs(point["spot"] - 100) < 1e-6)
+    assert at_spot == -1000.0

@@ -65,6 +65,10 @@ backend_is_current() {
     code="$(curl -sS -o /dev/null -w '%{http_code}' "${base}${path}" 2>/dev/null || echo 000)"
     [ "$code" = "200" ] || return 1
   done
+  for path in "/api/company-profile?symbol=SPY" "/api/financials?symbol=SPY" "/api/insiders?symbol=SPY" "/api/government?symbol=SPY" "/api/ownership?symbol=SPY"; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "${base}${path}" 2>/dev/null || echo 000)"
+    [ "$code" = "200" ] || return 1
+  done
   code="$(curl -sS -o /dev/null -w '%{http_code}' "${base}/api/flow-tape?symbol=SPY" 2>/dev/null || echo 000)"
   [ "$code" = "200" ] || return 1
   return 0

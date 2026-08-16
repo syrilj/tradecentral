@@ -45,6 +45,7 @@ interface Level {
   cls: string
   x: number
   labelX: number
+  labelY: number
 }
 
 const props = withDefaults(defineProps<{
@@ -313,18 +314,58 @@ const levels = computed<Level[]>(() => {
     .filter((level): level is { key: string; label: string; value: number; cls: string; x: number } => level.x != null)
     .sort((a, b) => a.x - b.x)
 
-  let lastLabelX = -Infinity
-  const minGap = 54
-  const minBoundary = left + 32
-  const maxBoundary = left + plotInnerW.value - 32
+  if (!placed.length) return []
 
-  return placed.map((level) => {
-    let desired = Math.max(minBoundary, Math.min(maxBoundary, level.x))
-    if (desired < lastLabelX + minGap) {
-      desired = Math.min(maxBoundary, lastLabelX + minGap)
+  const minGap = 52
+  const minBoundary = left + 28
+  const maxBoundary = left + plotInnerW.value - 28
+
+  // 1. Initial clamp to plot interior
+  const xs = placed.map((l) => Math.max(minBoundary, Math.min(maxBoundary, l.x)))
+
+  // 2. Forward pass (push right)
+  for (let i = 1; i < xs.length; i++) {
+    if (xs[i] < xs[i - 1] + minGap) {
+      xs[i] = xs[i - 1] + minGap
     }
-    lastLabelX = desired
-    return { ...level, labelX: desired }
+  }
+
+  // 3. Backward pass (pull left if rightmost exceeds maxBoundary)
+  if (xs[xs.length - 1] > maxBoundary) {
+    xs[xs.length - 1] = maxBoundary
+    for (let i = xs.length - 2; i >= 0; i--) {
+      if (xs[i] > xs[i + 1] - minGap) {
+        xs[i] = xs[i + 1] - minGap
+      }
+    }
+  }
+
+  // 4. Clamp check at left boundary
+  if (xs[0] < minBoundary) {
+    xs[0] = minBoundary
+    for (let i = 1; i < xs.length; i++) {
+      if (xs[i] < xs[i - 1] + minGap) {
+        xs[i] = xs[i - 1] + minGap
+      }
+    }
+  }
+
+  // 5. Detect remaining congestion for vertical tier staggering
+  const hasRemainingOverlap = xs.some((x, i) => i > 0 && Math.abs(x - xs[i - 1]) < 48)
+  const isWidthConstrained = (maxBoundary - minBoundary) < (placed.length * minGap)
+
+  return placed.map((level, i) => {
+    const labelX = Math.max(minBoundary, Math.min(maxBoundary, xs[i]))
+    // Stagger tier 0 (top + 10) vs tier 1 (top + 22) when congested
+    const labelY = (hasRemainingOverlap || isWidthConstrained)
+      ? (i % 2 === 0 ? top + 10 : top + 22)
+      : top + 10
+
+    return {
+      ...level,
+      labelX,
+      labelY,
+    }
   })
 })
 
@@ -649,7 +690,12 @@ function jumpToLevel(strike: number | null): void {
         <!-- Vertical Structural Levels (Put Wall, Flip, Spot, Call Wall) -->
         <g v-for="level in levels" :key="level.key" class="level" :class="level.cls">
           <line :x1="level.x" :x2="level.x" :y1="top" :y2="plotBottom" />
-          <text :x="level.labelX" :y="top + 10" text-anchor="middle">
+          <path
+            v-if="Math.abs(level.labelX - level.x) > 3"
+            :d="`M ${level.x} ${top} L ${level.labelX} ${level.labelY - 8}`"
+            class="level-connector"
+          />
+          <text :x="level.labelX" :y="level.labelY" text-anchor="middle">
             {{ level.label }} ${{ strikeLabel(level.value) }}
           </text>
         </g>
@@ -1206,10 +1252,12 @@ svg {
   cursor: pointer;
 }
 
-.strike-bar:focus {
-  outline: none;
+.strike-bar:focus-visible {
+  outline: var(--hair) solid var(--phosphor);
+  outline-offset: 2px;
 }
 
+.strike-bar:focus-visible .hit,
 .strike-bar:focus .hit {
   stroke: var(--phosphor);
   stroke-width: 1;
@@ -1341,6 +1389,19 @@ svg {
   opacity: 0.85;
 }
 .level.flip line { stroke: var(--warn); }
+
+.level-connector {
+  fill: none;
+  stroke: var(--rule-hi);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  opacity: 0.7;
+  pointer-events: none;
+}
+.level.call .level-connector { stroke: var(--call-hi); }
+.level.put .level-connector { stroke: var(--put-hi); }
+.level.spot .level-connector { stroke: var(--ink-dim); }
+.level.flip .level-connector { stroke: var(--warn); }
 
 .level text {
   font: 700 8.5px var(--font-display);

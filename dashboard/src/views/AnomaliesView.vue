@@ -358,7 +358,7 @@ function kindClass(kind: string): string {
   background: var(--void);
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
-  font-family: var(--font-mono, var(--font-display));
+  font-family: var(--font-data);
   padding: 6px 10px;
   width: 9ch;
   letter-spacing: 0.06em;

@@ -26,7 +26,76 @@ export function sellSourceLabel(source: string | null | undefined): string {
   const value = String(source ?? '').trim().toLowerCase()
   if (value === 'call_wall') return 'call wall'
   if (value === 'put_wall') return 'put wall'
+  const family = levelSourceLabel(source)
+  return family === UNMEASURED ? UNMEASURED : family
+}
+
+export function levelSourceLabel(source: string | null | undefined): string {
+  const value = String(source ?? '').trim().toLowerCase()
+  if (value === 'resistance/support' || value === 'support' || value === 'resistance') {
+    return 'resistance/support'
+  }
+  if (value === 'options gex' || value === 'call_wall' || value === 'put_wall' || value === 'gex') {
+    return 'options GEX'
+  }
+  if (value === 'positions' || value === 'pin_strike' || value === 'open_interest') {
+    return 'positions'
+  }
+  if (value === 'technical analysis' || value === 'gamma_flip' || value === 'ta') {
+    return 'technical analysis'
+  }
   return UNMEASURED
+}
+
+export interface SetupLevelMark {
+  price?: number | null
+  source?: string | null
+}
+
+export function formatSetupLevel(
+  price: number | null | undefined,
+  source?: string | null,
+): string {
+  if (price == null || !Number.isFinite(Number(price))) return UNMEASURED
+  const tagged = levelSourceLabel(source)
+  const figure = `$${num(price, 2)}`
+  return tagged === UNMEASURED ? figure : `${figure}  ${tagged}`
+}
+
+export function formatSupportLevels(
+  supports: SetupLevelMark[] | null | undefined,
+): string {
+  if (!Array.isArray(supports) || supports.length === 0) return UNMEASURED
+  const parts = supports
+    .map((item) => formatSetupLevel(item?.price, item?.source))
+    .filter((part) => part !== UNMEASURED)
+  return parts.length ? parts.join(' · ') : UNMEASURED
+}
+
+export function formatTakeProfitZones(
+  zones: SetupLevelMark[] | null | undefined,
+): string {
+  return formatSupportLevels(zones)
+}
+
+export function setupHeadlineInvalidation(input: {
+  invalidation?: number | null
+  invalidationSource?: string | null
+  planInvalidation?: number | null
+  planInvalidationSource?: string | null
+}): { price: number | null, source: string | null } {
+  if (input.invalidation != null && Number.isFinite(Number(input.invalidation))) {
+    return { price: Number(input.invalidation), source: input.invalidationSource ?? null }
+  }
+  if (input.planInvalidation != null && Number.isFinite(Number(input.planInvalidation))) {
+    return { price: Number(input.planInvalidation), source: input.planInvalidationSource ?? null }
+  }
+  return { price: null, source: null }
+}
+
+export function missingSourcesCopy(sources: string[] | null | undefined): string {
+  if (!Array.isArray(sources) || sources.length === 0) return UNMEASURED
+  return sources.join(', ')
 }
 
 export function spotRelativeSellCopy(input: {

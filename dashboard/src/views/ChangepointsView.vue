@@ -43,6 +43,12 @@ import {
 } from '@/api'
 import { debounce, useResource } from '@/composables/useResource'
 import { age, DASH, num, pctFrac, shortDate } from '@/format'
+import {
+  CHANGEPOINT_FIGURE_LABELS,
+  artifactAgeDays,
+  artifactIsStale,
+  insightFromRow,
+} from '@/changepointDisplay'
 import { bandPath, linearScale, niceTicks } from '@/charts'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
@@ -56,6 +62,10 @@ const router = useRouter()
 const board = useResource<ChangepointsPayload>(() => api.changepoints(), { intervalMs: 300_000 })
 const boardData = computed(() => board.data.value)
 const boardAvailable = computed(() => boardData.value?.available === true)
+const boardAgeDays = computed(() =>
+  artifactAgeDays(boardData.value?.asof, boardData.value?.generated_at),
+)
+const boardStale = computed(() => artifactIsStale(boardAgeDays.value))
 
 const breakCount = computed(
   () => (boardData.value?.symbols ?? []).filter((r) => r.regime === 'BREAK').length,
@@ -503,6 +513,7 @@ function sortArrow(key: SortKey): string {
 
 /* ---- selected-row insight ------------------------------------------------- */
 const selectedRow = computed<ChangepointRow | null>(() => {
+  if (d.value?.stats && d.value.stats.symbol === symbol.value) return d.value.stats
   if (!symbol.value) return null
   return boardData.value?.symbols?.find((r) => r.symbol === symbol.value) ?? null
 })
@@ -510,81 +521,8 @@ const selectedRow = computed<ChangepointRow | null>(() => {
 const symbolInsight = computed(() => {
   const row = selectedRow.value
   if (!row) return null
-  const regime = row.regime
-  const bp = row.break_prob
-  const mapRun = row.map_run_length
-  const dsb = row.days_since_break
-  const predVol = row.predictive_vol
-  const trailVol = row.trailing_vol_20d
-  const vr = row.vol_ratio
-
-  const lines: { label: string; value: string; tone: 'ok' | 'warn' | 'hot' | 'dim'; note: string }[] = []
-
-  // Regime
-  lines.push({
-    label: 'Regime',
-    value: regime,
-    tone: regime === 'BREAK' ? 'hot' : regime === 'SETTLING' ? 'warn' : 'ok',
-    note:
-      regime === 'BREAK'
-        ? 'Variance just reset — model discarding old vol estimate. Expect unstable options pricing.'
-        : regime === 'SETTLING'
-        ? `MAP run ${mapRun} bars — model is rebuilding its vol estimate. Still uncertain.`
-        : `MAP run ${mapRun} bars — regime stable, vol estimate reliable.`,
-  })
-
-  // Break freshness
-  if (dsb != null) {
-    const fresh = dsb <= 3
-    lines.push({
-      label: 'Break age',
-      value: `${dsb}d ago`,
-      tone: fresh ? 'hot' : dsb <= 10 ? 'warn' : 'dim',
-      note:
-        fresh
-          ? 'Break is very fresh (≤3 bars). Vol structure is actively changing — unreliable for options scoring.'
-          : dsb <= 10
-          ? 'Break within the last 10 bars. Settling but still elevated uncertainty.'
-          : `Break ${dsb} bars ago — regime has had time to stabilize.`,
-    })
-  } else {
-    lines.push({ label: 'Break age', value: DASH, tone: 'dim', note: 'No break detected in this window.' })
-  }
-
-  // Predictive vol vs realized
-  if (predVol != null && trailVol != null && trailVol > 0) {
-    const vrNum = vr ?? predVol / trailVol
-    lines.push({
-      label: 'Pred / Trail vol',
-      value: `${pctFrac(predVol, 2)} / ${pctFrac(trailVol, 2)}`,
-      tone: vrNum >= 1.3 ? 'hot' : vrNum >= 1.1 ? 'warn' : vrNum <= 0.8 ? 'warn' : 'ok',
-      note:
-        vrNum >= 1.3
-          ? `Vol ratio ${num(vrNum, 2)} — model expects materially more vol than 20d history. Potential vol expansion; avoid short vol strategies.`
-          : vrNum >= 1.1
-          ? `Vol ratio ${num(vrNum, 2)} — model slightly above recent history. Watch for regime continuation.`
-          : vrNum <= 0.8
-          ? `Vol ratio ${num(vrNum, 2)} — model below recent history. Possible vol compression or overshoot; tail risk from mean-reversion.`
-          : `Vol ratio ${num(vrNum, 2)} — model in line with recent realized vol. Regime appears stable.`,
-    })
-  } else {
-    lines.push({ label: 'Pred / Trail vol', value: DASH, tone: 'dim', note: 'Insufficient data to compute vol ratio.' })
-  }
-
-  // Break prob summary
-  lines.push({
-    label: 'Break prob (5d)',
-    value: pctFrac(bp, 1),
-    tone: bp >= 0.5 ? 'hot' : bp >= 0.25 ? 'warn' : 'ok',
-    note:
-      bp >= 0.5
-        ? 'Above threshold — this name is in active break state. Do not assume the current vol reading is stable.'
-        : bp >= 0.25
-        ? 'Elevated — approaching break territory. Monitor for confirmation.'
-        : 'Below threshold — no active break detected.',
-  })
-
-  return lines
+  const thresholds = d.value?.thresholds ?? boardData.value?.thresholds ?? { break: 0.5, settling: 10 }
+  return insightFromRow(row, thresholds)
 })
 </script>
 
@@ -593,7 +531,9 @@ const symbolInsight = computed(() => {
     <Panel
       label="Bayesian regime breaks"
       index="13"
-      :meta="boardData?.asof ? `asof ${boardData.asof} · ${age(boardData.generated_at)} ago` : 'diagnostics only'"
+      :meta="boardData?.asof
+        ? `asof ${boardData.asof} · ${age(boardData.generated_at)} ago${boardStale ? ' · STALE ARTIFACT' : ''}`
+        : 'diagnostics only'"
       class="w-full"
     >
       <template #action>
@@ -636,6 +576,10 @@ const symbolInsight = computed(() => {
         </div>
         <p class="model-line fig">{{ modelLine }}</p>
         <p class="dims" v-if="boardData?.source">{{ boardData.source }}</p>
+        <p v-if="boardStale" class="note stale-board">
+          Cross-section artifact is {{ boardAgeDays }}d old (asof {{ boardData?.asof }}).
+          Selected-symbol detail below is live BOCPD on current bars — not this board.
+        </p>
         <p v-if="skippedInfo" class="dims skipped-note" :title="skippedInfo.reasons">
           {{ skippedInfo.n }} symbol{{ skippedInfo.n === 1 ? '' : 's' }} skipped — hover for reasons
         </p>
@@ -754,12 +698,14 @@ const symbolInsight = computed(() => {
 
       <template v-else>
         <div ref="figureHost" class="figure-stack" @mousemove="onFigureMove" @mouseleave="onFigureLeave">
-          <svg
+          <div class="fig-axis-row">
+            <span class="fig-ylab label">{{ CHANGEPOINT_FIGURE_LABELS.yTop }}</span>
+            <svg
             :viewBox="`0 0 ${W} ${TOP_H}`"
             class="chart top-chart"
             preserveAspectRatio="none"
             role="img"
-            aria-label="Daily returns with predictive volatility envelope"
+            :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yTop} with predictive volatility envelope`"
           >
             <template v-if="topChart">
               <g class="axis">
@@ -805,13 +751,16 @@ const symbolInsight = computed(() => {
               class="crosshair"
             />
           </svg>
+          </div>
 
-          <svg
+          <div class="fig-axis-row">
+            <span class="fig-ylab label">{{ CHANGEPOINT_FIGURE_LABELS.yBottom }}</span>
+            <svg
             :viewBox="`0 0 ${W} ${BOT_H}`"
             class="chart bottom-chart"
             preserveAspectRatio="none"
             role="img"
-            aria-label="Run-length posterior heatmap: darker means higher probability"
+            :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yBottom}: ${CHANGEPOINT_FIGURE_LABELS.heatmap}`"
           >
             <template v-if="heatmap">
               <image
@@ -854,6 +803,13 @@ const symbolInsight = computed(() => {
               class="crosshair"
             />
           </svg>
+          </div>
+          <div class="fig-xlab label">{{ CHANGEPOINT_FIGURE_LABELS.x }} · {{ CHANGEPOINT_FIGURE_LABELS.heatmap }}</div>
+          <div class="fig-legend label">
+            <span>low P</span>
+            <i class="leg-scale" aria-hidden="true" />
+            <span>high P (ridge = recent break)</span>
+          </div>
         </div>
 
         <div v-if="breakMarks.length" class="break-list">
@@ -1105,15 +1061,54 @@ const symbolInsight = computed(() => {
   display: flex;
   flex-direction: column;
   cursor: crosshair;
+  background: var(--void);
 }
+.fig-axis-row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  align-items: stretch;
+}
+.fig-ylab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
+  letter-spacing: 0.06em;
+  padding: var(--s2) 0;
+}
+.fig-xlab {
+  text-align: center;
+  color: var(--ink-dim);
+  padding: var(--s1) 0 var(--s2);
+  font-size: var(--t-tiny);
+}
+.fig-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  padding: 0 var(--s3) var(--s3);
+  color: var(--ink-faint);
+  font-size: var(--t-tiny);
+}
+.leg-scale {
+  display: block;
+  width: 88px;
+  height: 8px;
+  background: linear-gradient(90deg, var(--void-lift), color-mix(in srgb, var(--phosphor) 45%, var(--void)), var(--phosphor));
+}
+.stale-board { color: var(--warn); }
 .chart { display: block; width: 100%; }
-.top-chart { height: 170px; border-bottom: var(--hair) solid var(--rule-faint); }
-.bottom-chart { height: 360px; }
+.top-chart { height: 200px; border-bottom: var(--hair) solid var(--rule-faint); }
+.bottom-chart { height: 400px; }
 
 .gridline { stroke: var(--grid); stroke-width: 1; }
 .zero { stroke: var(--rule-hi); stroke-width: 1; }
-.tick-label { font-family: var(--font-data); font-size: 9px; fill: var(--ink-faint); }
-.axis-title { font-family: var(--font-data); font-size: 9px; fill: var(--ink-ghost); }
+.tick-label { font-family: var(--font-data); font-size: 11px; fill: var(--ink-dim); }
+.axis-title { font-family: var(--font-data); font-size: 11px; fill: var(--ink-soft); }
 
 .vol-band-outer { fill: rgba(169, 196, 108, 0.06); stroke: rgba(169, 196, 108, 0.22); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .vol-band { fill: var(--phosphor-wash); stroke: var(--phosphor-dim); stroke-width: 1; vector-effect: non-scaling-stroke; }

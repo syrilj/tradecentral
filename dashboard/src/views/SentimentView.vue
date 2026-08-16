@@ -6,10 +6,10 @@ import {
   type AnomaliesPayload,
   type CotMarket,
   type SentimentPayload,
-  type SecFilingsPayload,
 } from '@/api'
 import { useResource } from '@/composables/useResource'
 import { num, signed, signedPct, compact, tone, shortDate, DASH } from '@/format'
+import { cotLeanFromBias, cotLeanFromSpecNetZ, cotLeanTone } from '@/cotLean'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import HelpTip from '@/components/HelpTip.vue'
@@ -28,8 +28,13 @@ const tab = ref<'structure' | 'outliers'>(
 const symbol = ref(((route.query.symbol as string) || '').toUpperCase())
 const draft = ref(symbol.value)
 
+const sentimentForceNext = ref(false)
 const sentiment = useResource<SentimentPayload>(
-  () => api.sentiment(symbol.value || undefined),
+  () => {
+    const force = sentimentForceNext.value
+    sentimentForceNext.value = false
+    return api.sentiment(symbol.value || undefined, { force })
+  },
   { intervalMs: 300_000 },
 )
 const anomalies = useResource<AnomaliesPayload>(
@@ -44,8 +49,9 @@ watch(
     if (next !== symbol.value) {
       symbol.value = next
       draft.value = next
-      void sentiment.refresh()
-      void anomalies.refresh()
+      sentimentForceNext.value = true
+      void sentiment.refresh({ clear: false })
+      void anomalies.refresh({ clear: false })
     }
   },
 )
@@ -78,8 +84,9 @@ function applySymbol(): void {
       ...(tab.value === 'outliers' ? { tab: 'outliers' } : {}),
     },
   })
-  void sentiment.refresh()
-  void anomalies.refresh()
+  sentimentForceNext.value = true
+  void sentiment.refresh({ clear: false })
+  void anomalies.refresh({ clear: false })
 }
 
 const d = computed(() => sentiment.data.value)
@@ -88,7 +95,6 @@ const vol = computed(() => d.value?.vol as Record<string, any> | undefined)
 const cotMarkets = computed(() => (d.value?.cot?.markets ?? []) as CotMarket[])
 const finraTop = computed(() => (d.value?.finra_short?.top_short_pressure as any[]) ?? [])
 const finraLow = computed(() => (d.value?.finra_short?.low_short_pressure as any[]) ?? [])
-const filings = computed(() => d.value?.symbol_filings as SecFilingsPayload | undefined)
 
 const a = computed(() => anomalies.data.value)
 const unified = computed(() => a.value?.unified ?? [])
@@ -104,11 +110,9 @@ function qTone(q: string | undefined): 'pos' | 'neg' | 'flat' {
   return 'neg'
 }
 
-function biasTone(b: string | undefined): 'pos' | 'neg' | 'flat' {
-  if (!b) return 'flat'
-  if (b.includes('LONG')) return 'pos'
-  if (b.includes('SHORT')) return 'neg'
-  return 'flat'
+function marketLean(m: CotMarket): ReturnType<typeof cotLeanFromSpecNetZ> {
+  const fromZ = cotLeanFromSpecNetZ(m.noncomm_net_z_1y)
+  return fromZ === 'UNKNOWN' ? cotLeanFromBias(m.bias) : fromZ
 }
 
 function openMarket(sym: string): void {
@@ -127,7 +131,11 @@ const outliersLoading = computed(() => anomalies.loading.value && !anomalies.dat
 const isRefreshing = computed(() => sentiment.loading.value || anomalies.loading.value)
 
 async function refreshAll(): Promise<void> {
-  await Promise.all([sentiment.refresh(), anomalies.refresh()])
+  sentimentForceNext.value = true
+  await Promise.all([
+    sentiment.refresh({ clear: false }),
+    anomalies.refresh({ clear: false }),
+  ])
 }
 
 /** Human labels + lean for vol complex keys (raw CSV names are unreadable on a desk). */
@@ -199,28 +207,10 @@ function finraLean(z: number | null | undefined, side: 'high' | 'low'): string {
 }
 
 const COT_HELP =
-  'Weekly CFTC futures books. Spec net = non-commercial long minus short. LONG bias = specs crowded long; SHORT = crowded short. Context only — not a stock entry.'
+  'Weekly CFTC futures books. Spec net = non-commercial long minus short. LONG = specs crowded long; SHORT = crowded short; BALANCED = near the 1y mean. Context only — not a stock entry.'
 
-const SEC_HELP =
-  'Type a ticker and Load. Form 4 = insider trade reports. 8-K = material company events. 13D/G = large ownership stakes. Not 13F fund holdings (those lag a quarter).'
-
-function formLabel(key: string): string {
-  const k = key.toLowerCase()
-  if (k.includes('form4') || k === '4') return 'Form 4 (insider)'
-  if (k.includes('8k') || k.includes('eightk') || k === '8-k') return '8-K (events)'
-  if (k.includes('13') || k.includes('sc13')) return '13D/G (holders)'
-  return key.replaceAll('_', ' ')
-}
-
-function formMeaning(form: string | undefined): string {
-  if (!form) return ''
-  const f = form.toUpperCase()
-  if (f.includes('4')) return 'Insider trade report'
-  if (f.includes('8-K') || f === '8K') return 'Material company event'
-  if (f.includes('13D') || f.includes('13G')) return 'Large ownership stake'
-  if (f.includes('10-K') || f.includes('10-Q')) return 'Periodic financial report'
-  return ''
-}
+const TICKER_HELP =
+  'Focus Pulse outliers and structure on one ticker. Insider Form 4 / 8-K / 13D/G live on the Insiders desk — not here.'
 </script>
 
 <template>
@@ -261,12 +251,18 @@ function formMeaning(form: string | undefined): string {
           <span class="refresh-icon" :class="{ spinning: isRefreshing }">↻</span>
           {{ isRefreshing ? 'UPDATING...' : 'UPDATE ALL INFO' }}
         </button>
+        <span v-if="d?.generated_at" class="asof-chip label">
+          as-of {{ shortDate(d.generated_at) }}
+          · vol {{ vol?.quality ?? '—' }}
+          · cot {{ d?.cot?.quality ?? '—' }}
+          · finra {{ String((d?.finra_short as any)?.quality ?? '—') }}
+        </span>
       </div>
 
       <form class="sym-row" @submit.prevent="applySymbol">
         <label class="label" for="pulse-sym">
           Ticker
-          <HelpTip label="Ticker focus" :text="SEC_HELP" />
+          <HelpTip label="Ticker focus" :text="TICKER_HELP" />
         </label>
         <input
           id="pulse-sym"
@@ -276,9 +272,13 @@ function formMeaning(form: string | undefined): string {
           maxlength="10"
           autocomplete="off"
           spellcheck="false"
-          title="Loads SEC filings for one ticker on the Structure tab"
+          title="Focus Pulse on one ticker"
         />
-        <button type="submit" class="btn">Load filings</button>
+        <button type="submit" class="btn">Load</button>
+        <RouterLink
+          class="btn insiders-link"
+          :to="{ name: 'insiders', query: symbol ? { symbol } : {} }"
+        >INSIDERS</RouterLink>
       </form>
     </div>
 
@@ -409,7 +409,7 @@ function formMeaning(form: string | undefined): string {
                     <span class="label dim s-file">{{ m.label }}</span>
                   </td>
                   <td>
-                    <span class="kpi-badge" :class="biasTone(m.bias)">{{ m.bias ?? 'n/a' }}</span>
+                    <span class="kpi-badge" :class="cotLeanTone(marketLean(m))">{{ marketLean(m) }}</span>
                   </td>
                   <td class="fig num" :class="tone(m.noncomm_net)">{{ signed(m.noncomm_net, 0) }}</td>
                   <td class="fig num" :class="tone(m.noncomm_net_z_1y)">{{ num(m.noncomm_net_z_1y, 2) }}</td>
@@ -491,57 +491,16 @@ function formMeaning(form: string | undefined): string {
         </Panel>
 
         <Panel
-          label="SEC filings"
+          label="Insiders + filings"
           index=""
-          :meta="filings ? `${filings.symbol}` : 'pick a ticker above'"
+          :meta="symbol || 'open desk'"
           class="w-full"
-          flush
         >
-          <template #action>
-            <HelpTip label="SEC forms" :text="SEC_HELP" />
-          </template>
-          <template v-if="filings">
-            <p v-if="filings.error" class="err">{{ filings.error }}</p>
-            <div v-if="filings.counts_90d" class="mkt-readouts">
-              <Readout
-                v-for="(v, k) in filings.counts_90d"
-                :key="k"
-                :label="formLabel(String(k))"
-                :value="String(v)"
-                :sub="'90d count'"
-                size="sm"
-              />
-            </div>
-            <p v-if="filings.edgar_company_url" class="note pad">
-              <a :href="filings.edgar_company_url" target="_blank" rel="noopener">Open EDGAR company page ↗</a>
-            </p>
-            <div class="table-container">
-              <table v-if="filings.filings?.length" class="grid">
-                <thead>
-                  <tr>
-                    <th class="label">Filed</th>
-                    <th class="label">Form</th>
-                    <th class="label">What it means</th>
-                    <th class="label">Link</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(f, i) in filings.filings" :key="i">
-                    <td class="label dim">{{ shortDate(f.filed) }}</td>
-                    <td class="fig">{{ f.form }}</td>
-                    <td class="label dim feat">{{ formMeaning(f.form) || f.description || 'n/a' }}</td>
-                    <td>
-                      <a v-if="f.url" :href="f.url" target="_blank" rel="noopener" class="label">doc ↗</a>
-                      <span v-else class="label dim">n/a</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <p v-else class="note pad">No watched filings in the recent window (or ticker not in SEC map).</p>
-            </div>
-          </template>
-          <p v-else class="note pad">
-            Enter a ticker (e.g. AAPL) and click <strong>Load filings</strong> to see insider trades (Form 4), material events (8-K), and large holders (13D/G).
+          <p class="note pad">
+            Form 4 / 8-K / 13D/G live on the Insiders desk — Pulse keeps structure (vol, COT, FINRA).
+            <RouterLink :to="{ name: 'insiders', query: symbol ? { symbol } : {} }">
+              Open Insiders{{ symbol ? ` · ${symbol}` : '' }} →
+            </RouterLink>
           </p>
         </Panel>
       </template>
@@ -819,6 +778,8 @@ function formMeaning(form: string | undefined): string {
   display: flex;
   gap: 2px;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-sm);
+  overflow: hidden;
 }
 .tab {
   padding: 8px 14px;
@@ -829,17 +790,23 @@ function formMeaning(form: string | undefined): string {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .tab:hover { color: var(--ink); background: var(--panel-hi); }
 .tab.on {
   color: var(--void);
   background: var(--phosphor);
-  font-weight: 800;
+  font-weight: 700;
 }
 .tab-count {
+  font-family: var(--font-data);
   font-size: 10px;
   padding: 1px 5px;
   border: var(--hair) solid currentColor;
+  border-radius: var(--r-xs);
   opacity: 0.85;
 }
 .summary-deck {
@@ -851,6 +818,8 @@ function formMeaning(form: string | undefined): string {
 .kpi-card {
   background: var(--panel);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   padding: var(--s4);
   display: flex;
   flex-direction: column;
@@ -859,9 +828,12 @@ function formMeaning(form: string | undefined): string {
   min-width: 0;
   overflow: hidden;
 }
-.kpi-card.armed { border-color: var(--phosphor-dim); box-shadow: inset 3px 0 0 var(--phosphor); }
+.kpi-card.armed { border-color: var(--phosphor-dim); box-shadow: inset 3px 0 0 var(--phosphor), 0 1px 3px rgba(0, 0, 0, 0.35); }
 .kpi-label {
   color: var(--ink-dim);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -869,9 +841,9 @@ function formMeaning(form: string | undefined): string {
 }
 .kpi-val-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); min-width: 0; }
 .kpi-val {
-  font-family: var(--font-display);
+  font-family: var(--font-data);
   font-size: 1.15rem;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -887,11 +859,13 @@ function formMeaning(form: string | undefined): string {
   white-space: nowrap;
 }
 .kpi-badge {
+  font-family: var(--font-data);
   font-size: var(--t-micro);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.04em;
   padding: 2px 6px;
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs);
   color: var(--ink-dim);
   flex: 0 0 auto;
 }
@@ -915,6 +889,7 @@ function formMeaning(form: string | undefined): string {
   min-width: 0;
   padding: var(--s3);
   border: var(--hair) solid var(--rule-faint);
+  border-radius: var(--r-sm);
   background: var(--panel-hi);
 }
 .vol-lab {
@@ -964,7 +939,7 @@ function formMeaning(form: string | undefined): string {
   background: var(--void);
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
-  font-family: var(--font-mono, var(--font-display));
+  font-family: var(--font-data);
   padding: 6px 10px;
   width: 9ch;
   letter-spacing: 0.06em;
@@ -981,6 +956,8 @@ function formMeaning(form: string | undefined): string {
   cursor: pointer;
 }
 .btn:hover { background: var(--phosphor); color: var(--void); }
+.insiders-link { text-decoration: none; display: inline-flex; align-items: center; }
+.asof-chip { color: var(--ink-faint); letter-spacing: 0.04em; }
 
 .mkt-readouts {
   display: flex;

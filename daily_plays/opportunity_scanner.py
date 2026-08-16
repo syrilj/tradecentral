@@ -202,6 +202,278 @@ def _level(value: Any) -> float | None:
     return round(number, 4) if number is not None and number > 0 else None
 
 
+LEVEL_SOURCE_SUPPORT = "resistance/support"
+LEVEL_SOURCE_GEX = "options GEX"
+LEVEL_SOURCE_POSITIONS = "positions"
+LEVEL_SOURCE_TA = "technical analysis"
+LEVEL_SOURCES = (
+    LEVEL_SOURCE_SUPPORT,
+    LEVEL_SOURCE_GEX,
+    LEVEL_SOURCE_POSITIONS,
+    LEVEL_SOURCE_TA,
+)
+
+
+def _first_level(*values: Any) -> float | None:
+    for value in values:
+        measured = _level(value)
+        if measured is not None:
+            return measured
+    return None
+
+
+def _append_level(
+    bucket: list[dict[str, Any]],
+    price: Any,
+    source: str,
+    *,
+    side: str | None,
+    spot: float | None,
+) -> None:
+    measured = _level(price)
+    if measured is None or source not in LEVEL_SOURCES:
+        return
+    if side == "below" and spot is not None and measured >= spot:
+        return
+    if side == "above" and spot is not None and measured <= spot:
+        return
+    key = round(measured, 4)
+    if any(round(float(item["price"]), 4) == key for item in bucket):
+        return
+    bucket.append({"price": measured, "source": source})
+
+
+def _focus_contract_strike(focus: Any, right: str | None) -> float | None:
+    if not isinstance(focus, Mapping):
+        return None
+    if right in {"call", "put"} and isinstance(focus.get(right), Mapping):
+        return _level(focus[right].get("strike"))
+    return _level(focus.get("strike"))
+
+
+def _row_open_interest(row: Mapping[str, Any]) -> float | None:
+    total = _finite(row.get("open_interest"))
+    if total is not None and total > 0:
+        return total
+    call_oi = _finite(row.get("call_oi")) or 0.0
+    put_oi = _finite(row.get("put_oi")) or 0.0
+    combined = call_oi + put_oi
+    return combined if combined > 0 else None
+
+
+def _notable_gex_rows(rows: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(rows, (list, tuple)):
+        return []
+    return [row for row in rows if isinstance(row, Mapping) and _level(row.get("strike")) is not None]
+
+
+def setup_inputs_from_rows(
+    board: Mapping[str, Any] | None,
+    flow: Mapping[str, Any] | None,
+    *,
+    direction: str | None,
+) -> dict[str, Any]:
+    """Pull already-measured S/R, GEX, positions, and TA fields from board/flow."""
+    board_map: Mapping[str, Any] = board or {}
+    flow_map: Mapping[str, Any] = flow or {}
+    right = "call" if direction == "long" else "put" if direction == "short" else None
+    return {
+        "support": _first_level(
+            board_map.get("support"), board_map.get("support_price"), board_map.get("next_support"),
+            flow_map.get("support"), flow_map.get("support_price"), flow_map.get("next_support"),
+        ),
+        "resistance": _first_level(
+            board_map.get("resistance"), board_map.get("resistance_price"), board_map.get("next_resistance"),
+            flow_map.get("resistance"), flow_map.get("resistance_price"), flow_map.get("next_resistance"),
+        ),
+        "call_wall": _first_level(board_map.get("call_wall"), flow_map.get("call_wall")),
+        "put_wall": _first_level(board_map.get("put_wall"), flow_map.get("put_wall")),
+        "gamma_flip": _first_level(board_map.get("gamma_flip"), flow_map.get("gamma_flip")),
+        "pin_strike": _first_level(board_map.get("pin_strike"), flow_map.get("pin_strike")),
+        "position_strike": _first_level(
+            _focus_contract_strike(board_map.get("contract_focus"), right),
+            _focus_contract_strike(flow_map.get("flow_focus"), right),
+            board_map.get("position_strike"),
+            flow_map.get("position_strike"),
+        ),
+        "ta_support": _first_level(
+            board_map.get("ta_support"), board_map.get("swing_low"),
+            flow_map.get("ta_support"), flow_map.get("swing_low"),
+        ),
+        "ta_resistance": _first_level(
+            board_map.get("ta_resistance"), board_map.get("swing_high"),
+            flow_map.get("ta_resistance"), flow_map.get("swing_high"),
+        ),
+        "gex_rows": (
+            board_map.get("gex_by_strike")
+            or board_map.get("gex_rows")
+            or flow_map.get("gex_by_strike")
+            or flow_map.get("gex_rows")
+        ),
+        "expected_move": _first_level(board_map.get("expected_move"), flow_map.get("expected_move")),
+        "spot": _first_level(board_map.get("spot"), flow_map.get("spot")),
+    }
+
+
+def setup_level_model(
+    *,
+    direction: str | None,
+    spot: Any,
+    support: Any = None,
+    resistance: Any = None,
+    call_wall: Any = None,
+    put_wall: Any = None,
+    gamma_flip: Any = None,
+    pin_strike: Any = None,
+    position_strike: Any = None,
+    ta_support: Any = None,
+    ta_resistance: Any = None,
+    gex_rows: Any = None,
+    expected_move: Any = None,
+) -> dict[str, Any]:
+    """Source-attributed strike, supports, invalidation, and take-profit zones.
+
+    Uses only already-measured resistance/support, options GEX, positions, and
+    technical analysis. Expected-move is accepted so callers can prove it never
+    fills a level. Missing or wrong-side inputs stay unmeasured.
+    """
+    del expected_move  # never a strike, support, invalidation, or take-profit zone
+    spot_n = _level(spot)
+    supports: list[dict[str, Any]] = []
+    zones: list[dict[str, Any]] = []
+    resistances: list[dict[str, Any]] = []
+
+    _append_level(supports, support, LEVEL_SOURCE_SUPPORT, side="below", spot=spot_n)
+    _append_level(resistances, resistance, LEVEL_SOURCE_SUPPORT, side="above", spot=spot_n)
+    _append_level(supports, put_wall, LEVEL_SOURCE_GEX, side="below", spot=spot_n)
+    _append_level(resistances, call_wall, LEVEL_SOURCE_GEX, side="above", spot=spot_n)
+    _append_level(supports, ta_support, LEVEL_SOURCE_TA, side="below", spot=spot_n)
+    _append_level(resistances, ta_resistance, LEVEL_SOURCE_TA, side="above", spot=spot_n)
+    _append_level(supports, gamma_flip, LEVEL_SOURCE_TA, side="below", spot=spot_n)
+    _append_level(resistances, gamma_flip, LEVEL_SOURCE_TA, side="above", spot=spot_n)
+
+    best_oi_below: tuple[float, float] | None = None
+    best_oi_above: tuple[float, float] | None = None
+    best_put_gex: tuple[float, float] | None = None
+    best_call_gex: tuple[float, float] | None = None
+    best_oi_strike: tuple[float, float] | None = None
+    for row in _notable_gex_rows(gex_rows):
+        strike = _level(row.get("strike"))
+        if strike is None:
+            continue
+        oi = _row_open_interest(row)
+        if oi is not None and (best_oi_strike is None or oi > best_oi_strike[0]):
+            best_oi_strike = (oi, strike)
+        if spot_n is None:
+            continue
+        put_gex = _finite(row.get("put_gex_m") if row.get("put_gex_m") is not None else row.get("put_gex"))
+        call_gex = _finite(row.get("call_gex_m") if row.get("call_gex_m") is not None else row.get("call_gex"))
+        if strike < spot_n:
+            if oi is not None and (best_oi_below is None or oi > best_oi_below[0]):
+                best_oi_below = (oi, strike)
+            if put_gex is not None and put_gex < 0 and (best_put_gex is None or put_gex < best_put_gex[0]):
+                best_put_gex = (put_gex, strike)
+        elif strike > spot_n:
+            if oi is not None and (best_oi_above is None or oi > best_oi_above[0]):
+                best_oi_above = (oi, strike)
+            if call_gex is not None and call_gex > 0 and (best_call_gex is None or call_gex > best_call_gex[0]):
+                best_call_gex = (call_gex, strike)
+
+    if best_oi_below is not None:
+        _append_level(supports, best_oi_below[1], LEVEL_SOURCE_POSITIONS, side="below", spot=spot_n)
+    if best_put_gex is not None:
+        _append_level(supports, best_put_gex[1], LEVEL_SOURCE_GEX, side="below", spot=spot_n)
+    if best_oi_above is not None:
+        _append_level(resistances, best_oi_above[1], LEVEL_SOURCE_POSITIONS, side="above", spot=spot_n)
+    if best_call_gex is not None:
+        _append_level(resistances, best_call_gex[1], LEVEL_SOURCE_GEX, side="above", spot=spot_n)
+
+    strike = _first_level(position_strike, pin_strike, best_oi_strike[1] if best_oi_strike else None)
+    strike_source = None
+    if strike is not None:
+        if position_strike is not None and _level(position_strike) == strike:
+            strike_source = LEVEL_SOURCE_POSITIONS
+        elif pin_strike is not None and _level(pin_strike) == strike:
+            strike_source = LEVEL_SOURCE_POSITIONS
+        else:
+            strike_source = LEVEL_SOURCE_POSITIONS
+
+    supports.sort(key=lambda item: item["price"], reverse=True)
+    resistances.sort(key=lambda item: item["price"])
+    if direction == "long":
+        zones = list(resistances)
+        invalidation = supports[0]["price"] if supports else None
+        invalidation_source = supports[0]["source"] if supports else None
+    elif direction == "short":
+        zones = list(supports)
+        invalidation = resistances[0]["price"] if resistances else None
+        invalidation_source = resistances[0]["source"] if resistances else None
+    else:
+        zones = []
+        invalidation = None
+        invalidation_source = None
+
+    gex_target = None
+    gex_invalidation = None
+    if direction == "long":
+        gex_target = call_wall if _level(call_wall) is not None and (spot_n is None or _level(call_wall) > spot_n) else None
+        gex_invalidation = put_wall if _level(put_wall) is not None and (spot_n is None or _level(put_wall) < spot_n) else None
+    elif direction == "short":
+        gex_target = put_wall if _level(put_wall) is not None and (spot_n is None or _level(put_wall) < spot_n) else None
+        gex_invalidation = call_wall if _level(call_wall) is not None and (spot_n is None or _level(call_wall) > spot_n) else None
+
+    source_status = {
+        LEVEL_SOURCE_SUPPORT: "measured" if any(
+            item["source"] == LEVEL_SOURCE_SUPPORT for item in (*supports, *resistances)
+        ) else "unmeasured",
+        LEVEL_SOURCE_GEX: "measured" if any(
+            item["source"] == LEVEL_SOURCE_GEX for item in (*supports, *resistances)
+        ) or gex_target is not None or gex_invalidation is not None else "unmeasured",
+        LEVEL_SOURCE_POSITIONS: "measured" if strike_source == LEVEL_SOURCE_POSITIONS or any(
+            item["source"] == LEVEL_SOURCE_POSITIONS for item in (*supports, *resistances)
+        ) else "unmeasured",
+        LEVEL_SOURCE_TA: "measured" if any(
+            item["source"] == LEVEL_SOURCE_TA for item in (*supports, *resistances)
+        ) else "unmeasured",
+    }
+    if source_status[LEVEL_SOURCE_SUPPORT] == "unmeasured" and (
+        _level(support) is not None or _level(resistance) is not None
+    ):
+        source_status[LEVEL_SOURCE_SUPPORT] = "wrong-side"
+    if source_status[LEVEL_SOURCE_GEX] == "unmeasured" and (
+        _level(call_wall) is not None or _level(put_wall) is not None
+    ):
+        source_status[LEVEL_SOURCE_GEX] = "wrong-side"
+
+    missing_fields = [
+        label for label, value in (
+            ("strike", strike),
+            ("supports", supports[0]["price"] if supports else None),
+            ("invalidation", invalidation),
+            ("take profit zones", zones[0]["price"] if zones else None),
+            ("GEX take-profit target", _level(gex_target)),
+            ("GEX invalidation", _level(gex_invalidation)),
+        ) if value is None
+    ]
+    complete = bool(strike is not None and supports and invalidation is not None and zones)
+    return {
+        "strike": strike,
+        "strike_source": strike_source,
+        "supports": supports,
+        "invalidation": invalidation,
+        "invalidation_source": invalidation_source,
+        "take_profit_zones": zones,
+        "gex_target": _level(gex_target),
+        "gex_invalidation": _level(gex_invalidation),
+        "source_status": source_status,
+        "missing_sources": [name for name, state in source_status.items() if state != "measured"],
+        "risk_missing_fields": missing_fields,
+        "complete": complete,
+        "risk_levels_complete": complete,
+        "spot": spot_n,
+    }
+
+
 def gex_relative_sell(
     *,
     direction: str | None,
@@ -663,6 +935,7 @@ def _playbook(
     *, board: Mapping[str, Any], direction: str | None, direction_source: str,
     gate_pass: bool, gate_reasons: list[str], freshness_pass: bool,
     freshness_reason: str, confidence: Mapping[str, Any], costs: Mapping[str, Any],
+    level_model: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     spot = _level(board.get("spot"))
     expected_move = _level(board.get("expected_move"))
@@ -670,6 +943,7 @@ def _playbook(
     put_wall = _level(board.get("put_wall"))
     gamma_flip = _level(board.get("gamma_flip"))
     expiry = board.get("selected_expiry")
+    model = dict(level_model or {})
 
     trigger = None
     target = None
@@ -716,7 +990,17 @@ def _playbook(
             f"Directional model state is {confidence.get('state') or 'WATCH'}; setup gate is not active."
         )
 
-    risk_levels_complete = bool(target is not None and invalidation is not None)
+    modeled_complete = bool(model.get("risk_levels_complete")) if model else None
+    risk_levels_complete = bool(
+        modeled_complete
+        if modeled_complete is not None
+        else (target is not None and invalidation is not None)
+    )
+    if model:
+        if model.get("strike") is None:
+            blockers.append("No measured strike to watch.")
+        if not model.get("supports"):
+            blockers.append("No measured support to watch.")
     if direction == "long":
         if target is None:
             blockers.append("No measured call wall above spot for the take-profit target.")
@@ -932,6 +1216,8 @@ def build_live_opportunities(
             "unsigned_activity_bias" if bias_direction is not None else direction_source
         )
         costs = _cost_estimate(spread_pct, filters)
+        setup_inputs = setup_inputs_from_rows(board_map, flow_map, direction=review_direction)
+        level_model = setup_level_model(direction=review_direction, **setup_inputs)
         playbook = _playbook(
             board=board_map,
             direction=review_direction,
@@ -942,6 +1228,7 @@ def build_live_opportunities(
             freshness_reason=freshness_reason,
             confidence=confidence,
             costs=costs,
+            level_model=level_model,
         )
         qlib_map: Mapping[str, Any] = qlib_by_symbol.get(symbol) or {}
         suggestion = build_suggestion(
@@ -991,14 +1278,23 @@ def build_live_opportunities(
             "plan_target_source": target_source,
             "plan_invalidation": playbook_invalidation,
             "plan_invalidation_source": invalidation_source,
+            "strike": level_model.get("strike"),
+            "strike_source": level_model.get("strike_source"),
+            "supports": list(level_model.get("supports") or ()),
+            "take_profit_zones": list(level_model.get("take_profit_zones") or ()),
+            "source_status": dict(level_model.get("source_status") or {}),
+            "missing_sources": list(level_model.get("missing_sources") or ()),
             "risk_levels_complete": bool(playbook.get("risk_levels_complete")),
-            "risk_missing_fields": [
+            "risk_missing_fields": list(level_model.get("risk_missing_fields") or [
                 label for label, value in (
                     ("GEX take-profit target", playbook_target),
                     ("GEX invalidation", playbook_invalidation),
                 ) if value is None
-            ],
+            ]),
         })
+        if suggestion.get("invalidation") is None and level_model.get("invalidation") is not None:
+            suggestion["invalidation"] = level_model["invalidation"]
+            suggestion["invalidation_source"] = level_model["invalidation_source"]
         highlighted = bool(playbook.get("status") == "candidate")
         suggestion_plan = (
             suggestion.get("contract_plan")

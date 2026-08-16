@@ -48,9 +48,8 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   The substrate: a faint measurement grid under everything, the way graph
-   paper sits under a plotted trace. Panels are semi-opaque so it reads
-   through them.
+   The substrate: ultra-subtle measurement grid under everything.
+   Panels sit cleanly on top of it.
    ------------------------------------------------------------------------ */
 body::before {
   content: '';
@@ -61,25 +60,13 @@ body::before {
   background-image:
     linear-gradient(to right, var(--grid) var(--hair), transparent var(--hair)),
     linear-gradient(to bottom, var(--grid) var(--hair), transparent var(--hair));
-  background-size: 28px 28px;
+  background-size: 32px 32px;
 }
 
-/* Grain. Keeps large flat panels from reading as dead flat colour. */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1;
-  opacity: 0.035;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-/* ---- type primitives ---------------------------------------------------- */
+/* ---- type primitives: Mistral AI modern hierarchy ----------------------- */
 
 .label {
-  font-family: var(--font-display);
+  font-family: var(--font-data);
   font-size: var(--t-micro);
   font-weight: 600;
   letter-spacing: var(--track-label);
@@ -109,7 +96,7 @@ table .feat,
 .fig {
   font-family: var(--font-data);
   font-variant-numeric: tabular-nums;
-  font-feature-settings: 'zero' 1;
+  font-feature-settings: 'tnum', 'zero';
   letter-spacing: var(--track-tight);
 }
 
@@ -150,42 +137,40 @@ a:hover { text-decoration: underline; }
   scrollbar-width: thin;
   scrollbar-color: var(--rule-hi) transparent;
 }
-*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: var(--rule-hi);
+  background: var(--rule);
+  border-radius: var(--r-sm);
   border: 2px solid var(--void);
 }
-*::-webkit-scrollbar-thumb:hover { background: var(--ink-ghost); }
+*::-webkit-scrollbar-thumb:hover { background: var(--rule-hi); }
 
-/* ---- shared panel chrome ------------------------------------------------ */
+/* ---- shared panel chrome (Mistral AI Clean Boxes) ----------------------- */
 
-/* Registration marks. The signature detail — panels are framed the way a
-   viewfinder or a print proof is, with four corner ticks instead of a border
-   radius. Drawn with gradients so there is no extra markup. */
 .ticked {
   position: relative;
-  background:
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 0 0 / var(--tick) var(--hair) no-repeat,
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 0 0 / var(--hair) var(--tick) no-repeat,
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 100% 0 / var(--tick) var(--hair) no-repeat,
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 100% 0 / var(--hair) var(--tick) no-repeat,
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 0 100% / var(--tick) var(--hair) no-repeat,
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 0 100% / var(--hair) var(--tick) no-repeat,
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 100% 100% / var(--tick) var(--hair) no-repeat,
-    linear-gradient(var(--phosphor-dim), var(--phosphor-dim)) 100% 100% / var(--hair) var(--tick) no-repeat,
-    var(--panel);
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-md);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.ticked:hover {
+  border-color: var(--rule-hi);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 .hairline {
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
 }
 
 /* ---- staggered entrance -------------------------------------------------
-   One orchestrated page load. Panels resolve in sequence like an instrument
-   coming up to temperature, then nothing moves again unless data changes. */
+   One orchestrated page load. Panels resolve in sequence cleanly. */
 @keyframes rise {
-  from { opacity: 0; transform: translateY(7px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
 
@@ -211,18 +196,6 @@ a:hover { text-decoration: underline; }
 
 /* ---------------------------------------------------------------------------
    Canonical data table.
-   ----------------------------------------------------------------------------
-   `.grid` was hand-rolled seven times across the views, and the copies had
-   already drifted — three used the token scale, two hardcoded `8px 12px`, one
-   used a tighter row height. This is the reference definition, matching the
-   dominant (Desk / Sectors / Gates) variant.
-
-   It is ADDITIVE on purpose. Vue scoped styles compile to `.grid[data-v-…]`,
-   which outranks this bare class selector, so every existing view keeps its
-   current appearance byte-for-byte. New views get the canonical table by
-   writing nothing. Migrate an old copy only when that view is next touched
-   for its own reasons — a mass sweep here would be an unreviewable diff
-   across six screens for zero user-visible gain.
    ------------------------------------------------------------------------ */
 .grid {
   width: 100%;
@@ -232,16 +205,17 @@ a:hover { text-decoration: underline; }
 
 .grid th {
   text-align: left;
-  padding: var(--s3) var(--s4);
+  padding: var(--s2) var(--s4);
   color: var(--ink-dim);
   border-bottom: var(--hair) solid var(--rule);
-  /* The header must survive a scrolled tbody — a column of figures with no
-     header is unreadable, and these tables are frequently taller than the
-     panel that frames them. */
   position: sticky;
   top: 0;
   background: var(--panel-hi);
-  font-weight: 700;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
   z-index: 1;
 }
 
@@ -250,12 +224,120 @@ a:hover { text-decoration: underline; }
   border-bottom: var(--hair) solid var(--rule-faint);
   color: var(--ink);
   vertical-align: middle;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
-/* Figures align on the decimal or they are not worth printing. */
+.grid tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Figures align on the decimal */
 .grid .num,
 th.num,
 td.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- desk controls: sleek Mistral-styled buttons ------------------------ */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--density-control-h);
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid var(--phosphor);
+  border-radius: var(--r-sm);
+  background: var(--phosphor);
+  color: var(--void);
+  font-family: var(--font-ui);
+  font-size: var(--t-tiny);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--phosphor-dim);
+}
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-quiet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--density-control-h);
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--ink-soft);
+  font-family: var(--font-ui);
+  font-size: var(--t-tiny);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.btn-quiet:hover:not(:disabled) {
+  background: var(--panel-hi);
+  border-color: var(--rule-hi);
+  color: var(--ink);
+}
+.btn-quiet:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* ---- Clerk Dark Theme Institutional Overrides --------------------------- */
+.cl-userButtonPopoverCard {
+  background: var(--panel) !important;
+  border: var(--hair) solid var(--rule-hi) !important;
+  border-radius: 2px !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.75) !important;
+  color: var(--ink) !important;
+  font-family: var(--font-ui) !important;
+}
+
+.cl-userButtonPopoverFooter {
+  background: var(--void-lift) !important;
+  border-top: var(--hair) solid var(--rule) !important;
+}
+
+.cl-userButtonPopoverActionButton {
+  color: var(--ink-soft) !important;
+  border-radius: 2px !important;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out) !important;
+}
+
+.cl-userButtonPopoverActionButton:hover {
+  background: var(--panel-hi) !important;
+  color: var(--ink) !important;
+}
+
+.cl-userButtonPopoverActionButtonText {
+  color: inherit !important;
+  font-size: var(--t-small) !important;
+}
+
+.cl-userButtonPopoverActionButtonIcon {
+  color: var(--ink-dim) !important;
+}
+
+.cl-userPreviewMainIdentifier {
+  color: var(--ink) !important;
+  font-family: var(--font-display) !important;
+  font-size: var(--t-small) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+}
+
+.cl-userPreviewSecondaryIdentifier {
+  color: var(--ink-dim) !important;
+  font-size: var(--t-tiny) !important;
+}
+
+.cl-avatarBox {
+  border-radius: 2px !important;
+  border: var(--hair) solid var(--rule-hi) !important;
+}
+

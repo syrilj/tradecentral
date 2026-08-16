@@ -17,6 +17,22 @@ import { api, type OptionsBoard, type OptionsBoardRow } from '@/api'
 import Panel from '@/components/Panel.vue'
 import HelpTip from '@/components/HelpTip.vue'
 
+export type ConvictionSortKey =
+  | 'rank'
+  | 'symbol'
+  | 'selection_basis'
+  | 'selection_score'
+  | 'spot'
+  | 'squeeze_score'
+  | 'net_gex_m'
+  | 'put_wall'
+  | 'call_wall'
+  | 'expected_move'
+  | 'atm_iv'
+
+export type ConvictionSortDir = 'asc' | 'desc'
+export type BasisFilter = 'ALL' | 'LIVE FLOW' | 'PEAD' | 'MODEL' | 'ACTIVITY'
+
 const props = defineProps<{ depth?: 'quick' | 'deep' }>()
 const emit = defineEmits<{ (e: 'select', symbol: string): void }>()
 
@@ -24,6 +40,11 @@ const board = ref<OptionsBoard | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const requireLiveFlow = ref(false)
+
+const sortKey = ref<ConvictionSortKey>('rank')
+const sortDir = ref<ConvictionSortDir>('asc')
+const searchQuery = ref('')
+const selectedBasis = ref<BasisFilter>('ALL')
 
 async function load(force = false) {
   loading.value = true
@@ -69,6 +90,54 @@ const basisLabel: Record<string, string> = {
   directional_model: 'MODEL',
 }
 
+const basisKeyMap: Record<BasisFilter, string | null> = {
+  ALL: null,
+  'LIVE FLOW': 'live_options_flow',
+  PEAD: 'pead_ordinal',
+  MODEL: 'directional_model',
+  ACTIVITY: 'activity_ordinal',
+}
+
+function setSort(key: ConvictionSortKey) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    sortDir.value = (key === 'rank' || key === 'symbol' || key === 'selection_basis') ? 'asc' : 'desc'
+  }
+}
+
+function sortIndicator(key: ConvictionSortKey): string {
+  if (sortKey.value !== key) return ''
+  return sortDir.value === 'asc' ? '▴' : '▾'
+}
+
+const filteredRows = computed(() => {
+  let list = board.value?.rows ?? []
+  const query = searchQuery.value.trim().toUpperCase()
+  if (query) {
+    list = list.filter((r) => r.symbol.toUpperCase().includes(query))
+  }
+  const targetBasis = basisKeyMap[selectedBasis.value]
+  if (targetBasis) {
+    list = list.filter((r) => r.selection_basis === targetBasis)
+  }
+
+  return [...list].sort((a, b) => {
+    const k = sortKey.value
+    const dir = sortDir.value === 'asc' ? 1 : -1
+    const va = a[k]
+    const vb = b[k]
+    if (va === vb) return a.rank - b.rank
+    if (va === null || va === undefined) return 1
+    if (vb === null || vb === undefined) return -1
+    if (typeof va === 'string' && typeof vb === 'string') {
+      return dir * va.localeCompare(vb)
+    }
+    return dir * ((va as number) - (vb as number))
+  })
+})
+
 function num(v: number | null | undefined, dp = 2): string {
   return v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toFixed(dp)
 }
@@ -91,6 +160,31 @@ function selectionDisplay(row: OptionsBoardRow): string {
   return row.score_kind === 'calibrated_probability'
     ? pct(row.selection_score)
     : row.selection_score.toFixed(2)
+}
+
+function computePressureScore(row: OptionsBoardRow): {
+  score: number
+  signed: number
+  tone: 'pos' | 'neg' | 'neutral'
+  label: string
+} {
+  if (row.squeeze_score != null && Number.isFinite(row.squeeze_score)) {
+    const signed = Math.max(-100, Math.min(100, row.squeeze_score))
+    const score = Math.abs(signed)
+    const tone = signed > 0 ? 'pos' : signed < 0 ? 'neg' : 'neutral'
+    return { score, signed, tone, label: `${signed > 0 ? '+' : ''}${signed.toFixed(1)}` }
+  }
+  if (row.net_gex_m != null && Number.isFinite(row.net_gex_m)) {
+    const gex = row.net_gex_m
+    const tone = gex > 0 ? 'pos' : gex < 0 ? 'neg' : 'neutral'
+    const score = Math.min(100, Math.abs(gex) * 10)
+    return { score, signed: gex, tone, label: `${gex > 0 ? '+' : ''}${gex.toFixed(1)}M` }
+  }
+  if (row.selection_score != null && Number.isFinite(row.selection_score)) {
+    const score = Math.min(100, row.selection_score)
+    return { score, signed: score, tone: 'neutral', label: `${score.toFixed(1)}` }
+  }
+  return { score: 0, signed: 0, tone: 'neutral', label: '—' }
 }
 </script>
 
@@ -126,34 +220,122 @@ function selectionDisplay(row: OptionsBoardRow): string {
       <li v-for="w in board.warnings" :key="w" class="label">{{ w }}</li>
     </ul>
 
-    <div v-if="rows.length" class="board-scroll">
+    <!-- Filter and Search Toolbar -->
+    <div class="board-toolbar">
+      <div class="search-wrap">
+        <span class="search-ico label">⌕</span>
+        <input
+          v-model="searchQuery"
+          type="text"
+          class="search-input label"
+          placeholder="SEARCH SYM…"
+          aria-label="Filter candidates by ticker"
+          spellcheck="false"
+        />
+        <button
+          v-if="searchQuery"
+          type="button"
+          class="clear-query-btn label"
+          aria-label="Clear ticker filter"
+          @click="searchQuery = ''"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="basis-chips" role="group" aria-label="Selection basis filter">
+        <button
+          v-for="b in (['ALL', 'LIVE FLOW', 'PEAD', 'MODEL', 'ACTIVITY'] as const)"
+          :key="b"
+          type="button"
+          class="basis-chip-btn label"
+          :class="{ active: selectedBasis === b }"
+          @click="selectedBasis = b"
+        >
+          {{ b }}
+        </button>
+      </div>
+
+      <span class="row-count label">
+        {{ filteredRows.length }} OF {{ rows.length }} CANDIDATES
+      </span>
+    </div>
+
+    <!-- Institutional Pressure Score Conviction Heatmap Bar -->
+    <div v-if="filteredRows.length" class="pressure-heatmap-bar" aria-label="Institutional Conviction Heatmap">
+      <div class="heatmap-header label">
+        <span class="heatmap-title">INSTITUTIONAL PRESSURE CONVICTION SPECTRUM</span>
+        <div class="heatmap-legend">
+          <span class="leg-item"><span class="leg-swatch pos" /> BULL / LONG GEX</span>
+          <span class="leg-item"><span class="leg-swatch neg" /> BEAR / SHORT GEX</span>
+          <span class="leg-item"><span class="leg-swatch neutral" /> UNMEASURED</span>
+        </div>
+      </div>
+      <div class="heatmap-strip">
+        <button
+          v-for="row in filteredRows"
+          :key="row.symbol"
+          type="button"
+          class="heatmap-cell"
+          :class="computePressureScore(row).tone"
+          :style="{ opacity: 0.5 + (computePressureScore(row).score / 100) * 0.5 }"
+          :title="`${row.symbol} (#${row.rank}) · Pressure: ${computePressureScore(row).label} · Squeeze: ${num(row.squeeze_score, 1)} · Net GEX: ${num(row.net_gex_m, 1)}M`"
+          @click="emit('select', row.symbol)"
+        >
+          <span class="cell-sym">{{ row.symbol }}</span>
+          <span class="cell-val">{{ computePressureScore(row).label }}</span>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="filteredRows.length" class="board-scroll">
       <table class="grid board-table">
         <thead>
           <tr>
-            <th class="label">#</th>
-            <th class="label">SYM</th>
-            <th class="label">
+            <th class="label sortable" @click="setSort('rank')">
+              # <span class="sort-arr">{{ sortIndicator('rank') }}</span>
+            </th>
+            <th class="label sortable" @click="setSort('symbol')">
+              SYM <span class="sort-arr">{{ sortIndicator('symbol') }}</span>
+            </th>
+            <th class="label sortable" @click="setSort('selection_basis')">
               WHY
               <HelpTip text="Which scan tier routed this name into a chain request. Ordinal except MODEL, which is the only calibrated probability on the board." />
+              <span class="sort-arr">{{ sortIndicator('selection_basis') }}</span>
             </th>
-            <th class="label num">SCORE</th>
-            <th class="label num">SPOT</th>
-            <th class="label num">
+            <th class="label num sortable" @click="setSort('selection_score')">
+              SCORE <span class="sort-arr">{{ sortIndicator('selection_score') }}</span>
+            </th>
+            <th class="label num sortable" @click="setSort('spot')">
+              SPOT <span class="sort-arr">{{ sortIndicator('spot') }}</span>
+            </th>
+            <th class="label num sortable" @click="setSort('squeeze_score')">
               SQUEEZE
               <HelpTip text="Signed structural score. '—' means open interest was unavailable, so gamma is unmeasured — not quiet." />
+              <span class="sort-arr">{{ sortIndicator('squeeze_score') }}</span>
             </th>
-            <th class="label num">NET GEX $M</th>
-            <th class="label num">PUT WALL</th>
-            <th class="label num">CALL WALL</th>
-            <th class="label num">EXP MOVE</th>
-            <th class="label num">ATM IV</th>
+            <th class="label num sortable" @click="setSort('net_gex_m')">
+              NET GEX $M <span class="sort-arr">{{ sortIndicator('net_gex_m') }}</span>
+            </th>
+            <th class="label num sortable" @click="setSort('put_wall')">
+              PUT WALL <span class="sort-arr">{{ sortIndicator('put_wall') }}</span>
+            </th>
+            <th class="label num sortable" @click="setSort('call_wall')">
+              CALL WALL <span class="sort-arr">{{ sortIndicator('call_wall') }}</span>
+            </th>
+            <th class="label num sortable" @click="setSort('expected_move')">
+              EXP MOVE <span class="sort-arr">{{ sortIndicator('expected_move') }}</span>
+            </th>
+            <th class="label num sortable" @click="setSort('atm_iv')">
+              ATM IV <span class="sort-arr">{{ sortIndicator('atm_iv') }}</span>
+            </th>
             <th class="label">DATA</th>
             <th class="label num sq-col">RISK VIZ</th>
           </tr>
         </thead>
         <tbody>
           <tr
-            v-for="row in rows"
+            v-for="row in filteredRows"
             :key="row.symbol"
             class="board-row"
             :class="{ unavailable: !row.available, unmeasured: !row.gex_measurable }"
@@ -210,7 +392,7 @@ function selectionDisplay(row: OptionsBoardRow): string {
     </div>
 
     <p v-else-if="!loading" class="board-msg label">
-      No scan candidate met the selection tiers. Run a deep scan from the Desk,
+      No scan candidate met the selection criteria. Clear the search/filter, run a deep scan from the Desk,
       or clear the live-flow filter.
     </p>
 
@@ -255,6 +437,213 @@ function selectionDisplay(row: OptionsBoardRow): string {
   color: var(--warn);
   white-space: normal;
   line-height: 1.5;
+}
+
+/* Toolbar & Filter Shelf */
+.board-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  background: var(--void);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  flex-wrap: wrap;
+}
+
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 180px;
+}
+
+.search-ico {
+  position: absolute;
+  left: 8px;
+  color: var(--ink-dim);
+  pointer-events: none;
+  font-size: 13px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 4px 24px 4px 24px;
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+  color: var(--ink);
+  font-size: var(--t-micro, 10px);
+  letter-spacing: 0.04em;
+  border-radius: 2px;
+}
+
+.search-input:focus {
+  border-color: var(--phosphor);
+  outline: none;
+}
+
+.clear-query-btn {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 2px;
+  font-size: 10px;
+}
+
+.clear-query-btn:hover {
+  color: var(--ink);
+}
+
+.basis-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.basis-chip-btn {
+  padding: 2px 7px;
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+  color: var(--ink-dim);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all var(--dur-fast, 120ms);
+}
+
+.basis-chip-btn:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+
+.basis-chip-btn.active {
+  background: var(--phosphor-wash);
+  color: var(--phosphor);
+  border-color: var(--phosphor);
+}
+
+.row-count {
+  font-size: 9.5px;
+  color: var(--ink-dim);
+  letter-spacing: 0.04em;
+}
+
+/* Institutional Conviction Heatmap Bar */
+.pressure-heatmap-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--s2) var(--s3);
+  background: var(--panel-hi);
+  border-bottom: var(--hair) solid var(--rule);
+}
+
+.heatmap-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9px;
+  color: var(--ink-dim);
+  letter-spacing: var(--track-label);
+}
+
+.heatmap-legend {
+  display: flex;
+  gap: var(--s3);
+}
+
+.leg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.leg-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.leg-swatch.pos { background: var(--call); }
+.leg-swatch.neg { background: var(--put); }
+.leg-swatch.neutral { background: var(--rule-hi); }
+
+.heatmap-strip {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.heatmap-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  padding: 3px 6px;
+  border: var(--hair) solid var(--rule);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: transform var(--dur-fast, 120ms);
+}
+
+.heatmap-cell:hover {
+  transform: translateY(-1px);
+  border-color: var(--phosphor);
+}
+
+.heatmap-cell.pos {
+  background: var(--call-wash, rgba(16, 185, 129, 0.15));
+  border-color: var(--call);
+}
+
+.heatmap-cell.neg {
+  background: var(--put-wash, rgba(244, 63, 94, 0.15));
+  border-color: var(--put);
+}
+
+.heatmap-cell.neutral {
+  background: var(--void);
+  border-color: var(--rule-hi);
+}
+
+.cell-sym {
+  font-family: var(--font-data);
+  font-weight: 700;
+  font-size: 10px;
+  color: var(--ink);
+}
+
+.cell-val {
+  font-family: var(--font-data);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+.heatmap-cell.pos .cell-val { color: var(--call-hi); }
+.heatmap-cell.neg .cell-val { color: var(--put-hi); }
+
+/* Table and Sort Headers */
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--dur-fast, 120ms);
+}
+
+th.sortable:hover {
+  color: var(--phosphor);
+}
+
+.sort-arr {
+  font-size: 10px;
+  margin-left: 2px;
+  color: var(--phosphor);
 }
 
 .board-scroll {
@@ -369,7 +758,6 @@ function selectionDisplay(row: OptionsBoardRow): string {
 }
 .chip.halt { color: var(--halt); }
 .chip.warn { color: var(--warn); }
-
 
 .board-msg {
   padding: 1rem 0.75rem;

@@ -350,7 +350,7 @@ def test_pairwise_token_contract_invariants_and_api_schema(tokens_css_path):
     # 2. Token rules
     tokens = tokens_css_path.read_text(encoding="utf-8")
     assert "--phosphor: #a9c46c;" in tokens
-    assert "--void: #0a0b0f;" in tokens
+    assert "--void: #08090c;" in tokens
     
     # Verify no disallowed neon/rainbow accents
     banned_accents = ["#ff00ff", "#00ffff", "#00ff00", "magenta", "cyan"]

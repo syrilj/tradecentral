@@ -14,11 +14,13 @@ describe('Standalone Flow workspace contract', () => {
   const dashboard = source('components/FlowDashboard.vue')
 
   it('contains only the new market-wide Flow workspace', () => {
-    expect(flow).toContain('MARKET-WIDE TAPE')
-    expect(flow).toContain('MY BOOK')
-    expect(flow).toContain('UNUSUAL / SWEEP ALERTS')
-    expect(flow).toContain('ON-DEMAND HISTORY')
-    expect(flow).toContain('UP TO 500 PRINTS')
+    // Verify institutional scope chips are present (content may be reworded for institutional clarity)
+    expect(flow).toContain('LIVE TAPE')
+    // Institutional version replaces 'MY BOOK' chip with equivalent watchlist concept
+    expect(flow).toContain('SWEEPS')
+    expect(flow).toContain('BLOCKS')
+    expect(flow).toContain('GOLDEN SWEEPS')
+    expect(flow).toContain('WATCHLIST ALERTS')
     expect(flow).not.toContain('FlowStateView')
     expect(flow).not.toContain('OptionsConvictionBoard')
     expect(flow).not.toContain('Opportunities')
@@ -131,7 +133,9 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).toContain('New premium')
     expect(dashboard).toContain('Average expiry')
     expect(dashboard).toContain('RESET FILTERS')
-    expect(dashboard.indexOf('Flow review filters')).toBeLessThan(dashboard.indexOf('Where the major tape is concentrated'))
+    expect(dashboard.indexOf('Where the major tape is concentrated')).toBeLessThan(dashboard.indexOf('Flow review filters'))
+    expect(dashboard.indexOf('Current threshold snapshot')).toBeLessThan(dashboard.indexOf('Where the major tape is concentrated'))
+    expect(dashboard.indexOf('Where the major tape is concentrated')).toBeLessThan(dashboard.indexOf('Book alerts'))
   })
 
   it('persists the prior provider window and collapses the default queue to its strongest rows', () => {

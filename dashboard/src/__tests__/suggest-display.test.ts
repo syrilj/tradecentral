@@ -6,10 +6,15 @@ import { DASH, signedPct } from '@/format'
 import {
   UNMEASURED,
   freshnessLabel,
+  formatSetupLevel,
+  formatSupportLevels,
+  formatTakeProfitZones,
+  levelSourceLabel,
   presentSetupRows,
   qlibAlignmentLabel,
   sellSourceLabel,
   setupCalculatorQuery,
+  setupHeadlineInvalidation,
   setupsFeedRequest,
   spotRelativeSellCopy,
   suggestionStabilityCopy,
@@ -39,6 +44,65 @@ describe('suggest display helpers (shipped)', () => {
     expect(suggestedRightTokenClass(null)).toBe('token-unsigned')
     expect(suggestedRightTokenClass('call')).not.toBe('token-long')
     expect(suggestedRightTokenClass('put')).not.toBe('token-short')
+  })
+
+  it('renders strike, supports, invalidation, and take-profit zones from the payload', () => {
+    const payload = {
+      strike: 101.5,
+      strikeSource: 'positions',
+      supports: [
+        { price: 96.25, source: 'options GEX' },
+        { price: 97, source: 'resistance/support' },
+      ],
+      invalidation: 96.25,
+      invalidationSource: 'options GEX',
+      takeProfitZones: [
+        { price: 108, source: 'resistance/support' },
+        { price: 111.5, source: 'technical analysis' },
+      ],
+    }
+    expect(formatSetupLevel(payload.strike, payload.strikeSource)).toBe('$101.50  positions')
+    expect(formatSetupLevel(payload.invalidation, payload.invalidationSource)).toBe('$96.25  options GEX')
+    expect(formatSupportLevels(payload.supports)).toContain('96.25')
+    expect(formatSupportLevels(payload.supports)).toContain('options GEX')
+    expect(formatSupportLevels(payload.supports)).toContain('resistance/support')
+    expect(formatTakeProfitZones(payload.takeProfitZones)).toContain('108.00')
+    expect(formatTakeProfitZones(payload.takeProfitZones)).toContain('technical analysis')
+    expect(levelSourceLabel('positions')).toBe('positions')
+    expect(formatSetupLevel(null, 'positions')).toBe(DASH)
+    expect(formatSupportLevels(null)).toBe(UNMEASURED)
+    expect(formatTakeProfitZones([])).toBe(UNMEASURED)
+    expect(levelSourceLabel(null)).toBe(UNMEASURED)
+  })
+
+  it('prints measured invalidation from the payload and stays unmeasured when only supports exist', () => {
+    const measured = setupHeadlineInvalidation({
+      invalidation: 96.25,
+      invalidationSource: 'options GEX',
+      planInvalidation: 96.25,
+      planInvalidationSource: 'put_wall',
+      supports: [{ price: 96.25, source: 'options GEX' }],
+    })
+    expect(measured.price).toBe(96.25)
+    expect(measured.source).toBe('options GEX')
+
+    const shortWithSupportsOnly = setupHeadlineInvalidation({
+      invalidation: null,
+      invalidationSource: null,
+      planInvalidation: null,
+      planInvalidationSource: null,
+      supports: [{ price: 94, source: 'options GEX' }],
+    })
+    expect(shortWithSupportsOnly.price).toBeNull()
+    expect(shortWithSupportsOnly.source).toBeNull()
+    expect(shortWithSupportsOnly.price).not.toBe(94)
+
+    const watchWithSupportsOnly = setupHeadlineInvalidation({
+      invalidation: null,
+      planInvalidation: null,
+      supports: [{ price: 101, source: 'resistance/support' }],
+    })
+    expect(watchWithSupportsOnly).toEqual({ price: null, source: null })
   })
 
   it('renders a spot-relative sell from the shipped GEX fields, or —', () => {
@@ -172,6 +236,7 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
   const router = readFileSync(join(srcRoot, 'router.ts'), 'utf8')
   const app = readFileSync(join(srcRoot, 'App.vue'), 'utf8')
   const view = readFileSync(join(srcRoot, 'views', 'SuggestView.vue'), 'utf8')
+  const drawer = readFileSync(join(srcRoot, 'components', 'FlowSuggestionDrawer.vue'), 'utf8')
   const risk = readFileSync(join(srcRoot, 'components', 'SetupRiskPanel.vue'), 'utf8')
   const api = readFileSync(join(srcRoot, 'api.ts'), 'utf8')
 
@@ -190,8 +255,16 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
     expect(view).toContain('setupsFeedRequest')
     expect(view).toContain('presentSetupRows')
     expect(view).not.toMatch(/limit:\s*40/)
-    expect(view).toContain('spotRelativeSellCopy')
+    expect(view).toContain('formatTakeProfitZones')
     expect(view).toContain('suggestedRightLabel')
+    expect(view).toContain('label="Strike"')
+    expect(view).toContain('label="Supports"')
+    expect(view).toContain('label="Invalidation"')
+    expect(view).toContain('setupHeadlineInvalidation')
+    expect(view).not.toMatch(/setupHeadlineInvalidation\(\{[^}]*supports:/s)
+    expect(view).toContain('label="Take profit zones"')
+    expect(view).toContain('not supplied')
+    expect(view).toContain('LEVELS INCOMPLETE')
     expect(view).toContain('token-call')
     expect(view).toContain('token-put')
     expect(view).toContain('var(--call)')
@@ -216,6 +289,14 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
     expect(risk).toContain('Max contracts')
     expect(risk).toContain('Planning size only')
     expect(api).toContain('/api/options/suggest')
+    expect(drawer).toContain('label">Strike')
+    expect(drawer).toContain('label">Supports')
+    expect(drawer).toContain('label">Invalidation')
+    expect(drawer).toContain('setupHeadlineInvalidation')
+    expect(drawer).not.toMatch(/setupHeadlineInvalidation\(\{[^}]*supports:/s)
+    expect(drawer).toContain('label">Take profit zones')
+    expect(drawer).toContain('not supplied')
+    expect(drawer).toContain('LEVELS INCOMPLETE')
   })
 
   it('does not ship a broker ticket or a private neon palette', () => {

@@ -1,13 +1,32 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { api } from '@/api'
+import { useChartSize } from '@/composables/useChartSize'
 import { debounce } from '@/composables/useResource'
 import { DASH, num, usd } from '@/format'
-
-type Strategy = 'long_call' | 'long_put' | 'long_straddle'
+import {
+  asStrategy,
+  bookAllocation,
+  buildPayoffChart,
+  computeBookGreeks,
+  evaluateBookDualCurves,
+  evaluateRiskRewardBounds,
+  findBreakevens,
+  netDebit,
+  nextLegId,
+  samplePnlRows,
+  seedBook,
+  STRATEGY_PRESETS,
+  usableLegs,
+  type CalcLeg,
+  type CalcStrategy,
+  type OptionRight,
+} from '@/optionsCalculator'
+import Panel from '@/components/Panel.vue'
+import Readout from '@/components/Readout.vue'
 
 const props = defineProps<{
-  defaultStrategy?: Strategy | string | null
+  defaultStrategy?: CalcStrategy | string | null
   defaultSpot?: number | null
   defaultStrike?: number | null
   defaultDte?: number | null
@@ -16,34 +35,50 @@ const props = defineProps<{
   symbol?: string | null
 }>()
 
-function asStrategy(value: unknown): Strategy {
-  const raw = String(value || '').toLowerCase()
-  if (raw === 'long_put' || raw === 'put') return 'long_put'
-  if (raw === 'long_straddle' || raw === 'straddle') return 'long_straddle'
-  return 'long_call'
-}
-
-const strategy = ref<Strategy>(asStrategy(props.defaultStrategy))
+const strategy = ref<CalcStrategy>(asStrategy(props.defaultStrategy))
 const spot = ref(props.defaultSpot && props.defaultSpot > 0 ? props.defaultSpot : 100)
-const strike = ref(props.defaultStrike && props.defaultStrike > 0 ? props.defaultStrike : 105)
+const strikeHint = ref(props.defaultStrike && props.defaultStrike > 0 ? props.defaultStrike : 105)
 const dte = ref(props.defaultDte != null && props.defaultDte >= 0 ? props.defaultDte : 30)
 const volPct = ref(props.defaultVol && props.defaultVol > 0 ? props.defaultVol * 100 : 30)
-const premium = ref(props.defaultPremium != null && props.defaultPremium >= 0 ? props.defaultPremium : 5)
+const skewPct = ref(0)
+const smilePct = ref(0)
+const premiumHint = ref(props.defaultPremium != null && props.defaultPremium >= 0 ? props.defaultPremium : 5)
+const legs = ref<CalcLeg[]>(seedBook({
+  strategy: strategy.value === 'custom' ? 'long_call' : strategy.value,
+  strike: strikeHint.value,
+  premium: premiumHint.value,
+  dte: dte.value,
+  vol: volPct.value,
+}))
 const error = ref<string | null>(null)
 const loading = ref(false)
 const result = ref<{
-  greeks: { delta: number; gamma: number; theta: number; vega: number; theo: number }
+  spot: number
+  greeks: { delta: number; gamma: number; theta: number; vega: number; rho?: number; theo: number }
   pnl_at_expiry: Array<{ spot: number; pnl: number }>
+  legs: Array<Record<string, unknown>>
 } | null>(null)
 
 watch(() => props.defaultStrategy, (value) => {
-  if (value) strategy.value = asStrategy(value)
+  if (!value) return
+  applyPreset(asStrategy(value))
 })
 watch(() => props.defaultSpot, (value) => {
   if (value && value > 0) spot.value = value
 })
 watch(() => props.defaultStrike, (value) => {
-  if (value && value > 0) strike.value = value
+  if (value && value > 0) {
+    strikeHint.value = value
+    if (strategy.value !== 'custom') {
+      legs.value = seedBook({
+        strategy: strategy.value,
+        strike: value,
+        premium: premiumHint.value,
+        dte: dte.value,
+        vol: volPct.value,
+      })
+    }
+  }
 })
 watch(() => props.defaultDte, (value) => {
   if (value != null && value >= 0) dte.value = value
@@ -52,26 +87,203 @@ watch(() => props.defaultVol, (value) => {
   if (value && value > 0) volPct.value = value * 100
 })
 watch(() => props.defaultPremium, (value) => {
-  if (value != null && value >= 0) premium.value = value
+  if (value != null && value >= 0) {
+    premiumHint.value = value
+    if (strategy.value !== 'custom') {
+      legs.value = seedBook({
+        strategy: strategy.value,
+        strike: strikeHint.value,
+        premium: value,
+        dte: dte.value,
+        vol: volPct.value,
+      })
+    }
+  }
+})
+watch(strikeHint, (value) => {
+  if (strategy.value !== 'custom' && value > 0) {
+    legs.value = seedBook({
+      strategy: strategy.value,
+      strike: value,
+      premium: premiumHint.value,
+      dte: dte.value,
+      vol: volPct.value,
+    })
+  }
 })
 
-const strategyLabel = computed(() => ({
-  long_call: 'Long Call',
-  long_put: 'Long Put',
-  long_straddle: 'Long Straddle',
-}[strategy.value]))
+const strategyLabel = computed(() => {
+  if (strategy.value === 'custom') return 'Custom book'
+  return STRATEGY_PRESETS[strategy.value]?.label ?? 'Options Strategy'
+})
+
+const book = computed(() => usableLegs(legs.value))
+const debit = computed(() => netDebit(legs.value))
+const allocation = computed(() => bookAllocation(legs.value))
+
+// High-speed client-side dual curve and Greeks calculation
+const dualSeries = computed(() => evaluateBookDualCurves({
+  legs: legs.value,
+  spot: spot.value,
+  dteDays: dte.value,
+  volPct: volPct.value,
+  skewPct: skewPct.value,
+  smilePct: smilePct.value,
+}))
+
+const clientGreeks = computed(() => computeBookGreeks(
+  legs.value,
+  spot.value,
+  dte.value,
+  volPct.value,
+))
+
+const bounds = computed(() => evaluateRiskRewardBounds(legs.value, dualSeries.value))
+const breakevens = computed(() => findBreakevens(dualSeries.value))
+const samplePnl = computed(() => samplePnlRows(
+  dualSeries.value,
+  [spot.value, ...legs.value.map((leg) => Number(leg.strike))],
+))
+
+const chartHost = ref<HTMLElement | null>(null)
+const { W: chartW } = useChartSize(chartHost, { minW: 320, minH: 220, fallbackW: 720, fallbackH: 240 })
+const hoverX = ref<number | null>(null)
+
+const payoff = computed(() => buildPayoffChart({
+  series: dualSeries.value,
+  spot: spot.value,
+  strikes: legs.value,
+  width: chartW.value,
+  height: 240,
+  bounds: bounds.value,
+}))
+
+const hoverRead = computed(() => {
+  const chart = payoff.value
+  const series = dualSeries.value
+  if (!chart || hoverX.value == null || series.length < 2) return null
+  const t = (hoverX.value - chart.pad.l) / Math.max(1, chart.plotWidth)
+  const idx = Math.min(series.length - 1, Math.max(0, Math.round(t * (series.length - 1))))
+  const point = series[idx]
+  return {
+    x: Math.min(chart.width - chart.pad.r, Math.max(chart.pad.l, hoverX.value)),
+    spot: point.spot,
+    pnl: point.pnlExpiry,
+    t0Pnl: point.pnlTheo,
+  }
+})
+
+function onChartMove(event: PointerEvent): void {
+  const host = chartHost.value
+  if (!host || !payoff.value) return
+  const box = host.getBoundingClientRect()
+  const x = ((event.clientX - box.left) / Math.max(1, box.width)) * payoff.value.width
+  hoverX.value = x
+}
+
+function onChartLeave(): void {
+  hoverX.value = null
+}
+
+function axisMoney(value: number): string {
+  const abs = Math.abs(value)
+  if (abs >= 1000) return `${value < 0 ? '−' : ''}${usd(abs, 0)}`
+  return usd(value, value % 1 === 0 ? 0 : 2)
+}
+
+function sharePct(value: number | null): string {
+  return value == null ? DASH : `${Math.round(value * 100)}%`
+}
+
+function applyPreset(next: CalcStrategy): void {
+  strategy.value = next === 'custom' ? 'custom' : next
+  if (next === 'custom') return
+  legs.value = seedBook({
+    strategy: next,
+    strike: strikeHint.value,
+    premium: premiumHint.value,
+    dte: dte.value,
+    vol: volPct.value,
+  })
+}
+
+function addLeg(): void {
+  const last = legs.value[legs.value.length - 1]
+  legs.value = [...legs.value, {
+    id: nextLegId(legs.value),
+    right: last?.right ?? 'call',
+    strike: last?.strike ?? strikeHint.value,
+    quantity: last && last.quantity < 0 ? -1 : 1,
+    premium: last?.premium ?? premiumHint.value,
+    dte: last?.dte ?? dte.value,
+    vol: last?.vol ?? volPct.value,
+  }]
+  strategy.value = 'custom'
+}
+
+function removeLeg(id: string): void {
+  if (legs.value.length <= 1) return
+  legs.value = legs.value.filter((leg) => leg.id !== id)
+  strategy.value = 'custom'
+}
+
+function patchLeg(id: string, patch: Partial<CalcLeg>): void {
+  legs.value = legs.value.map((leg) => (leg.id === id ? { ...leg, ...patch } : leg))
+  strategy.value = 'custom'
+}
+
+function setSide(leg: CalcLeg, sign: 1 | -1): void {
+  const mag = Math.abs(Number(leg.quantity)) || 1
+  patchLeg(leg.id, { quantity: sign * mag })
+}
+
+function setRight(leg: CalcLeg, right: OptionRight): void {
+  patchLeg(leg.id, { right })
+}
+
+function setQty(leg: CalcLeg, event: Event): void {
+  const mag = Math.abs(Number((event.target as HTMLInputElement).value))
+  const sign = Number(leg.quantity) < 0 ? -1 : 1
+  patchLeg(leg.id, { quantity: (Number.isFinite(mag) && mag > 0 ? mag : 1) * sign })
+}
+
+function setStrike(leg: CalcLeg, event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  patchLeg(leg.id, { strike: value })
+  if (value > 0) strikeHint.value = value
+}
+
+function setPremium(leg: CalcLeg, event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  patchLeg(leg.id, { premium: value })
+  if (value >= 0) premiumHint.value = value
+}
+
+function setLegVol(leg: CalcLeg, event: Event): void {
+  const raw = (event.target as HTMLInputElement).value
+  const value = raw === '' ? undefined : Number(raw)
+  patchLeg(leg.id, { vol: value != null && Number.isFinite(value) && value > 0 ? value : undefined })
+}
 
 async function run(): Promise<void> {
+  const priced = book.value
+  if (!priced.length) {
+    result.value = null
+    error.value = 'Add a contract to the book'
+    loading.value = false
+    return
+  }
   loading.value = true
   error.value = null
   try {
     result.value = await api.optionsCalculator({
       strategy: strategy.value,
       spot: spot.value,
-      strike: strike.value,
+      strike: priced[0].strike,
       dte: dte.value,
       vol: volPct.value / 100,
-      premium: premium.value,
+      premium: priced[0].premium,
+      legs: priced,
     })
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Calculator unavailable'
@@ -81,127 +293,447 @@ async function run(): Promise<void> {
 }
 
 const refresh = debounce(run, 250)
-watch([strategy, spot, strike, dte, volPct, premium], () => { void refresh() }, { immediate: true })
-
-const samplePnl = computed(() => {
-  const series = result.value?.pnl_at_expiry ?? []
-  if (!series.length) return []
-  const picks = [0, Math.floor(series.length * 0.25), Math.floor(series.length * 0.5), Math.floor(series.length * 0.75), series.length - 1]
-  return [...new Set(picks)].map((index) => series[index])
-})
+watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => { void refresh() }, { immediate: true, deep: true })
 </script>
 
 <template>
-  <section class="calc" aria-labelledby="calc-title">
-    <header>
-      <div>
-        <span class="label">Closed-form P/L</span>
-        <h3 id="calc-title">Options profit calculator</h3>
-      </div>
-      <span class="label">{{ symbol ? `${symbol} · ` : '' }}{{ strategyLabel }} · no order path</span>
-    </header>
-
-    <div class="calc-controls">
-      <fieldset>
-        <legend class="label">Strategy</legend>
-        <div>
-          <button type="button" :class="{ on: strategy === 'long_call' }" @click="strategy = 'long_call'">Long Call</button>
-          <button type="button" :class="{ on: strategy === 'long_put' }" @click="strategy = 'long_put'">Long Put</button>
-          <button type="button" :class="{ on: strategy === 'long_straddle' }" @click="strategy = 'long_straddle'">Long Straddle</button>
+  <div class="calc">
+    <!-- Strategy Presets Toolbar (11 Institutional Presets) -->
+    <div class="presets-shelf">
+      <div class="presets-group">
+        <span class="label group-tag">DIRECTIONAL</span>
+        <div class="presets-btns">
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'long_call' }" @click="applyPreset('long_call')">Long Call</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'long_put' }" @click="applyPreset('long_put')">Long Put</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'bull_call_spread' }" @click="applyPreset('bull_call_spread')">Bull Call Spread</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'bear_put_spread' }" @click="applyPreset('bear_put_spread')">Bear Put Spread</button>
         </div>
-      </fieldset>
+      </div>
+      <div class="presets-group">
+        <span class="label group-tag">INCOME</span>
+        <div class="presets-btns">
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'bull_put_spread' }" @click="applyPreset('bull_put_spread')">Bull Put Spread</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'bear_call_spread' }" @click="applyPreset('bear_call_spread')">Bear Call Spread</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'iron_condor' }" @click="applyPreset('iron_condor')">Iron Condor</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'covered_call' }" @click="applyPreset('covered_call')">Covered Call</button>
+        </div>
+      </div>
+      <div class="presets-group">
+        <span class="label group-tag">VOLATILITY</span>
+        <div class="presets-btns">
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'long_straddle' }" @click="applyPreset('long_straddle')">Long Straddle</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'long_strangle' }" @click="applyPreset('long_strangle')">Long Strangle</button>
+          <button type="button" class="btn-quiet" :class="{ on: strategy === 'calendar_spread' }" @click="applyPreset('calendar_spread')">Calendar Spread</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Parameter Controls Grid -->
+    <div class="calc-controls">
       <label><span class="label">Spot</span><input v-model.number="spot" type="number" min="0.01" step="0.5"></label>
-      <label><span class="label">Strike</span><input v-model.number="strike" type="number" min="0.01" step="0.5"></label>
+      <label><span class="label">Strike</span><input v-model.number="strikeHint" type="number" min="0.01" step="0.5"></label>
       <label><span class="label">Expiry DTE</span><input v-model.number="dte" type="number" min="0" max="730" step="1"></label>
       <label><span class="label">Vol %</span><input v-model.number="volPct" type="number" min="1" max="300" step="0.5"></label>
-      <label><span class="label">Premium</span><input v-model.number="premium" type="number" min="0" step="0.05"></label>
+      <label><span class="label">IV Skew %</span><input v-model.number="skewPct" type="number" min="-50" max="50" step="1" title="Volatility skew adjustment"></label>
+      <label><span class="label">IV Smile %</span><input v-model.number="smilePct" type="number" min="0" max="50" step="1" title="Volatility smile convexity adjustment"></label>
+    </div>
+
+    <div class="calc-desk">
+      <Panel
+        label="Book"
+        index="01"
+        flush
+        :meta="`${symbol ? `${symbol} · ` : ''}${strategyLabel} · ${legs.length} LEG${legs.length === 1 ? '' : 'S'}`"
+      >
+        <template #action>
+          <button type="button" class="btn-quiet" @click="addLeg">Add leg</button>
+        </template>
+        <div class="table-scroll">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th class="label">Side</th>
+                <th class="label">Right</th>
+                <th class="label num">Strike</th>
+                <th class="label num">Qty</th>
+                <th class="label num">Premium</th>
+                <th class="label num">IV %</th>
+                <th class="label num">Debit</th>
+                <th class="label"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="leg in legs" :key="leg.id">
+                <td>
+                  <div class="seg">
+                    <button type="button" class="btn-quiet" :class="{ on: leg.quantity > 0 }" @click="setSide(leg, 1)">Long</button>
+                    <button type="button" class="btn-quiet" :class="{ on: leg.quantity < 0 }" @click="setSide(leg, -1)">Short</button>
+                  </div>
+                </td>
+                <td>
+                  <div class="seg">
+                    <button type="button" class="btn-quiet" :class="{ on: leg.right === 'call' }" @click="setRight(leg, 'call')">Call</button>
+                    <button type="button" class="btn-quiet" :class="{ on: leg.right === 'put' }" @click="setRight(leg, 'put')">Put</button>
+                  </div>
+                </td>
+                <td class="num"><input class="fig" :value="leg.strike" type="number" min="0.01" step="0.5" @input="setStrike(leg, $event)"></td>
+                <td class="num"><input class="fig" :value="Math.abs(leg.quantity)" type="number" min="1" step="1" @input="setQty(leg, $event)"></td>
+                <td class="num"><input class="fig" :value="leg.premium" type="number" min="0" step="0.05" @input="setPremium(leg, $event)"></td>
+                <td class="num"><input class="fig" :value="leg.vol ?? ''" :placeholder="`${volPct}%`" type="number" min="1" max="300" step="1" title="Per-leg implied volatility override" @input="setLegVol(leg, $event)"></td>
+                <td class="fig num" :class="leg.premium * leg.quantity > 0 ? 'neg' : leg.premium * leg.quantity < 0 ? 'pos' : ''">
+                  {{ usd(leg.premium * 100 * leg.quantity, 0) }}
+                </td>
+                <td>
+                  <button type="button" class="btn-quiet" :disabled="legs.length <= 1" @click="removeLeg(leg.id)">Remove</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      <aside class="alloc-stack">
+        <section class="alloc-card ticked" aria-label="Option portfolio allocation">
+          <header>
+            <span class="label">Allocation</span>
+            <strong class="fig">{{ usd(allocation.net, 0) }} net</strong>
+          </header>
+          <div class="alloc-bar" aria-hidden="true">
+            <i class="call-seg" :style="{ width: sharePct(allocation.callShare) }" />
+            <i class="put-seg" :style="{ width: sharePct(allocation.putShare) }" />
+          </div>
+          <dl class="alloc-grid">
+            <div>
+              <dt class="label call-text">Call cash</dt>
+              <dd class="fig" :class="allocation.callDebit > 0 ? 'neg' : allocation.callDebit < 0 ? 'pos' : ''">{{ usd(allocation.callDebit, 0) }}</dd>
+              <small>{{ sharePct(allocation.callShare) }}</small>
+            </div>
+            <div>
+              <dt class="label put-text">Put cash</dt>
+              <dd class="fig" :class="allocation.putDebit > 0 ? 'neg' : allocation.putDebit < 0 ? 'pos' : ''">{{ usd(allocation.putDebit, 0) }}</dd>
+              <small>{{ sharePct(allocation.putShare) }}</small>
+            </div>
+            <div>
+              <dt class="label">Long notional</dt>
+              <dd class="fig neg">{{ usd(allocation.longNotional, 0) }}</dd>
+            </div>
+            <div>
+              <dt class="label">Short credit</dt>
+              <dd class="fig pos">{{ usd(allocation.shortCredit, 0) }}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <dl class="greeks">
+          <Readout label="Delta" :value="clientGreeks ? num(clientGreeks.delta, 3) : (result ? num(result.greeks.delta, 3) : DASH)" />
+          <Readout label="Gamma" :value="clientGreeks ? num(clientGreeks.gamma, 4) : (result ? num(result.greeks.gamma, 4) : DASH)" />
+          <Readout label="Theta" :value="clientGreeks ? usd(clientGreeks.theta, 2) : (result ? usd(result.greeks.theta, 2) : DASH)" />
+          <Readout label="Vega" :value="clientGreeks ? usd(clientGreeks.vega, 2) : (result ? usd(result.greeks.vega, 2) : DASH)" />
+          <Readout label="Rho" :value="clientGreeks ? usd(clientGreeks.rho, 2) : (result?.greeks?.rho != null ? usd(result.greeks.rho, 2) : DASH)" />
+          <Readout label="Theo" :value="clientGreeks ? usd(clientGreeks.theo, 2) : (result ? usd(result.greeks.theo, 2) : DASH)" />
+          <Readout
+            label="Net debit"
+            :value="usd(debit, 0)"
+            :tone="debit > 0 ? 'neg' : debit < 0 ? 'pos' : 'flat'"
+          />
+        </dl>
+      </aside>
     </div>
 
     <p v-if="error" class="calc-error">{{ error }}</p>
-    <dl v-else class="greeks">
-      <div><dt class="label">Delta</dt><dd class="fig">{{ result ? num(result.greeks.delta, 3) : DASH }}</dd></div>
-      <div><dt class="label">Gamma</dt><dd class="fig">{{ result ? num(result.greeks.gamma, 4) : DASH }}</dd></div>
-      <div><dt class="label">Theta</dt><dd class="fig">{{ result ? usd(result.greeks.theta, 2) : DASH }}</dd></div>
-      <div><dt class="label">Vega</dt><dd class="fig">{{ result ? usd(result.greeks.vega, 2) : DASH }}</dd></div>
-      <div><dt class="label">Theo</dt><dd class="fig">{{ result ? usd(result.greeks.theo, 2) : DASH }}</dd></div>
-      <div><dt class="label">Status</dt><dd class="fig">{{ loading ? '…' : 'READY' }}</dd></div>
-    </dl>
 
-    <table v-if="samplePnl.length" class="pnl-table">
-      <thead>
-        <tr>
-          <th class="label">Underlying</th>
-          <th class="label num">P/L at expiry</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="point in samplePnl" :key="point.spot">
-          <td class="fig">{{ usd(point.spot) }}</td>
-          <td class="fig num" :class="point.pnl >= 0 ? 'pos' : 'neg'">{{ usd(point.pnl, 0) }}</td>
-        </tr>
-      </tbody>
-    </table>
-    <p class="calc-note">Multi-leg P/L is the sum of the same function on each leg. Diagnostic only — not an order ticket.</p>
-  </section>
+    <Panel
+      label="P/L at expiry"
+      index="02"
+      flush
+      :meta="loading ? 'PRICING…' : payoff
+        ? `MAX ${bounds.formattedMaxProfit} · MAX ${bounds.formattedMaxLoss}${breakevens.length ? ` · BE ${breakevens.map((level) => usd(level, 2)).join(' · ')}` : ''}`
+        : 'READY'"
+    >
+      <div
+        ref="chartHost"
+        class="payoff-host"
+        @pointermove="onChartMove"
+        @pointerleave="onChartLeave"
+      >
+        <svg
+          v-if="payoff"
+          class="payoff"
+          :viewBox="`0 0 ${payoff.width} ${payoff.height}`"
+          role="img"
+          aria-label="Expiry P/L and T+0 theoretical curve versus underlying"
+        >
+          <g class="gridlines" aria-hidden="true">
+            <line
+              v-for="tick in payoff.yTicks"
+              :key="`y-${tick.label}`"
+              :x1="payoff.pad.l"
+              :x2="payoff.width - payoff.pad.r"
+              :y1="tick.y"
+              :y2="tick.y"
+            />
+          </g>
+          <path class="loss-fill" :d="payoff.lossArea" />
+          <path class="profit-fill" :d="payoff.profitArea" />
+          <line class="axis" :x1="payoff.pad.l" :x2="payoff.width - payoff.pad.r" :y1="payoff.zeroY" :y2="payoff.zeroY" />
+          <line class="spot" :x1="payoff.spotX" :x2="payoff.spotX" :y1="payoff.pad.t" :y2="payoff.height - payoff.pad.b" />
+          <line
+            v-for="mark in payoff.strikes"
+            :key="`k-${mark.right}-${mark.strike}`"
+            class="strike"
+            :class="mark.right"
+            :x1="mark.x"
+            :x2="mark.x"
+            :y1="payoff.pad.t"
+            :y2="payoff.height - payoff.pad.b"
+          />
+          <!-- Expiration P/L Curve (Solid) -->
+          <path class="curve" :d="payoff.line" />
+          <!-- T+0 Theoretical Black-Scholes Curve (Colored) -->
+          <path v-if="payoff.t0Line" class="t0-curve" :d="payoff.t0Line" />
+          <circle
+            v-for="mark in payoff.breakevens"
+            :key="`be-${mark.spot}`"
+            class="be-dot"
+            :cx="mark.x"
+            :cy="payoff.zeroY"
+            r="3"
+          />
+          <line
+            v-if="hoverRead"
+            class="hover"
+            :x1="hoverRead.x"
+            :x2="hoverRead.x"
+            :y1="payoff.pad.t"
+            :y2="payoff.height - payoff.pad.b"
+          />
+          <g class="axis-labels">
+            <text
+              v-for="tick in payoff.yTicks"
+              :key="`yl-${tick.label}`"
+              :x="payoff.pad.l - 6"
+              :y="tick.y + 3"
+            >{{ axisMoney(tick.label) }}</text>
+            <text
+              v-for="tick in payoff.xTicks"
+              :key="`xl-${tick.label}`"
+              class="x-tick"
+              :x="tick.x"
+              :y="payoff.height - 8"
+            >{{ axisMoney(tick.label) }}</text>
+            <text class="spot-tag" :x="payoff.spotX + 4" :y="payoff.pad.t + 10">SPOT {{ usd(spot) }}</text>
+            <text
+              v-for="mark in payoff.breakevens"
+              :key="`bel-${mark.spot}`"
+              class="be-tag"
+              :x="mark.x + 4"
+              :y="payoff.zeroY - 6"
+            >BE {{ usd(mark.spot, 2) }}</text>
+          </g>
+        </svg>
+        <div v-if="hoverRead" class="hover-read fig">
+          {{ usd(hoverRead.spot) }} · EXP: <span :class="hoverRead.pnl >= 0 ? 'pos' : 'neg'">{{ usd(hoverRead.pnl, 0) }}</span> · T+0: <span :class="hoverRead.t0Pnl >= 0 ? 'pos' : 'neg'">{{ usd(hoverRead.t0Pnl, 0) }}</span>
+        </div>
+        <div class="curve-legend label" aria-hidden="true">
+          <span class="leg-item"><i class="swatch expiry" /> EXPIRATION</span>
+          <span class="leg-item"><i class="swatch theo" /> T+0 THEORETICAL</span>
+        </div>
+      </div>
+      <div v-if="samplePnl.length" class="table-scroll">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th class="label">Underlying</th>
+              <th class="label num">P/L at expiry</th>
+              <th class="label num">T+0 Theo P/L</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="point in samplePnl" :key="point.spot">
+              <td class="fig">{{ usd(point.spot) }}</td>
+              <td class="fig num" :class="point.pnlExpiry >= 0 ? 'pos' : 'neg'">{{ usd(point.pnlExpiry, 0) }}</td>
+              <td class="fig num" :class="point.pnlTheo >= 0 ? 'pos' : 'neg'">{{ usd(point.pnlTheo, 0) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+    <p class="calc-note">Multi-leg P/L is computed using closed-form Black-Scholes and intrinsic expiry curves. Diagnostic only — not an order ticket.</p>
+  </div>
 </template>
 
 <style scoped>
-.calc { padding: var(--s4); }
-.calc header {
+.calc { display: grid; gap: var(--s4); }
+
+.presets-shelf {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+}
+
+.presets-group {
+  display: flex;
+  align-items: center;
   gap: var(--s3);
-  margin-bottom: var(--s4);
+  flex-wrap: wrap;
 }
-.calc h3 {
-  margin-top: 3px;
-  color: var(--ink);
-  font: 700 var(--t-small) / 1.2 var(--font-display);
+
+.group-tag {
+  font-size: var(--t-micro, 10px);
+  color: var(--ink-dim);
+  min-width: 90px;
+  letter-spacing: var(--track-label);
 }
+
+.presets-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .calc-controls {
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) repeat(5, minmax(90px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: var(--s3);
 }
-.calc-controls fieldset { border: 0; padding: 0; }
-.calc-controls fieldset > div { display: flex; flex-wrap: wrap; gap: 4px; }
-.calc-controls button {
-  min-height: 28px;
-  padding: 0 8px;
-  color: var(--text-secondary);
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--panel);
-  font-family: var(--font-display);
-  font-size: 10px;
-  font-weight: 750;
-  cursor: pointer;
-}
-.calc-controls button.on { color: var(--void); border-color: var(--phosphor); background: var(--phosphor); }
+
 .calc-controls label { display: flex; flex-direction: column; gap: 4px; }
-.calc-controls input {
-  min-height: 28px;
-  padding: 0 8px;
+.calc-controls input,
+.grid input {
+  min-height: var(--density-control-h);
+  width: 100%;
+  padding: 0 var(--s3);
   color: var(--ink);
-  border: var(--hair) solid var(--rule-hi);
+  border: var(--hair) solid var(--rule);
   background: var(--void-lift);
   font-family: var(--font-data);
+  font-size: var(--t-small);
+  border-radius: 2px;
 }
+.btn-quiet.on {
+  color: var(--phosphor);
+  border-color: var(--phosphor);
+  background: var(--phosphor-wash);
+}
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.calc-desk {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+  gap: var(--s4);
+  align-items: start;
+}
+.alloc-stack { display: grid; gap: var(--s3); min-width: 0; }
+.alloc-card {
+  display: grid;
+  gap: var(--s3);
+  padding: var(--s3);
+  border: var(--hair) solid var(--rule);
+  background: var(--panel);
+}
+.alloc-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.alloc-card header strong { color: var(--ink); font-size: var(--t-small); }
+.alloc-bar {
+  display: flex;
+  height: 8px;
+  overflow: hidden;
+  background: var(--rule-faint);
+}
+.alloc-bar .call-seg { display: block; background: var(--call); }
+.alloc-bar .put-seg { display: block; background: var(--put); }
+.alloc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+}
+.alloc-grid dd { margin-top: 2px; }
+.alloc-grid small { color: var(--ink-faint); font-size: var(--t-micro); }
+.call-text { color: var(--call-hi); }
+.put-text { color: var(--put-hi); }
 .greeks {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--s3);
-  margin-top: var(--s4);
 }
-.greeks dd { margin-top: 2px; color: var(--ink); }
-.pnl-table { width: 100%; margin-top: var(--s4); border-collapse: collapse; }
-.pnl-table th, .pnl-table td { padding: 5px 0; border-bottom: var(--hair) solid var(--rule); }
-.pnl-table .num { text-align: right; }
+.payoff-host {
+  position: relative;
+  min-height: 240px;
+  background: var(--void-lift);
+}
+.payoff {
+  display: block;
+  width: 100%;
+  height: 240px;
+}
+.payoff .gridlines line { stroke: var(--rule-faint); stroke-width: 1; }
+.payoff .axis { stroke: var(--rule-hi); stroke-width: 1; }
+.payoff .spot { stroke: var(--phosphor); stroke-width: 1; stroke-dasharray: 3 3; }
+.payoff .strike { stroke-width: 1; stroke-dasharray: 2 3; }
+.payoff .strike.call { stroke: var(--call); }
+.payoff .strike.put { stroke: var(--put); }
+.payoff .curve { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.payoff .t0-curve { fill: none; stroke: var(--call-hi); stroke-width: 1.5; stroke-dasharray: 4 2; }
+.payoff .profit-fill { fill: var(--long-wash); }
+.payoff .loss-fill { fill: var(--short-wash); }
+.payoff .be-dot { fill: var(--ink); }
+.payoff .hover { stroke: var(--ink-dim); stroke-width: 1; }
+.payoff .axis-labels text {
+  fill: var(--ink-faint);
+  font: 500 10px var(--font-data);
+  text-anchor: end;
+}
+.payoff .axis-labels .x-tick { text-anchor: middle; }
+.payoff .spot-tag,
+.payoff .be-tag { text-anchor: start; fill: var(--phosphor); }
+.payoff .be-tag { fill: var(--ink-dim); }
+.hover-read {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--ink);
+  font-size: var(--t-tiny);
+  background: var(--panel-hi);
+  padding: 2px 6px;
+  border: var(--hair) solid var(--rule-hi);
+}
+.curve-legend {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  display: flex;
+  gap: var(--s3);
+  font-size: 9px;
+  color: var(--ink-dim);
+}
+.leg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.swatch {
+  width: 10px;
+  height: 2px;
+  display: inline-block;
+}
+.swatch.expiry { background: var(--ink); }
+.swatch.theo { background: var(--call-hi); }
+
 .pos { color: var(--long); }
 .neg { color: var(--short); }
-.calc-note, .calc-error { margin-top: var(--s3); color: var(--text-tertiary); font-size: var(--t-micro); }
+.calc-note, .calc-error { color: var(--ink-faint); font-size: var(--t-micro); }
 .calc-error { color: var(--warn); }
-@media (max-width: 900px) {
-  .calc-controls, .greeks { grid-template-columns: 1fr 1fr; }
+@media (max-width: 980px) {
+  .calc-desk { grid-template-columns: 1fr; }
+  .greeks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .greeks { grid-template-columns: 1fr 1fr; }
 }
 </style>

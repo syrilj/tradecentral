@@ -4,8 +4,6 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   api,
   ApiError,
-  type FintelIntelPayload,
-  type FintelStatusPayload,
   type LiveOpportunities,
   type LiveOpportunityRow,
   type OptionsIntelligence,
@@ -13,7 +11,6 @@ import {
   type OptionsRange,
   type OptionsTapeRow,
   type SearchHit,
-  type SentimentPayload,
   type StatusPayload,
   type UnusualFlowPayload,
   type UnusualFlowRow,
@@ -31,17 +28,12 @@ import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
 import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
 import { activityLeanRead, printWhy } from '@/optionsTape'
-import {
-  insiderLean,
-  presentFintelInsiders,
-  presentSecFilings,
-} from '@/insiderDisplay'
 import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
 type NoisePreset = 'strict' | 'balanced' | 'raw'
 type TapeView = 'near' | 'all' | 'whales' | 'anomalies' | 'calls' | 'puts' | 'sweeps' | 'blocks' | 'itm' | 'unusual' | 'momentum' | 'moonshot'
 type TapeSort = 'near-signed' | 'newest' | 'premium' | 'anomaly'
-type PremiumFloor = 0 | 25_000 | 50_000 | 100_000 | 250_000
+type PremiumFloor = 0 | 25_000 | 50_000 | 100_000 | 250_000 | 500_000 | 1_000_000
 
 const status = inject<Resource<StatusPayload>>('status')
 const route = useRoute()
@@ -89,24 +81,9 @@ const historyAsOfSyncing = ref(false)
  * that can supersede the chain request and leave the map blank.
  */
 const symbolLoadSyncing = ref(false)
-const PREMIUM_FLOORS: PremiumFloor[] = [0, 25_000, 50_000, 100_000, 250_000]
+const PREMIUM_FLOORS: PremiumFloor[] = [0, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
 const book = ref(loadWatchlist())
 const onBook = computed(() => watchlistHas(book.value, symbol.value))
-
-const filings = useResource<SentimentPayload>(
-  () => api.sentiment(symbol.value),
-  { intervalMs: 0 },
-)
-const fintelStatus = useResource<FintelStatusPayload>(
-  () => api.fintelStatus(),
-  { intervalMs: 300_000 },
-)
-const fintelIntel = useResource<FintelIntelPayload>(
-  () => api.fintelIntel(symbol.value, { country: 'US', depth: 'full' }),
-  { intervalMs: 0, immediate: false },
-)
-
-
 
 function toggleBook(): void {
   book.value = toggleWatchlistSymbol(book.value, symbol.value).symbols
@@ -478,8 +455,6 @@ function selectSymbol(): void {
 /** Watch symbol itself so any path that mutates it (route, search, board click) forces a load. */
 watch(symbol, (next, prev) => {
   if (!next || next === prev) return
-  void filings.refresh({ clear: true })
-  fintelIntel.clear()
   // loadSymbol already refreshes; this catches external mutations only.
   if (resource.data.value?.symbol === next) return
   if (resource.loading.value || symbolLoadSyncing.value) return
@@ -543,11 +518,6 @@ const leanRead = computed(() => {
     decision_authorized: false,
   })
 })
-const secFilings = computed(() => presentSecFilings(filings.data.value?.symbol_filings))
-const form4Filings = computed(() => secFilings.value.filter((row) => row.kind === 'insider'))
-const fintelInsiders = computed(() => presentFintelInsiders(fintelIntel.data.value?.blocks?.insiders))
-const insiderMix = computed(() => insiderLean(fintelInsiders.value))
-const fintelConfigured = computed(() => fintelStatus.data.value?.configured === true)
 const expiry = computed(() => d.value?.chain_context)
 const historyMeta = computed(() => d.value?.history)
 const historyDays = computed(() => historyMeta.value?.available_dates ?? [])
@@ -827,9 +797,61 @@ function tapeLean(row: OptionsTapeRow): { label: string; cls: string; title: str
 
 function tradeClassLabel(row: OptionsTapeRow): string {
   const raw = (row.trade_class || 'single').toLowerCase()
-  if (raw === 'sweep' || row.anomaly_flags.includes('sweep_burst')) return 'SWEEP'
+  if (raw === 'sweep' || row.anomaly_flags.includes('sweep_burst')) {
+    // Golden sweep: premium ≥ $500k with sweep classification = institutional conviction
+    return row.premium >= 500_000 ? 'GOLDEN SWEEP' : 'SWEEP'
+  }
   if (raw === 'block') return 'BLOCK'
+  if (raw === 'split') return 'SPLIT'
+  if (raw === 'multileg') return 'MULTILEG'
   return 'SINGLE'
+}
+
+/** Maps a trade class label to its global token CSS class from tokens.css */
+function tradeClassTokenCls(label: string): string {
+  if (label === 'GOLDEN SWEEP') return 'flow-badge badge-golden-sweep'
+  if (label === 'SWEEP') return 'flow-badge badge-sweep'
+  if (label === 'BLOCK') return 'flow-badge badge-block'
+  if (label === 'SPLIT') return 'flow-badge badge-split'
+  if (label === 'MULTILEG') return 'flow-badge badge-multileg'
+  return 'flow-badge badge-standard'
+}
+
+/** Returns the whale-indicator tier class for premium size */
+function premiumTierCls(premium: number): string {
+  if (premium >= 1_000_000) return 'whale-indicator tier-mega-whale'
+  if (premium >= 500_000) return 'whale-indicator tier-500k'
+  if (premium >= 100_000) return 'whale-indicator tier-100k'
+  return ''
+}
+
+/** Premium tier label for the indicator */
+function premiumTierLabel(premium: number): string {
+  if (premium >= 1_000_000) return '$1M+'
+  if (premium >= 500_000) return '$500K+'
+  if (premium >= 100_000) return '$100K+'
+  return ''
+}
+
+/** Vol/OI ratio tier for the vol-oi-pill */
+function volOiRatio(row: OptionsTapeRow): number | null {
+  const oi = row.open_interest
+  const vol = row.volume ?? row.contracts ?? 0
+  if (!oi || oi <= 0 || vol <= 0) return null
+  return vol / oi
+}
+
+function volOiPillCls(ratio: number | null): string {
+  if (ratio == null) return 'vol-oi-pill'
+  if (ratio >= 3) return 'vol-oi-pill extreme'
+  if (ratio >= 1) return 'vol-oi-pill high'
+  return 'vol-oi-pill'
+}
+
+function volOiLabel(ratio: number | null): string {
+  if (ratio == null) return '—'
+  if (ratio >= 10) return '>10x'
+  return `${ratio.toFixed(1)}x`
 }
 
 function contractsOf(row: OptionsTapeRow): number {
@@ -1044,9 +1066,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <div class="identity">
         <div class="symbol-lockup">
           <span class="active-symbol fig">{{ symbol }}</span>
-          <span class="view-label label">OPTIONS INTELLIGENCE</span>
+          <span class="view-label label">OPTIONS FLOW</span>
           <button type="button" class="book-pin label" :class="{ on: onBook }" @click="toggleBook">
-            {{ onBook ? 'PINNED TO BOOK' : 'PIN TO BOOK' }}
+            {{ onBook ? '★ BOOK' : '☆ BOOK' }}
           </button>
         </div>
       </div>
@@ -1338,55 +1360,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       </div>
     </section>
 
-    <Panel
-      label="INSIDERS + FILINGS"
-      index="02"
-      class="insider-panel rise"
-      :meta="`${form4Filings.length} FORM 4 · ${fintelInsiders.length} FINTEL`"
-    >
-      <div class="insider-grid">
-        <div>
-          <h3 class="label">SEC Form 4 / events</h3>
-          <p v-if="filings.error.value" class="note">{{ filings.error.value }}</p>
-          <p v-else-if="filings.loading.value && !secFilings.length" class="note">Loading EDGAR…</p>
-          <ul v-else-if="secFilings.length" class="insider-list">
-            <li v-for="(row, i) in secFilings.slice(0, 6)" :key="`${row.form}-${row.filed}-${i}`">
-              <span class="kind label" :class="row.kind">{{ row.kind.toUpperCase() }}</span>
-              <span class="fig">{{ row.form }}</span>
-              <span class="dim">{{ row.filed || DASH }}</span>
-              <a v-if="row.url" :href="row.url" target="_blank" rel="noopener" class="label">doc</a>
-            </li>
-          </ul>
-          <p v-else class="note">No recent Form 4 / 8-K / 13D for this ticker, or ticker not in the SEC map.</p>
-        </div>
-        <div>
-          <h3 class="label">Fintel insider tape</h3>
-          <p v-if="!fintelConfigured" class="note">
-            FINTEL_API_KEY is not configured. Form 4 still loads from EDGAR.
-          </p>
-          <p v-else-if="fintelIntel.error.value" class="note">{{ fintelIntel.error.value }}</p>
-          <p v-else-if="!fintelIntel.data.value" class="note">
-            Full Fintel insiders burn monthly weight.
-            <button type="button" class="label raw-btn" :disabled="fintelIntel.loading.value" @click="void fintelIntel.refresh({ clear: true })">
-              {{ fintelIntel.loading.value ? 'LOADING…' : 'LOAD FINTEL INSIDERS' }}
-            </button>
-          </p>
-          <template v-else>
-            <p class="note">{{ insiderMix.buys }} buy / {{ insiderMix.sells }} sell · {{ insiderMix.label }} · not authorized</p>
-            <ul v-if="fintelInsiders.length" class="insider-list">
-              <li v-for="(row, i) in fintelInsiders.slice(0, 6)" :key="`${row.who}-${i}`">
-                <span class="kind label" :class="row.side">{{ row.side.toUpperCase() }}</span>
-                <span class="fig">{{ row.who }}</span>
-                <span class="dim">{{ row.detail }}</span>
-              </li>
-            </ul>
-            <p v-else class="note">Fintel returned no insider rows.</p>
-          </template>
-        </div>
-      </div>
-      <RouterLink class="label insider-more" :to="{ name: 'insiders', query: { symbol } }">OPEN INSIDERS DESK →</RouterLink>
-    </Panel>
-
     <!-- Dense workbench: compact flow bar, then squeeze + dominant GEX. -->
     <div class="workbench">
       <Panel
@@ -1567,9 +1540,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
     </Panel>
 
     <Panel
-      label="Qualified Flow Tape"
+      label="QUALIFIED FLOW TAPE"
       index="05"
-      :meta="`${visibleTape.length}/${d?.flow_tape.length ?? 0} · ${tapeClassCounts.whales} WHALES · ${tapeClassCounts.sweeps} SWP · ${tapeClassCounts.blocks} BLK`"
+      :meta="`${visibleTape.length}/${d?.flow_tape.length ?? 0} PRINTS · ${tapeClassCounts.whales} WHALES · ${tapeClassCounts.sweeps} SWEEPS · ${tapeClassCounts.blocks} BLOCKS`"
       :live="tapeHealth.status === 'live'"
       flush
       class="tape-panel tape-panel-full"
@@ -1648,7 +1621,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             :class="{
               anomalous: row.anomaly_flags.length,
               isWhale: row.premium >= 100_000,
-              isMegaWhale: row.premium >= 250_000,
+              isMegaWhale: row.premium >= 500_000,
+              isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
               [tapeLean(row).cls]: true,
             }"
           >
@@ -1656,8 +1630,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <span class="type-pill label" :class="row.right">{{ row.right === 'call' ? 'CALL' : 'PUT' }}</span>
               <span class="lean-pill label" :class="tapeLean(row).cls">{{ tapeLean(row).label }}</span>
               <span class="ts-time fig">{{ row.timestamp.slice(11, 19) }}</span>
-              <span v-if="row.premium >= 250_000" class="flag-chip mega-whale-chip label">MEGA</span>
-              <span v-else-if="row.premium >= 100_000" class="flag-chip whale-chip label">WHALE</span>
+              <span
+                v-if="premiumTierCls(row.premium)"
+                :class="premiumTierCls(row.premium)"
+              >{{ premiumTierLabel(row.premium) }}</span>
+              <span :class="tradeClassTokenCls(tradeClassLabel(row))" style="margin-left:auto;">{{ tradeClassLabel(row) }}</span>
             </div>
 
             <div class="card-body-row">
@@ -1689,19 +1666,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         <table class="tape-table">
           <thead>
             <tr>
-              <th class="label flag-col">Flag</th>
+              <th class="label flag-col">Tier</th>
               <th class="label">Time</th>
               <th class="label tape-col-group">Lean</th>
               <th class="label">Side</th>
               <th class="label">Class</th>
               <th class="label tape-col-group">Expiry</th>
               <th class="label num-col">Strike</th>
-              <th class="label num-col tape-col-group stock-head">Stock Price</th>
-              <th class="label num-col tape-col-group">Paid $</th>
+              <th class="label num-col tape-col-group stock-head">Spot</th>
+              <th class="label num-col tape-col-group">Fill</th>
               <th class="label num-col">Ct</th>
+              <th class="label num-col vol-oi-head">Vol/OI</th>
               <th class="label num-col tape-premium-head">Premium</th>
-              <th class="label tape-col-group">Aggressor</th>
-              <th class="label num-col">Notional edge</th>
+              <th class="label tape-col-group">Side</th>
+              <th class="label num-col">Signed</th>
               <th class="label">Why</th>
             </tr>
           </thead>
@@ -1712,29 +1690,35 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               :class="{
                 anomalous: row.anomaly_flags.length,
                 isWhale: row.premium >= 100_000,
-                isMegaWhale: row.premium >= 250_000,
+                isMegaWhale: row.premium >= 500_000,
+                isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
                 [tapeLean(row).cls]: true,
               }"
             >
               <td class="flag-col">
-                <span v-if="row.premium >= 250_000" class="flag-chip label mega-whale-chip" title="Mega Whale trade ≥ $250,000">MEGA</span>
-                <span v-else-if="row.premium >= 100_000" class="flag-chip label whale-chip" title="Whale trade ≥ $100,000">WHALE</span>
-                <span v-else-if="!row.anomaly_flags.length" class="no-flag label">—</span>
-                <span v-for="flag in row.anomaly_flags" :key="flag" class="flag-chip label" :class="flag">{{ anomalyLabel(flag) }}</span>
+                <span
+                  v-if="premiumTierCls(row.premium)"
+                  :class="premiumTierCls(row.premium)"
+                  :title="`Premium tier: ${premiumTierLabel(row.premium)}`"
+                >{{ premiumTierLabel(row.premium) }}</span>
+                <span v-else-if="row.anomaly_flags.length" class="flag-chip label">FLAG</span>
+                <span v-else class="no-flag label">—</span>
               </td>
-              <td class="fig dim">{{ row.timestamp.slice(5, 16).replace('T', ' ') }}</td>
+              <td class="fig dim ts-cell">{{ row.timestamp.slice(11, 19) }}</td>
               <td class="tape-col-group">
                 <span class="bias-chip label" :class="tapeLean(row).cls" :title="tapeLean(row).title">
                   {{ tapeLean(row).label }}
                 </span>
               </td>
               <td>
-                <span class="type-chip label" :class="row.right">{{ row.right === 'call' ? 'CALL' : 'PUT' }}</span>
+                <span class="type-chip label" :class="row.right">{{ row.right === 'call' ? 'C' : 'P' }}</span>
               </td>
               <td>
-                <span class="class-chip label" :class="tradeClassLabel(row).toLowerCase()">{{ tradeClassLabel(row) }}</span>
+                <span :class="tradeClassTokenCls(tradeClassLabel(row))">
+                  {{ tradeClassLabel(row) }}
+                </span>
               </td>
-              <td class="fig dim tape-col-group">{{ row.expiry ? shortDate(row.expiry) : '—' }}</td>
+              <td class="fig dim tape-col-group expiry-cell">{{ row.expiry ? shortDate(row.expiry) : '—' }}</td>
               <td class="fig num-col strike-cell">{{ usd(row.strike) }}</td>
               <td class="fig num-col tape-col-group stock-cell">
                 <div class="stock-lockup">
@@ -1743,15 +1727,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </div>
               </td>
               <td class="fig num-col tape-col-group" :title="row.premium_estimated ? 'Back-solved from notional' : 'Per-contract fill'">
-                {{ pricePaid(row) == null ? DASH : num(pricePaid(row), 2) }}
+                {{ pricePaid(row) == null ? DASH : num(pricePaid(row)!, 2) }}
               </td>
               <td class="fig num-col">{{ num(contractsOf(row), 0) }}</td>
+              <td class="num-col">
+                <span :class="volOiPillCls(volOiRatio(row))" :title="row.open_interest != null ? `OI: ${num(row.open_interest, 0)}` : 'OI unavailable'">
+                  {{ volOiLabel(volOiRatio(row)) }}
+                </span>
+              </td>
               <td class="fig num-col premium-cell" :class="[row.right, { 'whale-prem': row.premium >= 100_000 }]">
                 ${{ compact(row.premium) }}
                 <small v-if="row.premium_estimated" class="est">≈</small>
               </td>
               <td class="tape-col-group">
-                <span class="agg label" :class="aggressorLabel(row).cls" :title="aggressorLabel(row).cls === 'unknown' ? 'LSE does not report buy/sell on this print' : ''">
+                <span class="agg label" :class="aggressorLabel(row).cls" :title="aggressorLabel(row).cls === 'unknown' ? 'Feed does not report buy/sell on this print' : ''">
                   {{ aggressorLabel(row).label }}
                 </span>
               </td>
@@ -1766,7 +1755,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <template v-if="row.signed_premium != null">
                     {{ row.signed_premium > 0 ? '+' : '−' }}${{ compact(Math.abs(row.signed_premium)) }}
                   </template>
-                  <template v-else>${{ compact(row.premium) }} · unsig</template>
+                  <template v-else>unsig</template>
                 </span>
               </td>
               <td class="why-cell label" :title="printWhy(row).join(' · ') || 'No unusual flags'">
@@ -2100,18 +2089,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 
 .options-view :deep(.panel) {
-  border: 1px solid var(--rule);
   border-radius: 0;
-  padding: 0;
-  overflow: hidden;
-  background: var(--panel);
+  padding: var(--s1);
 }
-.options-view :deep(.panel:hover) { border-color: var(--rule-hi); }
 .options-view :deep(.panel > .head) {
   min-height: 38px;
-  padding: var(--s2) var(--s3);
-  border-bottom: 1px solid var(--rule);
-  background: var(--void-lift);
+  padding: var(--s1) var(--s2);
+  border-bottom: var(--hair) solid var(--rule);
 }
 .options-view :deep(.panel > .head .idx) { color: var(--phosphor); }
 
@@ -2123,7 +2107,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   flex: 0 0 auto;
 }
 .view-tab {
-  padding: 5px 14px;
+  padding: var(--s2) var(--s3);
   border: none;
   border-right: var(--hair) solid var(--rule);
   background: transparent;
@@ -2146,7 +2130,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 34px;
   padding: var(--s2) var(--s3);
   color: var(--call-hi);
-  border: 1px solid color-mix(in srgb, var(--call) 42%, var(--rule));
+  border: var(--hair) solid color-mix(in srgb, var(--call) 42%, var(--rule));
   background: var(--call-wash);
   text-decoration: none;
 }
@@ -2159,24 +2143,28 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 
 .command {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(128px, 176px) auto auto minmax(120px, 168px) minmax(0, 1fr);
   align-items: center;
   gap: var(--s2) var(--s3);
-  flex-wrap: wrap;
-  min-height: 64px;
-  padding: var(--s3) var(--s4);
-  border: 1px solid var(--rule-hi);
-  border-left: 3px solid var(--phosphor-dim);
+  min-height: 56px;
+  padding: var(--s2) var(--s4);
+  border: var(--hair) solid var(--rule);
+  border-left: 2px solid var(--phosphor-dim);
   background-color: var(--panel);
 }
 .identity {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: center;
   min-width: 0;
-  margin-right: 4px;
 }
-.symbol-lockup { display: grid; align-items: start; gap: var(--s1); line-height: 1; }
+.symbol-lockup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px var(--s3);
+  line-height: 1;
+}
 .book-pin {
   justify-self: start;
   min-height: 22px;
@@ -2194,7 +2182,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   align-items: end;
   padding: var(--s3);
 }
-.active-symbol { font-size: 1.7rem; font-weight: 720; letter-spacing: -.05em; color: var(--ink); }
+.active-symbol { font-size: var(--t-fig); font-weight: 500; letter-spacing: var(--track-tight); color: var(--ink); }
 .slash { font: 300 1rem var(--font-display); color: var(--rule-hi); }
 .view-name { font: 700 0.85rem var(--font-display); letter-spacing: .1em; color: var(--ink-dim); }
 .observed { color: var(--ink-ghost); font-size: var(--t-micro); white-space: nowrap; }
@@ -2232,7 +2220,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .symbol-entry {
   display: flex;
   height: 34px;
-  border: 1px solid var(--rule-hi);
+  border: var(--hair) solid var(--rule-hi);
   overflow: hidden;
   background: var(--void-lift);
 }
@@ -2253,7 +2241,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-size: var(--t-micro);
   font-weight: 800;
 }
-.load-btn:hover:not(:disabled) { background: var(--ink); }
+.load-btn:hover:not(:disabled) { background: var(--phosphor-dim); }
 .load-btn:disabled { opacity: 0.5; }
 .search-hits {
   position: absolute;
@@ -2327,7 +2315,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .unusual-body { border-top: var(--hair) solid var(--rule); }
 .unusual-actions { display: flex; align-items: center; gap: var(--s3); flex: 0 0 auto; margin-left: auto; padding-right: var(--s2); }
 .scan-btn {
-  padding: 5px 10px;
+  padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--phosphor-dim);
   color: var(--phosphor);
   background: var(--phosphor-wash);
@@ -2340,20 +2328,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .unusual-table { max-height: 260px; overflow: auto; }
 .unusual-table table { width: 100%; border-collapse: collapse; }
 .unusual-table th,
-.unusual-table td { padding: 5px 8px; border-bottom: var(--hair) solid var(--rule); text-align: left; }
+.unusual-table td { padding: var(--s2) var(--s4); border-bottom: var(--hair) solid var(--rule-faint); text-align: left; }
 .unusual-table th.num,
 .unusual-table td.num { text-align: right; }
 .unusual-table tbody tr { cursor: pointer; }
 .unusual-table tbody tr:hover { background: var(--panel-hi); }
 .unusual-table tbody tr.active { background: var(--phosphor-wash); box-shadow: inset 2px 0 0 var(--phosphor); }
-.rank-idx { color: var(--ink-ghost); margin-right: 8px; font-size: 10px; }
+.rank-idx { color: var(--ink-ghost); margin-right: 8px; font-size: var(--t-micro); }
 .sym { letter-spacing: 0.04em; }
 .flag-stack { display: flex; flex-wrap: wrap; gap: 4px; }
 .flag-stack span {
   padding: 2px 6px;
   border: var(--hair) solid var(--rule);
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-micro);
   letter-spacing: 0.06em;
 }
 .flag-stack span.live { color: var(--phosphor); border-color: color-mix(in srgb, var(--phosphor) 45%, var(--rule)); }
@@ -2361,13 +2349,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .activity-score > i { display: block; height: 3px; overflow: hidden; background: var(--rule); }
 .activity-score > i b { display: block; height: 100%; background: var(--phosphor); }
 .live-value { color: var(--phosphor); }
-.flow-count { display: block; color: var(--ink-ghost); font-size: 9px; }
+.flow-count { display: block; color: var(--ink-ghost); font-size: var(--t-micro); }
 .sep { color: var(--ink-ghost); margin: 0 2px; }
 .side-pill {
   display: inline-block;
   padding: 2px 7px;
   border: var(--hair) solid var(--rule);
-  font-size: 9px;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
 }
 .side-pill.pos { color: var(--long); border-color: color-mix(in srgb, var(--long) 40%, var(--rule)); }
@@ -2379,7 +2367,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .opportunities-table { max-height: 260px; overflow: auto; }
 .opportunities-table table { width: 100%; border-collapse: collapse; }
 .opportunities-table th,
-.opportunities-table td { padding: 5px 8px; border-bottom: var(--hair) solid var(--rule); text-align: left; }
+.opportunities-table td { padding: var(--s2) var(--s4); border-bottom: var(--hair) solid var(--rule-faint); text-align: left; }
 .opportunities-table th.num,
 .opportunities-table td.num { text-align: right; }
 .opportunities-table tbody tr { cursor: pointer; }
@@ -2393,7 +2381,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   display: inline-block;
   padding: 2px 7px;
   border: var(--hair) solid var(--rule);
-  font-size: 9px;
+  font-size: var(--t-micro);
   letter-spacing: 0.06em;
 }
 .gate-chip.pass { color: var(--long); border-color: color-mix(in srgb, var(--long) 45%, var(--rule)); background: var(--long-wash); }
@@ -2403,7 +2391,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 2px 7px;
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-micro);
   letter-spacing: 0.06em;
 }
 .basis.both { border-color: var(--phosphor-dim); color: var(--phosphor); }
@@ -2418,7 +2406,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .composite-meter .meter-fill.pos { background: var(--long); }
 .composite-meter .meter-fill.neg { background: var(--short); }
 .composite-meter .meter-fill.flat { background: var(--ink-ghost); }
-.note.tiny { font-size: 11px; color: var(--ink-faint); }
+.note.tiny { font-size: var(--t-micro); color: var(--ink-faint); }
 .note.pad { padding: var(--s3) var(--s4); }
 .cov { color: var(--ink-ghost); }
 .segment { display: flex; border: 1px solid var(--rule-hi); height: 34px; overflow: hidden; background: var(--void-lift); }
@@ -2645,7 +2633,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 2px 0;
   border-bottom: var(--hair) solid var(--rule-hi);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: var(--t-tiny);
   background: transparent;
   color: var(--ink);
 }
@@ -2753,7 +2741,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .insider-more { display: inline-block; margin: 0 var(--s4) var(--s3); color: var(--phosphor); }
 .why-cell, .why-line {
   color: var(--ink-ghost);
-  font-size: 10px;
+  font-size: var(--t-micro);
   max-width: 22ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2770,26 +2758,28 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: 1px;
   padding: 1px;
   background: var(--rule);
-  border: 1px solid var(--rule);
-  overflow: visible;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--r-md);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
 }
 .kpi .dim { color: var(--ink-ghost); margin: 0 2px; }
 .kpi {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
-  min-height: 82px;
+  min-height: 88px;
   padding: var(--s3) var(--s4);
   border: 0;
   background: var(--panel);
 }
-.kpi .label { color: var(--ink-faint); font-size: var(--t-micro); letter-spacing: 0.08em; line-height: 1.2; font-weight: 700; }
+.kpi .label { color: var(--ink-faint); font-family: var(--font-data); font-size: var(--t-micro); letter-spacing: 0.07em; line-height: 1.2; font-weight: 700; }
 .kpi strong {
   font-size: 1.08rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--ink);
   line-height: 1.15;
   white-space: nowrap;
@@ -2801,8 +2791,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-size: var(--t-micro);
   line-height: 1.15;
 }
+/* SPOT is the anchor — larger and slightly bolder */
 .kpi.spot { box-shadow: inset 3px 0 var(--phosphor); background: var(--phosphor-wash); }
-.kpi.spot strong { font-size: 1.28rem; color: var(--ink); font-weight: 750; }
+.kpi.spot strong { font-size: var(--t-fig); color: var(--ink); font-weight: 700; letter-spacing: -0.03em; }
 .kpi.positive { border-color: color-mix(in srgb, var(--long) 32%, var(--rule)); }
 .kpi.negative { border-color: color-mix(in srgb, var(--short) 32%, var(--rule)); }
 .kpi.call strong, .kpi .call { color: var(--call); }
@@ -2820,8 +2811,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid color-mix(in srgb, var(--warn) 55%, var(--rule));
   background: var(--warn-wash);
   color: var(--warn);
+  font-family: var(--font-data);
   font-size: var(--t-micro);
-  font-weight: 700;
+  font-weight: 600;
+  border-radius: var(--r-xs);
 }
 
 /* ---- workbench: flow bar, then squeeze + dominant GEX ------------------- */
@@ -2832,7 +2825,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: var(--s3);
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-md);
   background: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .workbench {
   display: flex;
@@ -2886,7 +2881,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   flex: 0 0 auto;
 }
 .workbench :deep(.head) {
-  padding: 6px 12px;
+  padding: var(--s2) var(--s3);
   min-height: 32px;
 }
 .gex-meta-badge.flip { color: var(--warn); }
@@ -2911,8 +2906,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .command-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
-  margin-left: auto;
+  justify-self: end;
 }
 .scope-chip {
   padding: var(--s2) var(--s3);
@@ -2947,7 +2944,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 
 .chart-legend-pill {
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 600;
   letter-spacing: 0.04em;
   padding: 1px 4px;
@@ -2962,7 +2959,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
-  font-size: 9px;
+  font-size: var(--t-micro);
   padding: 1px 4px;
   font-weight: 700;
 }
@@ -3007,8 +3004,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: 4px;
   min-height: 14px;
 }
-.expiry-gex-row .exp { color: var(--ink-dim); font-size: 9px; }
-.expiry-gex-row .dte { color: var(--ink-ghost); text-align: right; font-size: 9px; }
+.expiry-gex-row .exp { color: var(--ink-dim); font-size: var(--t-micro); }
+.expiry-gex-row .dte { color: var(--ink-ghost); text-align: right; font-size: var(--t-micro); }
 .expiry-gex-row .bar-track {
   height: 4px;
   background: var(--rule);
@@ -3021,8 +3018,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .expiry-gex-row .bar-track i.pos { background: var(--call); }
 .expiry-gex-row .bar-track i.neg { background: var(--put); }
-.expiry-gex-row .fig { text-align: right; font-size: 10px; color: var(--ink-soft); }
-.empty-note { color: var(--ink-dim); padding: 10px 6px; font-size: 12px; }
+.expiry-gex-row .fig { text-align: right; font-size: var(--t-micro); color: var(--ink-soft); }
+.empty-note { color: var(--ink-dim); padding: 10px 6px; font-size: var(--t-tiny); }
 
 .tape-panel-full { min-height: 280px; width: 100%; }
 .prob-calc-panel {
@@ -3033,7 +3030,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 0;
 }
 .prob-calc-panel :deep(.head) {
-  padding: 6px 12px;
+  padding: var(--s2) var(--s3);
   min-height: 32px;
 }
 .table-scroll-tall { max-height: min(52vh, 520px) !important; }
@@ -3152,31 +3149,37 @@ td.fig, th.num-col, td.num-col { font-size: var(--t-small); }
   font-weight: 800;
   letter-spacing: .04em;
 }
-/* Mega-whale: same warn fill, heavier weight — no glow, no gradient */
-.flag-chip.mega-whale-chip {
-  background: var(--warn);
-  color: var(--void);
-  border-color: var(--warn);
-  font-weight: 800;
-}
-/* Whale: dimmed wash so it reads below mega */
-.flag-chip.whale-chip {
-  background: var(--warn-wash);
-  color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 55%, var(--rule));
-  font-weight: 700;
-}
+/* Legacy flag-chip sizes stay (anomaly flags) */
 .no-flag { color: var(--ink-ghost); }
+/* Vol/OI head column */
+.vol-oi-head { color: var(--ink-dim); }
+/* Timestamp column: trimmed to time only, tighter */
+.ts-cell { font-size: var(--t-micro); letter-spacing: 0.03em; }
+/* Expiry cell: compact mono */
+.expiry-cell { font-size: var(--t-micro); letter-spacing: 0.02em; }
+/* Type chip: abbreviated C/P takes less space */
+.type-chip { min-width: 24px; }
+/* Golden sweep rows: left amber rule + subtle gold wash */
+tr.isGoldenSweep {
+  background: var(--badge-golden-wash);
+  box-shadow: inset 4px 0 0 var(--badge-golden);
+}
+tr.isGoldenSweep td { color: var(--ink); }
+.tape-stalker-card.isGoldenSweep {
+  border-left: 3px solid var(--badge-golden);
+  background: color-mix(in srgb, var(--badge-golden) 8%, var(--panel));
+}
 /* Anomalous rows: left rule only, no gradient wash */
 tr.anomalous { box-shadow: inset 3px 0 0 var(--warn); }
+/* Whale row thresholds — $100k and $500k+ (previously $250k) */
 /* Whale rows: progressively heavier left rule, flat background */
 tr.isWhale {
   background: var(--warn-wash);
   box-shadow: inset 3px 0 0 var(--warn);
 }
 tr.isMegaWhale {
-  background: color-mix(in srgb, var(--warn) 14%, var(--panel));
-  box-shadow: inset 4px 0 0 var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, var(--panel));
+  box-shadow: inset 5px 0 0 var(--warn);
 }
 tr.anomalous td, tr.isWhale td, tr.isMegaWhale td { color: var(--ink); }
 .num-col { text-align: right; }
@@ -3254,7 +3257,7 @@ td.put { color: var(--put); }
 .reject-hint b { color: var(--warn); }
 .raw-btn {
   margin-top: var(--s1);
-  padding: 6px 12px;
+  padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--phosphor-dim);
   color: var(--phosphor);
   background: var(--phosphor-wash);
@@ -3288,11 +3291,16 @@ td.put { color: var(--put); }
   gap: 2px var(--s4);
   padding: 6px var(--s3) 8px var(--s5);
   margin: 0;
-  font-size: 10px;
+  font-size: var(--t-micro);
   line-height: 1.35;
 }
 
 @media (max-width: 1100px) {
+  .command {
+    grid-template-columns: auto minmax(120px, 1fr) auto auto;
+  }
+  .expiry-select { grid-column: 1 / 2; }
+  .command-right { grid-column: 2 / -1; }
   .kpi-rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .tape-toolbar { flex-wrap: wrap; padding-block: 6px; }
   .anomaly-method { width: 100%; margin-left: 0; max-width: none; }
@@ -3381,7 +3389,7 @@ td.put { color: var(--put); }
   color: var(--ink);
 }
 .moneyness-tag {
-  font-size: 8.5px;
+  font-size: var(--t-micro);
   font-weight: 700;
   padding: 1px 4px;
   letter-spacing: 0.05em;
@@ -3430,8 +3438,10 @@ tr.isMegaWhale:hover {
 }
 .tape-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: var(--s3);
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: var(--hair) solid var(--rule);
 }
 .tape-stalker-card {
   display: flex;
@@ -3439,7 +3449,7 @@ tr.isMegaWhale:hover {
   gap: var(--s2);
   padding: var(--s3);
   background: var(--panel);
-  border: var(--hair) solid var(--rule);
+  border: 0;
   transition: background var(--dur-fast) var(--ease-out);
 }
 .tape-stalker-card.bull {
@@ -3482,7 +3492,8 @@ tr.isMegaWhale:hover {
   justify-content: space-between;
   gap: 8px;
   padding: 4px 0;
-  border-y: 1px solid var(--rule-faint);
+  border-top: var(--hair) solid var(--rule-faint);
+  border-bottom: var(--hair) solid var(--rule-faint);
 }
 .strike-box, .prem-box {
   display: flex;

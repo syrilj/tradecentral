@@ -208,6 +208,34 @@ def _mem_set(key: str, payload: Any) -> Any:
     return payload
 
 
+def cot_asof_age_days(asof: str | None) -> int | None:
+    if not asof:
+        return None
+    try:
+        return int((_today_utc_naive() - pd.Timestamp(str(asof)[:10])).days)
+    except Exception:
+        return None
+
+
+def cot_week_stale(asof: str | None, *, max_age_days: int = 7) -> bool:
+    age = cot_asof_age_days(asof)
+    if age is None:
+        return True
+    return age > max_age_days
+
+
+def cot_lean_from_spec_net_z(z: float | None) -> str:
+    """Map spec-net z to LONG / SHORT / BALANCED. Same cutoffs as dashboard/src/cotLean.ts."""
+    v = _finite(z)
+    if v is None:
+        return "UNKNOWN"
+    if v >= 0.5:
+        return "LONG"
+    if v <= -0.5:
+        return "SHORT"
+    return "BALANCED"
+
+
 # ---------------------------------------------------------------------------
 # Vol complex → market risk sentiment
 # ---------------------------------------------------------------------------
@@ -424,10 +452,30 @@ def _cot_row_metrics(row: dict[str, Any]) -> dict[str, float | None]:
     }
 
 
+def _ensure_cot_leans(payload: dict[str, Any]) -> dict[str, Any]:
+    markets = []
+    for raw in payload.get("markets") or []:
+        if not isinstance(raw, dict):
+            continue
+        market = dict(raw)
+        if not market.get("lean"):
+            market["lean"] = cot_lean_from_spec_net_z(_finite(market.get("noncomm_net_z_1y")))
+        markets.append(market)
+    out = dict(payload)
+    out["markets"] = markets
+    if cot_week_stale(out.get("asof")) and out.get("quality") == "ok":
+        out["quality"] = "stale"
+    return out
+
+
+def build_cot_payload(*, force_refresh: bool = False) -> dict[str, Any]:
+    return _build_cot_block(force_refresh=force_refresh)
+
+
 def _build_cot_block(*, force_refresh: bool = False) -> dict[str, Any]:
     cached = None if force_refresh else _mem_get("cot_block")
-    if cached is not None:
-        return cached
+    if cached is not None and not cot_week_stale(cached.get("asof")):
+        return _ensure_cot_leans(cached)
 
     # Disk cache fallback when network fails.
     disk: dict[str, Any] | None = None
@@ -489,6 +537,7 @@ def _build_cot_block(*, force_refresh: bool = False) -> dict[str, Any]:
             bias = "SPEC_SHORT"
         else:
             bias = "BALANCED"
+        lean = cot_lean_from_spec_net_z(z)
 
         markets_out.append(
             {
@@ -505,6 +554,7 @@ def _build_cot_block(*, force_refresh: bool = False) -> dict[str, Any]:
                 "noncomm_net_z_1y": _round(z, 2),
                 "noncomm_net_pctile_1y": _round(pctile, 3),
                 "bias": bias,
+                "lean": lean,
                 "history_weeks": len(nets),
                 "source": f"CFTC {_CFTC_DATASET} (legacy futures COT)",
                 "lag_note": (
@@ -529,6 +579,7 @@ def _build_cot_block(*, force_refresh: bool = False) -> dict[str, Any]:
             "errors": errors,
             "fetched_at": _utc_now_iso(),
         }
+        payload = _ensure_cot_leans(payload)
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             COT_CACHE.write_text(json.dumps(payload, indent=2))
@@ -544,7 +595,7 @@ def _build_cot_block(*, force_refresh: bool = False) -> dict[str, Any]:
             "Live CFTC fetch failed; serving last good disk cache. "
             + str(disk.get("lag_note") or "")
         )
-        return _mem_set("cot_block", disk)
+        return _mem_set("cot_block", _ensure_cot_leans(disk))
 
     return _mem_set(
         "cot_block",
@@ -603,8 +654,10 @@ def _read_finra_day(path: Path, symbols: set[str] | None = None) -> pd.DataFrame
     return g
 
 
-def _finra_short_pressure_block(universe: list[str], *, lookback_days: int = 40) -> dict[str, Any]:
-    cached = _mem_get(f"finra_short:{lookback_days}:{len(universe)}")
+def _finra_short_pressure_block(
+    universe: list[str], *, lookback_days: int = 40, force_refresh: bool = False,
+) -> dict[str, Any]:
+    cached = None if force_refresh else _mem_get(f"finra_short:{lookback_days}:{len(universe)}")
     if cached is not None:
         return cached
 
@@ -1140,12 +1193,12 @@ def _price_anomalies(universe: list[str], *, limit: int = 40) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Public aggregates
 # ---------------------------------------------------------------------------
-def build_sentiment_payload(*, symbol: str | None = None) -> dict[str, Any]:
+def build_sentiment_payload(*, symbol: str | None = None, force_refresh: bool = False) -> dict[str, Any]:
     """Desk-level sentiment page payload (+ optional symbol SEC deep-dive)."""
     universe = _core_universe()
     vol = _vol_sentiment_block()
-    cot = _build_cot_block()
-    finra = _finra_short_pressure_block(universe)
+    cot = _build_cot_block(force_refresh=force_refresh)
+    finra = _finra_short_pressure_block(universe, force_refresh=force_refresh)
     opt = _options_sentiment_block()
     sector_note = {
         "quality": "ok",

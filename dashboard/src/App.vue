@@ -2,7 +2,7 @@
 import { computed, nextTick, provide, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ClerkLoaded, ClerkLoading, UserButton, useAuth, useClerk, useUser } from '@clerk/vue'
-import { api, configureApiAuth, type StatusPayload, type Readiness, type MarketClock, type ComparePayload, type ScanDepth } from '@/api'
+import { api, configureApiAuth, type StatusPayload, type Readiness, type MarketClock, type ComparePayload, type ScanDepth, type SectorFlowPayload } from '@/api'
 import { isAllowedOperatorEmail } from '@/auth'
 import { formatMarketCountdown, marketSessionClass as sessionClassOf, marketSessionLabel as sessionLabelOf } from '@/marketSession'
 import { placeToolsMenuStyle, type ToolsMenuStyle } from '@/toolsMenu'
@@ -60,6 +60,31 @@ const tapeMarks = useResource<ComparePayload>(
   { intervalMs: 120_000, enabled: authEnabled },
 )
 
+/** Sector rotation re-runs on its own clock. Status polls must not rebuild
+ *  PEAD/directional tables, but money-flow cannot sit on the warmup scan. */
+const sectorForceNext = ref(false)
+const sectorFlowRes = useResource<SectorFlowPayload>(
+  () => {
+    const force = sectorForceNext.value
+    sectorForceNext.value = false
+    return api.sectorFlow({ force })
+  },
+  { intervalMs: 180_000, enabled: authEnabled },
+)
+
+async function refreshSectorFlow(opts?: { force?: boolean; clear?: boolean }): Promise<void> {
+  if (opts?.force) sectorForceNext.value = true
+  await sectorFlowRes.refresh({ clear: opts?.clear })
+}
+
+watch(
+  [() => sectorFlowRes.data.value, () => status.data.value],
+  ([flow, board]) => {
+    if (!flow || !board || board.sector_flow === flow) return
+    status.data.value = { ...board, sector_flow: flow }
+  },
+)
+
 watch(isSignedIn, (signedIn) => {
   if (signedIn && operatorAllowed.value) {
     void Promise.all([
@@ -67,12 +92,14 @@ watch(isSignedIn, (signedIn) => {
       readiness.refresh(),
       marketClock.refresh(),
       tapeMarks.refresh(),
+      refreshSectorFlow({ force: true }),
     ])
   } else {
     status.clear()
     readiness.clear()
     marketClock.clear()
     tapeMarks.clear()
+    sectorFlowRes.clear()
   }
 })
 
@@ -97,6 +124,14 @@ watch(
 provide('status', status)
 provide('readiness', readiness)
 provide('marketClock', marketClock)
+provide('sectorFlow', {
+  data: sectorFlowRes.data,
+  error: sectorFlowRes.error,
+  loading: sectorFlowRes.loading,
+  fetchedAt: sectorFlowRes.fetchedAt,
+  refresh: refreshSectorFlow,
+  clear: sectorFlowRes.clear,
+})
 
 const primaryNav = [
   { name: 'desk', idx: '01', title: 'Desk', hint: 'Posture · queue · arena', icon: 'desk' },
@@ -140,15 +175,7 @@ interface SectorRow {
   name?: string
   flow_score?: number
 }
-interface SectorFlowPayload {
-  asof?: string | null
-  asof_bar?: string | null
-  source?: string | null
-  sectors_ranked?: SectorRow[]
-}
-const sectorFlow = computed(() =>
-  status.data.value?.sector_flow as SectorFlowPayload | undefined,
-)
+const sectorFlow = computed(() => status.data.value?.sector_flow)
 const sectorsRanked = computed((): SectorRow[] => {
   const raw = sectorFlow.value?.sectors_ranked
   return Array.isArray(raw) ? raw : []
@@ -499,9 +526,10 @@ function openVol(): void {
             class="nav-item"
             :class="{ on: route.name === n.name, alert: navAlert(n.name) }"
             :title="navAlert(n.name)
-              ? `${n.title} · ${n.hint} · attention`
-              : `${n.title} · ${n.hint}`"
+              ? `${n.title} [${n.idx}] · ${n.hint} · attention`
+              : `${n.title} [${n.idx}] · ${n.hint}`"
           >
+            <span class="nav-idx fig" aria-hidden="true">{{ n.idx }}</span>
             <AppIcon class="nav-icon" :name="n.icon" :size="18" />
             <span class="nav-title label">{{ n.title }}</span>
             <span v-if="navAlert(n.name)" class="nav-pulse" aria-hidden="true" />
@@ -525,6 +553,7 @@ function openVol(): void {
           @keydown.down.prevent="openToolsMenu('first')"
           @keydown.up.prevent="openToolsMenu('last')"
         >
+          <span class="nav-idx fig" aria-hidden="true">TOOLS</span>
           <AppIcon class="nav-icon" name="more" :size="18" />
           <span class="nav-title label">Tools</span>
         </button>
@@ -590,11 +619,25 @@ function openVol(): void {
         </Teleport>
       </div>
 
-      <div class="clerk-user" :title="operatorEmail || 'Account and sign out'">
-        <UserButton after-sign-out-url="/" />
+      <div class="clerk-user" :title="operatorEmail ? `Operator: ${operatorEmail} · Account and sign out` : 'Account and sign out'">
+        <div class="operator-status" aria-hidden="true">
+          <span class="operator-lamp" />
+          <span class="operator-badge label">OP</span>
+        </div>
+        <div class="operator-avatar-frame">
+          <UserButton after-sign-out-url="/" />
+        </div>
         <span class="nav-title label">Account</span>
-        <button type="button" class="account-signout label" :disabled="signingOut" @click="void signOut()">
-          {{ signingOut ? 'EXITING' : 'SIGN OUT' }}
+        <button
+          type="button"
+          class="account-signout label"
+          :disabled="signingOut"
+          :title="signingOut ? 'Signing out…' : 'Sign out of operator session'"
+          aria-label="Sign out"
+          @click="void signOut()"
+        >
+          <AppIcon name="signout" :size="10" class="signout-icon" />
+          <span>{{ signingOut ? 'EXITING' : 'SIGN OUT' }}</span>
         </button>
       </div>
       </div>
@@ -817,6 +860,7 @@ function openVol(): void {
      opts out of that; the nav list scrolls so Account stays pinned. */
   min-height: 0;
   overflow: hidden;
+  user-select: none;
 }
 .nav {
   list-style: none;
@@ -827,6 +871,7 @@ function openVol(): void {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  padding: 0 4px;
 }
 .rail-foot {
   flex: 0 0 auto;
@@ -834,6 +879,7 @@ function openVol(): void {
   flex-direction: column;
   align-items: stretch;
   margin-top: auto;
+  padding: 0 4px 4px;
   overflow: visible;
 }
 
@@ -841,13 +887,14 @@ function openVol(): void {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
-  padding: 1px 4px var(--s3);
+  gap: 4px;
+  padding: 2px 4px var(--s3);
   color: var(--ink);
   text-decoration: none;
   transition: color var(--dur-fast) var(--ease-out);
 }
 .mark:hover { color: var(--phosphor); text-decoration: none; }
+.mark:hover .mark-rule { background: var(--phosphor); }
 
 .mark-word {
   display: flex;
@@ -867,6 +914,7 @@ function openVol(): void {
   width: 22px;
   height: var(--hair);
   background: var(--rule-hi);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 /* ---- nav ------------------------------------------------------------------ */
@@ -876,30 +924,50 @@ function openVol(): void {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  min-height: 48px;
-  padding: var(--s2) var(--s2);
+  justify-content: center;
+  gap: 3px;
+  min-height: 52px;
+  padding: 6px 4px;
   color: var(--ink-dim);
+  border-radius: var(--r-sm);
   text-decoration: none;
   transition: color var(--dur-fast) var(--ease-out),
-              background var(--dur-fast) var(--ease-out);
+              background var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
 }
 .nav-item:hover { color: var(--ink); background: var(--panel-hi); text-decoration: none; }
 
+.nav-idx {
+  font-family: var(--font-data);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ink-ghost);
+  opacity: 0.85;
+  line-height: 1;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.nav-item:hover .nav-idx { color: var(--ink-dim); }
+
 .nav-item.on {
+  color: var(--ink);
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule);
+  font-weight: 600;
+}
+.nav-item.on .nav-idx {
   color: var(--phosphor);
-  background: var(--phosphor-wash);
-  font-weight: 700;
 }
 
 /* The active marker is a phosphor bar on the inner edge */
 .nav-item.on::after {
   content: '';
   position: absolute;
-  right: 0;
-  top: 15%;
-  bottom: 15%;
-  width: 3px;
+  left: 0;
+  top: 18%;
+  bottom: 18%;
+  width: 2px;
+  border-radius: 1px;
   background: var(--phosphor);
 }
 
@@ -909,47 +977,120 @@ function openVol(): void {
 .nav-item.alert.on { color: var(--phosphor); }
 .nav-pulse {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 6px;
+  right: 6px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--warn);
-  opacity: 0.9;
+  box-shadow: 0 0 6px rgba(217, 164, 65, 0.6);
+  animation: pulse-lamp 2s ease-in-out infinite;
 }
 
 .nav-icon { color: currentColor; }
-.nav-title { color: inherit; font-size: var(--t-micro); font-weight: 700; }
+.nav-title {
+  color: inherit;
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  line-height: 1.1;
+}
 
 /* ---- more dropdown ------------------------------------------------------- */
 .more-wrap {
   position: relative;
+  margin-bottom: 4px;
 }
 .clerk-user {
+  position: relative;
   width: 100%;
-  min-height: 78px;
+  min-height: 84px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 3px;
+  padding: 8px 4px 6px;
+  border-top: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--void-lift);
+}
+
+.operator-status {
+  display: flex;
+  align-items: center;
   gap: 4px;
-  margin-top: 0;
-  border-top: var(--hair) solid var(--rule-faint);
+  margin-bottom: 2px;
 }
-.clerk-user :deep(.cl-avatarBox) {
-  width: 27px;
-  height: 27px;
-  border: var(--hair) solid var(--rule-hi);
+.operator-lamp {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--phosphor);
+  box-shadow: 0 0 4px var(--phosphor);
 }
+.operator-badge {
+  color: var(--ink-ghost);
+  font-family: var(--font-data);
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.operator-avatar-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  border-radius: var(--r-xs);
+}
+.clerk-user :deep(.cl-avatarBox),
+.clerk-user :deep(.cl-userButtonAvatarBox) {
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: var(--r-xs) !important;
+  border: var(--hair) solid var(--rule-hi) !important;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.clerk-user :deep(.cl-userButtonTrigger:hover .cl-avatarBox) {
+  border-color: var(--phosphor) !important;
+}
+
 .account-signout {
-  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 2px 5px;
+  min-height: 18px;
+  margin-top: 2px;
   color: var(--ink-ghost);
   border: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-  font-size: 8px;
+  border-radius: var(--r-xs);
+  background: var(--panel);
+  font-family: var(--font-data);
+  font-size: 7.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
 }
-.account-signout:hover:not(:disabled) { color: var(--short); border-color: color-mix(in srgb, var(--short) 55%, var(--rule)); }
+.account-signout .signout-icon {
+  color: inherit;
+  opacity: 0.85;
+}
+.account-signout:hover:not(:disabled) {
+  color: var(--short);
+  border-color: color-mix(in srgb, var(--short) 60%, var(--rule));
+  background: var(--short-wash);
+}
+.account-signout:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .clerk-boot,
 .clerk-redirect {
   position: relative;
@@ -962,7 +1103,7 @@ function openVol(): void {
   color: var(--ink-dim);
   background: var(--void);
 }
-.clerk-boot-word { color: var(--ink); font: 700 var(--t-display) var(--font-display); }
+.clerk-boot-word { color: var(--ink); font: 600 var(--t-display) var(--font-display); }
 .more-btn {
   width: 100%;
   border: none;
@@ -972,16 +1113,18 @@ function openVol(): void {
 .more-panel {
   position: fixed;
   z-index: var(--z-overlay);
-  background: var(--void-lift);
+  background: var(--panel);
   border: var(--hair) solid var(--rule-hi);
-  min-width: 208px;
-  max-height: min(70vh, 520px);
+  border-radius: var(--r-lg);
+  min-width: 220px;
+  max-height: min(72vh, 540px);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 .more-item {
   display: flex;
@@ -989,6 +1132,8 @@ function openVol(): void {
   align-items: center;
   gap: var(--s3);
   padding: var(--s2) var(--s3);
+  margin: 1px 0;
+  border-radius: var(--r-sm);
   color: var(--ink-dim);
   text-decoration: none;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
@@ -1000,27 +1145,30 @@ function openVol(): void {
   align-items: center;
   gap: var(--s3);
   padding: var(--s2) var(--s3);
+  margin-bottom: 3px;
+  border-radius: var(--r-sm);
   color: var(--ink-soft);
-  border-bottom: var(--hair) solid var(--rule);
-  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+  background: var(--void-lift);
   text-align: left;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.more-search:hover { color: var(--phosphor); background: var(--phosphor-wash); }
+.more-search:hover { color: var(--phosphor); background: var(--phosphor-wash); border-color: var(--phosphor-dim); }
 .more-item:hover { background: var(--panel-hi); color: var(--ink); }
-.more-item.on { color: var(--phosphor); background: var(--phosphor-wash); font-weight: 700; }
-.more-idx { font-size: var(--t-micro); opacity: 0.85; font-weight: 700; min-width: 2.5ch; }
-.more-idx { margin-left: auto; color: var(--ink-ghost); text-align: right; }
-.more-title { font-size: var(--t-micro); font-weight: 700; }
+.more-item.on { color: var(--phosphor); background: var(--phosphor-wash); font-weight: 600; }
+.more-idx { font-family: var(--font-data); font-size: var(--t-micro); opacity: 0.85; font-weight: 600; min-width: 2.5ch; margin-left: auto; color: var(--ink-ghost); text-align: right; }
+.more-title { font-family: var(--font-ui); font-size: var(--t-micro); font-weight: 600; }
 .more-group {
   padding: var(--s2) var(--s3) var(--s1);
   color: var(--ink-ghost);
-  font-size: var(--t-micro);
-  font-weight: 800;
+  font-family: var(--font-data);
+  font-size: 8.5px;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  border-top: var(--hair) solid var(--rule);
-  background: var(--panel);
+  border-top: var(--hair) solid var(--rule-faint);
+  background: transparent;
+  margin-top: 4px;
 }
 
 /* ---- strip --------------------------------------------------------------- */
@@ -1031,9 +1179,8 @@ function openVol(): void {
   gap: var(--s3);
   padding: 0 var(--s4);
   border-bottom: var(--hair) solid var(--rule);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--phosphor) 4%, transparent), transparent 24%),
-    var(--void-lift);
+  background: rgba(13, 15, 20, 0.88);
+  backdrop-filter: blur(12px);
   z-index: var(--z-strip);
   min-width: 0;
 }
@@ -1100,9 +1247,10 @@ function openVol(): void {
 .gauge .label,
 .strip-search .label {
   color: var(--ink-dim);
+  font-family: var(--font-data);
   font-size: var(--t-micro);
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .g-symbol { color: var(--ink) !important; }
@@ -1117,8 +1265,8 @@ function openVol(): void {
 }
 .g-date.stale { color: var(--warn) !important; }
 .g-date.missing { color: var(--short) !important; }
-.g-val { flex: 0 0 auto; color: var(--ink); font-size: var(--t-small); font-weight: 700; line-height: 1.15; white-space: nowrap; }
-.g-chg { margin-left: auto; font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
+.g-val { flex: 0 0 auto; color: var(--ink); font-size: var(--t-small); font-weight: 600; line-height: 1.15; white-space: nowrap; }
+.g-chg { margin-left: auto; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
 .g-chg.pos { color: var(--long); }
 .g-chg.neg { color: var(--short); }
 .g-chg.flat { color: var(--ink-dim); }
@@ -1141,7 +1289,7 @@ function openVol(): void {
   gap: 8px;
   min-width: 0;
 }
-.rot-leg { display: flex; align-items: baseline; gap: 5px; min-width: 0; font-weight: 700; }
+.rot-leg { display: flex; align-items: baseline; gap: 5px; min-width: 0; font-weight: 600; }
 .rot-leg small { font-size: 8px; }
 .rot-in { color: var(--long); }
 .rot-out { color: var(--short); }
@@ -1158,8 +1306,11 @@ function openVol(): void {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--warn);
-  font-weight: 700;
+  font-family: var(--font-data);
+  font-weight: 600;
+  font-size: var(--t-micro);
   padding: 3px 8px;
+  border-radius: var(--r-sm);
   border: var(--hair) solid color-mix(in srgb, var(--warn) 45%, transparent);
   background: var(--warn-wash);
   flex: 0 0 auto;
@@ -1176,7 +1327,7 @@ function openVol(): void {
   border-left: var(--hair) solid var(--rule);
 }
 .market-clock.mapped .market-next { color: var(--ink); }
-.market-state { color: var(--ink-dim); font-weight: 700; }
+.market-state { color: var(--ink-dim); font-family: var(--font-data); font-weight: 600; font-size: var(--t-micro); }
 .market-next { color: var(--ink); font-size: var(--t-small); font-weight: 600; }
 .market-clock.regular .market-state { color: var(--phosphor); }
 .market-clock.premarket .market-state,
@@ -1190,18 +1341,23 @@ function openVol(): void {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
-  padding: 0 9px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
   color: var(--ink-dim);
-  border-left: var(--hair) solid var(--rule);
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  border: var(--hair) solid var(--rule);
+  background: var(--void-lift);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.strip-search:hover { color: var(--phosphor); background: var(--phosphor-wash); }
+.strip-search:hover { color: var(--ink); background: var(--panel-hi); border-color: var(--rule-hi); }
 .strip-search .label { color: inherit; }
 .strip-search kbd {
   padding: 1px 4px;
   color: var(--ink-ghost);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs);
+  background: var(--panel);
+  font-family: var(--font-data);
   font-size: 8px;
 }
 
@@ -1289,30 +1445,36 @@ function openVol(): void {
   }
   .mark { display: none; }
   .nav li:nth-child(5) { display: none; }
-  .nav { flex: 1 1 auto; flex-direction: row; gap: 0; min-width: 0; overflow-x: auto; }
+  .nav { flex: 1 1 auto; flex-direction: row; gap: 0; min-width: 0; overflow-x: auto; padding: 0; }
   .nav li { display: flex; flex: 1 0 52px; }
+  .nav-idx { display: none; }
   .nav-item {
     flex: 1 1 auto;
     min-height: 64px;
     height: 64px;
     justify-content: center;
     padding: 6px 3px;
+    border-radius: 0;
   }
   .nav-item.on::after { top: auto; right: 18%; bottom: 0; left: 18%; width: auto; height: 2px; }
   .nav-pulse { top: 8px; right: calc(50% - 15px); }
-  .rail-foot { flex-direction: row; margin-top: 0; }
-  .more-wrap { flex: 0 0 52px; width: 52px; margin-top: 0; }
+  .rail-foot { flex-direction: row; margin-top: 0; padding: 0; }
+  .more-wrap { flex: 0 0 52px; width: 52px; margin-top: 0; margin-bottom: 0; }
   .clerk-user {
     display: flex;
     flex: 0 0 52px;
     width: 52px;
     margin-top: 0;
     min-height: 64px;
+    height: 64px;
+    padding: 6px 3px;
     border-top: 0;
+    border-radius: 0;
     border-left: var(--hair) solid var(--rule-faint);
   }
+  .operator-status { display: none; }
   .account-signout { display: none; }
-  .more-btn { min-height: 64px; height: 64px; }
+  .more-btn { min-height: 64px; height: 64px; border-radius: 0; }
   .foot { display: none; }
   .gauges { display: flex; flex: 1 1 auto; }
   .gauge-vol,

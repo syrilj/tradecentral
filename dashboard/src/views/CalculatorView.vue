@@ -25,9 +25,9 @@ const fromSetup = computed(() => Boolean(symbol.value || strike.value || premium
   <div class="calc-view">
     <header class="ticked rise">
       <span class="label">Options toolkit</span>
-      <h1>Profit calculator</h1>
+      <h1>Portfolio calculator</h1>
       <p>
-        Spot, strike, DTE, vol, and premium live here — not on the Options tape.
+        The book lives here — not on the Options tape. Each contract is a row.
         Setups open this page with the exact contract prefilled. Closed-form P/L and Greeks.
         No live order path.
       </p>

@@ -44,16 +44,16 @@ const tooltipText = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 9px 4px 7px;
+  padding: 3px 8px;
   border: var(--hair) solid currentColor;
   color: var(--unknown);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
   line-height: 1;
-  font-weight: 700;
-  border-radius: 2px;
+  font-weight: 600;
+  border-radius: var(--r-sm);
 }
 
-.s-sm { padding: 3px 7px 3px 6px; font-size: var(--t-tiny); }
+.s-sm { padding: 2px 6px; font-size: var(--t-micro); }
 
 .dot {
   width: 5px;
@@ -67,5 +67,5 @@ const tooltipText = computed(() => {
 .no-go { color: var(--no-go); background: var(--short-wash); }
 .running { color: var(--running); background: var(--warn-wash); }
 .running .dot { animation: pulse-lamp 1.4s var(--ease-in-out) infinite; }
-.unknown { color: var(--unknown); }
+.unknown { color: var(--unknown); background: rgba(255, 255, 255, 0.02); }
 </style>

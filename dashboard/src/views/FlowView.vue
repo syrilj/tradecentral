@@ -64,21 +64,19 @@ watch(() => route.query.setup, (value) => {
   <div class="flow-view">
     <header class="flow-head ticked rise">
       <div class="flow-title">
-        <span class="label eyebrow">Market-wide options activity</span>
-        <h1>Options flow</h1>
+        <span class="label eyebrow"><i aria-hidden="true" class="live-dot" /> LIVE OPTIONS FLOW</span>
+        <h1>Market-Wide Order Flow</h1>
         <p>
-          Track what entered since the prior provider window, read SPY/QQQ/IWM/DIA concentration first,
-          then click a name for a live call/put setup, GEX sell level, and risk budget. The chain remains
-          one step away. Signed buy/sell only appears when the provider marks it.
+          Real-time institutional order activity across liquid names.
+          Sweeps, blocks, and unusual prints. Signed buy/sell when the feed marks it.
         </p>
       </div>
       <div class="scope-stack">
-        <span class="scope-chip label live"><i aria-hidden="true" /> MARKET-WIDE TAPE</span>
-        <span class="scope-chip label">UP TO 500 PRINTS</span>
-        <span class="scope-chip label">MY BOOK</span>
-        <span class="scope-chip label">UNUSUAL / SWEEP ALERTS</span>
-        <span class="scope-chip label">ON-DEMAND HISTORY</span>
-        <span class="scope-chip label">POLL 15S</span>
+        <span class="scope-chip label live"><i aria-hidden="true" /> LIVE TAPE</span>
+        <span class="scope-chip label">SWEEPS &amp; BLOCKS</span>
+        <span class="scope-chip label">GOLDEN SWEEPS</span>
+        <span class="scope-chip label">WATCHLIST ALERTS</span>
+        <span class="scope-chip label">15s POLL</span>
       </div>
     </header>
 
@@ -117,11 +115,9 @@ watch(() => route.query.setup, (value) => {
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--s6);
-  min-height: 166px;
-  padding: var(--s5) var(--s6);
-  border: var(--hair) solid var(--border-strong);
-  border-left: 3px solid var(--phosphor-dim);
-  background-color: var(--surface-raised);
+  padding: var(--s4) var(--s5);
+  border: var(--hair) solid var(--rule);
+  border-left: 2px solid var(--phosphor-dim);
 }
 
 .flow-title {
@@ -134,9 +130,9 @@ watch(() => route.query.setup, (value) => {
 
 h1 {
   margin: var(--s2) 0 0;
-  color: var(--text-primary);
-  font: 700 clamp(1.65rem, 2.5vw, 2.15rem) / 1.05 var(--font-display);
-  letter-spacing: -0.04em;
+  color: var(--ink);
+  font: 700 var(--t-display) / 1.15 var(--font-display);
+  letter-spacing: var(--track-tight);
 }
 
 .flow-title p {
@@ -160,23 +156,40 @@ h1 {
 .scope-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 26px;
+  min-height: var(--density-control-h);
   padding: var(--s1) var(--s2);
-  color: var(--text-secondary);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-base);
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule);
 }
 
 .scope-chip.live {
   color: var(--status-live);
   border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
 }
 
 .scope-chip.live i {
+  display: inline-block;
   width: 5px;
   height: 5px;
   margin-right: 5px;
+  border-radius: 50%;
   background: currentColor;
+}
+
+.live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--phosphor);
+  margin-right: 6px;
+  vertical-align: middle;
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .scope-chip.warn {
@@ -192,7 +205,7 @@ h1 {
   }
 
   h1 {
-    font-size: var(--t-fig);
+    font-size: var(--t-display);
   }
 
   .scope-stack {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { TrajectoryBar } from '@/api'
-import { linearScale, niceTicks, niceDomain, dateTicks, ema, linePath, areaPath } from '@/charts'
+import { linearScale, niceTicks, dateTicks, ema, linePath, areaPath } from '@/charts'
 import { num, signedPct, shortDate } from '@/format'
 
 /**
@@ -73,18 +73,32 @@ const yDomain = computed(() => {
   const v: number[] = []
   if (useCandles.value) {
     for (const b of props.series) {
-      v.push(b.h, b.l, b.o, b.c)
+      if (b.h > 0 && b.l > 0) v.push(b.h, b.l, b.o, b.c)
     }
   } else {
-    v.push(...values.value)
+    for (const val of values.value) {
+      if (Number.isFinite(val)) v.push(val)
+    }
   }
   if (props.mode === 'price') {
-    if (vwapSeries.value) v.push(...vwapSeries.value)
-    if (ema9.value) v.push(...ema9.value)
-    if (ema21.value) v.push(...ema21.value)
+    if (vwapSeries.value) {
+      for (const val of vwapSeries.value) if (Number.isFinite(val) && val > 0) v.push(val)
+    }
+    if (ema9.value) {
+      for (const val of ema9.value) if (Number.isFinite(val) && val > 0) v.push(val)
+    }
+    if (ema21.value) {
+      for (const val of ema21.value) if (Number.isFinite(val) && val > 0) v.push(val)
+    }
   }
   if (!v.length) return [0, 1] as [number, number]
-  return niceDomain(Math.min(...v), Math.max(...v), 0.06)
+  const minVal = Math.min(...v)
+  const maxVal = Math.max(...v)
+  const span = Math.max(0.001, maxVal - minVal)
+  const pad = span * 0.035
+  const lo = Math.max(0, minVal - pad)
+  const hi = maxVal + pad
+  return [lo, hi] as [number, number]
 })
 
 /** Candle geometry — body + wick for each bar. */
@@ -101,7 +115,7 @@ const candles = computed(() => {
   }[]
   const n = props.series.length
   const slot = Math.max(1, (W - PAD.l - PAD.r) / Math.max(1, n))
-  const bodyW = Math.max(1.2, Math.min(8, slot * 0.62))
+  const bodyW = Math.max(1.5, Math.min(10, slot * 0.68))
   return props.series.map((b, i) => {
     const cx = x.value(i)
     const o = y.value(b.o)
@@ -384,6 +398,7 @@ text {
   font-family: var(--font-data);
   font-size: 9px;
   fill: var(--ink-faint);
+  user-select: none;
 }
 
 .ylab text { text-anchor: start; }

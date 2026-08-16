@@ -9,6 +9,7 @@ from edge.daily_plays.opportunity_scanner import (
     build_suggestion,
     gex_relative_sell,
     qlib_rows_from_panel,
+    setup_level_model,
 )
 from edge.daily_plays.options_intelligence import OptionsFilters
 
@@ -254,6 +255,7 @@ class TestConfidenceFreshnessAndPlaybook:
             "call_wall": 108,
             "put_wall": 96,
             "gamma_flip": 101,
+            "pin_strike": 100,
             "selected_expiry": "2026-08-21",
         }
         values.update(overrides)
@@ -462,10 +464,9 @@ class TestSuggestionAndRisk(TestConfidenceFreshnessAndPlaybook):
         assert sug["plan_target"] is None
         assert sug["plan_invalidation"] is None
         assert sug["risk_levels_complete"] is False
-        assert sug["risk_missing_fields"] == [
-            "GEX take-profit target",
-            "GEX invalidation",
-        ]
+        assert "GEX take-profit target" in sug["risk_missing_fields"]
+        assert "GEX invalidation" in sug["risk_missing_fields"]
+        assert all(zone.get("price") != pytest.approx(104) for zone in (sug.get("take_profit_zones") or []))
         assert result["rows"][0]["playbook"]["target"] is None
         assert result["rows"][0]["playbook"]["invalidation"] is None
         assert result["rows"][0]["playbook"]["status"] == "research_only"
@@ -772,3 +773,138 @@ class TestSuggestionAndRisk(TestConfidenceFreshnessAndPlaybook):
         assert rows[0]["n_symbols"] == 2
         assert qlib_rows_from_panel(None) == []
         assert qlib_rows_from_panel({"by_symbol": {}}) == []
+
+
+ALLOWED_LEVEL_SOURCES = {
+    "resistance/support",
+    "options GEX",
+    "positions",
+    "technical analysis",
+}
+
+
+class TestSetupLevelModel:
+    def test_complete_inputs_attribute_each_headline_to_a_measured_source(self):
+        model = setup_level_model(
+            direction="long",
+            spot=100,
+            support=97,
+            resistance=110,
+            call_wall=108,
+            put_wall=96,
+            gamma_flip=101,
+            pin_strike=100,
+            position_strike=102,
+            ta_support=95.5,
+            expected_move=4,
+        )
+        assert model["strike"] == pytest.approx(102)
+        assert model["strike_source"] == "positions"
+        support_sources = {item["source"] for item in model["supports"]}
+        zone_sources = {item["source"] for item in model["take_profit_zones"]}
+        assert {item["price"] for item in model["supports"]} >= {96, 97, 95.5}
+        assert model["invalidation"] is not None
+        assert model["invalidation"] < 100
+        assert model["invalidation_source"] in ALLOWED_LEVEL_SOURCES
+        assert {item["price"] for item in model["take_profit_zones"]} >= {108, 110, 101}
+        assert support_sources <= ALLOWED_LEVEL_SOURCES
+        assert zone_sources <= ALLOWED_LEVEL_SOURCES
+        assert support_sources & {"resistance/support", "options GEX", "technical analysis"}
+        assert zone_sources & {"resistance/support", "options GEX", "technical analysis"}
+        assert all(item["price"] != pytest.approx(104) for item in model["take_profit_zones"])
+        assert model["complete"] is True
+        assert model["risk_levels_complete"] is True
+
+    def test_expected_move_and_wrong_side_levels_stay_unmeasured(self):
+        model = setup_level_model(
+            direction="long",
+            spot=100,
+            support=110,
+            resistance=90,
+            call_wall=95,
+            put_wall=112,
+            gamma_flip=None,
+            pin_strike=None,
+            position_strike=None,
+            expected_move=4,
+        )
+        assert model["strike"] is None
+        assert model["supports"] == []
+        assert model["invalidation"] is None
+        assert model["take_profit_zones"] == []
+        assert model["complete"] is False
+        assert model["risk_levels_complete"] is False
+        assert 104 not in [item.get("price") for item in model["take_profit_zones"]]
+        assert "expected_move" not in str(model).lower() or all(
+            item.get("source") != "expected_move" for item in model["take_profit_zones"]
+        )
+
+    def test_live_opportunities_complete_payload_keeps_source_tags(self):
+        helper = TestConfidenceFreshnessAndPlaybook()
+        result = build_live_opportunities(
+            board_rows=[helper._live_board(
+                support_price=97,
+                resistance_price=110,
+                pin_strike=100,
+                ta_support=95.5,
+                gex_by_strike=[
+                    {"strike": 96, "put_gex_m": -2.4, "call_gex_m": 0.1, "put_oi": 4200, "call_oi": 200},
+                    {"strike": 100, "put_gex_m": -0.4, "call_gex_m": 0.5, "call_oi": 9000, "put_oi": 8800},
+                    {"strike": 108, "put_gex_m": 0.0, "call_gex_m": 3.1, "call_oi": 5100, "put_oi": 300},
+                ],
+                contract_focus={"call": {
+                    "right": "call", "strike": 101, "expiry": "2026-08-21", "dte": 12,
+                    "bid": 2.1, "ask": 2.3, "midpoint": 2.2, "spread_pct": 0.09,
+                    "volume": 400, "open_interest": 2200, "implied_volatility": 0.28,
+                    "delta": 0.51, "contract_multiplier": 100,
+                    "observed_at": ASOF.isoformat(), "quote_complete": True,
+                    "contract_complete": True, "rejection_reasons": [],
+                    "selection_method": "complete fixture",
+                }},
+            )],
+            flow_rows=[helper._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        sug = row["suggestion"]
+        assert sug["strike"] == pytest.approx(101)
+        assert sug["strike_source"] in ALLOWED_LEVEL_SOURCES
+        assert sug["supports"]
+        assert sug["invalidation"] is not None
+        assert sug["take_profit_zones"]
+        assert {item["source"] for item in sug["supports"]} <= ALLOWED_LEVEL_SOURCES
+        assert {item["source"] for item in sug["take_profit_zones"]} <= ALLOWED_LEVEL_SOURCES
+        assert sug["invalidation_source"] in ALLOWED_LEVEL_SOURCES or sug["plan_invalidation_source"] in {
+            "put_wall", "call_wall", *ALLOWED_LEVEL_SOURCES,
+        }
+        assert sug["risk_levels_complete"] is True
+
+    def test_incomplete_expected_move_cannot_become_ready(self):
+        helper = TestConfidenceFreshnessAndPlaybook()
+        result = build_live_opportunities(
+            board_rows=[helper._live_board(
+                spot=100, call_wall=None, put_wall=None, expected_move=4,
+                gamma_flip=None, pin_strike=None, support_price=None, resistance_price=None,
+            )],
+            flow_rows=[helper._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        sug = row["suggestion"]
+        assert sug["sell"] is None
+        assert sug["plan_target"] is None
+        assert sug["plan_invalidation"] is None
+        assert sug["supports"] in (None, [])
+        assert not sug.get("take_profit_zones")
+        assert all(
+            zone.get("price") != pytest.approx(104)
+            for zone in (sug.get("take_profit_zones") or [])
+        )
+        assert sug["risk_levels_complete"] is False
+        assert row["live_ready"] is False
+        assert row["highlighted"] is False
+        assert row["playbook"]["status"] != "candidate"
+        assert row["confidence"]["band"] == "HIGH"
+        assert result["coverage"]["live_ready"] == 0

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { type StatusPayload } from '@/api'
+import { type SectorFlowPayload, type StatusPayload } from '@/api'
 import type { Resource } from '@/composables/useResource'
-import { signedPct, tone } from '@/format'
+import { age, shortDate, signedPct, tone } from '@/format'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import HelpTip from '@/components/HelpTip.vue'
@@ -16,6 +16,10 @@ import LoadingState from '@/components/LoadingState.vue'
  * against benchmark, market regime indicators, and surfaced flow watch names.
  */
 const status = inject<Resource<StatusPayload>>('status')!
+type SectorFlowResource = Resource<SectorFlowPayload> & {
+  refresh: (opts?: { force?: boolean; clear?: boolean }) => Promise<void>
+}
+const sectorFlowRes = inject<SectorFlowResource>('sectorFlow')
 const router = useRouter()
 
 const watchSearch = ref('')
@@ -24,15 +28,47 @@ const selectedCategory = ref<'all' | 'in' | 'out'>('all')
 const expandedEtf = ref<string | null>(null)
 
 const d = computed(() => status.data.value)
-const flow = computed(() => d.value?.sector_flow as
+const flow = computed(() => (sectorFlowRes?.data.value ?? d.value?.sector_flow) as
   | {
       money_in?: string[]
       money_out?: string[]
       sectors_ranked?: SectorRow[]
       watch_names?: WatchRow[]
       market_context?: Record<string, number | boolean | string>
+      asof?: string | null
+      asof_bar?: string | null
+      source?: string | null
     }
   | undefined)
+
+const sectorLoading = computed(() =>
+  Boolean(
+    sectorFlowRes?.loading.value
+    || (status.loading.value && !(flow.value?.sectors_ranked?.length)),
+  ),
+)
+const sectorAsOf = computed(() => flow.value?.asof_bar ?? null)
+const sectorAgeDays = computed(() => {
+  if (!sectorAsOf.value) return null
+  const stamp = Date.parse(`${sectorAsOf.value}T00:00:00Z`)
+  if (!Number.isFinite(stamp)) return null
+  return Math.max(0, Math.floor((Date.now() - stamp) / 86_400_000))
+})
+const sectorStale = computed(() =>
+  sectorAgeDays.value == null || sectorAgeDays.value > 3,
+)
+const rotationMeta = computed(() => {
+  if (!sectorAsOf.value) return sectorLoading.value ? 're-running' : 'date unknown'
+  const bar = shortDate(sectorAsOf.value)
+  const src = String(flow.value?.source || 'scan').replace(/_/g, ' ')
+  const stale = sectorStale.value ? ' · STALE' : ''
+  const ago = sectorFlowRes?.fetchedAt.value ? ` · ${age(sectorFlowRes.fetchedAt.value)}` : ''
+  return `BAR ${bar} · ${src}${ago}${stale}`
+})
+
+onMounted(() => {
+  void sectorFlowRes?.refresh({ force: true })
+})
 
 interface SectorRow {
   etf: string
@@ -56,7 +92,10 @@ interface WatchRow {
 
 const sectors = computed(() => flow.value?.sectors_ranked ?? [])
 const watch = computed(() => flow.value?.watch_names ?? [])
-const mkt = computed(() => flow.value?.market_context)
+const mkt = computed(() => {
+  const raw = flow.value?.market_context
+  return raw && typeof raw === 'object' ? raw : undefined
+})
 
 const flowMax = computed(() =>
   Math.max(1e-6, ...sectors.value.map((s) => Math.abs(s.flow_score))),
@@ -160,14 +199,30 @@ const expandedNames = computed(() => {
     </div>
 
     <!-- ── 01 Market Context Strip & Cards ────────────────────────────── -->
-    <Panel label="Sector rotation map" index="01" :meta="mkt ? `vs ${mkt.benchmark}` : ''" class="w-full">
+    <Panel
+      label="Sector rotation map"
+      index="01"
+      :meta="rotationMeta"
+      :live="sectorLoading"
+      class="w-full"
+    >
       <template #action>
         <HelpTip
           label="Sector rotation"
-          text="Flow score ranks sector ETFs by multi-horizon relative strength vs the benchmark. Right/green = accumulation (money in), left/red = distribution. Use this for which sleeve is leading — then open Market on the ETF or a watch name."
+          text="Flow score ranks sector ETFs by multi-horizon relative strength vs the benchmark. Right/green = accumulation (money in), left/red = distribution. Use this for which sleeve is leading — then open Market on the ETF or a watch name. This panel re-runs the daily sector scan on its own; it does not wait for a full Desk scan."
         />
+        <button
+          class="filter-btn label"
+          type="button"
+          :class="{ active: sectorLoading }"
+          :disabled="sectorLoading"
+          title="Re-run the sector money-flow scan now"
+          @click="void sectorFlowRes?.refresh({ force: true })"
+        >
+          {{ sectorLoading ? 'RUNNING' : 'RE-RUN' }}
+        </button>
       </template>
-      <LoadingState v-if="status.loading.value && !sectors.length" label="Loading sector flow" compact />
+      <LoadingState v-if="sectorLoading && !sectors.length" label="Loading sector flow" compact />
       <div v-if="mkt" class="mkt-readouts">
         <Readout label="SPY 1D Return" :value="signedPct(Number(mkt.spy_ret_1d) * 100)" :tone="tone(mkt.spy_ret_1d)" size="sm" />
         <Readout label="SPY 5D Return" :value="signedPct(Number(mkt.spy_ret_5d) * 100)" :tone="tone(mkt.spy_ret_5d)" size="sm" />
@@ -335,7 +390,7 @@ const expandedNames = computed(() => {
 .kpi-card {
   background: var(--panel);
   border: var(--hair) solid var(--rule);
-  border-radius: 4px;
+  border-radius: 0;
   padding: var(--s3) var(--s4);
   display: flex;
   flex-direction: column;
@@ -359,7 +414,7 @@ const expandedNames = computed(() => {
 }
 
 .kpi-val {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 1.2rem;
   font-weight: 700;
   color: var(--ink);
@@ -369,7 +424,7 @@ const expandedNames = computed(() => {
   font-size: 9px;
   font-weight: 700;
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: 2px;
   text-transform: uppercase;
 }
 .kpi-badge.pos { color: var(--long); background: var(--long-wash); }
@@ -458,6 +513,7 @@ const expandedNames = computed(() => {
   height: 8px;
   background: var(--void);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs);
   overflow: hidden;
 }
 .rot-bar i {
@@ -476,19 +532,21 @@ const expandedNames = computed(() => {
 }
 
 .sector-card {
-  background: var(--panel-hi);
+  background: var(--panel);
   border: var(--hair) solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--r-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   padding: var(--s3);
   display: flex;
   flex-direction: column;
   gap: 4px;
   cursor: pointer;
-  transition: all var(--dur-fast);
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .sector-card:hover {
   background: var(--panel-raise);
   border-color: var(--rule-hi);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
   transform: translateY(-1px);
 }
 .sector-card.card-in { border-left: 3px solid var(--long); }
@@ -499,14 +557,15 @@ const expandedNames = computed(() => {
   align-items: center;
   justify-content: space-between;
 }
-.card-etf { font-size: 1.1rem; font-weight: 800; color: var(--phosphor); }
-.card-score { font-size: 11px; font-weight: 700; }
+.card-etf { font-family: var(--font-data); font-size: 1.1rem; font-weight: 600; color: var(--phosphor); }
+.card-score { font-family: var(--font-data); font-size: 11px; font-weight: 600; }
 .card-name { font-size: 11px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .card-metrics {
   display: flex;
   justify-content: space-between;
   margin-top: 4px;
+  font-family: var(--font-data);
   font-size: 10px;
   color: var(--ink-dim);
 }
@@ -523,17 +582,18 @@ const expandedNames = computed(() => {
   gap: 2px;
   background: var(--panel-hi);
   padding: 2px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   border: var(--hair) solid var(--rule);
 }
 .filter-btn {
   background: transparent;
   border: none;
   color: var(--ink-dim);
+  font-family: var(--font-data);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   padding: 3px 8px;
-  border-radius: 2px;
+  border-radius: var(--r-xs);
   cursor: pointer;
 }
 .filter-btn.active { background: var(--panel-raise); color: var(--phosphor); }
@@ -541,10 +601,11 @@ const expandedNames = computed(() => {
 .search-input {
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
   color: var(--ink);
   font-size: 11px;
   padding: 3px 8px;
-  border-radius: 3px;
+  border-radius: 2px;
   width: 140px;
 }
 
@@ -579,8 +640,8 @@ const expandedNames = computed(() => {
 .num { text-align: right; }
 .dim { color: var(--ink-dim); }
 
-.fl-track { position: relative; height: 10px; background: var(--panel-hi); display: block; border-radius: 2px; width: 100%; min-width: 90px; }
-.fl-fill { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+.fl-track { position: relative; height: 10px; background: var(--panel-hi); display: block; border-radius: 1px; width: 100%; min-width: 90px; }
+.fl-fill { position: absolute; top: 0; bottom: 0; border-radius: 1px; }
 .fl-fill.in { background: var(--long); }
 .fl-fill.out { background: var(--short); }
 .fl-mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: var(--hair); background: var(--rule-hi); }

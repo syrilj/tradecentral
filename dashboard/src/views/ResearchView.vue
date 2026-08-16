@@ -464,14 +464,15 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   margin-bottom: var(--s3);
   padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--phosphor-dim);
+  border-radius: var(--r-sm);
   background: var(--phosphor-wash);
 }
 .pill {
   flex: 0 0 auto;
-  font-family: var(--font-display);
+  font-family: var(--font-data);
   font-size: var(--t-micro);
   letter-spacing: var(--track-label);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--phosphor);
 }
 .banner-text {

@@ -105,3 +105,38 @@ def test_greeks_have_correct_sign():
     assert put["greeks"]["vega"] > 0
     assert call["greeks"]["gamma"] > 0
     assert put["greeks"]["gamma"] > 0
+
+
+def test_custom_book_is_the_sum_of_signed_legs():
+    book = evaluate_strategy(
+        strategy="custom",
+        spot=100,
+        dte=0,
+        vol=0.3,
+        legs=[
+            {"right": "call", "strike": 100, "quantity": 1, "premium": 5.0},
+            {"right": "call", "strike": 110, "quantity": -1, "premium": 2.0},
+        ],
+    )
+    long = evaluate_strategy(
+        strategy="long_call",
+        spot=100,
+        strike=100,
+        dte=0,
+        vol=0.3,
+        premium=5.0,
+    )
+    short = evaluate_strategy(
+        strategy="long_call",
+        spot=100,
+        strike=110,
+        dte=0,
+        vol=0.3,
+        premium=2.0,
+        quantity=-1,
+    )
+    assert len(book["legs"]) == 2
+    for book_pt, long_pt, short_pt in zip(book["pnl_at_expiry"], long["pnl_at_expiry"], short["pnl_at_expiry"]):
+        assert book_pt["spot"] == long_pt["spot"] == short_pt["spot"]
+        assert book_pt["pnl"] == long_pt["pnl"] + short_pt["pnl"]
+

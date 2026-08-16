@@ -150,7 +150,10 @@ watch([accountEquity, selectedRiskPct, openRiskDollars], () => {
 <style scoped>
 .risk-panel {
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   background: var(--panel);
+  overflow: hidden;
 }
 
 .risk-head {
@@ -159,6 +162,7 @@ watch([accountEquity, selectedRiskPct, openRiskDollars], () => {
   justify-content: space-between;
   gap: var(--s3);
   padding: var(--s3);
+  background: var(--panel-hi);
   border-bottom: var(--hair) solid var(--rule);
 }
 
@@ -167,11 +171,16 @@ watch([accountEquity, selectedRiskPct, openRiskDollars], () => {
   color: var(--ink);
   font-family: var(--font-display);
   font-size: var(--t-small);
+  font-weight: 600;
 }
 
 .risk-state {
   padding: 3px 7px;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
 }
 .risk-state.ready { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
 .risk-state.blocked { color: var(--short); border-color: var(--short); background: var(--short-wash); }
@@ -202,7 +211,7 @@ watch([accountEquity, selectedRiskPct, openRiskDollars], () => {
   color: var(--ink);
 }
 .input-shell i { color: var(--ink-faint); font-style: normal; }
-.input-shell input { width: 100%; min-width: 0; outline: none; }
+.input-shell input { width: 100%; min-width: 0; }
 .input-shell input::placeholder { color: var(--ink-ghost); }
 
 .risk-meter { height: 3px; background: var(--rule-faint); }

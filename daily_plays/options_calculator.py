@@ -48,7 +48,7 @@ def black_scholes(
     vol: float,
     right: str,
 ) -> dict[str, float]:
-    """European Black–Scholes price and Greeks (theta per day, vega per 1 vol point)."""
+    """European Black–Scholes price and Greeks (theta per day, vega per 1 vol point, rho per 1% rate)."""
     right_n = _right(right)
     if years <= 0 or vol <= 0 or spot <= 0 or strike <= 0:
         intrinsic = max(spot - strike, 0.0) if right_n == "call" else max(strike - spot, 0.0)
@@ -62,6 +62,7 @@ def black_scholes(
             "gamma": 0.0,
             "theta": 0.0,
             "vega": 0.0,
+            "rho": 0.0,
         }
     root_t = math.sqrt(years)
     d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * years) / (vol * root_t)
@@ -72,10 +73,12 @@ def black_scholes(
         price = spot * _norm_cdf(d1) - strike * discount * _norm_cdf(d2)
         delta = _norm_cdf(d1)
         theta_year = -(spot * density * vol) / (2.0 * root_t) - rate * strike * discount * _norm_cdf(d2)
+        rho_point = strike * years * discount * _norm_cdf(d2) * 0.01
     else:
         price = strike * discount * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
         delta = _norm_cdf(d1) - 1.0
         theta_year = -(spot * density * vol) / (2.0 * root_t) + rate * strike * discount * _norm_cdf(-d2)
+        rho_point = -strike * years * discount * _norm_cdf(-d2) * 0.01
     gamma = density / (spot * vol * root_t)
     vega_point = spot * density * root_t * 0.01
     return {
@@ -84,6 +87,7 @@ def black_scholes(
         "gamma": gamma,
         "theta": theta_year / DAYS_PER_YEAR,
         "vega": vega_point,
+        "rho": rho_point,
     }
 
 
@@ -183,7 +187,7 @@ def evaluate_strategy(
         quantity=float(quantity),
         legs=legs,
     )
-    greeks = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "theo": 0.0}
+    greeks = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0, "theo": 0.0}
     priced_legs: list[dict[str, Any]] = []
     for leg in book:
         qty = float(leg["quantity"])
@@ -207,12 +211,14 @@ def evaluate_strategy(
             "gamma": model["gamma"] * qty,
             "theta": model["theta"] * qty * float(multiplier),
             "vega": model["vega"] * qty * float(multiplier),
+            "rho": model["rho"] * qty * float(multiplier),
         }
         priced_legs.append(priced)
         greeks["delta"] += priced["delta"]
         greeks["gamma"] += priced["gamma"]
         greeks["theta"] += priced["theta"]
         greeks["vega"] += priced["vega"]
+        greeks["rho"] += priced["rho"]
         greeks["theo"] += model["price"] * qty
 
     if spot_grid is None:

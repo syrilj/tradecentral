@@ -91,8 +91,7 @@ function directionArrow(state: OptionsDirectionRead['state']): string {
   display: grid;
   grid-template-columns: 40px minmax(160px, 0.9fr) minmax(140px, 0.55fr) minmax(0, 2.2fr);
   align-items: stretch;
-  min-height: 0;
-  max-height: 64px;
+  min-height: 60px;
   border: var(--hair) solid var(--border-strong);
   border-left: 3px solid var(--direction-tone);
   background: var(--panel);

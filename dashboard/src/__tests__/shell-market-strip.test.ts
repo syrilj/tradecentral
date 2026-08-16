@@ -26,6 +26,11 @@ describe('application market strip contract', () => {
     expect(app).toContain('BAR ${compactBarDate(rotationAsOf.value)}')
   })
 
+  it('keeps rotation dated from the independently refreshed sector panel', () => {
+    expect(app).toContain('board.sector_flow === flow')
+    expect(app).toContain('sector_flow: flow')
+  })
+
   it('moves search into the top strip and removes the detached rail block', () => {
     expect(app).toContain('class="strip-search"')
     expect(app).not.toContain('class="find"')

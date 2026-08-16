@@ -227,10 +227,11 @@ function commit(): void {
   display: flex;
   flex-direction: column;
   border: var(--hair) solid var(--rule-hi);
-  padding: var(--s1);
+  border-radius: var(--r-xl);
+  padding: 0;
   background: var(--panel);
-  /* Hard edge lift — instrument overlay, not floating glass card */
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4), 0 8px 0 -1px var(--void);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  overflow: hidden;
   animation: rise var(--dur) var(--ease-out) both;
 }
 
@@ -238,8 +239,9 @@ function commit(): void {
   display: flex;
   align-items: center;
   gap: var(--s3);
-  padding: var(--s4);
+  padding: var(--s3) var(--s4);
   border-bottom: var(--hair) solid var(--rule);
+  background: var(--void-lift);
 }
 
 .glyph { color: var(--phosphor); }
@@ -253,9 +255,14 @@ function commit(): void {
   min-width: 0;
 }
 .input::placeholder { color: var(--ink-ghost); font-family: var(--font-ui); letter-spacing: 0; }
-.input:focus-visible { outline: var(--hair) solid var(--phosphor); outline-offset: 2px; }
+.input:focus-visible { outline: none; }
 
-.state { color: var(--ink-faint); flex: 0 0 auto; }
+.state {
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  flex: 0 0 auto;
+}
 
 .results-scroll {
   overflow-y: auto;
@@ -274,11 +281,11 @@ function commit(): void {
 
 .section-head {
   padding: 4px var(--s4);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.1em;
+  font-family: var(--font-data);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   color: var(--ink-ghost);
-  border-bottom: var(--hair) solid var(--rule);
 }
 
 .cmd-list {
@@ -286,6 +293,7 @@ function commit(): void {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  padding: 0 4px;
 }
 
 .cmd-hit {
@@ -295,7 +303,8 @@ function commit(): void {
   text-align: left;
   gap: var(--s3);
   min-height: 36px;
-  padding: 6px var(--s4);
+  padding: 6px var(--s3);
+  border-radius: var(--r-sm);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -303,13 +312,15 @@ function commit(): void {
   background: var(--phosphor-wash);
 }
 .cmd-idx {
+  font-family: var(--font-data);
   font-size: var(--t-micro);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--phosphor);
   min-width: 2ch;
 }
 .cmd-title {
-  font-weight: 700;
+  font-family: var(--font-ui);
+  font-weight: 600;
   font-size: var(--t-small);
   color: var(--ink);
   min-width: 90px;
@@ -321,6 +332,7 @@ function commit(): void {
 
 .hits {
   list-style: none;
+  padding: 0 4px;
 }
 
 .hit {
@@ -331,9 +343,11 @@ function commit(): void {
   text-align: left;
   gap: var(--s3);
   min-height: 36px;
-  padding: var(--s2) var(--s4);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm);
   cursor: pointer;
   border-left: 2px solid transparent;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .hit.on {
@@ -343,21 +357,23 @@ function commit(): void {
 .hit.free .sym { color: var(--ink-dim); }
 .hit.free .tier { color: var(--warn); border-color: var(--warn); }
 
-.sym { font-size: var(--t-body); font-weight: 600; color: var(--ink); }
+.sym { font-family: var(--font-data); font-size: var(--t-body); font-weight: 600; color: var(--ink); }
 .hit.on .sym { color: var(--phosphor); }
 
 .tier {
   justify-self: start;
   padding: 1px 5px;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
+  font-family: var(--font-data);
   color: var(--ink-faint);
 }
 .tier.core { color: var(--phosphor-dim); border-color: var(--phosphor-dim); }
 .tier.live { color: var(--warn); border-color: var(--warn); }
 .track-badge { color: var(--warn); border-color: var(--warn); font-weight: 600; font-size: 0.7rem; letter-spacing: 0.05em; }
 
-.span { color: var(--ink-ghost); letter-spacing: 0.05em; }
-.bars { font-size: var(--t-tiny); color: var(--ink-faint); }
+.span { color: var(--ink-ghost); letter-spacing: 0.03em; }
+.bars { font-family: var(--font-data); font-size: var(--t-tiny); color: var(--ink-faint); }
 
 .empty, .err { padding: var(--s5) var(--s4); color: var(--ink-faint); text-align: center; }
 .err { color: var(--short); }
@@ -367,12 +383,14 @@ function commit(): void {
   gap: var(--s4);
   padding: var(--s2) var(--s4);
   border-top: var(--hair) solid var(--rule);
+  background: var(--void-lift);
   color: var(--ink-ghost);
 }
 
 kbd {
   font-family: var(--font-data);
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
   padding: 0 4px;
   margin-right: 3px;
   color: var(--ink-faint);

@@ -11,12 +11,16 @@ import SetupRiskPanel from '@/components/SetupRiskPanel.vue'
 import { DASH, num, shortDate, signed } from '@/format'
 import {
   freshnessLabel,
+  formatSetupLevel,
+  formatSupportLevels,
+  formatTakeProfitZones,
+  levelSourceLabel,
+  missingSourcesCopy,
   presentSetupRows,
   qlibAlignmentLabel,
-  sellSourceLabel,
   setupCalculatorQuery,
+  setupHeadlineInvalidation,
   setupsFeedRequest,
-  spotRelativeSellCopy,
   suggestionStabilityCopy,
   suggestedRightLabel,
   suggestedRightTokenClass,
@@ -134,6 +138,42 @@ function rightTone(right: string | null | undefined): 'call' | 'put' | 'flat' | 
   return 'flat'
 }
 
+function strikeHeadline(row: FlowSuggestion | null | undefined): string {
+  return formatSetupLevel(row?.strike ?? row?.contract_plan?.strike, row?.strike_source)
+}
+
+function supportsHeadline(row: FlowSuggestion | null | undefined): string {
+  return formatSupportLevels(row?.supports)
+}
+
+function invalidationHeadline(row: FlowSuggestion | null | undefined): { value: string, sub: string } {
+  const mark = setupHeadlineInvalidation({
+    invalidation: row?.invalidation,
+    invalidationSource: row?.invalidation_source,
+    planInvalidation: row?.plan_invalidation,
+    planInvalidationSource: row?.plan_invalidation_source,
+  })
+  return {
+    value: mark.price == null ? DASH : num(mark.price, 2),
+    sub: mark.source ? levelSourceLabel(mark.source) : 'not supplied',
+  }
+}
+
+function takeProfitHeadline(row: FlowSuggestion | null | undefined): string {
+  const zones = formatTakeProfitZones(row?.take_profit_zones)
+  if (zones !== DASH) return zones
+  return formatSetupLevel(row?.plan_target, row?.plan_target_source)
+}
+
+function completenessCopy(row: LiveOpportunityRow | null | undefined): string {
+  const suggestion = row?.suggestion
+  if (!suggestion) return 'not supplied'
+  if (suggestion.risk_levels_complete && row?.confidence?.is_high && row.live_ready) return 'READY'
+  if (suggestion.risk_levels_complete && row?.confidence?.is_high) return 'LEVELS COMPLETE · NOT LIVE READY'
+  if (suggestion.risk_levels_complete) return 'LEVELS COMPLETE · CONFIDENCE NOT HIGH'
+  return 'LEVELS INCOMPLETE'
+}
+
 const meta = computed(() => {
   const cov = coverage.value
   if (!cov) return feed.data.value?.asof_utc ? `asof ${shortDate(feed.data.value.asof_utc)}` : 'Awaiting Flow + board'
@@ -148,16 +188,17 @@ const meta = computed(() => {
         <span class="label eyebrow">Flow-derived research setups</span>
         <h1>Setups</h1>
         <p>
-          Stable CALL and PUT signals can become explicit unsized PAPER BUY actions.
-          The separate READY tier requires confirmed direction, a stable contract, live quotes, and liquidity.
-          GEX exits remain unmeasured when no wall exists. Research template. No order ticket.
+          Selecting a name shows the strike, supports, invalidation, and take profit zones
+          from measured resistance/support, options GEX, positions, and technical analysis.
+          Incomplete or uncalibrated rows stay unmeasured and are never a ready recommendation.
+          Research template. No order ticket.
         </p>
       </div>
       <div class="scope-stack">
         <span class="scope-chip label" :class="{ planning: planningMode }">
           {{ planningMode ? 'MARKET CLOSED · PLANNING' : 'LIVE ENTRY MONITOR' }}
         </span>
-        <span class="scope-chip label">GEX WALL SELL</span>
+        <span class="scope-chip label">STRIKE · SUPPORT · INVALIDATION · TAKE PROFIT</span>
         <span class="scope-chip label" :class="{ live: qlibPublished }">
           {{ qlibPublished ? 'QLIB PUBLISHED' : 'QLIB UNMEASURED' }}
         </span>
@@ -243,8 +284,9 @@ const meta = computed(() => {
               <tr>
                 <th class="label">Symbol</th>
                 <th class="label">Right</th>
+                <th class="label num">Strike</th>
                 <th class="label num">Spot</th>
-                <th class="label">Sell vs spot</th>
+                <th class="label">Take profit</th>
                 <th class="label">Qlib</th>
                 <th class="label">Data</th>
                 <th class="label">Action</th>
@@ -267,13 +309,9 @@ const meta = computed(() => {
                     {{ suggestedRightLabel(suggestionOf(row)?.right) }}
                   </span>
                 </td>
+                <td class="fig num">{{ suggestionOf(row)?.strike == null && suggestionOf(row)?.contract_plan?.strike == null ? DASH : num(suggestionOf(row)?.strike ?? suggestionOf(row)?.contract_plan?.strike, 2) }}</td>
                 <td class="fig num">{{ suggestionOf(row)?.spot == null ? DASH : num(suggestionOf(row)?.spot, 2) }}</td>
-                <td class="fig sell">{{ spotRelativeSellCopy({
-                  sell: suggestionOf(row)?.plan_target,
-                  spot: suggestionOf(row)?.spot,
-                  sellRelPct: suggestionOf(row)?.sell_rel_pct,
-                  sellSource: suggestionOf(row)?.plan_target_source,
-                }) }}</td>
+                <td class="fig sell">{{ takeProfitHeadline(suggestionOf(row)) }}</td>
                 <td class="fig">{{ qlibAlignmentLabel(suggestionOf(row)?.qlib.alignment) }}</td>
                 <td>
                   <span class="fresh label" :class="row.freshness?.pass ? 'ok' : 'stale'">
@@ -319,31 +357,50 @@ const meta = computed(() => {
             {{ suggestionStabilityCopy(suggestion) }} · REVIEW SCORE {{ suggestion.review_score ?? 0 }}/100
           </p>
 
-          <div class="levels">
-            <Readout label="Spot" :value="suggestion.spot == null ? DASH : num(suggestion.spot, 2)" size="lg" />
+          <div
+            class="completeness"
+            :class="{
+              complete: suggestion.risk_levels_complete,
+              ready: active.live_ready,
+              uncalibrated: !active.confidence?.is_high,
+            }"
+          >
+            <span class="label">{{ completenessCopy(active) }}</span>
+            <strong class="fig">{{ active.confidence?.band || 'UNCALIBRATED' }}</strong>
+            <small>
+              {{ suggestion.risk_levels_complete ? 'Strike, supports, invalidation, and take profit are measured.' : `Missing: ${suggestion.risk_missing_fields?.length ? suggestion.risk_missing_fields.join(', ') : 'not supplied'}.` }}
+            </small>
+            <small v-if="suggestion.missing_sources?.length">
+              Sources unmeasured: {{ missingSourcesCopy(suggestion.missing_sources) }}
+            </small>
+          </div>
+
+          <div class="levels setup-headlines">
             <Readout
-              label="GEX take-profit"
-              :value="suggestion.plan_target == null ? DASH : `$${num(suggestion.plan_target, 2)}`"
-              :sub="suggestion.plan_target == null ? (suggestion.right === 'call' ? 'No call wall above spot' : suggestion.right === 'put' ? 'No put wall below spot' : 'No measured target') : spotRelativeSellCopy({
-                sell: suggestion.plan_target,
-                spot: suggestion.spot,
-                sellRelPct: suggestion.sell_rel_pct,
-                sellSource: suggestion.plan_target_source,
-              })"
-              :tone="rightTone(suggestion.right)"
+              label="Strike"
+              :value="strikeHeadline(suggestion)"
+              :sub="suggestion.strike_source ? levelSourceLabel(suggestion.strike_source) : (suggestion.contract_plan?.strike == null ? 'not supplied' : 'positions')"
+              size="lg"
+            />
+            <Readout
+              label="Supports"
+              :value="supportsHeadline(suggestion)"
+              :sub="suggestion.supports?.length ? 'Watch these supports' : 'not supplied'"
+              tone="flat"
               size="lg"
             />
             <Readout
               label="Invalidation"
-              :value="suggestion.plan_invalidation == null ? DASH : num(suggestion.plan_invalidation, 2)"
-              :sub="suggestion.plan_invalidation == null ? (suggestion.right === 'call' ? 'No put wall below spot' : suggestion.right === 'put' ? 'No call wall above spot' : 'No measured invalidation') : sellSourceLabel(suggestion.plan_invalidation_source)"
+              :value="invalidationHeadline(suggestion).value"
+              :sub="invalidationHeadline(suggestion).sub"
               tone="flat"
             />
             <Readout
-              label="Composite"
-              :value="signed(active.composite_score, 2)"
-              :sub="active.signal_basis"
-              tone="accent"
+              label="Take profit zones"
+              :value="takeProfitHeadline(suggestion)"
+              :sub="suggestion.take_profit_zones?.length ? 'Labeled zones, not a blend' : 'not supplied'"
+              :tone="rightTone(suggestion.right)"
+              size="lg"
             />
           </div>
 
@@ -456,6 +513,8 @@ const meta = computed(() => {
   align-items: flex-start;
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   background: var(--panel);
 }
 
@@ -463,8 +522,8 @@ const meta = computed(() => {
   margin: 4px 0 8px;
   font-family: var(--font-display);
   font-size: var(--t-lead);
-  font-weight: 500;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
 }
 
 .title-block p {
@@ -487,6 +546,8 @@ const meta = computed(() => {
 .scope-chip {
   padding: 3px 8px;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
+  font-family: var(--font-data);
   color: var(--ink-dim);
 }
 
@@ -502,7 +563,11 @@ const meta = computed(() => {
   background: var(--call-wash);
 }
 
-.board { width: 100%; }
+.board {
+  width: 100%;
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
 
 .readout-grid {
   display: grid;
@@ -538,9 +603,12 @@ const meta = computed(() => {
 .tab-btn {
   padding: 5px 11px;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
+  font-family: var(--font-data);
   background: var(--void-lift);
   color: var(--ink-dim);
   cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .tab-btn.active {
@@ -552,6 +620,9 @@ const meta = computed(() => {
 .scan-btn {
   padding: 5px 11px;
   height: 28px;
+  border-radius: var(--r-xs);
+  font-family: var(--font-data);
+  font-weight: 600;
   color: var(--phosphor);
   background: var(--phosphor-wash);
   border: var(--hair) solid var(--phosphor-dim);
@@ -676,14 +747,36 @@ const meta = computed(() => {
   background: var(--call-wash);
   box-shadow: inset 8px 0 0 color-mix(in srgb, var(--call) 18%, transparent);
 }
-.paper-action-banner strong { font-family: var(--font-mono); letter-spacing: 0.02em; }
+.paper-action-banner strong { font-family: var(--font-data); letter-spacing: 0.02em; }
 .paper-action-banner small { color: var(--ink-dim); line-height: 1.4; }
+
+.completeness {
+  display: grid;
+  gap: 4px;
+  padding: var(--s3);
+  border: var(--hair) solid var(--warn);
+  border-left-width: 3px;
+  background: var(--warn-wash);
+}
+.completeness.complete {
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
+.completeness.ready {
+  color: var(--phosphor);
+}
+.completeness.uncalibrated:not(.complete) {
+  border-color: var(--warn);
+}
+.completeness strong { font-family: var(--font-data); letter-spacing: 0.04em; }
+.completeness small { color: var(--ink-dim); font-size: var(--t-micro); line-height: 1.4; }
 
 .levels {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--s3);
 }
+.setup-headlines { grid-template-columns: 1fr 1fr; }
 
 .facts {
   display: grid;
@@ -710,7 +803,7 @@ const meta = computed(() => {
 .stability-banner.stable { color: var(--phosphor); border-left-color: var(--phosphor); background: var(--phosphor-wash); }
 .stability-banner.churned { color: var(--short); border-left-color: var(--short); background: var(--short-wash); }
 .contract-numbers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: var(--hair) solid var(--rule); }
-.contract-numbers span { padding: var(--s2); color: var(--ink-soft); font-family: var(--font-mono); border-right: var(--hair) solid var(--rule); }
+.contract-numbers span { padding: var(--s2); color: var(--ink-soft); font-family: var(--font-data); border-right: var(--hair) solid var(--rule); }
 .contract-numbers span:last-child { border-right: 0; }
 .contract-numbers i { display: block; margin-bottom: 4px; font-style: normal; }
 

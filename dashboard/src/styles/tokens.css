@@ -23,39 +23,34 @@
 
 :root {
   /* ---- surface ---------------------------------------------------------- */
-  --void: #0a0b0f;
-  --void-lift: #0e1015;
-  --panel: #14161d;
-  --panel-hi: #1a1d26;
-  --panel-raise: #222633;
+  --void: #08090c;
+  --void-lift: #0d0f14;
+  --panel: #12141a;
+  --panel-hi: #181b22;
+  --panel-raise: #20242e;
 
   /* ---- rules & structure ------------------------------------------------ */
-  --rule: #262a36;
-  --rule-hi: #39404f;
-  --rule-faint: #1b1e28;
-  /* Neutral graph paper. The substrate should not carry the accent hue. */
-  --grid: rgba(160, 172, 195, 0.04);
+  --rule: #232732;
+  --rule-hi: #343a4a;
+  --rule-faint: #181b22;
+  /* Ultra-subtle substrate grid */
+  --grid: rgba(255, 255, 255, 0.025);
 
   /* ---- ink -------------------------------------------------------------- */
-  --ink: #e9ecf2;
-  --ink-soft: #c3c9d6;
-  --ink-dim: #9aa3b4;
-  --ink-faint: #7d879a;
-  --ink-ghost: #727c8f;
+  --ink: #f0f2f7;
+  --ink-soft: #c8cedb;
+  --ink-dim: #949eb2;
+  --ink-faint: #6c768a;
+  --ink-ghost: #4e5668;
 
   /* ---- the one accent ----------------------------------------------------
-     Sage, not lime. Same role as before — live state, selection, focus — at
-     roughly a third of the chroma, so a locked bar reads as *selected* rather
-     than as the loudest object on screen. */
+     Sage/phosphor for live state, active tabs, and selection. */
   --phosphor: #a9c46c;
   --phosphor-dim: #7f9550;
   --phosphor-glow: rgba(169, 196, 108, 0.14);
   --phosphor-wash: rgba(169, 196, 108, 0.07);
 
-  /* ---- semantic aliases --------------------------------------------------
-     Components use roles rather than raw palette values. This keeps live,
-     selection, market direction and option identity from collapsing into the
-     same visual signal as the dashboard grows. */
+  /* ---- semantic aliases -------------------------------------------------- */
   --surface-canvas: var(--void);
   --surface-base: var(--void-lift);
   --surface-raised: var(--panel);
@@ -71,14 +66,11 @@
   --status-stale: var(--warn);
   --status-proxy: var(--call);
 
-  /* ---- signed quantities ------------------------------------------------
-     Desaturated enough to sit next to each other in a dense bar chart without
-     vibrating, still ≥4.5:1 against --panel. */
+  /* ---- signed quantities ------------------------------------------------ */
   --long: #4fae80;
   --long-wash: rgba(79, 174, 128, 0.12);
   --short: #cf5f6b;
   --short-wash: rgba(207, 95, 107, 0.12);
-  /* Options right, not trade direction: quieter blue/amber encoding. */
   --call: #5b95b5;
   --call-hi: #86b7d1;
   --call-wash: rgba(91, 149, 181, 0.11);
@@ -89,18 +81,7 @@
   --warn-wash: rgba(217, 164, 65, 0.12);
   --halt: #cf5f6b;
 
-  /* ---- categorical ramp (graph communities only) -------------------------
-     The "one accent" rule holds for STATE — phosphor still means live, and
-     long/short still mean signed. But a knowledge-graph community is neither:
-     it is an unsigned nominal category, and encoding eight of them on the ink
-     ramp alone is unreadable at tick size.
-
-     This follows the precedent already set by --call/--put, which encode
-     option right (also nominal, also not direction) in quiet blue/amber. Same
-     discipline applies here: every entry is held to roughly the chroma of
-     --call, so a community reads as a *label* rather than competing with
-     phosphor for attention. Nothing outside the graph may use these.
-     Ordered so adjacent indices stay distinguishable at 1px stroke width. */
+  /* ---- categorical ramp (graph communities only) ------------------------- */
   --cat-1: #5b95b5;
   --cat-2: #c1955e;
   --cat-3: #7f9550;
@@ -116,12 +97,13 @@
   --unknown: var(--ink-faint);
   --running: var(--warn);
 
-  /* ---- type ------------------------------------------------------------- */
-  --font-display: 'Martian Mono Variable', 'Martian Mono', ui-monospace, monospace;
-  --font-ui: 'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
-  --font-data: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+  /* ---- type: Mistral AI refined typography system ----------------------- */
+  --font-display: 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-ui: 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-data: 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
+  --font-mono: 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
 
-  --t-micro: 0.6875rem;   /* 11px — crisp instrument labels    */
+  --t-micro: 0.6875rem;   /* 11px — crisp technical labels     */
   --t-tiny: 0.75rem;      /* 12px — dense table meta           */
   --t-small: 0.8125rem;   /* 13px — table body                 */
   --t-body: 0.875rem;     /* 14px — prose                      */
@@ -130,8 +112,16 @@
   --t-fig-lg: 2.25rem;    /* 36px — hero readout               */
   --t-display: 1.125rem;  /* 18px — view titles                */
 
-  --track-label: 0.10em;  /* balanced tracking on uppercase micro */
+  --track-display: -0.02em; /* tight display tracking         */
+  --track-label: 0.05em;   /* balanced uppercase mono tracking */
   --track-tight: -0.01em;
+
+  /* ---- radius geometry (clean modern box curves) ------------------------ */
+  --r-xs: 2px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
 
   /* ---- space (4px base) -------------------------------------------------- */
   --s1: 4px;
@@ -152,7 +142,7 @@
   /* ---- geometry ---------------------------------------------------------- */
   --rail-w: 80px;
   --strip-h: 60px;
-  --tick: 8px;            /* corner registration mark length   */
+  --tick: 8px;
   --hair: 1px;
 
   /* ---- motion ------------------------------------------------------------ */
@@ -166,6 +156,19 @@
   --z-rail: 45;
   --z-overlay: 90;
   --z-toast: 100;
+
+  /* ---- institutional flow order badges (strictly anti-neon) ------------- */
+  --badge-golden: #d9a441;
+  --badge-golden-wash: rgba(217, 164, 65, 0.14);
+  --badge-golden-border: rgba(217, 164, 65, 0.45);
+  --badge-sweep: #86b7d1;
+  --badge-sweep-wash: rgba(91, 149, 181, 0.12);
+  --badge-block: #c1955e;
+  --badge-block-wash: rgba(193, 149, 94, 0.12);
+  --badge-split: #a8788f;
+  --badge-split-wash: rgba(168, 120, 143, 0.12);
+  --badge-multileg: #6f8fa0;
+  --badge-multileg-wash: rgba(111, 143, 160, 0.12);
 }
 
 /* A desk defaults to compact, while review / presentation sessions can be
@@ -175,6 +178,141 @@
   --density-cell-padding: 6px 10px;
   --density-gap: 8px;
   --density-control-h: 34px;
+}
+
+/* Flow order badge components */
+.flow-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 19px;
+  padding: 1px 6px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+
+.badge-golden-sweep,
+.golden-sweep {
+  color: var(--badge-golden);
+  border: var(--hair) solid var(--badge-golden-border);
+  background: var(--badge-golden-wash);
+  font-weight: 850;
+}
+
+.badge-pip {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.badge-sweep,
+.sweep {
+  color: var(--badge-sweep);
+  border: var(--hair) solid color-mix(in srgb, var(--call) 50%, var(--rule));
+  background: var(--badge-sweep-wash);
+  font-weight: 750;
+}
+
+.badge-block,
+.block {
+  color: var(--put-hi);
+  border: var(--hair) solid color-mix(in srgb, var(--put) 50%, var(--rule));
+  background: var(--badge-block-wash);
+  font-weight: 750;
+}
+
+.badge-split,
+.split {
+  color: var(--badge-split);
+  border: var(--hair) solid color-mix(in srgb, var(--cat-4) 45%, var(--rule));
+  background: var(--badge-split-wash);
+  font-weight: 750;
+}
+
+.badge-multileg,
+.multileg {
+  color: var(--badge-multileg);
+  border: var(--hair) solid color-mix(in srgb, var(--cat-5) 45%, var(--rule));
+  background: var(--badge-multileg-wash);
+  font-weight: 750;
+}
+
+.badge-standard,
+.standard {
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule);
+  background: transparent;
+  font-weight: 600;
+}
+
+/* Vol / OI Visualizer Pill */
+.vol-oi-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 1px 5px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  border-radius: var(--r-xs);
+  border: var(--hair) solid var(--rule);
+  background: var(--void-lift);
+  color: var(--ink-dim);
+}
+
+.vol-oi-pill.high,
+.vol-oi-pill.vol-oi-high {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+  font-weight: 800;
+}
+
+.vol-oi-pill.extreme,
+.vol-oi-pill.vol-oi-extreme {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+  font-weight: 850;
+}
+
+/* Whale Indicators & Premium Tiers ($500k+ / $1M+) */
+.whale-indicator {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 3px;
+  font-size: var(--t-micro);
+  font-weight: 800;
+  border-radius: var(--r-xs);
+}
+
+.whale-indicator.tier-mega-whale,
+.whale-indicator.tier-1m {
+  color: var(--warn);
+  border: var(--hair) solid var(--warn);
+  background: var(--warn-wash);
+}
+
+.whale-indicator.tier-whale,
+.whale-indicator.tier-500k {
+  color: var(--call-hi);
+  border: var(--hair) solid var(--call);
+  background: var(--call-wash);
+  font-weight: 750;
+}
+
+.whale-indicator.tier-large,
+.whale-indicator.tier-100k {
+  color: var(--ink-soft);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
 }
 
 /* The instrument runs dark. A light variant would be a different instrument.

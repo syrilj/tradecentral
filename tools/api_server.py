@@ -12,7 +12,9 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
   GET  /api/status[?depth=quick|deep]
       -> latest cached desk board (PEAD candidates, directional signals,
          sector flow, vol complex, PEAD gate metrics, leaderboard). Polls do
-         not rebuild; POST /api/trigger_scan is the rebuild path.
+         not rebuild PEAD/directional tables; POST /api/trigger_scan is the
+         model rebuild path. Sector flow is refreshed independently when its
+         own TTL expires (see /api/sector-flow).
 
   GET  /api/quotes?symbols=A,B,C
       -> live marks for up to 40 tickers. Prefers LSE equity candles, falls
@@ -27,6 +29,13 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
 
   GET  /api/analyze?symbol=X
       -> analyze_symbol_adhoc(symbol) verbatim.
+
+  GET  /api/sector-flow[?force=1]
+      -> Re-runs the sector money-flow panel (yfinance daily books) and
+         patches sector_flow on the cached /api/status board. A short TTL
+         coalesces passive polls; force=1 always rescans. Status polls also
+         kick this refresh in the background so rotation cannot sit on the
+         one-shot scan that warmed the desk.
 
   POST /api/trigger_scan?depth=<quick|deep>
       -> starts a bounded background scan and returns its job immediately.
@@ -53,8 +62,9 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
          Shell benchmarks may use a cached yfinance refresh when the checked-in
          daily frame is stale. Freshness always refers to the observed bar date.
 
-  GET  /api/options-calculator?strategy=long_call|long_put|long_straddle&spot=&strike=&dte=&vol=&premium=
-      -> closed-form P/L vs spot + Delta/Gamma/Theta/Vega. No order path.
+  GET  /api/options-calculator?strategy=long_call|long_put|long_straddle|custom&spot=&strike=&dte=&vol=&premium=[&legs=JSON]
+      -> closed-form P/L vs spot + Delta/Gamma/Theta/Vega for one contract
+         or a signed multi-leg book. No order path.
 
   GET  /api/options?symbol=X&mode=<live|history>&range=<1d|5d|1m|3m>
       -> truth-preserving call/put activity, stock overlay, gamma-by-strike,
@@ -288,11 +298,13 @@ sys.path.insert(0, str(TOOLS_DIR))
 from render_dashboard import (  # noqa: E402
     get_dashboard_data as _get_dashboard_data_uncached,
     analyze_symbol_adhoc,
+    fetch_sector_flow_signals,
     load_dynamic_leaderboard,
 )
 from check_gcp_resources import get_all_gcp_resources  # noqa: E402
 from sentiment_anomalies import (  # noqa: E402
     build_anomalies_payload,
+    build_cot_payload,
     build_sentiment_payload,
 )
 from backfill_option_oi import capture as _capture_option_oi  # noqa: E402
@@ -851,7 +863,24 @@ def _changepoints_payload() -> dict:
     # Same "fill only absent keys" discipline as _factor_tearsheet_payload:
     # a genuinely-computed null must survive, never get papered over by a
     # default that would make a broken run look like a clean empty state.
-    return {**empty, **payload, "available": bool(payload.get("available", True))}
+    merged = {**empty, **payload, "available": bool(payload.get("available", True))}
+    asof = merged.get("asof") or merged.get("generated_at")
+    age_days = None
+    if asof:
+        try:
+            asof_ts = datetime.fromisoformat(str(asof).replace("Z", "+00:00"))
+            if asof_ts.tzinfo is None:
+                asof_ts = asof_ts.replace(tzinfo=timezone.utc)
+            age_days = max(0, (datetime.now(timezone.utc) - asof_ts).days)
+        except ValueError:
+            try:
+                asof_ts = datetime.strptime(str(asof)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                age_days = max(0, (datetime.now(timezone.utc) - asof_ts).days)
+            except ValueError:
+                age_days = None
+    merged["artifact_age_days"] = age_days
+    merged["artifact_stale"] = bool(age_days is not None and age_days > 3)
+    return merged
 
 
 def _flow_state_payload() -> dict:
@@ -901,6 +930,50 @@ def _flow_state_payload() -> dict:
     if not isinstance(payload, dict):
         return {**empty, "reason": "flow-state artifact is not a JSON object"}
     return {**empty, **payload, "available": bool(payload.get("available", True))}
+
+
+def _flow_state_levels_by_symbol() -> dict[str, dict[str, float]]:
+    payload = _flow_state_payload()
+    levels: dict[str, dict[str, float]] = {}
+    for row in payload.get("states") or ():
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        measured: dict[str, float] = {}
+        for field, dest in (("next_support", "support_price"), ("next_resistance", "resistance_price")):
+            try:
+                if row.get(field) is not None:
+                    measured[dest] = float(row[field])
+            except (TypeError, ValueError):
+                continue
+        if measured:
+            levels[symbol] = measured
+    return levels
+
+
+def _attach_flow_state_levels(board_rows: list) -> list:
+    extra = _flow_state_levels_by_symbol()
+    if not extra:
+        return board_rows
+    attached: list = []
+    for row in board_rows:
+        if not isinstance(row, dict):
+            attached.append(row)
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        measured = extra.get(symbol)
+        if not measured:
+            attached.append(row)
+            continue
+        copy = dict(row)
+        if copy.get("support_price") is None and measured.get("support_price") is not None:
+            copy["support_price"] = measured["support_price"]
+        if copy.get("resistance_price") is None and measured.get("resistance_price") is not None:
+            copy["resistance_price"] = measured["resistance_price"]
+        attached.append(copy)
+    return attached
 
 
 def _bocpd_align_dates(index: pd.DatetimeIndex, arr_len: int) -> "_get_pd().DatetimeIndex":
@@ -1272,6 +1345,12 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
         "runlength": runlength,
         "breaks": breaks,
         "stats": stats_row,
+        "figure": {
+            "x_label": "Date",
+            "y_top_label": "Daily return",
+            "y_bottom_label": "Run length (bars)",
+            "heatmap_label": "log10 P(r_t | x_1:t)",
+        },
     }
     _changepoint_symbol_cache_put(cache_key, payload)
     return payload
@@ -1286,6 +1365,14 @@ _STATUS_CACHE_TTL_S: float = 45.0
 _DEEP_STATUS_CACHE_TTL_S: float = 300.0
 _STATUS_LOCK = threading.Lock()
 _ACTIVE_SCAN_DEPTH = "quick"
+
+# Sector rotation is a 15-ETF daily panel. It must re-run on its own clock —
+# the desk board cache is allowed to keep yesterday's PEAD/directional tables,
+# but money-flow cannot sit on the one-shot scan that warmed the process.
+_SECTOR_FLOW_CACHE: dict[str, Any] = {}
+_SECTOR_FLOW_TTL_S: float = 180.0
+_SECTOR_FLOW_LOCK = threading.Lock()
+_SECTOR_FETCH_LOCK = threading.Lock()
 
 
 def _scan_depth(value: str | None) -> str:
@@ -1303,6 +1390,81 @@ def _status_cache_fresh(depth: str, now: float | None = None) -> bool:
     return ((now if now is not None else time.time()) - stamp) < _status_cache_ttl(depth)
 
 
+def _remember_sector_flow(flow: Mapping[str, Any]) -> None:
+    with _SECTOR_FLOW_LOCK:
+        _SECTOR_FLOW_CACHE["payload"] = dict(flow)
+        _SECTOR_FLOW_CACHE["ts"] = time.time()
+
+
+def _patch_status_sector_flow(flow: Mapping[str, Any]) -> None:
+    snapshot = dict(flow)
+    for depth, data in list(_STATUS_CACHE.items()):
+        if isinstance(data, dict):
+            patched = dict(data)
+            patched["sector_flow"] = snapshot
+            _STATUS_CACHE[depth] = patched
+
+
+def _apply_sector_flow_to_status(flow: Mapping[str, Any]) -> None:
+    with _STATUS_LOCK:
+        _patch_status_sector_flow(flow)
+
+
+def get_sector_flow(*, force: bool = False) -> dict:
+    """Return a current sector-flow panel, re-running the scan when needed."""
+    with _SECTOR_FLOW_LOCK:
+        cached = _SECTOR_FLOW_CACHE.get("payload")
+        ts = float(_SECTOR_FLOW_CACHE.get("ts") or 0)
+        if (
+            isinstance(cached, dict)
+            and not force
+            and (time.time() - ts) < _SECTOR_FLOW_TTL_S
+        ):
+            return dict(cached)
+    with _SECTOR_FETCH_LOCK:
+        with _SECTOR_FLOW_LOCK:
+            cached = _SECTOR_FLOW_CACHE.get("payload")
+            ts = float(_SECTOR_FLOW_CACHE.get("ts") or 0)
+            if (
+                isinstance(cached, dict)
+                and not force
+                and (time.time() - ts) < _SECTOR_FLOW_TTL_S
+            ):
+                return dict(cached)
+        flow = fetch_sector_flow_signals()
+        if not isinstance(flow, dict):
+            flow = {}
+        _remember_sector_flow(flow)
+    _apply_sector_flow_to_status(flow)
+    return dict(flow)
+
+
+def _kick_sector_refresh_if_stale(status: Mapping[str, Any] | None = None) -> None:
+    """Background re-run when the last sector panel is older than the TTL."""
+    board_flow = status.get("sector_flow") if isinstance(status, Mapping) else None
+    with _SECTOR_FLOW_LOCK:
+        cached = _SECTOR_FLOW_CACHE.get("payload")
+        ts = float(_SECTOR_FLOW_CACHE.get("ts") or 0)
+        if isinstance(cached, dict) and (time.time() - ts) < _SECTOR_FLOW_TTL_S:
+            return
+        if not isinstance(cached, dict) and not isinstance(board_flow, Mapping):
+            return
+        if _SECTOR_FLOW_CACHE.get("kicked"):
+            return
+        _SECTOR_FLOW_CACHE["kicked"] = True
+
+    def _run() -> None:
+        try:
+            get_sector_flow(force=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[api_server] sector flow refresh failed: {exc}", file=sys.stderr, flush=True)
+        finally:
+            with _SECTOR_FLOW_LOCK:
+                _SECTOR_FLOW_CACHE["kicked"] = False
+
+    threading.Thread(target=_run, daemon=True, name="sector-flow-refresh").start()
+
+
 def get_dashboard_data(
     *,
     force: bool = False,
@@ -1315,7 +1477,9 @@ def get_dashboard_data(
     `/api/status` polls must not rebuild PEAD/directional boards. A concurrent
     status poll during a Deep scan used to wait on this lock, then recompute
     the Quick snapshot and overwrite the desk's two model tables. Trigger-scan
-    is the only path that force-rebuilds.
+    is the only path that force-rebuilds those tables. Sector flow is different:
+    stale rotation is kicked onto a background re-run so the board does not
+    freeze on the warmup scan.
     """
     global _ACTIVE_SCAN_DEPTH
     requested = _scan_depth(scan_depth) if scan_depth is not None else None
@@ -1324,12 +1488,14 @@ def get_dashboard_data(
     if not force and _status_cache_fresh(depth, now):
         if activate:
             _ACTIVE_SCAN_DEPTH = depth
+        _kick_sector_refresh_if_stale(_STATUS_CACHE[depth])
         return _STATUS_CACHE[depth]
     # Idle polls serve the latest activated board even after TTL. Never launch
     # a competing rebuild that can replace a just-completed scan.
     if not force and not activate:
         fallback = _STATUS_CACHE.get(depth) or _STATUS_CACHE.get(_ACTIVE_SCAN_DEPTH)
         if fallback is not None:
+            _kick_sector_refresh_if_stale(fallback)
             return fallback
     with _STATUS_LOCK:
         now = time.time()
@@ -1348,6 +1514,8 @@ def get_dashboard_data(
                 data["searchable_symbol_count"] = len(SYMBOL_INDEX)
                 _STATUS_CACHE[depth] = data
                 _STATUS_CACHE_TS[depth] = time.time()
+                if isinstance(data.get("sector_flow"), Mapping):
+                    _remember_sector_flow(data["sector_flow"])
         else:
             data = _get_dashboard_data_uncached(
                 scan_depth=depth,
@@ -1357,9 +1525,12 @@ def get_dashboard_data(
             data["searchable_symbol_count"] = len(SYMBOL_INDEX)
             _STATUS_CACHE[depth] = data
             _STATUS_CACHE_TS[depth] = time.time()
+            if isinstance(data.get("sector_flow"), Mapping):
+                _remember_sector_flow(data["sector_flow"])
         if activate:
             _ACTIVE_SCAN_DEPTH = depth
-        return data
+    _kick_sector_refresh_if_stale(data)
+    return data
 
 
 # Scan jobs keep the operator request short even when a provider is degraded or
@@ -3931,7 +4102,7 @@ def _live_opportunities_payload(*, force: bool = False) -> dict:
         flow_cache = flow.get("cache") if isinstance(flow.get("cache"), dict) else {}
         qlib_panel = peek_shared_qlib_panel()
         payload = build_live_opportunities(
-            board_rows=list(board.get("rows") or []),
+            board_rows=_attach_flow_state_levels(list(board.get("rows") or [])),
             flow_rows=list(flow.get("rows") or []),
             calibrated_rows=list(board.get("calibrated_signals") or []),
             qlib_rows=qlib_rows_from_panel(qlib_panel),
@@ -4010,7 +4181,7 @@ def _flow_suggestion_payload_impl(symbol: str, *, force: bool = False) -> dict:
     ]
     flow_cache = flow_payload.get("cache") if isinstance(flow_payload.get("cache"), dict) else {}
     payload = build_live_opportunities(
-        board_rows=[board_row],
+        board_rows=_attach_flow_state_levels([board_row]),
         flow_rows=flow_rows,
         calibrated_rows=calibrated_rows,
         qlib_rows=qlib_rows,
@@ -4476,6 +4647,18 @@ def _options_calculator_payload(query: dict) -> tuple[dict, int]:
             raise ValueError(f"{name} must be finite")
         return value
 
+    def _legs() -> list[dict] | None:
+        raw = query.get("legs", [None])[0]
+        if raw is None or raw == "":
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("legs must be a JSON array") from exc
+        if not isinstance(parsed, list):
+            raise ValueError("legs must be a JSON array")
+        return parsed
+
     try:
         spot = _float("spot")
         if spot is None:
@@ -4492,6 +4675,7 @@ def _options_calculator_payload(query: dict) -> tuple[dict, int]:
             premium=_float("premium"),
             debit=_float("debit"),
             quantity=_float("quantity", 1.0) or 1.0,
+            legs=_legs(),
         )
     except ValueError as exc:
         return {"error": str(exc), "endpoint": "/api/options-calculator"}, 400
@@ -4776,7 +4960,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _route(self):
         parsed = urlparse(self.path)
-        path = parsed.path
+        path = parsed.path.rstrip('/') or '/'
         query = parse_qs(parsed.query)
         try:
             if path.startswith("/api/"):
@@ -4848,6 +5032,10 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 self._send_json(analyze_symbol_adhoc(sym_or_err))
+
+            elif path == "/api/sector-flow":
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                self._send_json(get_sector_flow(force=force))
 
             elif path == "/api/trigger_scan":
                 depth = _scan_depth(query.get("depth", ["quick"])[0])
@@ -4963,6 +5151,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/sentiment":
                 raw_sym = (query.get("symbol", [""])[0] or "").strip()
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
                 sym: str | None = None
                 if raw_sym:
                     ok, sym_or_err = _sanitize_symbol(raw_sym)
@@ -4970,7 +5159,11 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                         return
                     sym = sym_or_err
-                self._send_json(build_sentiment_payload(symbol=sym))
+                self._send_json(build_sentiment_payload(symbol=sym, force_refresh=force))
+
+            elif path == "/api/cot":
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                self._send_json(build_cot_payload(force_refresh=force))
 
             elif path == "/api/anomalies":
                 limit = _safe_int(query.get("limit", ["40"])[0], default=40, lo=5, hi=200)
@@ -5216,6 +5409,47 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         },
                         status=401,
                     )
+
+            elif path == "/api/financials":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                period = query.get("period", ["quarterly"])[0]
+                from tools.financial_data import get_financials_payload
+                self._send_json(get_financials_payload(sym_or_err, period=period))
+
+            elif path == "/api/company-profile":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                from tools.financial_data import get_company_profile_payload
+                self._send_json(get_company_profile_payload(sym_or_err))
+
+            elif path == "/api/insiders":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                from tools.financial_data import get_insiders_payload
+                self._send_json(get_insiders_payload(sym_or_err))
+
+            elif path == "/api/government":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                from tools.financial_data import get_government_payload
+                self._send_json(get_government_payload(sym_or_err))
+
+            elif path == "/api/ownership":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                from tools.financial_data import get_ownership_payload
+                self._send_json(get_ownership_payload(sym_or_err))
 
             else:
                 self._send_json({"error": "unknown endpoint", "endpoint": path}, status=404)

@@ -14,7 +14,7 @@ import {
 import type { Resource } from '@/composables/useResource'
 import { num, pctFrac, signedPct, tone, usd, DASH } from '@/format'
 import { sparkline } from '@/charts'
-import { loadWatchlist, saveWatchlist as persistWatchlist, toggleWatchlistSymbol } from '@/watchlist'
+import { loadWatchlist, toggleWatchlistSymbol } from '@/watchlist'
 import Panel from '@/components/Panel.vue'
 import VerdictChip from '@/components/VerdictChip.vue'
 
@@ -85,10 +85,6 @@ onUnmounted(() => {
   if (watchlistTimer !== undefined) clearInterval(watchlistTimer)
   if (marksTimer !== undefined) clearInterval(marksTimer)
 })
-
-function saveWatchlist(): void {
-  customWatchlist.value = persistWatchlist(customWatchlist.value)
-}
 
 async function probeSymbol(sym: string): Promise<void> {
   const clean = sym.trim().toUpperCase()
@@ -658,7 +654,7 @@ function navTo(name: string): void {
     <section class="desk-summary" aria-label="Desk session overview metrics">
       <!-- Zone 1: Session Posture & Capital Status -->
       <!-- 01 Capital Status Card -->
-      <div class="kpi-card kpi-posture-card" :class="r?.cleared_for_live ? 'armed' : 'held'">
+      <div class="kpi-card ticked kpi-posture-card" :class="r?.cleared_for_live ? 'armed' : 'held'">
         <div class="kpi-head-row">
           <span class="label kpi-label">Capital Status</span>
           <span class="kpi-badge" :class="r?.cleared_for_live ? 'armed' : 'held'">
@@ -676,7 +672,7 @@ function navTo(name: string): void {
       </div>
 
       <!-- 02 Confidence Posture Card -->
-      <div class="kpi-card kpi-posture-card" :class="confidencePosture.tone">
+      <div class="kpi-card ticked kpi-posture-card" :class="confidencePosture.tone">
         <div class="kpi-head-row">
           <span class="label kpi-label">Confidence Posture</span>
           <span class="kpi-badge" :class="sigHighConf > 0 ? 'enter' : 'held'">
@@ -695,7 +691,7 @@ function navTo(name: string): void {
 
       <!-- Zone 2: Market Breadth & Flow -->
       <!-- 03 Activity Flags Card -->
-      <div class="kpi-card kpi-breadth-card">
+      <div class="kpi-card ticked kpi-breadth-card">
         <div class="kpi-head-row">
           <span class="label kpi-label">Activity Flags</span>
           <span class="kpi-badge flat">{{ scan?.depth?.toUpperCase() ?? 'SCAN' }}</span>
@@ -711,7 +707,7 @@ function navTo(name: string): void {
 
       <!-- Zone 3: Macro & Strategy Navigation -->
       <!-- 04 Top Sector Flow (Interactive Navigation Button) -->
-      <button class="kpi-card kpi-nav-card" type="button" aria-label="Open Sectors for top sector flow" @click="navTo('sectors')">
+      <button class="kpi-card ticked kpi-nav-card" type="button" aria-label="Open Sectors for top sector flow" @click="navTo('sectors')">
         <div class="kpi-head-row">
           <span class="label kpi-label">Top Sector Flow</span>
           <span class="kpi-nav-badge">OPEN →</span>
@@ -728,7 +724,7 @@ function navTo(name: string): void {
       </button>
 
       <!-- 05 Top Alpha Strategy (Interactive Navigation Button) -->
-      <button class="kpi-card kpi-nav-card" type="button" aria-label="Open Gates for the top alpha strategy" @click="navTo('gates')">
+      <button class="kpi-card ticked kpi-nav-card" type="button" aria-label="Open Gates for the top alpha strategy" @click="navTo('gates')">
         <div class="kpi-head-row">
           <span class="label kpi-label">Top Alpha Strategy</span>
           <span class="kpi-nav-badge">OPEN →</span>
@@ -744,7 +740,7 @@ function navTo(name: string): void {
     </section>
 
     <!-- ── High-Confidence Authorization Queue ─────────────────────────── -->
-    <section class="confidence-queue w-full" :class="{ 'has-items': highConfidenceQueue.length > 0 }" aria-label="High confidence directional queue">
+    <section class="confidence-queue ticked w-full" :class="{ 'has-items': highConfidenceQueue.length > 0 }" aria-label="High confidence directional queue">
       <div class="confidence-queue-head">
         <div class="confidence-queue-title">
           <div class="queue-kicker-row">
@@ -800,7 +796,7 @@ function navTo(name: string): void {
     </section>
 
     <!-- ── Scan Operations Console ─────────────────────────────────────── -->
-    <section class="scan-console w-full" aria-label="Market scan depth and controls">
+    <section class="scan-console ticked w-full" aria-label="Market scan depth and controls">
       <div class="scan-console-head">
         <div class="scan-title-block">
           <span class="label scan-kicker">Scan Operations</span>
@@ -1344,7 +1340,6 @@ function navTo(name: string): void {
               <th class="label num col-ret5">5D Chg</th>
               <th class="label num col-edge">Model Edge</th>
               <th class="label num col-mom">Momentum</th>
-              <th class="label num col-sharpe">Sharpe</th>
               <th class="label col-act">Actions</th>
             </tr>
           </thead>
@@ -1388,7 +1383,6 @@ function navTo(name: string): void {
               <td class="fig num col-mom" :class="tone(signalFor(sym)?.momentum ?? probeResults[sym]?.stats?.chg_5d_pct)">
                 {{ signalFor(sym)?.momentum != null ? num(signalFor(sym)!.momentum, 2) : signedPct(probeResults[sym]?.stats?.chg_5d_pct) }}
               </td>
-              <td class="fig num col-sharpe">{{ probeResults[sym]?.stats?.sharpe == null ? DASH : num(probeResults[sym]?.stats?.sharpe, 2) }}</td>
               <td class="col-act">
                 <div class="watch-actions">
                   <button
@@ -1457,13 +1451,13 @@ function navTo(name: string): void {
 .session-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 1px 8px;
-  border-radius: 2px;
-  font-family: var(--font-display);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2);
+  border-radius: var(--r-sm);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.05em;
 }
 .session-indicator.live {
   color: var(--long);
@@ -1483,13 +1477,13 @@ function navTo(name: string): void {
 }
 
 .arena-title h1 {
-  margin: 2px 0 4px;
-  color: var(--text-primary);
+  margin: var(--s1) 0;
+  color: var(--ink);
   font-family: var(--font-display);
-  font-size: clamp(1.5rem, 2.2vw, 2.1rem);
-  letter-spacing: -0.03em;
-  line-height: 1.1;
-  font-weight: 800;
+  font-size: var(--t-display);
+  letter-spacing: var(--track-display);
+  line-height: 1.15;
+  font-weight: 600;
 }
 .arena-desc {
   max-width: 680px;
@@ -1507,20 +1501,21 @@ function navTo(name: string): void {
 .scope-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 3px 10px;
+  gap: var(--s2);
+  min-height: var(--density-control-h);
+  padding: var(--s1) var(--s2);
   border: var(--hair) solid var(--rule-hi);
-  color: var(--text-primary);
+  border-radius: var(--r-sm);
+  color: var(--ink);
   background: var(--panel);
-  font-family: var(--font-display);
+  font-family: var(--font-data);
   font-size: var(--t-micro);
   letter-spacing: var(--track-label);
   white-space: nowrap;
 }
 .scope-tag {
   color: var(--ink-ghost);
-  font-weight: 700;
+  font-weight: 600;
 }
 .scope-chip.session-chip {
   border-color: var(--rule-hi);
@@ -1543,21 +1538,21 @@ function navTo(name: string): void {
 .arena-flow-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 4px 10px;
+  gap: var(--s2);
+  min-height: var(--density-control-h);
+  padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--phosphor);
-  color: var(--phosphor);
-  background: var(--phosphor-wash);
-  font-size: var(--t-micro);
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: all var(--dur-fast) ease;
-}
-.arena-flow-link:hover {
+  border-radius: var(--r-sm);
   color: var(--void);
   background: var(--phosphor);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.arena-flow-link:hover {
+  background: var(--phosphor-dim);
 }
 .flow-arrow {
   font-family: var(--font-data);
@@ -1572,9 +1567,10 @@ function navTo(name: string): void {
 }
 
 .kpi-card {
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-md);
   background: var(--panel);
-  border: var(--hair) solid var(--rule-hi);
-  border-radius: var(--radius-sm, 3px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   padding: var(--s3) var(--s4);
   display: flex;
   flex-direction: column;
@@ -1582,27 +1578,24 @@ function navTo(name: string): void {
   gap: var(--s2);
   min-height: 104px;
   min-width: 0;
-  overflow: hidden;
-  transition: border-color var(--dur-fast), background var(--dur-fast), transform var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .kpi-card:hover {
   border-color: var(--rule-hi);
-  background: var(--panel-hi);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 .kpi-card:focus-visible, .arena-flow-link:focus-visible {
-  outline: 2px solid var(--action-focus);
+  outline: var(--hair) solid var(--phosphor);
   outline-offset: 2px;
 }
 .kpi-card.armed {
-  border-left: 3px solid var(--long);
-  background: color-mix(in srgb, var(--long) 5%, var(--panel));
+  border-left: 2px solid var(--long);
 }
 .kpi-card.held {
-  border-left: 3px solid var(--warn);
-  background: color-mix(in srgb, var(--warn) 5%, var(--panel));
+  border-left: 2px solid var(--warn);
 }
 .kpi-breadth-card {
-  border-left: 3px solid var(--phosphor-dim);
+  border-left: 2px solid var(--phosphor-dim);
 }
 
 /* Macro/Strategy Navigation Cards */
@@ -1612,24 +1605,21 @@ function navTo(name: string): void {
   text-align: left;
   font: inherit;
   cursor: pointer;
-  border-left: 3px solid var(--call);
-  background: color-mix(in srgb, var(--call) 4%, var(--panel));
+  border-left: 2px solid var(--call);
 }
 .kpi-nav-card:hover {
-  border-color: var(--call-hi);
+  border-color: var(--rule-hi);
   border-left-color: var(--call-hi);
-  background: color-mix(in srgb, var(--call) 10%, var(--panel));
-  transform: translateY(-1px);
 }
 .kpi-nav-badge {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   padding: 1px 6px;
-  border-radius: 2px;
-  font-family: var(--font-display);
-  font-size: 9px;
-  font-weight: 800;
+  border-radius: var(--r-xs);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
   letter-spacing: 0.05em;
   color: var(--call-hi);
   background: var(--call-wash);
@@ -1650,11 +1640,12 @@ function navTo(name: string): void {
   min-width: 0;
 }
 .kpi-label {
-  font-size: 11px;
-  font-weight: 700;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
   color: var(--ink-dim);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1671,8 +1662,8 @@ function navTo(name: string): void {
 
 .kpi-val {
   font-family: var(--font-data);
-  font-size: 1.35rem;
-  font-weight: 800;
+  font-size: var(--t-fig);
+  font-weight: 500;
   line-height: 1.1;
   color: var(--ink);
   white-space: nowrap;
@@ -1682,11 +1673,11 @@ function navTo(name: string): void {
 .warn-text { color: var(--warn); }
 
 .kpi-badge {
-  font-family: var(--font-display);
-  font-size: 10px;
-  font-weight: 750;
-  padding: 2px 7px;
-  border-radius: 2px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  padding: var(--s1) var(--s2);
+  border-radius: var(--r-xs);
   text-transform: uppercase;
   flex-shrink: 0;
   white-space: nowrap;
@@ -1699,7 +1690,7 @@ function navTo(name: string): void {
 .kpi-badge.flat { color: var(--ink-soft); background: var(--rule); border-color: var(--rule-hi); }
 
 .kpi-sub {
-  font-size: 12px;
+  font-size: var(--t-tiny);
   color: var(--ink-soft);
   white-space: nowrap;
   overflow: hidden;
@@ -1708,24 +1699,25 @@ function navTo(name: string): void {
 }
 .kpi-sub-count {
   color: var(--phosphor-dim);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: var(--t-micro);
+  font-weight: 600;
 }
 .fl-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.strat-name { font-size: 1.05rem; min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strat-name { font-size: var(--t-lead); min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── High-Confidence Authorization Queue ─────────────────────────────────── */
 .confidence-queue {
-  border: var(--hair) solid var(--rule-hi);
-  border-left: 3px solid var(--phosphor);
+  border: var(--hair) solid var(--rule);
+  border-left: 2px solid var(--phosphor);
+  border-radius: var(--r-md);
   background: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
   min-width: 0;
-  transition: all var(--dur-fast) ease;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .confidence-queue.has-items {
-  border-color: color-mix(in srgb, var(--long) 50%, var(--rule-hi));
-  border-left: 3px solid var(--long);
-  background: color-mix(in srgb, var(--long) 4%, var(--panel));
+  border-left-color: var(--long);
 }
 .confidence-queue-head {
   display: flex;
@@ -1733,6 +1725,7 @@ function navTo(name: string): void {
   justify-content: space-between;
   gap: var(--s4);
   padding: var(--s3) var(--s4);
+  background: var(--panel-hi);
   border-bottom: var(--hair) solid var(--rule);
 }
 .queue-kicker-row {
@@ -1743,29 +1736,32 @@ function navTo(name: string): void {
 }
 .queue-kicker {
   color: var(--phosphor);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.06em;
 }
 .queue-edge-pill {
   color: var(--ink-soft);
-  font-size: 9px;
-  padding: 1px 6px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  padding: var(--s1) var(--s2);
   border: var(--hair) solid var(--rule-hi);
   background: var(--panel-hi);
-  border-radius: 2px;
+  border-radius: var(--r-xs);
 }
 .confidence-queue-title strong {
   display: block;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: 1rem;
-  letter-spacing: -0.01em;
+  font-size: var(--t-display);
+  letter-spacing: var(--track-display);
+  font-weight: 600;
 }
 .queue-note {
-  margin-top: 4px;
+  margin-top: var(--s1);
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--t-tiny);
   max-width: 80ch;
   line-height: 1.4;
 }
@@ -1777,12 +1773,12 @@ function navTo(name: string): void {
   flex-shrink: 0;
 }
 .count-fig {
-  font-size: 1.6rem;
-  font-weight: 800;
+  font-size: var(--t-fig);
+  font-weight: 500;
   line-height: 1;
 }
 .count-label {
-  font-size: 9px;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   letter-spacing: 0.08em;
 }
@@ -1810,11 +1806,11 @@ function navTo(name: string): void {
   background: color-mix(in srgb, var(--long) 18%, var(--panel));
 }
 .prob-fig {
-  font-size: 1.1rem;
+  font-size: var(--t-lead);
   font-weight: 800;
 }
 .horizon-label {
-  font-size: 10px;
+  font-size: var(--t-micro);
 }
 
 .confidence-empty {
@@ -1837,27 +1833,25 @@ function navTo(name: string): void {
 .empty-indicator {
   color: var(--ink-ghost);
   font-family: var(--font-data);
-  font-size: 1.2rem;
+  font-size: var(--t-lead);
 }
 .empty-copy strong {
   display: block;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--t-small);
   margin-bottom: 2px;
 }
 .empty-copy p {
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--t-tiny);
   line-height: 1.4;
 }
 
 /* ── Scan Console ────────────────────────────────────────────────────────── */
 .scan-console {
   position: relative;
-  overflow: hidden;
-  border: var(--hair) solid var(--rule-hi);
-  border-left: 3px solid var(--phosphor);
-  background: var(--void-lift);
+  border: var(--hair) solid var(--rule);
+  border-left: 2px solid var(--phosphor);
 }
 
 .scan-console-head {
@@ -1876,15 +1870,15 @@ function navTo(name: string): void {
   border-right: var(--hair) solid var(--rule);
   background: var(--panel);
 }
-.scan-kicker { color: var(--phosphor); font-size: 10px; font-weight: 700; }
+.scan-kicker { color: var(--phosphor); font-size: var(--t-micro); font-weight: 700; }
 .scan-title {
   font-family: var(--font-display);
   color: var(--ink);
-  font-size: 1rem;
-  font-weight: 750;
-  letter-spacing: 0.02em;
+  font-size: var(--t-display);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
 }
-.last-scan { color: var(--ink-ghost); font-size: 9px; font-weight: 600; }
+.last-scan { color: var(--ink-ghost); font-size: var(--t-micro); font-weight: 600; }
 
 .scan-readouts {
   display: grid;
@@ -1899,10 +1893,10 @@ function navTo(name: string): void {
   padding: var(--s3) var(--s4);
   border-right: var(--hair) solid var(--rule);
 }
-.scan-readout > .label { color: var(--ink-dim); font-size: 10px; font-weight: 700; }
-.scan-readout > .fig { color: var(--ink); font-size: 1.15rem; font-weight: 800; }
-.scan-readout > .fig i { color: var(--ink-ghost); font-size: 11px; font-style: normal; font-weight: 500; }
-.scan-readout > small { color: var(--ink-soft); font-size: 10px; }
+.scan-readout > .label { color: var(--ink-dim); font-size: var(--t-micro); font-weight: 700; }
+.scan-readout > .fig { color: var(--ink); font-size: var(--t-fig); font-weight: 500; }
+.scan-readout > .fig i { color: var(--ink-ghost); font-size: var(--t-micro); font-style: normal; font-weight: 500; }
+.scan-readout > small { color: var(--ink-soft); font-size: var(--t-micro); }
 
 .scan-controls {
   display: flex;
@@ -1914,13 +1908,14 @@ function navTo(name: string): void {
 .depth-switch { display: flex; border: var(--hair) solid var(--rule-hi); }
 .depth-option {
   min-width: 88px;
-  padding: 8px 12px;
+  min-height: var(--density-control-h);
+  padding: var(--s2) var(--s3);
   color: var(--ink-soft);
   background: var(--panel);
   border-right: var(--hair) solid var(--rule-hi);
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 750;
-  transition: all var(--dur-fast) ease;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .depth-option:last-child { border-right: 0; }
 .depth-option span { color: var(--ink-ghost); margin-left: var(--s1); font-weight: 600; }
@@ -1933,18 +1928,20 @@ function navTo(name: string): void {
   align-items: center;
   gap: var(--s2);
   min-width: 170px;
+  min-height: var(--density-control-h);
   justify-content: center;
-  padding: 9px 14px;
+  padding: var(--s2) var(--s3);
   color: var(--void);
   border: var(--hair) solid var(--phosphor);
+  border-radius: 2px;
   background: var(--phosphor);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  transition: all var(--dur-fast) ease;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .scan-run:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--phosphor) 85%, #fff);
+  background: var(--phosphor-dim);
 }
 .scan-run:disabled, .depth-option:disabled { cursor: progress; opacity: 0.7; }
 .scan-pulse { width: 7px; height: 7px; background: currentColor; border-radius: 1px; }
@@ -1961,11 +1958,11 @@ function navTo(name: string): void {
   background: var(--phosphor-wash);
 }
 .scan-progress-copy { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: var(--s3); min-width: 0; }
-.scan-progress-copy > .label { color: var(--phosphor); font-size: 10px; font-weight: 700; white-space: nowrap; }
-.scan-progress-copy > strong { overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.scan-progress-copy > small { color: var(--ink-soft); font-size: 10px; white-space: nowrap; }
+.scan-progress-copy > .label { color: var(--phosphor); font-size: var(--t-micro); font-weight: 700; white-space: nowrap; }
+.scan-progress-copy > strong { overflow: hidden; color: var(--ink); font-size: var(--t-small); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.scan-progress-copy > small { color: var(--ink-soft); font-size: var(--t-micro); white-space: nowrap; }
 .scan-progress-track { height: 5px; overflow: hidden; border: var(--hair) solid var(--rule-hi); background: var(--void); }
-.scan-progress-track > i { display: block; height: 100%; background: var(--phosphor); transition: width var(--dur-standard) ease; }
+.scan-progress-track > i { display: block; height: 100%; background: var(--phosphor); transition: width var(--dur) ease; }
 
 .scan-explain {
   display: flex;
@@ -1976,8 +1973,8 @@ function navTo(name: string): void {
   padding: var(--s2) var(--s5);
   color: var(--ink-soft);
   border-top: var(--hair) solid var(--rule);
-  background: rgba(10, 11, 15, 0.6);
-  font-size: 11px;
+  background: var(--void-lift);
+  font-size: var(--t-micro);
 }
 .scan-explain .scan-msg { padding: 0; color: var(--phosphor); font-weight: 600; }
 .scan-flow-link {
@@ -1989,14 +1986,14 @@ function navTo(name: string): void {
   background: var(--phosphor-wash);
   text-decoration: none;
   font-weight: 700;
-  font-size: 10px;
+  font-size: var(--t-micro);
 }
 .scan-flow-link:hover { color: var(--void); background: var(--phosphor); }
 
 /* ── Panel 01: Live Activity Flags ───────────────────────────────────────── */
 .activity-panel { border-color: var(--rule-hi); }
 .activity-table { max-height: 520px; }
-.activity-legend { display: flex; align-items: center; gap: var(--s3); color: var(--ink-soft); font-size: 10px; font-weight: 600; }
+.activity-legend { display: flex; align-items: center; gap: var(--s3); color: var(--ink-soft); font-size: var(--t-micro); font-weight: 600; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); }
 .live-dot.on { background: var(--phosphor); }
 .pass-label { color: var(--ink); }
@@ -2014,7 +2011,7 @@ function navTo(name: string): void {
   border-radius: 2px;
   font-weight: 800;
   letter-spacing: 0.05em;
-  font-size: 10px;
+  font-size: var(--t-micro);
   white-space: nowrap;
 }
 .lean-chip.bullish {
@@ -2063,7 +2060,7 @@ function navTo(name: string): void {
   grid-column: 1 / -1;
   text-align: right;
   color: var(--ink-ghost);
-  font-size: 8px;
+  font-size: var(--t-micro);
   letter-spacing: 0.06em;
 }
 
@@ -2079,7 +2076,7 @@ function navTo(name: string): void {
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule-hi);
   border-radius: 2px;
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: 0.03em;
 }
@@ -2089,10 +2086,10 @@ function navTo(name: string): void {
   background: var(--phosphor-wash);
 }
 
-.live-value { display: block; color: var(--phosphor); font-weight: 800; font-size: 13px; }
-.flow-count { display: block; margin-top: 2px; color: var(--ink-dim); font-family: var(--font-ui); font-size: 10px; white-space: nowrap; }
-.local-tag { font-size: 10px; font-weight: 600; }
-.price-ret { font-weight: 750; font-size: 13px; }
+.live-value { display: block; color: var(--phosphor); font-weight: 800; font-size: var(--t-small); }
+.flow-count { display: block; margin-top: 2px; color: var(--ink-dim); font-family: var(--font-ui); font-size: var(--t-micro); white-space: nowrap; }
+.local-tag { font-size: var(--t-micro); font-weight: 600; }
+.price-ret { font-weight: 750; font-size: var(--t-small); }
 
 /* Signal Context (Structured 2-Line Direction Cell) */
 .signal-context {
@@ -2114,7 +2111,7 @@ function navTo(name: string): void {
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-soft);
   background: var(--panel-hi);
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 700;
   border-radius: 2px;
   white-space: nowrap;
@@ -2125,7 +2122,7 @@ function navTo(name: string): void {
   align-items: center;
   padding: 1px 6px;
   border-radius: 2px;
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 800;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -2146,7 +2143,7 @@ function navTo(name: string): void {
   border-color: var(--warn);
   background: var(--warn-wash);
 }
-.context-edge { color: var(--warn); font-size: 10px; font-weight: 700; }
+.context-edge { color: var(--warn); font-size: var(--t-micro); font-weight: 700; }
 
 /* ── Signal Contract Reconciliation ──────────────────────────────────────── */
 .signal-contract {
@@ -2164,10 +2161,10 @@ function navTo(name: string): void {
   gap: var(--s3);
   margin-bottom: 2px;
 }
-.contract-kicker { color: var(--warn); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.contract-kicker { color: var(--warn); font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.08em; }
 .contract-rule-badge {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: var(--t-micro);
   padding: 1px 6px;
   border: var(--hair) solid var(--rule-hi);
   background: var(--panel-hi);
@@ -2178,14 +2175,14 @@ function navTo(name: string): void {
   margin-top: 2px;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: 1rem;
+  font-size: var(--t-display);
   letter-spacing: 0.02em;
 }
 .signal-contract-copy > p {
   max-width: 85ch;
   margin-top: 4px;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: var(--t-tiny);
   line-height: 1.45;
 }
 .reconciliation-stats {
@@ -2204,8 +2201,8 @@ function navTo(name: string): void {
   border-right: var(--hair) solid var(--rule-hi);
 }
 .stat-box:last-child { border-right: 0; }
-.stat-box .label { color: var(--ink-ghost); font-size: 9px; font-weight: 700; margin-bottom: 2px; }
-.stat-box strong { font-size: 1.3rem; font-weight: 800; }
+.stat-box .label { color: var(--ink-ghost); font-size: var(--t-micro); font-weight: 700; margin-bottom: 2px; }
+.stat-box strong { font-size: var(--t-fig); font-weight: 500; }
 .stat-box.agree strong { color: var(--long); }
 .stat-box.conflict strong { color: var(--short); }
 
@@ -2219,13 +2216,13 @@ function navTo(name: string): void {
   border-top: var(--hair) solid var(--rule);
   color: var(--short);
 }
-.conflict-head { font-weight: 750; font-size: 10px; }
+.conflict-head { font-weight: 750; font-size: var(--t-micro); }
 .conflict-item {
   padding: 2px 8px;
   border: var(--hair) solid color-mix(in srgb, var(--short) 60%, var(--rule));
   background: var(--short-wash);
   border-radius: 2px;
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 700;
 }
 
@@ -2239,12 +2236,12 @@ function navTo(name: string): void {
   margin-top: var(--s2);
   border-bottom: var(--hair) solid var(--rule-hi);
 }
-.section-kicker { color: var(--phosphor-dim); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.section-kicker { color: var(--phosphor-dim); font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.08em; }
 .model-views-kicker h2 {
   font-family: var(--font-display);
-  font-size: 1.15rem;
+  font-size: var(--t-display);
   color: var(--ink);
-  font-weight: 750;
+  font-weight: 700;
   margin-top: 1px;
 }
 .view-mode-tabs {
@@ -2254,8 +2251,8 @@ function navTo(name: string): void {
   overflow: hidden;
 }
 .view-tab {
-  padding: 6px 14px;
-  font-size: 10px;
+  padding: var(--s2) var(--s3);
+  font-size: var(--t-micro);
   font-weight: 750;
   color: var(--ink-soft);
   background: var(--panel);
@@ -2276,12 +2273,11 @@ function navTo(name: string): void {
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule-hi);
   color: var(--phosphor);
-  font-size: 11px;
+  font-size: var(--t-micro);
   font-weight: 750;
-  padding: 4px 12px;
+  padding: var(--s2) var(--s3);
   border-radius: 2px;
   cursor: pointer;
-  outline: none;
   transition: border-color var(--dur-fast);
 }
 .filter-select:hover, .filter-select:focus-visible {
@@ -2310,7 +2306,7 @@ function navTo(name: string): void {
   top: 0;
   background: var(--panel-hi);
   font-weight: 750;
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   z-index: 1;
@@ -2323,10 +2319,10 @@ function navTo(name: string): void {
   vertical-align: middle;
 }
 .grid tbody tr { cursor: pointer; transition: background var(--dur-fast); }
-.grid tbody tr:hover { background: var(--panel-raise); }
+.grid tbody tr:hover { background: var(--panel-hi); }
 
 .num { text-align: right; }
-.sym { color: var(--phosphor); font-weight: 750; font-size: 13px; }
+.sym { color: var(--phosphor); font-weight: 750; font-size: var(--t-small); }
 
 /* Split View Column Condensation (.w-half) */
 .w-half .table-pead th,
@@ -2341,7 +2337,7 @@ function navTo(name: string): void {
 .w-half .col-last,
 .w-half .col-chg {
   min-width: 48px;
-  font-size: 12px;
+  font-size: var(--t-tiny);
 }
 .w-half .col-side {
   min-width: 42px;
@@ -2350,7 +2346,7 @@ function navTo(name: string): void {
 }
 .w-half .col-score {
   min-width: 46px;
-  font-size: 12px;
+  font-size: var(--t-tiny);
 }
 .w-half .col-5d,
 .w-half .col-gap-event {
@@ -2366,13 +2362,13 @@ function navTo(name: string): void {
   padding-right: 2px;
 }
 .w-half .chain-btn {
-  padding: 2px 5px;
-  font-size: 9px;
+  padding: var(--s1) var(--s2);
+  font-size: var(--t-micro);
 }
 .w-half .side-pill {
   min-width: 36px;
-  font-size: 9px;
-  padding: 1px 3px;
+  font-size: var(--t-micro);
+  padding: var(--s1) var(--s2);
 }
 .w-half .prob-cell {
   gap: var(--s1);
@@ -2389,12 +2385,12 @@ function navTo(name: string): void {
   height: 3px;
 }
 .w-half .alignment-chip {
-  font-size: 8px;
-  padding: 1px 4px;
+  font-size: var(--t-micro);
+  padding: var(--s1) var(--s2);
 }
 .w-half .coverage-chip {
-  font-size: 8px;
-  padding: 1px 4px;
+  font-size: var(--t-micro);
+  padding: var(--s1) var(--s2);
 }
 
 /* Side Pills */
@@ -2403,7 +2399,7 @@ function navTo(name: string): void {
   align-items: center;
   justify-content: center;
   min-width: 48px;
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 800;
   letter-spacing: 0.05em;
   padding: 2px 6px;
@@ -2435,7 +2431,7 @@ function navTo(name: string): void {
 .prob-bar.flat { background: var(--ink-ghost); opacity: 0.6; }
 .prob-cell.weak { opacity: 0.75; }
 .confidence-value { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; font-weight: 750; }
-.confidence-value small { font-family: var(--font-ui); font-size: 8px; font-weight: 800; letter-spacing: 0.08em; }
+.confidence-value small { font-family: var(--font-ui); font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.08em; }
 .confidence-high { color: var(--long); }
 .confidence-moderate { color: var(--warn); }
 .confidence-low, .confidence-unavailable { color: var(--ink-ghost); }
@@ -2460,7 +2456,7 @@ function navTo(name: string): void {
   border: var(--hair) solid currentColor;
   border-radius: 2px;
   font-weight: 750;
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.04em;
 }
 .state.enter { color: var(--phosphor); background: var(--phosphor-wash); }
@@ -2468,13 +2464,13 @@ function navTo(name: string): void {
 
 /* Action Buttons */
 .chain-btn {
-  padding: 3px 8px;
+  padding: var(--s1) var(--s2);
   border: var(--hair) solid var(--rule-hi);
   border-radius: 2px;
   background: var(--panel-hi);
   color: var(--call-hi);
   font-weight: 750;
-  font-size: 10px;
+  font-size: var(--t-micro);
   cursor: pointer;
   transition: all var(--dur-fast) ease;
 }
@@ -2496,9 +2492,9 @@ function navTo(name: string): void {
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-micro);
   font-weight: 600;
-  padding: 5px 12px;
+  padding: var(--s2) var(--s3);
   border-radius: 2px;
   width: 220px;
   transition: border-color var(--dur-fast);
@@ -2507,10 +2503,10 @@ function navTo(name: string): void {
   border-color: var(--phosphor);
 }
 .act {
-  padding: 5px 12px;
+  padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--rule-hi);
   border-radius: 2px;
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 750;
   cursor: pointer;
   transition: all var(--dur-fast) ease;
@@ -2521,18 +2517,55 @@ function navTo(name: string): void {
   border-color: var(--phosphor);
 }
 .act-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--phosphor) 85%, #fff);
+  background: var(--phosphor-dim);
 }
 .act-secondary {
   color: var(--ink);
-  background: var(--panel-hi);
+  background: transparent;
 }
 .act-secondary:hover:not(:disabled) {
   border-color: var(--rule-hi);
-  background: var(--panel-raise);
+  background: var(--panel-hi);
 }
 .act:disabled { opacity: 0.6; cursor: progress; }
 
+.table-watchlist {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.table-watchlist th,
+.table-watchlist td {
+  box-sizing: border-box;
+  vertical-align: middle;
+  border-bottom: var(--hair) solid var(--rule-faint);
+}
+.table-watchlist th {
+  border-bottom: var(--hair) solid var(--rule-hi);
+}
+.table-watchlist tbody tr:last-child td {
+  border-bottom: var(--hair) solid var(--rule);
+}
+.table-watchlist .col-sym { width: 10%; }
+.table-watchlist .col-spark { width: 16%; }
+.table-watchlist .col-price { width: 11%; }
+.table-watchlist .col-ret1,
+.table-watchlist .col-ret5 { width: 9%; }
+.table-watchlist .col-edge { width: 13%; }
+.table-watchlist .col-mom { width: 10%; }
+.table-watchlist .col-act { width: 22%; }
+.table-watchlist .spark-cell {
+  width: 16%;
+  color: var(--phosphor);
+  vertical-align: middle;
+}
+.table-watchlist .spark {
+  width: 88px;
+  height: 22px;
+  display: block;
+  margin: 0;
+}
 .spark-cell { width: 96px; color: var(--phosphor); }
 .spark { width: 88px; height: 22px; display: block; }
 .spark path { vector-effect: non-scaling-stroke; }
@@ -2546,8 +2579,8 @@ function navTo(name: string): void {
 .edge-pill-wrap.pos { color: var(--long); }
 .edge-pill-wrap.mod { color: var(--warn); }
 .state-mini {
-  font-size: 8px;
-  padding: 1px 4px;
+  font-size: var(--t-micro);
+  padding: var(--s1) var(--s2);
   border: var(--hair) solid currentColor;
   border-radius: 1px;
 }
@@ -2560,9 +2593,9 @@ function navTo(name: string): void {
   background: transparent;
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-ghost);
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 750;
-  padding: 3px 6px;
+  padding: var(--s1) var(--s2);
   border-radius: 2px;
   cursor: pointer;
   transition: all var(--dur-fast) ease;
@@ -2581,7 +2614,7 @@ function navTo(name: string): void {
 .note { color: var(--ink-soft); font-size: var(--t-small); }
 .note.pad { padding: var(--s5) var(--s4); }
 .note.pad-x { padding: var(--s3) var(--s4) var(--s4); }
-.note.tiny { font-size: 11px; margin-top: var(--s3); }
+.note.tiny { font-size: var(--t-micro); margin-top: var(--s3); }
 .err { color: var(--short); font-size: var(--t-small); }
 .err.pad { padding: var(--s3) var(--s4); }
 

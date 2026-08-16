@@ -107,7 +107,10 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/insiders',
     name: 'insiders',
-    component: () => import('@/views/InsidersView.vue'),
+    redirect: (to) => ({
+      name: 'market',
+      query: { ...to.query, tab: 'insiders' },
+    }),
     meta: { title: 'Insiders', index: '15' },
   },
   {

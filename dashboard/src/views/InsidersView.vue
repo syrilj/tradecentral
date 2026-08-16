@@ -13,6 +13,8 @@ import Panel from '@/components/Panel.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import LoadingState from '@/components/LoadingState.vue'
 import {
+  FORM_BRIEFS,
+  formBrief,
   insiderLean,
   presentFintelInsiders,
   presentSecFilings,
@@ -85,13 +87,21 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
     </header>
 
     <p class="caveat">
-      Form 4 = officers/directors, not 13F funds. Fintel is optional and quota-metered.
+      Filings desk for market research. Fintel is optional and quota-metered.
       Authorized = <strong>NO</strong>. Open
       <RouterLink :to="{ name: 'options', query: { symbol } }">Options</RouterLink>
       or
       <RouterLink :to="{ name: 'flow', query: { symbol } }">Flow</RouterLink>
       for the tape.
     </p>
+
+    <section class="briefs" aria-label="What these forms pertain to">
+      <article v-for="brief in FORM_BRIEFS" :key="brief.id" class="brief">
+        <span class="label brief-form">{{ brief.form }}</span>
+        <strong class="brief-title">{{ brief.title }}</strong>
+        <p class="brief-copy">{{ brief.meaning }}</p>
+      </article>
+    </section>
 
     <section class="kpis">
       <div class="kpi">
@@ -131,7 +141,7 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
             <td><span class="kind label" :class="row.kind">{{ row.kind.toUpperCase() }}</span></td>
             <td class="fig">{{ row.form }}</td>
             <td class="dim">{{ row.filed || DASH }}</td>
-            <td class="dim">{{ row.description || DASH }}</td>
+            <td class="dim">{{ formBrief(row.form).title }}{{ row.description ? ` · ${row.description}` : '' }}</td>
             <td>
               <a v-if="row.url" :href="row.url" target="_blank" rel="noopener" class="label">open</a>
               <span v-else class="dim">{{ DASH }}</span>
@@ -187,6 +197,17 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
 .title { margin: 0; letter-spacing: 0.08em; font-size: 14px; }
 .caveat { margin: 0; color: var(--ink-dim); font-size: var(--t-small); max-width: 80ch; }
 .caveat a { color: var(--phosphor); }
+.briefs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: var(--hair) solid var(--rule);
+}
+.brief { display: grid; gap: 4px; padding: var(--s3); background: var(--panel); }
+.brief-form { color: var(--phosphor); }
+.brief-title { font: 700 var(--t-small) / 1.2 var(--font-display); color: var(--ink); }
+.brief-copy { margin: 0; color: var(--ink-dim); font-size: var(--t-tiny); line-height: 1.45; }
 .sym {
   width: 8rem;
   padding: 6px 8px;
@@ -219,6 +240,6 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
 .kind.sell { color: var(--short); }
 .kind.event, .kind.holder, .kind.other { color: var(--ink-soft); }
 @media (max-width: 900px) {
-  .kpis { grid-template-columns: 1fr 1fr; }
+  .kpis, .briefs { grid-template-columns: 1fr; }
 }
 </style>

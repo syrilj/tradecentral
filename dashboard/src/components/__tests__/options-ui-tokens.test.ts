@@ -256,7 +256,7 @@ describe('Aura-farming instrument shell gate', () => {
 
   it('FlowView standalone market-tape shell stays flat and instrument-like', () => {
     const src = readSrc('views/FlowView.vue')
-    expect(src).toMatch(/\.flow-head\s*\{[^}]*border:\s*var\(--hair\) solid var\(--border-strong\)/s)
+    expect(src).toMatch(/\.flow-head\s*\{[^}]*border:\s*var\(--hair\) solid var\(--rule\)/s)
     expect(src).not.toContain('opportunity-row')
     expect(src).not.toMatch(/feed-beacon::before/)
   })

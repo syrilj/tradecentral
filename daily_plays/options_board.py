@@ -325,6 +325,32 @@ def summarize_board_row(
         "warnings": [str(w) for w in (intel.get("warnings") or ())][:3],
     })
 
+    gex_rows = intel.get("gex_by_strike")
+    compact_gex: list[dict[str, Any]] = []
+    if isinstance(gex_rows, list):
+        spot_n = row.get("spot")
+        for item in gex_rows:
+            if not isinstance(item, Mapping):
+                continue
+            strike = _finite(item.get("strike"))
+            if strike is None:
+                continue
+            call_oi = _finite(item.get("call_oi")) or 0.0
+            put_oi = _finite(item.get("put_oi")) or 0.0
+            compact_gex.append({
+                "strike": strike,
+                "call_gex_m": _finite(item.get("call_gex_m") if item.get("call_gex_m") is not None else item.get("call_gex")),
+                "put_gex_m": _finite(item.get("put_gex_m") if item.get("put_gex_m") is not None else item.get("put_gex")),
+                "net_gex_m": _finite(item.get("net_gex_m") if item.get("net_gex_m") is not None else item.get("net_gex")),
+                "call_oi": call_oi or None,
+                "put_oi": put_oi or None,
+                "open_interest": _finite(item.get("open_interest")) or (call_oi + put_oi) or None,
+            })
+        if compact_gex and isinstance(spot_n, (int, float)):
+            compact_gex.sort(key=lambda item: abs(float(item["strike"]) - float(spot_n)))
+            compact_gex = compact_gex[:24]
+    row["gex_by_strike"] = compact_gex or None
+
     # A GEX of zero because open interest was never observed is NOT a quiet
     # reading — it is an unmeasured one, and rendering it as "quiet 0.0" invents
     # an observation. LSE live quotes omit OI, and the cached-snapshot backfill
@@ -345,6 +371,7 @@ def summarize_board_row(
             "net_gex_m", "gex_regime", "call_wall", "call_wall_pct", "put_wall",
             "put_wall_pct", "gamma_flip", "pin_strike", "squeeze_score",
             "squeeze_label", "squeeze_primary", "structure_score", "open_interest",
+            "gex_by_strike",
         ):
             row[field_name] = None
         row["warnings"] = ([

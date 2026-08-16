@@ -2,13 +2,17 @@
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, type FlowSuggestion, type LiveOpportunityRow, type MarketClock } from '@/api'
 import { useResource, type Resource } from '@/composables/useResource'
-import { DASH, num, shortDate, signed, usd } from '@/format'
+import { DASH, num, shortDate, usd } from '@/format'
 import {
   freshnessLabel,
+  formatSetupLevel,
+  formatSupportLevels,
+  formatTakeProfitZones,
+  levelSourceLabel,
+  missingSourcesCopy,
   qlibAlignmentLabel,
-  sellSourceLabel,
   setupCalculatorQuery,
-  spotRelativeSellCopy,
+  setupHeadlineInvalidation,
   suggestionStabilityCopy,
   suggestedRightLabel,
   suggestedRightTokenClass,
@@ -40,6 +44,17 @@ const planningMode = computed(() => Boolean(
   && sharedMarketClock.data.value.market_session !== 'regular',
 ))
 const live = computed(() => Boolean(row.value?.freshness?.pass && !feed.error.value && !planningMode.value))
+const invalidationMark = computed(() => setupHeadlineInvalidation({
+  invalidation: suggestion.value?.invalidation,
+  invalidationSource: suggestion.value?.invalidation_source,
+  planInvalidation: suggestion.value?.plan_invalidation,
+  planInvalidationSource: suggestion.value?.plan_invalidation_source,
+}))
+const takeProfitCopy = computed(() => {
+  const zones = formatTakeProfitZones(suggestion.value?.take_profit_zones)
+  if (zones !== DASH) return zones
+  return formatSetupLevel(suggestion.value?.plan_target, suggestion.value?.plan_target_source)
+})
 const dataState = computed(() => {
   if (live.value) return 'LIVE INPUTS'
   if (planningMode.value) return 'CLOSED · PLANNING'
@@ -138,26 +153,37 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
               </div>
             </section>
 
+            <section
+              class="completeness"
+              :class="{ complete: suggestion.risk_levels_complete, ready: row.live_ready }"
+              aria-label="Setup completeness"
+            >
+              <span class="label">{{ suggestion.risk_levels_complete ? (row.live_ready ? 'READY' : 'LEVELS COMPLETE · NOT LIVE READY') : 'LEVELS INCOMPLETE' }}</span>
+              <strong>{{ row.confidence?.band || 'UNCALIBRATED' }}</strong>
+              <p>{{ suggestion.risk_levels_complete ? 'Strike, supports, invalidation, and take profit are measured.' : `Missing: ${suggestion.risk_missing_fields?.length ? suggestion.risk_missing_fields.join(', ') : 'not supplied'}.` }}</p>
+              <p v-if="suggestion.missing_sources?.length">Sources unmeasured: {{ missingSourcesCopy(suggestion.missing_sources) }}</p>
+            </section>
+
             <section class="levels" aria-label="Setup levels">
               <article>
-                <span class="label">Spot</span>
-                <strong class="fig">{{ suggestion.spot == null ? DASH : usd(suggestion.spot, 2) }}</strong>
-                <small>Selected chain reference</small>
+                <span class="label">Strike</span>
+                <strong class="fig">{{ formatSetupLevel(suggestion.strike ?? suggestion.contract_plan?.strike, suggestion.strike_source) }}</strong>
+                <small>{{ suggestion.strike_source ? levelSourceLabel(suggestion.strike_source) : 'not supplied' }}</small>
               </article>
-              <article class="target">
-                <span class="label">GEX take-profit</span>
-                <strong class="fig">{{ suggestion.plan_target == null ? DASH : usd(suggestion.plan_target, 2) }}</strong>
-                <small>{{ suggestion.plan_target == null ? (suggestion.right === 'call' ? 'No call wall above spot' : suggestion.right === 'put' ? 'No put wall below spot' : 'No measured target') : spotRelativeSellCopy({ sell: suggestion.plan_target, spot: suggestion.spot, sellRelPct: suggestion.sell_rel_pct, sellSource: suggestion.plan_target_source }) }}</small>
+              <article>
+                <span class="label">Supports</span>
+                <strong class="fig">{{ formatSupportLevels(suggestion.supports) }}</strong>
+                <small>{{ suggestion.supports?.length ? 'Watch these supports' : 'not supplied' }}</small>
               </article>
               <article>
                 <span class="label">Invalidation</span>
-                <strong class="fig">{{ suggestion.plan_invalidation == null ? DASH : usd(suggestion.plan_invalidation, 2) }}</strong>
-                <small>{{ suggestion.plan_invalidation == null ? (suggestion.right === 'call' ? 'No put wall below spot' : suggestion.right === 'put' ? 'No call wall above spot' : 'No measured invalidation') : sellSourceLabel(suggestion.plan_invalidation_source) }}</small>
+                <strong class="fig">{{ invalidationMark.price == null ? DASH : usd(invalidationMark.price, 2) }}</strong>
+                <small>{{ invalidationMark.source ? levelSourceLabel(invalidationMark.source) : 'not supplied' }}</small>
               </article>
-              <article>
-                <span class="label">Composite rank score</span>
-                <strong class="fig">{{ signed(row.composite_score, 2) }}</strong>
-                <small>Ordinal · not probability</small>
+              <article class="target">
+                <span class="label">Take profit zones</span>
+                <strong class="fig">{{ takeProfitCopy }}</strong>
+                <small>{{ suggestion.take_profit_zones?.length ? 'Labeled zones, not a blend' : 'not supplied' }}</small>
               </article>
             </section>
 
@@ -321,7 +347,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   height: 100%;
   border-left: var(--hair) solid var(--rule-hi);
   background: var(--void-lift);
-  box-shadow: -18px 0 42px rgba(0, 0, 0, 0.36);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
   animation: drawer-in var(--dur) var(--ease-out) both;
 }
 
@@ -384,7 +410,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   background: var(--call-wash);
   box-shadow: inset 8px 0 0 color-mix(in srgb, var(--call) 18%, transparent);
 }
-.paper-action strong { display: block; margin: 6px 0; font-family: var(--font-mono); }
+.paper-action strong { display: block; margin: 6px 0; font-family: var(--font-data); }
 .paper-action p { margin: 0; color: var(--ink-dim); font-size: var(--t-small); }
 
 .exact-contract {
@@ -408,6 +434,17 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .contract-price small { color: var(--ink-dim); font-size: var(--t-micro); line-height: 1.4; }
 .contract-price { border-left: var(--hair) solid currentColor; }
 .contract-price strong { display: block; margin: 7px 0 4px; color: currentColor; font-size: var(--t-fig); }
+
+.completeness {
+  padding: var(--s3);
+  border: var(--hair) solid var(--warn);
+  border-left-width: 3px;
+  background: var(--warn-wash);
+}
+.completeness.complete { border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
+.completeness.ready { color: var(--phosphor); }
+.completeness p { margin: 4px 0 0; color: var(--ink-dim); font-size: var(--t-micro); line-height: 1.4; }
+.completeness strong { display: block; margin-top: 4px; font-family: var(--font-data); }
 
 .levels {
   display: grid;

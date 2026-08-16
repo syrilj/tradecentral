@@ -168,6 +168,19 @@ withDefaults(defineProps<{
       <path d="M9.8 6.3A9.7 9.7 0 0 1 12 6c6.3 0 9.5 6 9.5 6a13.5 13.5 0 0 1-2.4 3.1" />
       <path d="M6.2 7.2C3.7 9 2.5 12 2.5 12s3.2 6 9.5 6c1 0 1.9-.2 2.7-.4" />
     </template>
+    <template v-else-if="name === 'user'">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M5 20a7 7 0 0 1 14 0" />
+    </template>
+    <template v-else-if="name === 'user-check'">
+      <circle cx="10" cy="8" r="4" />
+      <path d="M3 20a7 7 0 0 1 11.5-5.3" />
+      <path d="m15 15 2.5 2.5 4.5-4.5" />
+    </template>
+    <template v-else-if="name === 'terminal'">
+      <path d="m4 17 6-5-6-5" />
+      <path d="M12 19h8" />
+    </template>
     <template v-else-if="name === 'signout'">
       <path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5" />
       <path d="M14 8l4 4-4 4" />

@@ -1,4 +1,4 @@
-import { ref, shallowRef, onScopeDispose, type Ref, type ShallowRef } from 'vue'
+import { ref, shallowRef, onScopeDispose, getCurrentScope, type Ref, type ShallowRef } from 'vue'
 import { ApiError } from '@/api'
 
 export interface Resource<T> {
@@ -138,11 +138,13 @@ export function useResource<T>(
   schedule()
   document.addEventListener('visibilitychange', onVisible)
 
-  onScopeDispose(() => {
-    disposed = true
-    stop()
-    document.removeEventListener('visibilitychange', onVisible)
-  })
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      disposed = true
+      stop()
+      document.removeEventListener('visibilitychange', onVisible)
+    })
+  }
 
   return { data, error, loading, fetchedAt, refresh, clear }
 }

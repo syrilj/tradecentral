@@ -524,7 +524,7 @@ export interface StatusPayload {
     semantics: { pead: string; directional: string }
   }
   activity_scan: ActivityScan
-  sector_flow: Record<string, unknown>
+  sector_flow: SectorFlowPayload
   latest_vol: VolReadout
   pead_metrics: Record<string, number | string | Record<string, boolean>>
   gcp_resources: Record<string, unknown>
@@ -1065,6 +1065,18 @@ export interface LiveOpportunityPlaybook {
   warnings: string[]
 }
 
+export type SetupLevelSource =
+  | 'resistance/support'
+  | 'options GEX'
+  | 'positions'
+  | 'technical analysis'
+  | string
+
+export interface SetupLevelMark {
+  price: number
+  source: SetupLevelSource
+}
+
 export type SuggestedRight = 'call' | 'put' | 'watch' | 'blocked'
 
 export interface FlowSuggestionQlib {
@@ -1103,6 +1115,12 @@ export interface FlowSuggestion {
   plan_target_source?: 'call_wall' | 'put_wall' | 'expected_move' | string | null
   plan_invalidation?: number | null
   plan_invalidation_source?: 'call_wall' | 'put_wall' | 'expected_move' | string | null
+  strike?: number | null
+  strike_source?: SetupLevelSource | null
+  supports?: SetupLevelMark[]
+  take_profit_zones?: SetupLevelMark[]
+  source_status?: Record<string, 'measured' | 'unmeasured' | 'wrong-side' | string>
+  missing_sources?: string[]
   risk_levels_complete?: boolean
   risk_missing_fields?: string[]
   contract_plan?: {
@@ -1395,6 +1413,7 @@ export interface CotMarket {
   noncomm_net_z_1y?: number | null
   noncomm_net_pctile_1y?: number | null
   bias?: string
+  lean?: 'LONG' | 'SHORT' | 'BALANCED' | 'UNKNOWN' | string
   history_weeks?: number
   source?: string
   lag_note?: string
@@ -1945,10 +1964,43 @@ export interface QuotesPayload {
   count: number
 }
 
+export interface SectorFlowRow {
+  etf: string
+  name: string
+  bucket?: string
+  ret_1d?: number
+  ret_5d?: number
+  ret_21d?: number
+  rs_5d?: number
+  rs_21d?: number
+  flow_score?: number
+}
+
+export interface SectorWatchRow {
+  symbol: string
+  sector_hint: string
+  etf: string
+  score: number
+  rs_5d: number
+}
+
+export interface SectorFlowPayload {
+  asof?: string | null
+  asof_bar?: string | null
+  source?: string | null
+  money_in?: string[]
+  money_out?: string[]
+  sectors_ranked?: SectorFlowRow[]
+  watch_names?: SectorWatchRow[]
+  market_context?: Record<string, number | boolean | string> | string
+}
+
 export const api = {
   health: () => req<Health>('/api/health'),
   status: (depth?: ScanDepth) =>
     req<StatusPayload>(depth ? `/api/status?depth=${depth}` : '/api/status'),
+  sectorFlow: (opts?: { force?: boolean }) =>
+    req<SectorFlowPayload>(opts?.force ? '/api/sector-flow?force=1' : '/api/sector-flow'),
   quotes: (symbols: string[]) =>
     req<QuotesPayload>(
       `/api/quotes?symbols=${encodeURIComponent(
@@ -1962,12 +2014,13 @@ export const api = {
   readiness: () => req<Readiness>('/api/readiness'),
   marketClock: () => req<MarketClock>('/api/market-clock'),
 
-  sentiment: (symbol?: string) =>
-    req<SentimentPayload>(
-      symbol
-        ? `/api/sentiment?symbol=${encodeURIComponent(symbol)}`
-        : '/api/sentiment',
-    ),
+  sentiment: (symbol?: string, opts?: { force?: boolean }) => {
+    const q = new URLSearchParams()
+    if (symbol) q.set('symbol', symbol)
+    if (opts?.force) q.set('force', '1')
+    const qs = q.toString()
+    return req<SentimentPayload>(`/api/sentiment${qs ? `?${qs}` : ''}`)
+  },
 
   anomalies: (opts?: { limit?: number; symbol?: string }) => {
     const q = new URLSearchParams()
@@ -2064,9 +2117,9 @@ export const api = {
 
   /** Standalone market-wide options-flow window (one live LSE request). */
   optionsCalculator: (opts: {
-    strategy?: 'long_call' | 'long_put' | 'long_straddle' | string
+    strategy?: 'long_call' | 'long_put' | 'long_straddle' | 'custom' | string
     spot: number
-    strike: number
+    strike?: number
     dte?: number
     expiry?: string
     vol?: number
@@ -2074,11 +2127,12 @@ export const api = {
     premium?: number
     debit?: number
     quantity?: number
+    legs?: Array<{ right: 'call' | 'put'; strike: number; quantity: number; premium: number }>
   }) => {
     const q = new URLSearchParams()
     q.set('strategy', String(opts.strategy || 'long_call'))
     q.set('spot', String(opts.spot))
-    q.set('strike', String(opts.strike))
+    if (opts.strike != null) q.set('strike', String(opts.strike))
     if (opts.dte != null) q.set('dte', String(opts.dte))
     if (opts.expiry) q.set('expiry', opts.expiry)
     if (opts.vol != null) q.set('vol', String(opts.vol))
@@ -2086,6 +2140,7 @@ export const api = {
     if (opts.premium != null) q.set('premium', String(opts.premium))
     if (opts.debit != null) q.set('debit', String(opts.debit))
     if (opts.quantity != null) q.set('quantity', String(opts.quantity))
+    if (opts.legs?.length) q.set('legs', JSON.stringify(opts.legs))
     return req<{
       strategy: string
       spot: number
@@ -2235,6 +2290,24 @@ export const api = {
     req<ScanJobPayload>(
       `/api/scan_status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
     ),
+
+  /** QuiverQuant-style stock financials & intelligence endpoints */
+  financials: (symbol: string, period: 'quarterly' | 'annual' = 'quarterly') =>
+    req<FinancialsPayload>(
+      `/api/financials?symbol=${encodeURIComponent(symbol)}&period=${period}`,
+    ),
+
+  companyProfile: (symbol: string) =>
+    req<CompanyProfilePayload>(`/api/company-profile?symbol=${encodeURIComponent(symbol)}`),
+
+  insiders: (symbol: string) =>
+    req<InsidersIntelligencePayload>(`/api/insiders?symbol=${encodeURIComponent(symbol)}`),
+
+  government: (symbol: string) =>
+    req<GovernmentPayload>(`/api/government?symbol=${encodeURIComponent(symbol)}`),
+
+  ownership: (symbol: string) =>
+    req<OwnershipPayload>(`/api/ownership?symbol=${encodeURIComponent(symbol)}`),
 }
 
 /* ---------------------------------------------------------------- fintel ----
@@ -2304,6 +2377,354 @@ export interface FintelSearchPayload {
   results: Record<string, unknown>[]
   error?: string
   generated_at?: string
+}
+
+/* -------------------------------------------------------- financials & stock intel ---- */
+
+export interface StatementRow {
+  key: string
+  label: string
+  values: Array<number | null>
+  indent?: number
+  is_bold?: boolean
+  is_header?: boolean
+  is_total?: boolean
+  format?: 'currency' | 'pct' | 'ratio' | 'compact' | string
+}
+
+export interface StatementTable {
+  rows: StatementRow[]
+}
+
+export interface RevenueSegment {
+  segment: string
+  revenue: number
+  pct: number
+  growth_yoy?: number
+}
+
+export interface RevenueGeography {
+  region: string
+  revenue: number
+  pct: number
+}
+
+export interface RevenueBreakdown {
+  by_segment: RevenueSegment[]
+  by_geography: RevenueGeography[]
+}
+
+export interface FinancialRatios {
+  market_cap?: number | null
+  enterprise_value?: number | null
+  pe_trailing?: number | null
+  pe_forward?: number | null
+  ps_trailing?: number | null
+  pb_trailing?: number | null
+  ev_ebitda?: number | null
+  ev_revenue?: number | null
+  debt_to_equity?: number | null
+  current_ratio?: number | null
+  quick_ratio?: number | null
+  roe?: number | null
+  roa?: number | null
+  gross_margin?: number | null
+  operating_margin?: number | null
+  net_margin?: number | null
+  revenue_growth_yoy?: number | null
+  earnings_growth_yoy?: number | null
+  free_cash_flow?: number | null
+  operating_cash_flow?: number | null
+}
+
+export interface FinancialsPayload {
+  symbol: string
+  period_type: 'quarterly' | 'annual'
+  periods: string[]
+  income_statement: StatementTable
+  balance_sheet: StatementTable
+  cash_flow: StatementTable
+  revenue_breakdown: RevenueBreakdown
+  ratios: FinancialRatios
+  source?: string
+  asof?: string
+}
+
+export interface CompanyAbout {
+  name: string
+  description: string
+  address?: string
+  city?: string
+  state?: string
+  country?: string
+  website?: string
+  sector?: string
+  industry?: string
+  employees?: number
+  market_cap?: number
+  beta?: number | null
+  fifty_two_week_high?: number | null
+  fifty_two_week_low?: number | null
+  currency?: string
+}
+
+export interface CompanyOfficer {
+  name: string
+  title: string
+  age?: number | null
+  total_pay?: number | null
+  exercised_value?: number | null
+  year_born?: number | null
+}
+
+export interface CompensationRow {
+  name: string
+  role: string
+  salary?: number | null
+  bonus?: number | null
+  stock_awards?: number | null
+  total_compensation?: number | null
+  year: string
+}
+
+export interface ExecutiveCompensation {
+  highest_paid_name: string
+  highest_paid_total: number
+  median_employee_pay: number
+  ceo_pay_ratio: number
+  year: string
+  rows: CompensationRow[]
+}
+
+export interface AnalystUpgradeDowngrade {
+  date: string
+  firm: string
+  analyst?: string
+  action: string
+  from_grade?: string
+  to_grade?: string
+  current: string
+  previous: string
+}
+
+export interface StockForecast {
+  consensus_rating: string
+  recommendation_mean?: number
+  target_price_high?: number
+  target_price_median?: number
+  target_price_low?: number
+  current_price?: number
+  upside_pct?: number
+  recommendations: {
+    strong_buy: number
+    buy: number
+    hold: number
+    underperform: number
+    sell: number
+  }
+  upgrades_downgrades: AnalystUpgradeDowngrade[]
+}
+
+export interface SmartScore {
+  score: number
+  rating: string
+  components: {
+    momentum: number
+    insider_activity: number
+    institutional_flow: number
+    analyst_sentiment: number
+    financial_health: number
+  }
+}
+
+export interface BullBearCase {
+  bulls_say: string[]
+  bears_say: string[]
+  last_updated: string
+}
+
+export interface CompanyProfilePayload {
+  symbol: string
+  about: CompanyAbout
+  officers: CompanyOfficer[]
+  compensation: ExecutiveCompensation
+  forecast: StockForecast
+  smart_score: SmartScore
+  bull_bear: BullBearCase
+  source?: string
+  asof?: string
+}
+
+export interface InsiderTransaction {
+  date: string
+  insider_name: string
+  relationship: string
+  transaction_type: 'Purchase' | 'Sale' | 'Option Exercise' | string
+  shares: number
+  price?: number | null
+  value?: number | null
+  shares_held_after?: number | null
+  direct_indirect?: string
+  filing_date?: string
+  sec_form_url?: string
+}
+
+export interface QuarterlyNetInsider {
+  quarter: string
+  net_shares: number
+  buy_volume: number
+  sell_volume: number
+  net_volume: number
+  transaction_count: number
+}
+
+export interface InsiderStrategyMetrics {
+  name: string
+  description: string
+  backtest_start_date: string
+  cagr: number
+  return_30d: number
+  return_1y: number
+  max_drawdown: number
+  beta: number
+  alpha: number
+  sharpe: number
+  win_rate: number
+  avg_win: number
+  avg_loss: number
+  annual_volatility?: number
+  annual_std_dev?: number
+  info_ratio?: number
+  treynor?: number
+  total_trades: number
+}
+
+export interface InsidersIntelligencePayload {
+  symbol: string
+  summary: {
+    net_shares_90d: number
+    buy_volume_usd: number
+    sell_volume_usd: number
+    net_volume_usd: number
+    total_transactions: number
+    buy_count: number
+    sell_count: number
+  }
+  transactions: InsiderTransaction[]
+  quarterly_net: QuarterlyNetInsider[]
+  strategy: InsiderStrategyMetrics
+  source?: string
+  asof?: string
+}
+
+export interface CongressTrade {
+  politician_name: string
+  party: 'Democrat' | 'Republican' | string
+  chamber: 'House' | 'Senate' | string
+  state: string
+  transaction_date: string
+  filing_date: string
+  type: 'Purchase' | 'Sale' | string
+  amount_range: string
+  asset_description: string
+  source_url?: string
+}
+
+export interface LobbyingFiling {
+  amount: number
+  date: string
+  issue: string
+  description: string
+  registrant: string
+}
+
+export interface LobbyingSpendQuarter {
+  quarter: string
+  amount: number
+  date: string
+}
+
+export interface LobbyingIntelligence {
+  estimated_quarterly_spend: number
+  total_spend_annual: number
+  history: LobbyingSpendQuarter[]
+  filings: LobbyingFiling[]
+}
+
+export interface GovernmentContract {
+  agency: string
+  date: string
+  amount: number
+  contract_type: string
+  description: string
+}
+
+export interface PatentRecord {
+  patent_number: string
+  title: string
+  grant_date: string
+  abstract: string
+  inventor?: string
+}
+
+export interface GovernmentPayload {
+  symbol: string
+  congress: CongressTrade[]
+  lobbying: LobbyingIntelligence
+  contracts: GovernmentContract[]
+  patents: PatentRecord[]
+  source?: string
+  asof?: string
+}
+
+export interface OwnershipBreakdown {
+  institutional_pct: number | null
+  insider_pct: number | null
+  retail_float_pct: number | null
+  shares_outstanding: number | null
+  float_shares: number | null
+}
+
+export interface TopInstitutionalHolder {
+  holder: string
+  shares: number | null
+  date_reported: string | null
+  pct_out: number | null
+  value: number | null
+  /** Last-quarter position % change (1.2 = +1.2%). Never % of outstanding. */
+  change_pct?: number | null
+  change_shares?: number | null
+  change_label?: string | null
+}
+
+export interface TopFundHolder {
+  holder: string
+  shares: number | null
+  date_reported: string | null
+  pct_out: number | null
+  value: number | null
+  change_pct?: number | null
+  change_shares?: number | null
+  change_label?: string | null
+}
+
+export interface ShortInterestMetrics {
+  shares_short: number | null
+  short_pct_of_float?: number | null
+  days_to_cover?: number | null
+  shares_short_prior_month?: number | null
+}
+
+export interface OwnershipPayload {
+  symbol: string
+  breakdown: OwnershipBreakdown
+  top_institutions: TopInstitutionalHolder[]
+  top_funds: TopFundHolder[]
+  /** Yahoo/13F reported institution count; may exceed named top_institutions. */
+  institutions_count?: number | null
+  short_interest: ShortInterestMetrics
+  source?: string
+  asof?: string
 }
 
 /** The server may return a bare array or a wrapped object; accept both. */
