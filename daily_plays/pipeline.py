@@ -1,4 +1,5 @@
 """Dependency-injected daily decision-support pipeline; it never places orders."""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -12,16 +13,29 @@ from .adapters.internal_models import ChainFreeInternalModelsAdapter
 from .adapters.promoted_models import PromotedLSEModelsAdapter
 from .adapters.directional_research import FrozenDirectionalResearchAdapter
 from .adapters.kronos import load_point_in_time_kronos
-from .adapters.options import LSEOptionsAdapter, OptionsProvider
+from .adapters.options import LSEOptionsAdapter, OptionsProvider, fetch_provider_snapshots
 from .adapters.sector_flow import load_sector_flow_discovery
 from .clock import RunContext
 from .config import DailyPlaysConfig
-from .contracts import (Confidence, ConfidenceKind, Entry, EvidenceGrade, LegSide,
-                        OptionLeg, OptionRight, Play, PlayState, Risk, RunMode)
+from .contracts import (
+    Confidence,
+    ConfidenceKind,
+    Entry,
+    EvidenceGrade,
+    LegSide,
+    OptionLeg,
+    OptionRight,
+    Play,
+    PlayState,
+    Risk,
+    RunMode,
+)
 from .fusion import entry_authorization_failures, rank_candidates
 from .ledger import persist_run
 from .options_validation import (
-    OptionsPolicy, select_directional_contract, validate_structure,
+    OptionsPolicy,
+    select_directional_contract,
+    validate_structure,
     validate_underlying_quote,
 )
 
@@ -56,20 +70,29 @@ def _call(loader: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 
 def empty_live_adapters() -> PipelineAdapters:
     """Use the manifest-selected LSE model when credentialed; fail closed otherwise."""
-    models = PromotedLSEModelsAdapter() if os.getenv("LSE_API_KEY") else ChainFreeInternalModelsAdapter()
-    return PipelineAdapters(internal_models=models, research_models=FrozenDirectionalResearchAdapter(),
-                            kronos=load_point_in_time_kronos,
-                            flow=load_live_forward_flow, flow_activity=load_live_flow_activity,
-                            options=LSEOptionsAdapter(),
-                            discovery=load_sector_flow_discovery)
+    models = (
+        PromotedLSEModelsAdapter() if os.getenv("LSE_API_KEY") else ChainFreeInternalModelsAdapter()
+    )
+    return PipelineAdapters(
+        internal_models=models,
+        research_models=FrozenDirectionalResearchAdapter(),
+        kronos=load_point_in_time_kronos,
+        flow=load_live_forward_flow,
+        flow_activity=load_live_flow_activity,
+        options=LSEOptionsAdapter(),
+        discovery=load_sector_flow_discovery,
+    )
 
 
 def _policy(config: DailyPlaysConfig) -> OptionsPolicy:
     return OptionsPolicy(
         max_quote_age_seconds=config.regular_quote_max_age_seconds,
-        min_dte=config.swing_dte_min, max_dte=config.swing_dte_max,
-        max_spread_pct=config.max_spread_pct, min_open_interest=config.min_open_interest,
-        min_volume=config.min_volume, min_abs_delta=config.min_abs_delta,
+        min_dte=config.swing_dte_min,
+        max_dte=config.swing_dte_max,
+        max_spread_pct=config.max_spread_pct,
+        min_open_interest=config.min_open_interest,
+        min_volume=config.min_volume,
+        min_abs_delta=config.min_abs_delta,
         max_abs_delta=config.max_abs_delta,
         max_position_risk_pct=config.max_position_risk_pct,
         max_underlying_risk_pct=config.max_underlying_risk_pct,
@@ -112,7 +135,7 @@ def _warning_symbol(warning: str) -> str | None:
     """Read a model symbol from the structured adapter warnings, if present."""
     for prefix in _MODEL_SYMBOL_WARNING_PREFIXES:
         if warning.startswith(prefix):
-            symbol = warning[len(prefix):].split(":", 1)[0].upper()
+            symbol = warning[len(prefix) :].split(":", 1)[0].upper()
             return symbol or None
     return None
 
@@ -128,7 +151,9 @@ def _rank_research_record(record: Mapping[str, Any]) -> tuple[float, str]:
     return (-rank_score, str(record.get("symbol") or ""))
 
 
-def _confidence(candidate: Mapping[str, Any], state: PlayState, failures: Sequence[str] = ()) -> Confidence:
+def _confidence(
+    candidate: Mapping[str, Any], state: PlayState, failures: Sequence[str] = ()
+) -> Confidence:
     row = dict(candidate.get("confidence") or {})
     kind = ConfidenceKind(row.get("confidence_kind", "unavailable"))
     grade = EvidenceGrade(row.get("evidence_grade", "F"))
@@ -152,24 +177,48 @@ def _confidence(candidate: Mapping[str, Any], state: PlayState, failures: Sequen
 
 
 def _leg(raw: Mapping[str, Any], side: LegSide) -> OptionLeg:
-    return OptionLeg(side, OptionRight(raw["right"]), str(raw["occ_symbol"]), str(raw["underlying"]),
-                     date.fromisoformat(str(raw["expiry"])[:10]), int(raw["dte"]),
-                     float(raw["strike"]), int(raw["multiplier"]), float(raw["bid"]), float(raw["ask"]),
-                     float(raw.get("mid") or (float(raw["bid"]) + float(raw["ask"])) / 2), float(raw["spread_pct"]),
-                     int(raw["volume"]), int(raw["open_interest"]), datetime.fromisoformat(str(raw["quote_asof_utc"]).replace("Z", "+00:00")),
-                     str(raw["provider"]), raw.get("provider_contract_id"), raw.get("iv"), raw.get("delta"),
-                     raw.get("gamma"))
+    return OptionLeg(
+        side,
+        OptionRight(raw["right"]),
+        str(raw["occ_symbol"]),
+        str(raw["underlying"]),
+        date.fromisoformat(str(raw["expiry"])[:10]),
+        int(raw["dte"]),
+        float(raw["strike"]),
+        int(raw["multiplier"]),
+        float(raw["bid"]),
+        float(raw["ask"]),
+        float(raw.get("mid") or (float(raw["bid"]) + float(raw["ask"])) / 2),
+        float(raw["spread_pct"]),
+        int(raw["volume"]),
+        int(raw["open_interest"]),
+        datetime.fromisoformat(str(raw["quote_asof_utc"]).replace("Z", "+00:00")),
+        str(raw["provider"]),
+        raw.get("provider_contract_id"),
+        raw.get("iv"),
+        raw.get("delta"),
+        raw.get("gamma"),
+    )
 
 
-def _make_play(candidate: Mapping[str, Any], snapshot: Mapping[str, Any] | None, *, context: RunContext,
-               account: float, config: DailyPlaysConfig, run_id: str,
-               existing_underlying_risk_dollars: float = 0.0,
-               aggregate_open_risk_dollars: float = 0.0) -> Play:
+def _make_play(
+    candidate: Mapping[str, Any],
+    snapshot: Mapping[str, Any] | None,
+    *,
+    context: RunContext,
+    account: float,
+    config: DailyPlaysConfig,
+    run_id: str,
+    existing_underlying_risk_dollars: float = 0.0,
+    aggregate_open_risk_dollars: float = 0.0,
+) -> Play:
     side = str(candidate.get("side") or "neutral")
     failures: list[str] = []
     legs_raw: list[dict[str, Any]] = []
     confidence_row = candidate.get("confidence") or {}
-    is_calibrated = confidence_row.get("confidence_kind") == ConfidenceKind.CALIBRATED_PROBABILITY.value
+    is_calibrated = (
+        confidence_row.get("confidence_kind") == ConfidenceKind.CALIBRATED_PROBABILITY.value
+    )
     semantic_probability = (
         is_calibrated
         and confidence_row.get("probability_target") == "underlying_directional_return"
@@ -185,56 +234,110 @@ def _make_play(candidate: Mapping[str, Any], snapshot: Mapping[str, Any] | None,
     elif snapshot is None and semantic_probability:
         failures.append("options_provider_unavailable")
     elif snapshot is not None:
-        failures.extend(validate_underlying_quote(
-            snapshot,
-            asof_utc=context.asof_utc,
-            max_age_seconds=config.regular_quote_max_age_seconds,
-        ))
+        failures.extend(
+            validate_underlying_quote(
+                snapshot,
+                asof_utc=context.asof_utc,
+                max_age_seconds=config.regular_quote_max_age_seconds,
+            )
+        )
         selection = select_directional_contract(
             [dict(x, side="buy") for x in snapshot.get("contracts", []) if isinstance(x, Mapping)],
-            direction=side, asof_utc=context.asof_utc, account_value=account,
+            direction=side,
+            asof_utc=context.asof_utc,
+            account_value=account,
             existing_underlying_risk_dollars=existing_underlying_risk_dollars,
             aggregate_open_risk_dollars=aggregate_open_risk_dollars,
-            policy=_policy(config), promotion_eligible=True,
+            policy=_policy(config),
+            promotion_eligible=True,
         )
         if selection.eligible and selection.leg:
             legs_raw = [dict(selection.leg, side="buy")]
         else:
             failures.extend(selection.failed_checks)
-    result = validate_structure(legs_raw, asof_utc=context.asof_utc, max_loss_dollars=account * config.max_account_risk_pct,
-                                policy=_policy(config), degraded=bool(snapshot and snapshot.get("degraded"))) if legs_raw else None
+    result = (
+        validate_structure(
+            legs_raw,
+            asof_utc=context.asof_utc,
+            max_loss_dollars=account * config.max_account_risk_pct,
+            policy=_policy(config),
+            degraded=bool(snapshot and snapshot.get("degraded")),
+        )
+        if legs_raw
+        else None
+    )
     if result:
         failures.extend(result.failed_checks)
     prelim = str((candidate.get("confidence") or {}).get("state", "ABSTAIN"))
     can_enter = (
-        prelim == "WATCH" and semantic_probability and result is not None
-        and result.eligible and context.mode is RunMode.LIVE
+        prelim == "WATCH"
+        and semantic_probability
+        and result is not None
+        and result.eligible
+        and context.mode is RunMode.LIVE
         and context.market_session.value == "regular"
     )
-    state = PlayState.ENTER if can_enter else (PlayState.WATCH if not failures and prelim == "WATCH" else PlayState.ABSTAIN)
+    state = (
+        PlayState.ENTER
+        if can_enter
+        else (PlayState.WATCH if not failures and prelim == "WATCH" else PlayState.ABSTAIN)
+    )
     # Replay is allowed to demonstrate an execution-valid ticket, but never changes the non-live safety state.
-    if context.mode is RunMode.REPLAY and semantic_probability and result and result.eligible and not failures:
+    if (
+        context.mode is RunMode.REPLAY
+        and semantic_probability
+        and result
+        and result.eligible
+        and not failures
+    ):
         state = PlayState.ENTER
     leg_objs: list[OptionLeg] = []
     for raw in legs_raw:
-        try: leg_objs.append(_leg(raw, LegSide.BUY))
-        except (KeyError, TypeError, ValueError): failures.append("invalid_canonical_option_leg")
+        try:
+            leg_objs.append(_leg(raw, LegSide.BUY))
+        except (KeyError, TypeError, ValueError):
+            failures.append("invalid_canonical_option_leg")
     quote_time = leg_objs[0].quote_asof_utc if leg_objs else context.asof_utc
     max_loss = result.max_loss_dollars if result and result.max_loss_dollars is not None else 0.0
     confidence = _confidence(candidate, state, failures)
-    return Play(f"{run_id}:{candidate.get('symbol')}:{'long_call' if side == 'long' else 'long_put'}", str(candidate.get("symbol")), side,
-                "long_call" if side == "long" else "long_put", state, int(candidate["rank"]),
-                ("Model and research candidate; decision support only.",), tuple(failures) or ("execution validation required",),
-                Entry(float((legs_raw[0].get("ask") if legs_raw else 0) or 0), float(((snapshot or {}).get("underlying") or {}).get("price") or 0), quote_time, config.regular_quote_max_age_seconds),
-                tuple(leg_objs), Risk(account, max_loss, max_loss / account if account else 0, 1 if leg_objs else 0),
-                confidence, candidate.get("evidence") or {}, {"options_snapshot_asof_utc": (snapshot or {}).get("asof_utc")},
-                {"decision_support_only": True, "shadow_only": config.shadow_only,
-                 "shadow_horizon_days": confidence.horizon_days or 10,
-                 "probability_target": confidence.probability_target})
+    return Play(
+        f"{run_id}:{candidate.get('symbol')}:{'long_call' if side == 'long' else 'long_put'}",
+        str(candidate.get("symbol")),
+        side,
+        "long_call" if side == "long" else "long_put",
+        state,
+        int(candidate["rank"]),
+        ("Model and research candidate; decision support only.",),
+        tuple(failures) or ("execution validation required",),
+        Entry(
+            float((legs_raw[0].get("ask") if legs_raw else 0) or 0),
+            float(((snapshot or {}).get("underlying") or {}).get("price") or 0),
+            quote_time,
+            config.regular_quote_max_age_seconds,
+        ),
+        tuple(leg_objs),
+        Risk(account, max_loss, max_loss / account if account else 0, 1 if leg_objs else 0),
+        confidence,
+        candidate.get("evidence") or {},
+        {"options_snapshot_asof_utc": (snapshot or {}).get("asof_utc")},
+        {
+            "decision_support_only": True,
+            "shadow_only": config.shadow_only,
+            "shadow_horizon_days": confidence.horizon_days or 10,
+            "probability_target": confidence.probability_target,
+        },
+    )
 
 
-def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfig, adapters: PipelineAdapters | None = None,
-                 output_root: str | None = None, persist: bool = True) -> dict[str, Any]:
+def run_pipeline(
+    *,
+    context: RunContext,
+    account: float,
+    config: DailyPlaysConfig,
+    adapters: PipelineAdapters | None = None,
+    output_root: str | None = None,
+    persist: bool = True,
+) -> dict[str, Any]:
     adapters = adapters or empty_live_adapters()
     warnings: list[str] = []
     research_warnings: list[str] = []
@@ -272,18 +375,23 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
                     discovery["target_symbols"] = routing_order
         except Exception as exc:
             warnings.append(f"flow_activity_unavailable:{type(exc).__name__}")
-    if (isinstance(adapters.options, LSEOptionsAdapter) and adapters.options.fetcher is None
-            and not (adapters.options.api_key or os.getenv("LSE_API_KEY"))):
+    if (
+        isinstance(adapters.options, LSEOptionsAdapter)
+        and adapters.options.fetcher is None
+        and not (adapters.options.api_key or os.getenv("LSE_API_KEY"))
+    ):
         warnings.append("lse_credential_missing")
     try:
-        internals = list(_call(
-            adapters.internal_models,
-            context=context,
-            asof_utc=context.asof_utc,
-            config=config,
-            symbols=discovery.get("target_symbols") or None,
-            symbol_context=discovery.get("symbol_context") or None,
-        ))
+        internals = list(
+            _call(
+                adapters.internal_models,
+                context=context,
+                asof_utc=context.asof_utc,
+                config=config,
+                symbols=discovery.get("target_symbols") or None,
+                symbol_context=discovery.get("symbol_context") or None,
+            )
+        )
         warnings.extend(getattr(adapters.internal_models, "last_warnings", []))
     except Exception as exc:
         internals = []
@@ -317,9 +425,7 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
         if isinstance(row, Mapping) and row.get("symbol")
     }
     flow_activity_attempted = {
-        str(symbol).upper()
-        for symbol in flow_activity.get("requested_symbols") or ()
-        if symbol
+        str(symbol).upper() for symbol in flow_activity.get("requested_symbols") or () if symbol
     }
     symbols = _stable_unique(str(raw.get("symbol") or "").upper() for raw in internals)
     for symbol in symbols:
@@ -341,12 +447,29 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
                     flow[symbol] = value
             except Exception as exc:
                 warnings.append(f"flow_unavailable:{symbol}:{type(exc).__name__}")
-    candidates = rank_candidates(internals, kronos_by_symbol=kronos, flow_by_symbol=flow, limit=config.shortlist_limit)
-    snapshots: list[Mapping[str, Any]] = []; plays: list[Play] = []
+    candidates = rank_candidates(
+        internals, kronos_by_symbol=kronos, flow_by_symbol=flow, limit=config.shortlist_limit
+    )
+    snapshots: list[Mapping[str, Any]] = []
+    plays: list[Play] = []
     chain_requests = 0
     chain_eligible_candidates = 0
     open_risk_by_underlying: dict[str, float] = defaultdict(float)
     aggregate_open_risk = 0.0
+    fetched_snapshots: dict[str, Mapping[str, Any]] = {}
+    snapshot_errors: dict[str, Exception] = {}
+    if adapters.options:
+        no_lse_key = (
+            isinstance(adapters.options, LSEOptionsAdapter)
+            and adapters.options.fetcher is None
+            and not (adapters.options.api_key or os.getenv("LSE_API_KEY"))
+        )
+        if not no_lse_key:
+            candidate_symbols = [str(c["symbol"]).upper() for c in candidates if c.get("symbol")]
+            fetched_snapshots, snapshot_errors = fetch_provider_snapshots(
+                adapters.options, candidate_symbols, asof_utc=context.asof_utc
+            )
+
     mode = context.mode
     for candidate in candidates:
         snapshot = None
@@ -361,24 +484,33 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
             and (context.mode is RunMode.REPLAY or context.market_session.value == "regular")
         )
         if adapters.options:
-            no_lse_key = (isinstance(adapters.options, LSEOptionsAdapter) and adapters.options.fetcher is None
-                          and not (adapters.options.api_key or os.getenv("LSE_API_KEY")))
+            no_lse_key = (
+                isinstance(adapters.options, LSEOptionsAdapter)
+                and adapters.options.fetcher is None
+                and not (adapters.options.api_key or os.getenv("LSE_API_KEY"))
+            )
             if not no_lse_key:
                 if chain_eligible:
                     chain_requests += 1
-                try:
-                    snapshot = adapters.options.snapshot(str(candidate["symbol"]), asof_utc=context.asof_utc)
+                sym_key = str(candidate["symbol"]).upper()
+                if sym_key in snapshot_errors:
+                    exc = snapshot_errors[sym_key]
+                    warnings.append(
+                        f"options_unavailable:{candidate['symbol']}:{type(exc).__name__}"
+                    )
+                else:
+                    snapshot = fetched_snapshots.get(sym_key)
                     if snapshot:
                         snapshots.append(snapshot)
-                except Exception as exc:
-                    warnings.append(f"options_unavailable:{candidate['symbol']}:{type(exc).__name__}")
         if chain_eligible:
             chain_eligible_candidates += 1
         symbol = str(candidate.get("symbol") or "").upper()
         play = _make_play(
             candidate,
             snapshot,
-            context=RunContext(context.requested_for, context.asof_utc, context.market_session, mode),
+            context=RunContext(
+                context.requested_for, context.asof_utc, context.market_session, mode
+            ),
             account=account,
             config=config,
             run_id=context.run_id(account=account, config_hash=config.config_hash),
@@ -391,20 +523,27 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
             aggregate_open_risk += play.risk.max_loss_dollars
     warnings = _stable_unique(warnings)
     advisory_evidence_warnings = [
-        warning for warning in warnings
+        warning
+        for warning in warnings
         if _is_advisory_evidence_warning(warning) or warning in research_warnings
     ]
     # An unsupported symbol is a coverage fact, not an outage of the symbols
     # that were successfully scanned.  Kronos, flow, sector routing, and the
     # optional research board are likewise non-gating context.
     execution_health_warnings = [
-        warning for warning in warnings
-        if warning not in advisory_evidence_warnings and not warning.startswith("unsupported_promoted_symbol:")
+        warning
+        for warning in warnings
+        if warning not in advisory_evidence_warnings
+        and not warning.startswith("unsupported_promoted_symbol:")
     ]
     if execution_health_warnings and mode is RunMode.LIVE:
         mode = RunMode.DEGRADED
-    manifest = replace(context.manifest(account=account, config_hash=config.config_hash, mode=mode), warnings=tuple(warnings))
-    manifest_data = manifest.to_dict(); manifest_data["warnings"] = warnings
+    manifest = replace(
+        context.manifest(account=account, config_hash=config.config_hash, mode=mode),
+        warnings=tuple(warnings),
+    )
+    manifest_data = manifest.to_dict()
+    manifest_data["warnings"] = warnings
     decision_dicts = [p.to_dict() for p in plays]
     actionable_plays = [p for p in decision_dicts if p["state"] == "ENTER"]
     watchlist = [p for p in decision_dicts if p["state"] == "WATCH"]
@@ -417,9 +556,13 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
     decision_blockers = list(decision_reasons)
     if not actionable_plays and not decision_blockers:
         decision_blockers.append(
-            "no_successfully_scanned_model_candidates" if not internals else "no_live_validated_actionable_plays"
+            "no_successfully_scanned_model_candidates"
+            if not internals
+            else "no_live_validated_actionable_plays"
         )
-    model_domain_symbols = [str(symbol).upper() for symbol in discovery.get("model_covered_symbols") or [] if symbol]
+    model_domain_symbols = [
+        str(symbol).upper() for symbol in discovery.get("model_covered_symbols") or [] if symbol
+    ]
     unavailable_model_symbols = _stable_unique(
         symbol for symbol in (_warning_symbol(warning) for warning in warnings) if symbol
     )
@@ -448,8 +591,12 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
             "chain_requests": chain_requests,
             "chain_snapshots": len(snapshots),
             "unavailable_model_symbols": unavailable_model_symbols,
-            "flow_activity_requested": int((flow_activity.get("coverage") or {}).get("requested") or 0),
-            "flow_activity_observed": int((flow_activity.get("coverage") or {}).get("with_activity") or 0),
+            "flow_activity_requested": int(
+                (flow_activity.get("coverage") or {}).get("requested") or 0
+            ),
+            "flow_activity_observed": int(
+                (flow_activity.get("coverage") or {}).get("with_activity") or 0
+            ),
         },
         "candidates": candidates,
         "flow_activity": flow_activity,
@@ -465,10 +612,7 @@ def run_pipeline(*, context: RunContext, account: float, config: DailyPlaysConfi
         "decision_blockers": [] if actionable_plays else decision_blockers,
         "advisory_evidence_warnings": advisory_evidence_warnings,
         "execution_health_warnings": execution_health_warnings,
-        "abstention_reasons": (
-            [] if actionable_plays
-            else _stable_unique([*decision_blockers])
-        ),
+        "abstention_reasons": ([] if actionable_plays else _stable_unique([*decision_blockers])),
     }
     if persist:
         persist_run(

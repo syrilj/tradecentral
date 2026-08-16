@@ -6,6 +6,7 @@ may evolve independently, while raw provider shapes must not leak past here.
 ``YFinanceOptionsAdapter`` is explicitly development/replay-only and always
 marks its output degraded.
 """
+
 from __future__ import annotations
 
 from contextlib import redirect_stdout
@@ -15,13 +16,18 @@ import io
 import os
 from pathlib import Path
 import sys
-from typing import Any, Callable, Iterable, Mapping, Protocol
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 
 class OptionsProvider(Protocol):
     """Small injectable boundary used by the pipeline and fixture tests."""
 
     def snapshot(self, symbol: str, *, asof_utc: datetime | None = None) -> Mapping[str, Any]: ...
+
+    def snapshots(
+        self, symbols: Sequence[str], *, asof_utc: datetime | None = None
+    ) -> Mapping[str, Mapping[str, Any]]: ...
 
 
 def _utc(value: Any, default: datetime | None = None) -> str | None:
@@ -90,14 +96,15 @@ def normalize_contract(
     spread_pct = ((ask - bid) / mid) if mid and bid is not None and ask is not None else None
     expiry = _expiry(_pick(row, "expiry", "expiration", "expiration_date"))
     strike = _float(_pick(row, "strike", "strike_price"))
-    contract_underlying = str(_pick(row, "underlying", "symbol") or underlying).upper().replace(".US", "")
+    contract_underlying = (
+        str(_pick(row, "underlying", "symbol") or underlying).upper().replace(".US", "")
+    )
     dte: int | None = None
     if expiry and asof_utc:
         dte = (date.fromisoformat(expiry) - asof_utc.astimezone(timezone.utc).date()).days
     quote_asof = _utc(_pick(row, "quote_asof_utc", "quote_timestamp", "nbbo_updated_at"))
     quote_live = bool(
-        bid is not None and ask is not None and quote_asof is not None
-        and provider == "lse"
+        bid is not None and ask is not None and quote_asof is not None and provider == "lse"
     )
     return {
         "underlying": contract_underlying,
@@ -140,18 +147,34 @@ def _capabilities(contracts: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Describe observed fields without treating reference data as quotes."""
     total = len(contracts)
     fields = (
-        "occ_symbol", "bid", "ask", "quote_asof_utc", "open_interest",
-        "volume", "iv", "delta", "gamma", "multiplier",
+        "occ_symbol",
+        "bid",
+        "ask",
+        "quote_asof_utc",
+        "open_interest",
+        "volume",
+        "iv",
+        "delta",
+        "gamma",
+        "multiplier",
     )
     counts = {
         field: sum(row.get(field) is not None and row.get(field) != "" for row in contracts)
         for field in fields
     }
     complete = sum(
-        all(row.get(field) is not None and row.get(field) != "" for field in (
-            "occ_symbol", "bid", "ask", "quote_asof_utc", "open_interest",
-            "volume", "multiplier",
-        ))
+        all(
+            row.get(field) is not None and row.get(field) != ""
+            for field in (
+                "occ_symbol",
+                "bid",
+                "ask",
+                "quote_asof_utc",
+                "open_interest",
+                "volume",
+                "multiplier",
+            )
+        )
         for row in contracts
     )
     return {
@@ -163,8 +186,12 @@ def _capabilities(contracts: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def normalize_snapshot(
-    raw: Mapping[str, Any] | Iterable[Mapping[str, Any]], *, symbol: str, provider: str,
-    degraded: bool, asof_utc: datetime | None = None,
+    raw: Mapping[str, Any] | Iterable[Mapping[str, Any]],
+    *,
+    symbol: str,
+    provider: str,
+    degraded: bool,
+    asof_utc: datetime | None = None,
 ) -> dict[str, Any]:
     """Normalize supported provider payload variants into one snapshot shape."""
     if isinstance(raw, Mapping):
@@ -184,8 +211,10 @@ def normalize_snapshot(
     # Contract DTE is calculated against the caller's immutable run clock;
     # source_asof is a serialized provider timestamp, not a clock object.
     raw_rows = [row for row in rows if isinstance(row, Mapping)]
-    contracts = [normalize_contract(row, underlying=symbol, provider=provider, asof_utc=asof_utc)
-                 for row in raw_rows]
+    contracts = [
+        normalize_contract(row, underlying=symbol, provider=provider, asof_utc=asof_utc)
+        for row in raw_rows
+    ]
     if price is None:
         price = next(
             (
@@ -197,8 +226,11 @@ def normalize_snapshot(
             None,
         )
     return {
-        "symbol": symbol.upper(), "provider": provider, "degraded": degraded,
-        "asof_utc": source_asof, "underlying": {"symbol": symbol.upper(), "price": price, "quote_asof_utc": underlying_asof},
+        "symbol": symbol.upper(),
+        "provider": provider,
+        "degraded": degraded,
+        "asof_utc": source_asof,
+        "underlying": {"symbol": symbol.upper(), "price": price, "quote_asof_utc": underlying_asof},
         "contracts": contracts,
         "capabilities": _capabilities(contracts),
     }
@@ -207,8 +239,10 @@ def normalize_snapshot(
 @dataclass
 class LSEOptionsAdapter:
     """Primary live adapter; ``fetcher`` makes it deterministic and testable."""
+
     api_key: str | None = None
     fetcher: Callable[[str], Mapping[str, Any] | Iterable[Mapping[str, Any]]] | None = None
+    bulk_fetcher: Callable[[Sequence[str]], Mapping[str, Mapping[str, Any]]] | None = None
     min_dte: int = 30
     max_dte: int = 60
 
@@ -224,6 +258,7 @@ class LSEOptionsAdapter:
         if str(source) not in sys.path:
             sys.path.insert(0, str(source))
         from lse_provider import fetch_lse_options_chain  # type: ignore[import-not-found]
+
         with redirect_stdout(io.StringIO()):
             rows = fetch_lse_options_chain(
                 symbol.upper(), min_dte=self.min_dte, max_dte=self.max_dte, api_key=key
@@ -233,19 +268,41 @@ class LSEOptionsAdapter:
         return {"contracts": rows}
 
     def snapshot(self, symbol: str, *, asof_utc: datetime | None = None) -> Mapping[str, Any]:
-        return normalize_snapshot(self._fetch(symbol), symbol=symbol, provider="lse", degraded=False, asof_utc=asof_utc)
+        return normalize_snapshot(
+            self._fetch(symbol), symbol=symbol, provider="lse", degraded=False, asof_utc=asof_utc
+        )
+
+    def snapshots(
+        self, symbols: Sequence[str], *, asof_utc: datetime | None = None
+    ) -> Mapping[str, Mapping[str, Any]]:
+        if self.bulk_fetcher:
+            raw_map = self.bulk_fetcher(symbols)
+            return {
+                str(sym).upper(): normalize_snapshot(
+                    raw, symbol=str(sym), provider="lse", degraded=False, asof_utc=asof_utc
+                )
+                for sym, raw in raw_map.items()
+            }
+        snaps, errs = fetch_provider_snapshots(self, symbols, asof_utc=asof_utc)
+        if errs and not snaps:
+            first_exc = next(iter(errs.values()))
+            raise first_exc
+        return snaps
 
 
 @dataclass
 class YFinanceOptionsAdapter:
     """Delayed development fallback. Its output can never be ENTER-eligible."""
+
     fetcher: Callable[[str], Mapping[str, Any] | Iterable[Mapping[str, Any]]] | None = None
+    bulk_fetcher: Callable[[Sequence[str]], Mapping[str, Mapping[str, Any]]] | None = None
 
     def snapshot(self, symbol: str, *, asof_utc: datetime | None = None) -> Mapping[str, Any]:
         if self.fetcher:
             raw = self.fetcher(symbol)
         else:
             import yfinance as yf  # type: ignore[import-not-found]
+
             ticker = yf.Ticker(symbol)
             contracts: list[dict[str, Any]] = []
             for expiry in ticker.options or []:
@@ -255,4 +312,81 @@ class YFinanceOptionsAdapter:
                         row.update({"expiry": expiry, "right": right})
                         contracts.append(row)
             raw = {"contracts": contracts}
-        return normalize_snapshot(raw, symbol=symbol, provider="yfinance", degraded=True, asof_utc=asof_utc)
+        return normalize_snapshot(
+            raw, symbol=symbol, provider="yfinance", degraded=True, asof_utc=asof_utc
+        )
+
+    def snapshots(
+        self, symbols: Sequence[str], *, asof_utc: datetime | None = None
+    ) -> Mapping[str, Mapping[str, Any]]:
+        if self.bulk_fetcher:
+            raw_map = self.bulk_fetcher(symbols)
+            return {
+                str(sym).upper(): normalize_snapshot(
+                    raw, symbol=str(sym), provider="yfinance", degraded=True, asof_utc=asof_utc
+                )
+                for sym, raw in raw_map.items()
+            }
+        snaps, errs = fetch_provider_snapshots(self, symbols, asof_utc=asof_utc)
+        if errs and not snaps:
+            first_exc = next(iter(errs.values()))
+            raise first_exc
+        return snaps
+
+
+def fetch_provider_snapshots(
+    provider: OptionsProvider,
+    symbols: Sequence[str],
+    *,
+    asof_utc: datetime | None = None,
+    max_workers: int = 10,
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Exception]]:
+    """Fetch snapshots for multiple symbols concurrently or via batch interface.
+
+    Returns a tuple of (snapshots_by_symbol, errors_by_symbol).
+    """
+    cleaned_symbols = [str(s).upper() for s in symbols if s]
+    if not cleaned_symbols:
+        return {}, {}
+
+    snapshots: dict[str, Mapping[str, Any]] = {}
+    errors: dict[str, Exception] = {}
+
+    # If provider explicitly implements a native snapshots() method, try it first
+    snapshots_method = getattr(provider, "snapshots", None)
+    if callable(snapshots_method) and getattr(snapshots_method, "__func__", None) not in (
+        LSEOptionsAdapter.snapshots,
+        YFinanceOptionsAdapter.snapshots,
+        OptionsProvider.snapshots,
+    ):
+        try:
+            batch_result = provider.snapshots(cleaned_symbols, asof_utc=asof_utc)
+            if isinstance(batch_result, Mapping):
+                for sym, snap in batch_result.items():
+                    snapshots[str(sym).upper()] = snap
+                return snapshots, errors
+        except Exception as exc:
+            # If batch method fails as a whole, fallback to parallel individual calls
+            pass
+
+    workers = min(max_workers, len(cleaned_symbols))
+    if workers <= 1:
+        for sym in cleaned_symbols:
+            try:
+                snapshots[sym] = provider.snapshot(sym, asof_utc=asof_utc)
+            except Exception as exc:
+                errors[sym] = exc
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_sym = {
+                executor.submit(provider.snapshot, sym, asof_utc=asof_utc): sym
+                for sym in cleaned_symbols
+            }
+            for future in as_completed(future_to_sym):
+                sym = future_to_sym[future]
+                try:
+                    snapshots[sym] = future.result()
+                except Exception as exc:
+                    errors[sym] = exc
+
+    return snapshots, errors
