@@ -55,3 +55,31 @@ def test_yfinance_adapter_is_explicitly_degraded_even_with_complete_fixture():
     assert snapshot["degraded"] is True
     assert snapshot["contracts"][0]["provider"] == "yfinance"
     assert snapshot["contracts"][0]["quote_live"] is False
+
+
+def test_options_adapter_batch_snapshots():
+    calls = []
+    def fetch_one(sym):
+        calls.append(sym)
+        return {"contracts": [{"symbol": sym, "strike": 100, "bid": 1.0, "ask": 1.1}]}
+
+    adapter = LSEOptionsAdapter(fetcher=fetch_one)
+    result = adapter.snapshots(["aapl", "msft"])
+    assert len(result) == 2
+    assert "AAPL" in result
+    assert "MSFT" in result
+    assert len(calls) == 2
+
+
+def test_options_adapter_bulk_fetcher():
+    def bulk_fetch(symbols):
+        return {
+            sym: {"contracts": [{"symbol": sym, "strike": 100, "bid": 1.0, "ask": 1.1}]}
+            for sym in symbols
+        }
+
+    adapter = LSEOptionsAdapter(bulk_fetcher=bulk_fetch)
+    result = adapter.snapshots(["aapl", "msft"])
+    assert len(result) == 2
+    assert "AAPL" in result
+    assert "MSFT" in result
