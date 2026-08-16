@@ -63,6 +63,110 @@ def _positive_pnl_concentration(frame: pd.DataFrame, *, group: pd.Series,
             "groups": groups}
 
 
+def _daily_net_returns(rows: pd.DataFrame, *, date_col: str, net_return_col: str) -> pd.Series:
+    """Collapse cross-sectional rows to one equal-weighted net return per date."""
+    dates = pd.to_datetime(_series_from_column_or_index(rows, date_col), errors="coerce")
+    net = pd.to_numeric(_series_from_column_or_index(rows, net_return_col), errors="coerce")
+    if dates.isna().any() or net.isna().any() or not np.isfinite(net).all():
+        raise ValueError("OOF rows require finite net returns and trading dates")
+    frame = pd.DataFrame({"date": dates.dt.normalize(), "net_return": net.astype(float)})
+    return frame.groupby("date", sort=True)["net_return"].mean()
+
+
+def monte_carlo_robustness(
+    rows: pd.DataFrame,
+    *,
+    date_col: str = "timestamp",
+    net_return_col: str = "net_return",
+    n_simulations: int = 2_000,
+    holding_periods: tuple[int, ...] = (21, 63, 126, 252),
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Bootstrap-of-returns robustness for a daily net-return series.
+
+    Resamples the date-aggregated daily net returns with replacement and
+    reports the distribution of compounded outcomes: expected/median/worst
+    max drawdown, the probability of loss over several holding periods, and a
+    confidence interval for the compounded return over one year.  This is the
+    "what could the same strategy have produced, given its own return
+    distribution" question -- a stress diagnostic, not a promotion criterion,
+    and not a live-portfolio drawdown estimate (the same scope boundary as
+    `oof_underlying_robustness_diagnostics`).
+    """
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be in (0, 1)")
+    if n_simulations < 1:
+        raise ValueError("n_simulations must be positive")
+    if not holding_periods or any(int(period) < 1 for period in holding_periods):
+        raise ValueError("holding_periods must be positive trading-day counts")
+    _reject_terminal_holdout(rows)
+    daily = _daily_net_returns(rows, date_col=date_col, net_return_col=net_return_col)
+    values = daily.to_numpy(dtype=float)
+    n_dates = int(values.size)
+    if n_dates < 2:
+        raise ValueError("at least two unique dates are required for Monte Carlo robustness")
+    rng = np.random.default_rng(seed)
+
+    max_drawdowns = np.empty(n_simulations, dtype=float)
+    for simulation in range(n_simulations):
+        simulated = rng.choice(values, size=n_dates, replace=True)
+        equity = np.cumprod(1.0 + simulated)
+        peak = np.maximum.accumulate(equity)
+        max_drawdowns[simulation] = float(np.min((equity - peak) / peak))
+
+    alpha = (1.0 - confidence) / 2.0
+    drawdowns = {
+        "expected_max_drawdown": float(np.mean(max_drawdowns)),
+        "median_max_drawdown": float(np.median(max_drawdowns)),
+        f"worst_{int(confidence * 100)}pct": float(np.quantile(max_drawdowns, 1.0 - alpha)),
+        "worst_case": float(np.min(max_drawdowns)),
+        "n_simulations": int(n_simulations),
+    }
+
+    loss_probabilities: dict[str, float] = {}
+    for period in holding_periods:
+        period = int(period)
+        if period > n_dates:
+            continue
+        simulations = np.empty(n_simulations, dtype=float)
+        for simulation in range(n_simulations):
+            simulated = rng.choice(values, size=period, replace=True)
+            simulations[simulation] = float(np.prod(1.0 + simulated) - 1.0)
+        loss_probabilities[str(period)] = float(np.mean(simulations < 0.0))
+
+    annual_period = 252
+    if annual_period <= n_dates:
+        simulations = np.empty(n_simulations, dtype=float)
+        for simulation in range(n_simulations):
+            simulated = rng.choice(values, size=annual_period, replace=True)
+            simulations[simulation] = float(np.prod(1.0 + simulated) - 1.0)
+        annual_ci = {
+            "expected": float(np.mean(simulations)),
+            "lower_bound": float(np.quantile(simulations, alpha)),
+            "upper_bound": float(np.quantile(simulations, 1.0 - alpha)),
+            "confidence": confidence,
+            "periods": annual_period,
+        }
+    else:
+        annual_ci = None
+
+    return {
+        "schema_version": "edge-monte-carlo-robustness-v1",
+        "scope": "development_oof_supplemental_diagnostic",
+        "supplemental_only": True,
+        "option_profitability": "not_evaluated",
+        "live_portfolio_drawdown": "not_evaluated",
+        "promotion_criteria": "unchanged",
+        "n_dates": n_dates,
+        "n_simulations": int(n_simulations),
+        "seed": int(seed),
+        "max_drawdown_distribution": drawdowns,
+        "probability_of_loss_by_holding_period": loss_probabilities,
+        "annual_compounded_return_ci": annual_ci,
+    }
+
+
 def oof_underlying_robustness_diagnostics(
     oof_rows: pd.DataFrame,
     *,

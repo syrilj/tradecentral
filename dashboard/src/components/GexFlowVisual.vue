@@ -73,12 +73,12 @@ const strikeColumns = [
 
 <style scoped>
 .gex-flow-visual {
-  --paper: #faf9f5;
-  --ink: #121311;
-  --rule: #3d3e39;
-  --blue: #79a8cf;
-  --orange: #df8768;
-  --green: #a5b981;
+  --paper: var(--ink);
+  --ink: var(--ink);
+  --rule: var(--rule);
+  --blue: var(--call);
+  --orange: var(--put);
+  --green: var(--phosphor);
   position: relative;
   width: 100%;
   min-height: 525px;
@@ -86,14 +86,14 @@ const strikeColumns = [
   padding: 21px 24px 19px;
   overflow: hidden;
   color: var(--paper);
-  border: 1px solid #4b4c46;
+  border: 1px solid var(--rule-hi);
   border-top: 2px solid var(--blue);
   background:
-    linear-gradient(rgba(250, 249, 245, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(250, 249, 245, 0.035) 1px, transparent 1px),
-    #111210;
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+    var(--panel);
   background-size: 31px 31px;
-  box-shadow: 20px 25px 0 rgba(121, 168, 207, 0.13), 0 28px 70px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .gex-flow-visual::before,
 .gex-flow-visual::after {
@@ -111,9 +111,9 @@ const strikeColumns = [
   justify-content: space-between;
   gap: 18px;
   padding-bottom: 13px;
-  color: #bbb8ae;
+  color: var(--ink-dim);
   border-bottom: 1px solid var(--rule);
-  font-family: var(--font-display);
+  font-family: var(--font-data);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.11em;
@@ -122,21 +122,21 @@ const strikeColumns = [
 .visual-title { display: grid; gap: 7px; margin-top: 17px; }
 .visual-title span {
   color: var(--orange);
-  font-family: var(--font-display);
+  font-family: var(--font-data);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 .visual-title strong {
-  color: #fffdf8;
-  font-family: var(--font-ui);
+  color: var(--ink);
+  font-family: var(--font-display);
   font-size: clamp(22px, 2.45vw, 31px);
-  font-weight: 620;
-  letter-spacing: -0.052em;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   line-height: 0.98;
 }
-.gex-stage { position: relative; height: 313px; margin-top: 13px; border: 1px solid #3e3f3a; background: rgba(11, 12, 10, 0.73); }
+.gex-stage { position: relative; height: 313px; margin-top: 13px; border: 1px solid var(--rule); background: rgba(8, 9, 12, 0.73); }
 .stage-label {
   position: absolute;
   z-index: 3;
@@ -145,8 +145,8 @@ const strikeColumns = [
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #f0eee6;
-  font-family: var(--font-display);
+  color: var(--ink);
+  font-family: var(--font-data);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -157,8 +157,8 @@ const strikeColumns = [
   position: absolute;
   z-index: 2;
   left: 17px;
-  color: #c8c5bc;
-  font-family: var(--font-display);
+  color: var(--ink-soft);
+  font-family: var(--font-data);
   font-size: 8px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -166,8 +166,8 @@ const strikeColumns = [
 .axis-copy::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; }
 .positive { top: 62px; }.positive::before { background: var(--blue); }
 .negative { top: 187px; }.negative::before { background: var(--orange); }
-.zero-axis { position: absolute; z-index: 1; top: 150px; right: 0; left: 0; height: 1px; border-top: 1px dashed #676862; }
-.zero-axis span { position: absolute; right: 15px; top: -15px; color: #aaa79e; font-family: var(--font-display); font-size: 8px; letter-spacing: 0.07em; text-transform: uppercase; }
+.zero-axis { position: absolute; z-index: 1; top: 150px; right: 0; left: 0; height: 1px; border-top: 1px dashed var(--rule-hi); }
+.zero-axis span { position: absolute; right: 15px; top: -15px; color: var(--ink-dim); font-family: var(--font-data); font-size: 8px; letter-spacing: 0.07em; text-transform: uppercase; }
 .strike-columns {
   position: absolute;
   z-index: 1;
@@ -180,26 +180,26 @@ const strikeColumns = [
   align-items: stretch;
   gap: 5px;
 }
-.strike-column { position: relative; height: 100%; border-right: 1px solid rgba(250, 249, 245, 0.07); }
+.strike-column { position: relative; height: 100%; border-right: 1px solid var(--rule-faint); }
 .strike-column i { position: absolute; left: 22%; width: 56%; }
 .call-bar { bottom: 50%; background: var(--blue); }
 .put-bar { top: 50%; background: var(--orange); }
 .reference-line { position: absolute; z-index: 2; top: 45px; bottom: 33px; width: 1px; border-left: 1px dashed; }
-.reference-line span { position: absolute; width: 74px; color: #d0cdc4; font-family: var(--font-display); font-size: 8px; font-weight: 700; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; }
-.gamma-flip { left: 47%; border-color: var(--orange); }.gamma-flip span { bottom: 3px; left: 5px; color: #f0b098; }
-.spot-reference { left: 62%; border-color: var(--green); }.spot-reference span { top: 36px; right: 5px; transform: translateX(-100%); color: #c5d5a8; text-align: right; }
+.reference-line span { position: absolute; width: 74px; color: var(--ink-soft); font-family: var(--font-data); font-size: 8px; font-weight: 700; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; }
+.gamma-flip { left: 47%; border-color: var(--orange); }.gamma-flip span { bottom: 3px; left: 5px; color: var(--put-hi); }
+.spot-reference { left: 62%; border-color: var(--green); }.spot-reference span { top: 36px; right: 5px; transform: translateX(-100%); color: var(--phosphor); text-align: right; }
 .flow-trace { position: absolute; z-index: 2; right: 18px; bottom: 16px; width: 58%; height: 150px; overflow: visible; }
-.trace-base { fill: none; stroke: rgba(250, 249, 245, 0.2); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-dasharray: 4 5; }
+.trace-base { fill: none; stroke: var(--rule-hi); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-dasharray: 4 5; }
 .trace-call { fill: none; stroke: var(--green); stroke-width: 1.8; vector-effect: non-scaling-stroke; stroke-dasharray: 22 160; animation: gex-trace 6.8s linear infinite; }
-.flow-trace circle { fill: #10110f; stroke: var(--green); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.flow-trace circle { fill: var(--void); stroke: var(--green); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .flow-tag {
   position: absolute;
   z-index: 3;
   display: grid;
   grid-template-columns: 7px 1fr;
   column-gap: 7px;
-  color: #efede4;
-  font-family: var(--font-display);
+  color: var(--ink);
+  font-family: var(--font-data);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.07em;
@@ -207,7 +207,7 @@ const strikeColumns = [
   text-transform: uppercase;
 }
 .flow-tag i { grid-row: span 2; width: 7px; height: 7px; margin-top: 2px; background: var(--green); }
-.flow-tag span { color: #c1bfb6; font-size: 8px; font-weight: 500; }
+.flow-tag span { color: var(--ink-dim); font-size: 8px; font-weight: 500; }
 .flow-tag-call { right: 28px; top: 98px; }.flow-tag-put { left: 18px; bottom: 28px; }.flow-tag-put i { background: var(--orange); }
 .interpret-card {
   position: absolute;
@@ -216,29 +216,29 @@ const strikeColumns = [
   bottom: 13px;
   width: min(205px, 39%);
   padding: 13px 14px;
-  color: var(--paper);
-  border: 1px solid rgba(250, 249, 245, 0.8);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
   border-left: 3px solid var(--green);
-  background: rgba(18, 19, 16, 0.94);
+  background: rgba(18, 20, 26, 0.94);
 }
-.interpret-card > span { color: #f0ae93; font-family: var(--font-display); font-size: 8px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
-.interpret-card strong { display: block; margin-top: 7px; color: #fffdf8; font-family: var(--font-ui); font-size: 15px; font-weight: 620; letter-spacing: -0.03em; line-height: 1.05; }
-.interpret-card p { margin-top: 8px; color: #dedbd2; font-family: var(--font-ui); font-size: 9px; line-height: 1.38; }
+.interpret-card > span { color: var(--put-hi); font-family: var(--font-data); font-size: 8px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
+.interpret-card strong { display: block; margin-top: 7px; color: var(--ink); font-family: var(--font-display); font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.05; }
+.interpret-card p { margin-top: 8px; color: var(--ink-dim); font-family: var(--font-ui); font-size: 9px; line-height: 1.38; }
 .visual-footer {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px 14px;
   margin-top: 14px;
-  color: #dedbd2;
-  font-family: var(--font-display);
+  color: var(--ink-soft);
+  font-family: var(--font-data);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .visual-footer span { display: inline-flex; align-items: center; gap: 5px; }.visual-footer i { display: inline-block; width: 7px; height: 7px; }.legend-call { background: var(--blue); }.legend-put { background: var(--orange); }.legend-net { border: 1px solid var(--green); }
-.visual-footer strong { margin-left: auto; color: #c0bdb4; font-size: 8px; font-weight: 500; }
+.visual-footer strong { margin-left: auto; color: var(--ink-dim); font-size: 8px; font-weight: 500; }
 
 @keyframes gex-trace { to { stroke-dashoffset: -182; } }
 

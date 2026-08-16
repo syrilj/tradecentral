@@ -815,9 +815,9 @@ def build_market_activity_scan(
 ) -> dict[str, Any]:
     """Build the dashboard activity board; Deep adds live per-symbol flow.
 
-    Deep mode also attaches a qlib-style cross-sectional research rank over the
-    scanned catalog and uses top ranks as a live-target priority tier. Quick
-    mode skips full-universe qlib inference (bounded work).
+    Deep mode attaches the trained qlib ensemble over the scanned catalog and
+    uses top ranks as a live-target priority tier. Quick mode attaches the
+    zero-fit desk ranker (rev5 + mom12_1) and still skips live option prints.
     """
     def report(stage: str, percent: int, message: str) -> None:
         if progress is not None:
@@ -838,7 +838,8 @@ def build_market_activity_scan(
         f"Ranked {local_scan['coverage']['scanned']}/{len(local_symbols)} local histories.",
     )
 
-    run_qlib = bool(enable_qlib_score) if enable_qlib_score is not None else mode == "deep"
+    run_qlib = bool(enable_qlib_score) if enable_qlib_score is not None else True
+    qlib_engine = "desk_ranker" if mode == "quick" else "auto"
     qlib_panel: dict[str, Any]
     if run_qlib:
         try:
@@ -847,11 +848,17 @@ def build_market_activity_scan(
                 asof=qlib_asof,
                 data_dirs=data_dirs,
                 candle_loader=candle_loader,
+                engine=qlib_engine,
             )
-            # Publish so Market trajectory/analyze reuse the same cross-section
-            # (ranks/asof/source match deep scan for the same as-of bar set).
-            if qlib_panel.get("quality") == "ok":
+            # Only a full-catalog deep panel may become the shared Market cache.
+            # Quick mode scores a bounded slice with desk_ranker; publishing that
+            # would overwrite a complete panel and mis-rank late-alphabet names.
+            if mode == "deep" and qlib_panel.get("quality") == "ok":
                 publish_shared_qlib_panel(qlib_panel)
+            if mode == "quick" and qlib_panel.get("quality") == "ok":
+                warnings = list(qlib_panel.get("warnings") or [])
+                warnings.append("desk_ranker_slice_not_full_catalog")
+                qlib_panel["warnings"] = warnings
         except Exception as exc:  # noqa: BLE001 - fail closed
             qlib_panel = {
                 "quality": "missing",
@@ -885,7 +892,7 @@ def build_market_activity_scan(
                 "failed": 0,
                 "skipped_insufficient_history": 0,
             },
-            "warnings": ["qlib_score_skipped_quick_scan"] if mode == "quick" else [],
+            "warnings": ["qlib_score_disabled"] if not run_qlib else [],
             "decision_authorized": False,
         }
     qlib_coverage = qlib_panel.get("coverage") or {}
@@ -895,7 +902,7 @@ def build_market_activity_scan(
         (
             f"Qlib ranked {int(qlib_coverage.get('scored') or 0)} cross-sectional names."
             if run_qlib
-            else "Quick mode skipped full-catalog qlib inference."
+            else "Desk ranker / qlib scoring disabled by caller."
         ),
     )
 

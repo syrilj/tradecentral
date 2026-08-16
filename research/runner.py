@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 from dataclasses import asdict, dataclass
-from datetime import date, timedelta
+from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -40,7 +40,7 @@ from .panel_splits import nested_panel_walk_forward_splits, trading_dates
 from .provenance import load_upstream_provenance
 from .regimes import classify_regimes
 from .reporting import Figure, GateReportSpec, write_gate_doc
-from .robustness import oof_underlying_robustness_diagnostics
+from .robustness import monte_carlo_robustness, oof_underlying_robustness_diagnostics
 from .sector_residual import sector_residual_momentum_20d
 from .simple_hypotheses import shock_reversal_features_5d
 
@@ -469,6 +469,12 @@ def run_preregistered_research(
             selected_rows,
             block_size=max(5, horizon),
         )
+        monte_carlo = monte_carlo_robustness(
+            selected_rows,
+            n_simulations=2_000,
+            holding_periods=(21, 63, 126, 252),
+            seed=0,
+        )
         development_gate_inputs.append(HorizonDevelopmentEvidence(
             horizon_days=horizon,
             candidate_net_returns=selected_rows["net_return"].to_numpy(dtype=float),
@@ -516,6 +522,7 @@ def run_preregistered_research(
             "frozen_baseline_metrics": baseline_metrics,
             "paired_frozen_baseline_difference": baseline_difference,
             "development_robustness": robustness,
+            "monte_carlo_robustness": monte_carlo,
             "beats_frozen_baseline_on_development": (
                 selected_metrics["net_expectancy"] > baseline_metrics["net_expectancy"]
             ),

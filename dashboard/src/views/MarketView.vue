@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, inject, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   api,
@@ -26,8 +26,12 @@ import {
   formatStatementCell,
   formatPeriodHeader,
   formatSourceLabel,
+  formatGearingUp,
+  formatModelForecastScore,
+  formatModelPredictedPrice,
   getDerivedRatio,
   getGrowthTone,
+  presentModelForecast,
 } from '@/financialsDisplay'
 import { presentSecFilings } from '@/insiderDisplay'
 import { sparkline } from '@/charts'
@@ -193,8 +197,19 @@ watch(
 
 watch(finPeriod, () => void financialsRes.refresh({ clear: true }))
 
+watch(
+  () => [route.query.highlight, activeTab.value] as const,
+  async ([hl, tab]) => {
+    if (hl === 'model-forecast' && tab === 'financials') {
+      await nextTick()
+      document.getElementById('model-forecast-highlight')?.scrollIntoView({ block: 'nearest' })
+    }
+  },
+  { immediate: true },
+)
+
 function cleanTicker(term: string): string {
-  return term.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
+  return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
 }
 
 const runSearch = debounce(async (term: string) => {
@@ -341,6 +356,10 @@ const companyName = computed(() => {
 const identity = computed(() => tickerIdentity(symbol.value, companyName.value))
 const searchOpen = computed(() => Boolean(q.value.trim()) && (hits.value.length > 0 || searching.value))
 const finData = computed(() => financialsRes.data.value)
+const modelForecast = computed(() =>
+  presentModelForecast(finData.value?.model_forecast ?? profile.value?.model_forecast),
+)
+const highlightModelForecast = computed(() => route.query.highlight === 'model-forecast')
 const insData = computed(() => insidersRes.data.value)
 const govData = computed(() => governmentRes.data.value)
 const ownData = computed(() => ownershipRes.data.value)
@@ -1023,14 +1042,14 @@ const finChartData = computed(() => {
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Gross Margin</span>
-              <strong class="kpi-v fig" :class="getGrowthTone(finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios as Record<string, number|null|undefined>, finData?.income_statement?.rows, 'gross_margin'))">
-                {{ (finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios as Record<string, number|null|undefined>, finData?.income_statement?.rows, 'gross_margin')) != null ? `${finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios as Record<string, number|null|undefined>, finData?.income_statement?.rows, 'gross_margin')}%` : DASH }}
+              <strong class="kpi-v fig" :class="getGrowthTone(finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'gross_margin'))">
+                {{ (finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'gross_margin')) != null ? `${finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'gross_margin')}%` : DASH }}
               </strong>
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Net Margin</span>
-              <strong class="kpi-v fig" :class="getGrowthTone(finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios as Record<string, number|null|undefined>, finData?.income_statement?.rows, 'net_margin'))">
-                {{ (finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios as Record<string, number|null|undefined>, finData?.income_statement?.rows, 'net_margin')) != null ? `${finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios as Record<string, number|null|undefined>, finData?.income_statement?.rows, 'net_margin')}%` : DASH }}
+              <strong class="kpi-v fig" :class="getGrowthTone(finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'net_margin'))">
+                {{ (finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'net_margin')) != null ? `${finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'net_margin')}%` : DASH }}
               </strong>
             </div>
           </div>
@@ -1181,6 +1200,77 @@ const finChartData = computed(() => {
     <!-- TAB 2: FINANCIALS                                                     -->
     <!-- ===================================================================== -->
     <section v-else-if="activeTab === 'financials'" class="tab-content financials-layout">
+      <article
+        id="model-forecast-highlight"
+        class="model-forecast-highlight"
+        :class="{ focused: highlightModelForecast }"
+        data-testid="model-forecast-highlight"
+      >
+        <div class="mf-head">
+          <div>
+            <div class="mf-kicker label">Internal research model</div>
+            <h2 class="mf-title lab">What it should be</h2>
+          </div>
+          <span class="mf-timeframe label">{{ modelForecast.timeframe || DASH }}</span>
+        </div>
+        <p class="mf-note label dim">
+          Looks through future earnings and growth from the filings and live tape — not last year's run-rate.
+          Distinct from Street consensus. Research only — not an ENTER authorization.
+        </p>
+        <div class="mf-metrics">
+          <div class="mf-metric">
+            <span class="mf-lbl label">Predicted price</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.predictedPrice) }}</strong>
+            <span v-if="modelForecast.spotUsed != null" class="mf-sub label dim">
+              from live mark {{ formatModelPredictedPrice(modelForecast.spotUsed) }}
+            </span>
+          </div>
+          <div class="mf-metric">
+            <span class="mf-lbl label">Forecast score</span>
+            <strong class="mf-val fig">{{ formatModelForecastScore(modelForecast.forecastScore) }}</strong>
+          </div>
+          <div class="mf-metric">
+            <span class="mf-lbl label">Look-through growth</span>
+            <strong class="mf-val fig">{{
+              modelForecast.lookthroughGrowth != null
+                ? `${(modelForecast.lookthroughGrowth * 100).toFixed(0)}%`
+                : DASH
+            }}</strong>
+          </div>
+          <div class="mf-metric mf-metric-wide">
+            <span class="mf-lbl label">Gearing up towards</span>
+            <strong class="mf-val lab">{{ formatGearingUp(modelForecast.gearingUpTowards) }}</strong>
+          </div>
+        </div>
+        <div class="mf-cases" data-testid="model-forecast-cases">
+          <div class="mf-case bear">
+            <span class="mf-lbl label">Bear case</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bear.price) }}</strong>
+            <p class="mf-thesis">{{ modelForecast.cases.bear.thesis || DASH }}</p>
+          </div>
+          <div class="mf-case base">
+            <span class="mf-lbl label">Base · {{ modelForecast.timeframe || 'horizon' }}</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.base.price) }}</strong>
+            <p class="mf-thesis">{{ modelForecast.cases.base.thesis || DASH }}</p>
+          </div>
+          <div class="mf-case bull">
+            <span class="mf-lbl label">Bull case</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bull.price) }}</strong>
+            <p class="mf-thesis">{{ modelForecast.cases.bull.thesis || DASH }}</p>
+          </div>
+        </div>
+        <div class="mf-factors">
+          <span class="mf-lbl label">Factors</span>
+          <ul v-if="modelForecast.factors.length" class="mf-factor-list">
+            <li v-for="f in modelForecast.factors" :key="f.label" class="mf-factor">
+              <span class="mf-factor-name">{{ f.label }}</span>
+              <span class="mf-factor-val fig" :class="f.tone">{{ f.display }}</span>
+            </li>
+          </ul>
+          <p v-else class="mf-thesis dim">{{ DASH }}</p>
+        </div>
+      </article>
+
       <!-- Sub-tab toolbar -->
       <div class="financials-toolbar">
         <div class="fin-statement-selector">
@@ -1770,6 +1860,75 @@ const finChartData = computed(() => {
     <!-- TAB 3: FORECAST                                                       -->
     <!-- ===================================================================== -->
     <section v-else-if="activeTab === 'forecast'" class="tab-content forecast-layout">
+      <article
+        class="model-forecast-highlight"
+        :class="{ focused: highlightModelForecast }"
+        data-testid="model-forecast-highlight-forecast"
+      >
+        <div class="mf-head">
+          <div>
+            <div class="mf-kicker label">Internal research model</div>
+            <h2 class="mf-title lab">What it should be</h2>
+          </div>
+          <span class="mf-timeframe label">{{ modelForecast.timeframe || DASH }}</span>
+        </div>
+        <p class="mf-note label dim">
+          Looks through future earnings and growth from the live mark — not the Street median target.
+        </p>
+        <div class="mf-metrics">
+          <div class="mf-metric">
+            <span class="mf-lbl label">Predicted price</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.predictedPrice) }}</strong>
+            <span v-if="modelForecast.spotUsed != null" class="mf-sub label dim">
+              from live mark {{ formatModelPredictedPrice(modelForecast.spotUsed) }}
+            </span>
+          </div>
+          <div class="mf-metric">
+            <span class="mf-lbl label">Forecast score</span>
+            <strong class="mf-val fig">{{ formatModelForecastScore(modelForecast.forecastScore) }}</strong>
+          </div>
+          <div class="mf-metric">
+            <span class="mf-lbl label">Look-through growth</span>
+            <strong class="mf-val fig">{{
+              modelForecast.lookthroughGrowth != null
+                ? `${(modelForecast.lookthroughGrowth * 100).toFixed(0)}%`
+                : DASH
+            }}</strong>
+          </div>
+          <div class="mf-metric mf-metric-wide">
+            <span class="mf-lbl label">Gearing up towards</span>
+            <strong class="mf-val lab">{{ formatGearingUp(modelForecast.gearingUpTowards) }}</strong>
+          </div>
+        </div>
+        <div class="mf-cases">
+          <div class="mf-case bear">
+            <span class="mf-lbl label">Bear case</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bear.price) }}</strong>
+            <p class="mf-thesis">{{ modelForecast.cases.bear.thesis || DASH }}</p>
+          </div>
+          <div class="mf-case base">
+            <span class="mf-lbl label">Base · {{ modelForecast.timeframe || 'horizon' }}</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.base.price) }}</strong>
+            <p class="mf-thesis">{{ modelForecast.cases.base.thesis || DASH }}</p>
+          </div>
+          <div class="mf-case bull">
+            <span class="mf-lbl label">Bull case</span>
+            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bull.price) }}</strong>
+            <p class="mf-thesis">{{ modelForecast.cases.bull.thesis || DASH }}</p>
+          </div>
+        </div>
+        <div class="mf-factors">
+          <span class="mf-lbl label">Factors</span>
+          <ul v-if="modelForecast.factors.length" class="mf-factor-list">
+            <li v-for="f in modelForecast.factors" :key="f.label" class="mf-factor">
+              <span class="mf-factor-name">{{ f.label }}</span>
+              <span class="mf-factor-val fig" :class="f.tone">{{ f.display }}</span>
+            </li>
+          </ul>
+          <p v-else class="mf-thesis dim">{{ DASH }}</p>
+        </div>
+      </article>
+
       <div class="forecast-top-grid">
         <!-- Ratings Breakdown -->
         <Panel label="Analyst Ratings Consensus" index="T1" :meta="profile?.forecast?.consensus_rating || DASH">
@@ -3375,6 +3534,136 @@ const finChartData = computed(() => {
   gap: var(--s4);
   padding-top: var(--s3);
   border-top: var(--hair) solid var(--rule);
+}
+
+/* ---- Internal model forecast highlight ("what it should be") ------------- */
+.model-forecast-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+  background: var(--phosphor-wash);
+  border: 2px solid var(--phosphor);
+  border-radius: var(--r-sm);
+}
+
+.model-forecast-highlight.focused {
+  background: var(--phosphor-glow);
+  outline: 1px solid var(--phosphor);
+}
+
+.mf-kicker {
+  color: var(--phosphor);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: var(--t-tiny, 10px);
+}
+
+.mf-title {
+  margin: 0;
+  font-size: var(--t-fig);
+  color: var(--ink);
+}
+
+.mf-note {
+  margin: 0;
+  max-width: 72ch;
+}
+
+.mf-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--s4);
+}
+
+.mf-lbl {
+  display: block;
+  color: var(--ink-dim);
+  margin-bottom: 4px;
+}
+
+.mf-val {
+  font-size: var(--t-display);
+  color: var(--phosphor);
+}
+
+.mf-sub {
+  display: block;
+  margin-top: 4px;
+}
+
+.mf-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--s4);
+}
+
+.mf-timeframe {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: var(--hair) solid var(--phosphor);
+  color: var(--phosphor);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mf-cases {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s3);
+}
+
+.mf-case {
+  padding: var(--s3);
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+}
+
+.mf-case.bear { border-color: var(--short); }
+.mf-case.base { border-color: var(--phosphor); }
+.mf-case.bull { border-color: var(--long); }
+
+.mf-case.bear .mf-val { color: var(--short); }
+.mf-case.bull .mf-val { color: var(--long); }
+
+.mf-thesis {
+  margin: 6px 0 0;
+  color: var(--ink-dim);
+  font-size: var(--t-tiny, 11px);
+  line-height: 1.4;
+}
+
+.mf-factors {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.mf-factor-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--s2) var(--s4);
+}
+
+.mf-factor {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s3);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  padding-bottom: 2px;
+}
+
+.mf-factor-name { color: var(--ink-dim); }
+.mf-factor-val.pos { color: var(--long); }
+.mf-factor-val.neg { color: var(--short); }
+
+@media (max-width: 720px) {
+  .mf-cases { grid-template-columns: 1fr; }
 }
 
 /* ---- Financials Toolbar & Grid ------------------------------------------- */

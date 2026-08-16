@@ -7,7 +7,7 @@ row positions.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Iterator
+from typing import Iterator
 
 import numpy as np
 import pandas as pd

@@ -1,7 +1,6 @@
 """Theory-aligned bullish/bearish gamma-squeeze math — worked examples + unit tests."""
 from __future__ import annotations
 
-import math
 
 import pytest
 

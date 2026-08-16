@@ -224,7 +224,7 @@ export function computeVolOiRatio(
   const oi = openInterest != null && Number.isFinite(Number(openInterest)) && Number(openInterest) >= 0 ? Number(openInterest) : null
 
   if (vol === null || oi === null) {
-    return { ratio: null, formatted: '—', isHigh: false, isExtreme: false }
+    return { ratio: null, formatted: '0.00x', isHigh: false, isExtreme: false }
   }
 
   if (oi === 0) {
@@ -313,3 +313,32 @@ export function flowWhaleTier(premium?: number | null): {
   if (p >= 100_000) return { tier: '100k', label: '$100k+', className: 'tier-100k' }
   return { tier: null, label: null, className: null }
 }
+
+export function formatDteBadge(dte?: number | null): { label: string; className: string } {
+  if (dte == null || !Number.isFinite(Number(dte))) {
+    return { label: 'N/A', className: 'dte-unknown' }
+  }
+  const d = Math.round(Number(dte))
+  if (d === 0) return { label: '0D', className: 'dte-0d' }
+  if (d <= 7) return { label: `${d}D`, className: 'dte-weekly' }
+  if (d <= 30) return { label: `${d}D`, className: 'dte-monthly' }
+  if (d <= 90) return { label: `${d}D`, className: 'dte-quarterly' }
+  return { label: `${d}D`, className: 'dte-leap' }
+}
+
+export function formatMoneyness(otmPct?: number | null): { label: string; className: string } {
+  if (otmPct == null || !Number.isFinite(Number(otmPct))) {
+    return { label: 'N/A', className: 'moneyness-none' }
+  }
+  const p = Number(otmPct)
+  if (Math.abs(p) < 0.015) {
+    return { label: 'ATM', className: 'moneyness-atm' }
+  }
+  if (p > 0) {
+    const formatted = p >= 0.1 ? `+${(p * 100).toFixed(0)}%` : `+${(p * 100).toFixed(1)}%`
+    return { label: `OTM ${formatted}`, className: 'moneyness-otm' }
+  }
+  const formatted = Math.abs(p) >= 0.1 ? `${(p * 100).toFixed(0)}%` : `${(p * 100).toFixed(1)}%`
+  return { label: `ITM ${formatted}`, className: 'moneyness-itm' }
+}
+

@@ -73,8 +73,8 @@ describe('Landing page honours the product boundary', () => {
   })
 
   it('uses the requested brand palette and respects reduced motion', () => {
-    for (const color of ['#141413', '#faf9f5', '#d97757', '#6a9bcc', '#788c5d']) {
-      expect(src.toLowerCase()).toContain(color)
+    for (const token of ['var(--void)', 'var(--phosphor)', 'var(--call)', 'var(--warn)']) {
+      expect(src).toContain(token)
     }
     expect(src).toContain('@media (prefers-reduced-motion: reduce)')
   })

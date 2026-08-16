@@ -10,8 +10,7 @@ DollarGamma_j = OI_j * 100 * Gamma_j * S^2 * 0.01
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
-import numpy as np
+from typing import Dict
 import pandas as pd
 
 

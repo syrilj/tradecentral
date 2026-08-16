@@ -85,6 +85,8 @@ const callPath = computed(() => pathFor('call_wall'))
 const putPath = computed(() => pathFor('put_wall'))
 const maxGex = computed(() => Math.max(1e-9, ...ordered.value.map((point) => Math.abs(point.total_gex_m))))
 const latest = computed(() => ordered.value.at(-1))
+const hoverIdx = ref<number | null>(null)
+const activePoint = computed(() => (hoverIdx.value != null ? ordered.value[hoverIdx.value] : latest.value))
 
 const barW = computed(() => {
   const n = Math.max(ordered.value.length, 1)
@@ -105,8 +107,11 @@ const barW = computed(() => {
       </div>
       <div class="history-facts">
         <span class="label">N <b class="fig">{{ ordered.length }}</b></span>
-        <span class="label">NET <b class="fig">{{ latest ? `${latest.total_gex_m >= 0 ? '+' : ''}$${num(latest.total_gex_m, 1)}M` : '—' }}</b></span>
-        <span class="label">AS OF <b class="fig">{{ shortDate(latest?.t) }}</b></span>
+        <span class="label">NET <b class="fig" :class="activePoint && activePoint.total_gex_m >= 0 ? 'call' : 'put'">{{ activePoint ? `${activePoint.total_gex_m >= 0 ? '+' : ''}$${num(activePoint.total_gex_m, 1)}M` : '—' }}</b></span>
+        <span class="label">AS OF <b class="fig">{{ shortDate(activePoint?.t) }}</b></span>
+        <span v-if="hoverIdx != null && activePoint" class="history-probe label">
+          SPOT ${{ num(activePoint.spot) }} · CW ${{ num(activePoint.call_wall) }} · PW ${{ num(activePoint.put_wall) }}
+        </span>
       </div>
       <div class="history-key label">
         <span class="call"><i />Call</span>
@@ -140,10 +145,12 @@ const barW = computed(() => {
             :x="x(index) - barW / 2"
             :y="point.total_gex_m >= 0 ? gexMid - (Math.abs(point.total_gex_m) / maxGex) * gexHalf : gexMid"
             :width="barW"
-            :height="(Math.abs(point.total_gex_m) / maxGex) * gexHalf"
-            :class="point.total_gex_m >= 0 ? 'positive' : 'negative'"
+            :height="Math.max(1.5, (Math.abs(point.total_gex_m) / maxGex) * gexHalf)"
+            :class="[point.total_gex_m >= 0 ? 'positive' : 'negative', { active: hoverIdx === index }]"
+            @mouseenter="hoverIdx = index"
+            @mouseleave="hoverIdx = null"
           >
-            <title>{{ shortDate(point.t) }} · net GEX {{ point.total_gex_m >= 0 ? '+' : '' }}${{ num(point.total_gex_m, 2) }}M</title>
+            <title>{{ shortDate(point.t) }} · net GEX {{ point.total_gex_m >= 0 ? '+' : '' }}${{ num(point.total_gex_m, 2) }}M · spot ${{ num(point.spot) }}</title>
           </rect>
         </g>
 
@@ -153,10 +160,17 @@ const barW = computed(() => {
 
         <g class="points">
           <g v-for="(point, index) in ordered" :key="point.t">
-            <circle :cx="x(index)" :cy="priceY(point.spot)" r="8" class="hit">
+            <circle
+              :cx="x(index)"
+              :cy="priceY(point.spot)"
+              r="8"
+              class="hit"
+              @mouseenter="hoverIdx = index"
+              @mouseleave="hoverIdx = null"
+            >
               <title>{{ shortDate(point.t) }} · spot ${{ num(point.spot) }} · call wall {{ num(point.call_wall) }} · put wall {{ num(point.put_wall) }}</title>
             </circle>
-            <circle :cx="x(index)" :cy="priceY(point.spot)" r="2.5" class="dot" />
+            <circle :cx="x(index)" :cy="priceY(point.spot)" r="2.5" class="dot" :class="{ active: hoverIdx === index }" />
             <text
               v-if="index === 0 || index === ordered.length - 1"
               :x="x(index)"
@@ -194,8 +208,18 @@ const barW = computed(() => {
 .titles { min-width: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .title { color: var(--ink); white-space: nowrap; }
 .sub { color: var(--ink-faint); font-size: 10px; }
-.history-facts { display: flex; gap: 6px 12px; flex-wrap: wrap; }
+.history-facts { display: flex; gap: 6px 12px; align-items: center; flex-wrap: wrap; }
 .history-facts b { margin-left: 3px; color: var(--ink); }
+.history-facts .call { color: var(--call-hi); }
+.history-facts .put { color: var(--put-hi); }
+.history-probe {
+  padding: 1px 6px;
+  background: var(--panel-raise);
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--phosphor);
+  font: 700 9px var(--font-data);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+}
 .canvas {
   position: relative;
   width: 100%;
@@ -205,7 +229,7 @@ const barW = computed(() => {
   border: var(--hair) solid var(--rule);
 }
 .svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.grid line { stroke: var(--rule); vector-effect: non-scaling-stroke; }
+.grid line { stroke: var(--rule); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .grid text, .points text {
   fill: var(--ink-dim);
   font: 600 10px var(--font-data);
@@ -217,13 +241,47 @@ const barW = computed(() => {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.trace.call { stroke: var(--call); }
-.trace.put { stroke: var(--put); }
-.trace.spot { stroke: var(--ink-soft); }
+.trace.call { stroke: var(--call-hi); }
+.trace.put { stroke: var(--put-hi); }
+.trace.spot { stroke: var(--ink); }
 .points .hit { fill: transparent; stroke: none; pointer-events: all; cursor: crosshair; }
-.points .dot { fill: var(--ink-soft); pointer-events: none; }
-.gex-bars rect.positive { fill: var(--phosphor-dim); opacity: .75; }
-.gex-bars rect.negative { fill: var(--short); opacity: .75; }
+.points .dot {
+  fill: var(--ink-soft);
+  pointer-events: none;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), fill 0.15s ease;
+}
+.points .dot.active {
+  fill: var(--phosphor);
+  transform: scale(1.5);
+}
+
+/* High-contrast emerald/crimson GEX strip bars */
+.gex-bars rect {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 1px;
+  transition: opacity 0.15s cubic-bezier(0.16, 1, 0.3, 1), stroke-width 0.15s ease, fill 0.15s ease;
+  cursor: crosshair;
+}
+.gex-bars rect.positive {
+  fill: var(--call);
+  stroke: var(--call-hi);
+  opacity: 0.92;
+}
+.gex-bars rect.negative {
+  fill: var(--put);
+  stroke: var(--put-hi);
+  opacity: 0.92;
+}
+.gex-bars rect:hover,
+.gex-bars rect.active {
+  opacity: 1;
+  stroke-width: 1.5px;
+}
+.gex-bars rect.positive:hover,
+.gex-bars rect.positive.active { fill: var(--call-hi); }
+.gex-bars rect.negative:hover,
+.gex-bars rect.negative.active { fill: var(--put-hi); }
+
 .empty, .single { fill: var(--ink-dim); font: 10px var(--font-display); letter-spacing: .08em; }
 .single { fill: var(--warn); }
 .history-key {
@@ -236,10 +294,10 @@ const barW = computed(() => {
 }
 .history-key span { display: inline-flex; align-items: center; gap: 4px; }
 .history-key i { display: inline-block; width: 10px; height: 2px; background: currentColor; }
-.history-key .call { color: var(--call); }
-.history-key .put { color: var(--put); }
-.history-key .spot { color: var(--ink-soft); }
-.history-key .net { color: var(--phosphor-dim); }
+.history-key .call { color: var(--call-hi); }
+.history-key .put { color: var(--put-hi); }
+.history-key .spot { color: var(--ink); }
+.history-key .net { color: var(--call-hi); }
 .history-key .net i { height: 8px; width: 6px; }
 @media (max-width: 760px) {
   .history-head { align-items: flex-start; }

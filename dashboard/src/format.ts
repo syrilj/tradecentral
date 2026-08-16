@@ -102,3 +102,74 @@ export function pick(o: unknown, ...keys: string[]): unknown {
   }
   return undefined
 }
+
+/* ------------------------------------------------------------------ Options & Squeeze Clean Numeric Formatters */
+
+/** Options / squeeze fixed-decimal number. Defaults to clean numeric fallback (e.g. "0.00", "0"). */
+export function optNum(v: unknown, dp = 2): string {
+  if (bad(v)) {
+    return (0).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+  }
+  const n = Number(v)
+  if (!Number.isFinite(n)) {
+    return (0).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+  }
+  return n.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+}
+
+/** Options / squeeze percentage, input already in percent units (12.5 → "12.50%"). Defaults to "0.00%". */
+export function optPct(v: unknown, dp = 2): string {
+  return `${optNum(v, dp)}%`
+}
+
+/** Options / squeeze percentage from fraction (0.125 → "12.50%"). Defaults to "0.00%" or "0.0%". */
+export function optPctFrac(v: unknown, dp = 2): string {
+  if (bad(v) || !Number.isFinite(Number(v))) {
+    return `${optNum(0, dp)}%`
+  }
+  return `${optNum(Number(v) * 100, dp)}%`
+}
+
+/** Options / squeeze signed percentage with an explicit + when positive or zero. Defaults to "+0.0%" or "+0.00%". */
+export function optSignedPct(v: unknown, dp = 2): string {
+  if (bad(v) || !Number.isFinite(Number(v))) {
+    return `+${optNum(0, dp)}%`
+  }
+  const n = Number(v)
+  return `${n >= 0 ? '+' : ''}${optNum(n, dp)}%`
+}
+
+/** Options / squeeze signed number with an explicit + when positive or zero. Defaults to "+0.00" or "+0.0". */
+export function optSigned(v: unknown, dp = 2): string {
+  if (bad(v) || !Number.isFinite(Number(v))) {
+    return `+${optNum(0, dp)}`
+  }
+  const n = Number(v)
+  return `${n >= 0 ? '+' : ''}${optNum(n, dp)}`
+}
+
+/** Options / squeeze compact magnitude for volume/notional: 1.2B, 340.5M, 0. Defaults to "0". */
+export function optCompact(v: unknown, dp = 1): string {
+  if (bad(v) || !Number.isFinite(Number(v))) {
+    return '0'
+  }
+  return compact(v, dp)
+}
+
+/** Options / squeeze USD currency ($12.50). Defaults to "$0.00" or "$0". */
+export function optUsd(v: unknown, dp = 2): string {
+  return `$${optNum(v, dp)}`
+}
+
+/** Options / squeeze GEX in USD millions/billions. Defaults to "$0.0M". */
+export function optGex(v: unknown, dp = 1): string {
+  if (bad(v) || !Number.isFinite(Number(v))) {
+    return `$${(0).toFixed(dp)}M`
+  }
+  const n = Number(v)
+  const a = Math.abs(n)
+  const s = n < 0 ? '-$' : '$'
+  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(dp)}B`
+  return `${s}${a.toFixed(dp)}M`
+}
+

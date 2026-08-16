@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 PROJECT = "gen-lang-client-0699310395"
 DATASET = "trading_research"
@@ -293,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Project:  {PROJECT}")
     print(f"  Dataset:  {DATASET}")
     print(f"  Model:    {args.model}  ({trial_filter})")
-    print(f"  Cost:     $0.00  (~50MB processed, free tier = 1TB/month)")
+    print("  Cost:     $0.00  (~50MB processed, free tier = 1TB/month)")
     print("=" * 70)
 
     client = None

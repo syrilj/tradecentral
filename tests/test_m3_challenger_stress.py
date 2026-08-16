@@ -8,26 +8,18 @@ Tests:
 from __future__ import annotations
 
 import math
-import sys
 import time
-import types
-from pathlib import Path
-from typing import Any
 import numpy as np
 import pandas as pd
-import pytest
 
 from edge.daily_plays.qlib_scan_score import (
     FEATURE_NAMES,
     SCORE_KIND,
-    SOURCE_ID,
-    _cross_section_z,
     _normalize_frame,
     feature_row_from_frame,
     score_cross_section_asof,
 )
 from edge.daily_plays.adapters.pead_adapter import (
-    _eval_single_pead_symbol,
     generate_pead_candidates,
 )
 from edge.tools import render_dashboard as dashboard

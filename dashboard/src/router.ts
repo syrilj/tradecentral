@@ -24,6 +24,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Desk', index: '01' },
   },
   {
+    path: '/plays',
+    name: 'plays',
+    component: () => import('@/views/PlaysView.vue'),
+    meta: { title: 'Plays', index: '02' },
+  },
+  {
     path: '/market',
     name: 'market',
     component: () => import('@/views/MarketView.vue'),
@@ -63,6 +69,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Market Flow', index: '04' },
   },
   {
+    path: '/chain',
+    name: 'chain',
+    component: () => import('@/views/ChainView.vue'),
+    meta: { title: 'Supply Chain', index: '05' },
+  },
+  {
     path: '/gates',
     name: 'gates',
     component: () => import('@/views/GatesView.vue'),
@@ -85,6 +97,22 @@ const routes: RouteRecordRaw[] = [
     name: 'research',
     component: () => import('@/views/ResearchView.vue'),
     meta: { title: 'Research', index: '09' },
+  },
+  {
+    path: '/quantitative-research',
+    name: 'quantitative-research',
+    redirect: (to) => ({
+      name: 'market',
+      query: {
+        ...to.query,
+        tab: 'financials',
+        highlight: 'model-forecast',
+        symbol: typeof to.query.symbol === 'string' && to.query.symbol
+          ? to.query.symbol
+          : 'ASTS',
+      },
+    }),
+    meta: { title: 'Quantitative Research' },
   },
   {
     path: '/graph',

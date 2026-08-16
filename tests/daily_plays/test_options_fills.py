@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import math
 
 import pytest
 
 from edge.daily_plays.options_fills import (
-    FillResult,
     OptionsFillModel,
     entry_fill_price,
     normalize_side,

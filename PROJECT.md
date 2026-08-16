@@ -1,63 +1,58 @@
-# Project: Institutional Market Section & Free Intelligence Pipeline
+# Project: Options Flow & Squeeze Screener Overhaul
 
 ## Architecture
-- **Frontend Cockpit (`dashboard/src/views/MarketView.vue`, `dashboard/src/components/`)**: High-density QuiverQuant/Bloomberg-inspired market intelligence cockpit in Vue 3 + TypeScript, featuring 10 integrated analytical tabs, interactive statement toggles, zero-emoji institutional typography, standardized "Coming Soon / Data Source Unavailable" containers, and strict `—` missing value formatting.
-- **Backend Stock Intelligence Engine (`tools/financial_data.py`, `tools/api_server.py`)**: High-throughput multi-period financial statement extractor, ratio engine, executive compensation compiler, analyst consensus target aggregator, SEC Form 4 insider trading tape, STOCK Act congressional trading tracker, LDA corporate lobbying ledger, USASpending federal contracts parser, USPTO patents registry, and 13F institutional ownership calculator.
-- **SEC EDGAR Direct Feed & Alternative Data Ingestion (`tools/sentiment_anomalies.py`)**: Direct CIK-mapped querying of SEC EDGAR public JSON submissions with rate-limit compliance and multi-tier caching (15m in-memory TTL, 7-day disk persistence).
-- **Dual-Track Testing & Integrity Verification (`tests/`, `dashboard/`)**: Comprehensive Pytest API contract suites, Vitest frontend component & zero-emoji verification suites (318+ passing tests), Vite production builds, and forensic integrity audits.
+- Frontend: Vue 3 + TypeScript + Vite + Pinia (`dashboard/src/`)
+- Styling: High-contrast dark theme token architecture (`src/styles/tokens.css`, `src/styles/theme.css`)
+- Test Framework: Vitest (`npm test` / `vitest run`) + Vue TSC (`vue-tsc --noEmit`)
+- Backend API Integration: Python FastAPI/Flask endpoints (`tools/api_server.py`, `daily_plays/`) consumed via `src/api.ts` and `src/composables/useResource.ts`
 
 ## Feature Inventory
-| # | Feature | Description | Milestone | Source | Status |
-|---|---------|-------------|-----------|--------|--------|
-| F1.1 | Multi-Period Financial Statements & Margin Engine | Multi-period Income Statement, Balance Sheet, Cash Flow with gross/operating/net margins and segment/geo breakdowns | M1 | Survey Backend | DONE |
-| F1.2 | Valuation & Solvency Ratio Extractor | 20+ financial ratios (P/E trailing/fwd, P/S, P/B, EV/EBITDA, D/E, Quick/Current, ROE, ROA, FCF) | M1 | Survey Backend | DONE |
-| F1.3 | Executive Compensation & Officer Registry | Named executive officers, salaries, bonuses, stock awards, total pay, and CEO-to-median ratio | M1 | Survey Backend | DONE |
-| F1.4 | Analyst Consensus, Price Targets & Earnings Surprise | Price targets (high, median, low, current, upside %), rating upgrades/downgrades, and EPS surprise history | M1 | Survey Backend | DONE |
-| F1.5 | SEC Form 4 Insider Tape & Backtest Matrix | Form 4 transactions, 90-day net metrics, quarterly net volume matrix, and Form 4 strategy backtest tearsheet | M1 | Survey Backend | DONE |
-| F1.6 | Government Disclosures & Federal Awards | Congressional trades (STOCK Act), lobbying disclosures (LDA), federal agency contracts, and USPTO patent grants | M1 | Survey Backend | DONE |
-| F1.7 | 13F Ownership & Short Interest Analytics | Top institutional & mutual fund holders, float breakdown (institutional/insider/retail), short interest & days to cover | M1 | Survey Backend | DONE |
-| F1.8 | SEC EDGAR Filings & News Feeds | Live CIK filings (10-K, 10-Q, 8-K) via SEC EDGAR public feeds and curated financial news items | M1 | Survey Backend | DONE |
-| F1.9 | Multi-Ticker Compare & Normalized Trajectory | Multi-symbol comparison table (valuation, margins, momentum) and normalized % price trajectory | M1 | Survey Backend | DONE |
-| F2.1 | Strict Zero-Emoji Institutional Design System | Eliminate 100% of unicode emojis in MarketView, replace with institutional typography and subtle badges | M2 | Survey Frontend | DONE |
-| F2.2 | In-Tab Insiders Navigation (Loop Fix) | Fix circular redirect loop on Insiders tab so all 10 tabs render seamlessly in-cockpit | M2 | Survey Frontend | DONE |
-| F2.3 | Standardized "Coming Soon / Unavailable" Fallbacks | Clean institutional container with informative subtext for unavailable datasets; eliminate fake numbers | M2 | Survey Frontend | DONE |
-| F2.4 | High-Density QuiverQuant UX & Period/View Toggles | Dense data grids, statement view mode (Table/Charts), sticky headers, aligned tabular figures | M2 | Survey Frontend | DONE |
-| F2.5 | Strict Dash (`—`) Formatting Invariant | Guarantee all missing/null values render as `—` (dash) across all tabs, never raw zeros or NaN | M2 | Survey Frontend | DONE |
-| F3.1 | Dedicated MarketView Vitest Suite | Unit and contract tests for MarketView tab switching, zero-emoji invariant, and fallback states | M3 | Survey Specs | DONE |
-| F3.2 | Backend Financial Intelligence Pytest Suite | Comprehensive endpoint tests for `/api/financials`, `/api/company-profile`, `/api/insiders`, `/api/government`, `/api/ownership` | M3 | Survey Specs | DONE |
-| F3.3 | Full Suite Builds & Automated Verification | Passing `npm test` (318 tests), passing `pytest`, passing `npm run build`, and zero-emoji regex audit | M3 | Survey Specs | DONE |
-| F3.4 | Forensic Integrity Audit | Static, runtime, and execution verification confirming genuine implementation and zero facade cheating (Verdict: CLEAN) | M3 | Survey Specs | DONE |
+| # | Feature | Description | Milestone | Status |
+|---|---------|-------------|-----------|--------|
+| 1 | High-Contrast Token System & Token Alignment | Upgrade `--call` (Emerald `#10b981`/`#34d399`) and `--put` (Crimson `#f43f5e`/`#fb7185`) in `tokens.css`; align `options-ui-tokens.test.ts` and `gex-map-enhanced.test.ts` | M1 | DONE |
+| 2 | Squeeze Screener Calculation & Setup Fixes | Fix featured tie-breaking (`signedScore`), negative score SVG ring offset (`Math.abs`), near-spot GEX formatting (`-$X.XM`), factor track clamping, takeaway polarity | M2 | DONE |
+| 3 | Options Flow & Conviction Board Data Pipeline Fixes | Fix C/P ratio zero-division on empty tape, pressure score normalization, moneyness null guard, and flow order taxonomy in `OptionsView.vue`, `OptionsConvictionBoard.vue`, `OptionsFlowContext.vue` | M3 | DONE |
+| 4 | Em-Dash Elimination & Clean Numeric Fallbacks | Eradicate all placeholder em-dashes ("—" / "--") across Options and Squeeze views, replacing with clean numeric fallbacks ($0.00, 0.00%, 0, styled N/A badges) | M4 | DONE |
+| 5 | High-Impact Graphics, Gauges & Tooltip Enhancements | Crisp SVG borders, smooth hover tooltips/crosshairs, cubic-bezier transition curves, 3D gradient sync across `GammaExposureMap.vue`, `OptionsDriftChart.vue`, `ProbabilityDensityChart.vue`, `RiskNeutral3DModel.vue`, `SqueezeScreener.vue` | M5 | DONE |
+| 6 | E2E Testing, Adversarial Verification & Full Test Pass | Comprehensive test suite pass (100% pass across all 45 test files / 661 tests), zero TypeScript compilation errors, forensic audit | M6 | DONE |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Backend Free Data Pipelines & API Ingestion | F1.1–F1.9 in `tools/financial_data.py`, `tools/api_server.py`, `tools/sentiment_anomalies.py` | None | DONE |
-| M2 | Frontend MarketView Institutional UX & Zero-Emoji | F2.1–F2.5 in `dashboard/src/views/MarketView.vue`, `dashboard/src/components/`, `tokens.css` | M1 | DONE |
-| M3 | Dual-Track Testing, Automated Verification & Forensic Audit | F3.1–F3.4 across `tests/`, `dashboard/`, Vitest, Pytest, Vite build | M2 | DONE |
+| M1 | Design System & Token Upgrades | `src/styles/tokens.css`, `src/components/__tests__/options-ui-tokens.test.ts`, `src/components/__tests__/gex-map-enhanced.test.ts` | none | DONE |
+| M2 | Squeeze Screener Calculation Fixes | `src/components/SqueezeScreener.vue`, `src/__tests__/squeeze-screener-calc.test.ts` | M1 | DONE |
+| M3 | Options Flow & Conviction Board Overhaul | `src/views/OptionsView.vue`, `src/components/OptionsConvictionBoard.vue`, `src/components/OptionsDirectionBrief.vue`, `src/components/OptionsFlowContext.vue`, `src/flowDisplay.ts` | M1 | DONE |
+| M4 | Em-Dash Elimination & Numeric Fallbacks | `src/format.ts`, `src/flowDisplay.ts`, `src/views/OptionsView.vue`, `src/components/SqueezeScreener.vue`, `src/components/OptionsConvictionBoard.vue`, `src/components/OptionsDirectionBrief.vue`, `src/components/OptionsFlowContext.vue`, `src/views/FintelView.vue` | M2, M3 | DONE |
+| M5 | High-Impact Graphics & Charts Polish | `src/components/GammaExposureMap.vue`, `src/components/OptionsDriftChart.vue`, `src/components/ProbabilityDensityChart.vue`, `src/components/RiskNeutral3DModel.vue`, `src/components/GammaHistoryStrip.vue` | M1 | DONE |
+| M6 | E2E & Full Test Pass Verification | Full dashboard test suites + TypeScript build + Forensic Audit | M1, M2, M3, M4, M5 | DONE |
 
 ## Interface Contracts
-### Backend HTTP API Endpoints
-- `GET /api/financials?symbol=SYM&period={quarterly|annual}`: Returns `FinancialsPayload` with `income_statement`, `balance_sheet`, `cash_flow`, `ratios`, `revenue_breakdown`, `period`, `source`, `asof`.
-- `GET /api/company-profile?symbol=SYM`: Returns `CompanyProfilePayload` with `profile`, `compensation`, `analyst_targets`, `consensus`, `smart_score`, `thesis`, `upgrades_downgrades`.
-- `GET /api/insiders?symbol=SYM`: Returns `InsidersIntelligencePayload` with `recent_transactions`, `quarterly_net`, `metrics_90d`, `strategy_backtest`, `source`.
-- `GET /api/government?symbol=SYM`: Returns `GovernmentPayload` with `congressional_trades`, `lobbying`, `contracts`, `patents`, `source`.
-- `GET /api/ownership?symbol=SYM`: Returns `OwnershipPayload` with `institutional_holders`, `mutual_fund_holders`, `breakdown`, `short_interest`, `source`.
-- `GET /api/compare?symbols=SYM1,SYM2,...&window={1m|3m|6m|1y|all}`: Returns multi-ticker comparison metrics and normalized trajectory.
-- `GET /api/sentiment?symbol=SYM`: Returns sentiment payload with embedded `sec_filings_for_symbol`.
+### `src/styles/tokens.css` ↔ Vue Components
+- `--call`: `#10b981` (High-contrast emerald green for Call contracts & Bullish structures)
+- `--call-hi`: `#34d399` (High-contrast bright emerald for highlights)
+- `--call-wash`: `rgba(16, 185, 129, 0.12)` (Translucent emerald wash for fills/tails)
+- `--put`: `#f43f5e` (High-contrast crimson red for Put contracts & Bearish structures)
+- `--put-hi`: `#fb7185` (High-contrast bright crimson for highlights)
+- `--put-wash`: `rgba(244, 63, 94, 0.12)` (Translucent crimson wash for fills/tails)
 
-### Data Formatting Invariants
-- All missing or null metrics must be rendered as `—` (dash), never `0`, `0.0%`, or `NaN`.
-- All financial numbers must follow institutional shorthand formatting (`$1.24B`, `$450.2M`, `$12.50/sh`, `14.2%`).
-- Zero Unicode emojis permitted in any component or view.
+### `src/format.ts` / Options Display Formatting
+- Currency: `optUsd(val, fallback = '$0.00')` -> outputs `$X.XX` or `$0.00`
+- Percentage: `optPct(val, fallback = '0.00%')` -> outputs `X.XX%` or `0.00%`
+- Signed GEX: `signedGex(val, fallback = '$0.0M')` -> outputs `+$X.XM`, `-$X.XM`, or `$0.0M`
+- Counts / Integers: `optNum(val, fallback = '0')` -> outputs `X` or `0`
+- Missing status: `<span class="badge-na">N/A</span>`
 
 ## Code Layout
-- `tools/financial_data.py`: Multi-period statements, ratios, compensation, targets, insiders, government, ownership data pipelines.
-- `tools/api_server.py`: HTTP API routing and endpoint handlers for stock intelligence feeds.
-- `tools/sentiment_anomalies.py`: SEC EDGAR direct JSON submissions scraper and filing link generator.
-- `dashboard/src/views/MarketView.vue`: Main institutional market cockpit view with 10 analytical tabs.
-- `dashboard/src/financialsDisplay.ts`: Data formatting and presentation utilities.
-- `dashboard/src/insiderDisplay.ts`: Insider trading formatting utilities.
-- `dashboard/src/api.ts`: Frontend TypeScript interfaces and API client functions.
-- `tests/e2e/test_financial_intelligence_endpoints.py`: Pytest backend endpoint verification suite.
-- `dashboard/src/__tests__/market_view_institutional.spec.ts`: Dedicated Vitest institutional market verification suite.
-- `dashboard/src/views/__tests__/MarketView.spec.ts`: Component-level Vitest suite.
+- `dashboard/src/styles/tokens.css`: Core design system variables
+- `dashboard/src/squeezeCalc.ts`: Pure algorithmic calculations for squeeze setups, rings, and takeaways
+- `dashboard/src/components/SqueezeScreener.vue`: Squeeze gauge, setup, factors, levels, takeaways
+- `dashboard/src/views/OptionsView.vue`: Master options flow, strike chain, KPI rail, stalker cards
+- `dashboard/src/components/OptionsConvictionBoard.vue`: Conviction pressure meter & rankings table
+- `dashboard/src/components/OptionsDirectionBrief.vue`: Directional read headline, score track, evidence
+- `dashboard/src/components/OptionsFlowContext.vue`: Tape contract mix, desk action triage
+- `dashboard/src/components/GammaExposureMap.vue`: Interactive dual-bar GEX chart & level markers
+- `dashboard/src/components/OptionsDriftChart.vue`: Underlying close + premium activity dual-pane chart
+- `dashboard/src/components/ProbabilityDensityChart.vue`: 2D lognormal probability density curve
+- `dashboard/src/components/RiskNeutral3DModel.vue`: Three.js 3D volatility surface
+- `dashboard/src/format.ts` & `dashboard/src/flowDisplay.ts`: Formatting and flow calculation helpers
+- `dashboard/src/__tests__/`: Automated test suites (45 suites, 661 tests)

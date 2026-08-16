@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
-import math
 import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd

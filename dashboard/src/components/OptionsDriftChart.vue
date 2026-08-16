@@ -558,7 +558,7 @@ function onMove(e: MouseEvent): void {
         <line class="pane-div" :x1="pad.l" :x2="W - pad.r" :y1="flowTop" :y2="flowTop" />
 
         <g class="activity-bars">
-          <g v-for="bar in activityBars" :key="bar.t">
+          <g v-for="bar in activityBars" :key="bar.t" :class="{ 'is-active': focus && Math.abs(focus.x - bar.x) < (bar.half + 2) }">
             <rect
               class="bar call"
               :x="bar.x - bar.half - 0.5"
@@ -589,8 +589,24 @@ function onMove(e: MouseEvent): void {
         <text class="axis-cap flow-y" :x="pad.l - 6" :y="flowTop + flowH / 2" text-anchor="end">$</text>
 
         <g v-if="focus" class="crosshair">
-          <line :x1="focus.x" :x2="focus.x" :y1="priceTop" :y2="flowBot" />
+          <line :x1="focus.x" :x2="focus.x" :y1="priceTop" :y2="flowBot" class="crosshair-v" />
+          <line v-if="focus.price != null" :x1="pad.l" :x2="W - pad.r" :y1="priceY(focus.price)" :y2="priceY(focus.price)" class="crosshair-h" />
           <circle v-if="focus.price != null" :cx="focus.x" :cy="priceY(focus.price)" r="4" class="price-dot" />
+          <g v-if="focus.price != null" class="crosshair-badge">
+            <rect
+              :x="pad.l - (W < 480 ? 40 : 48)"
+              :y="priceY(focus.price) - 8"
+              :width="W < 480 ? 38 : 46"
+              height="16"
+              class="crosshair-pill-bg"
+            />
+            <text
+              :x="pad.l - 4"
+              :y="priceY(focus.price) + 3.5"
+              text-anchor="end"
+              class="crosshair-pill-text"
+            >{{ num(focus.price) }}</text>
+          </g>
         </g>
 
         <g v-if="pricePath || flow.length" class="time-axis">
@@ -657,6 +673,7 @@ function onMove(e: MouseEvent): void {
   background: var(--void-lift);
   color: var(--ink);
   min-height: 20px;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
 }
 .scale-note { margin-left: auto; color: var(--ink-faint); }
 .anomaly-readout { color: var(--warn); }
@@ -667,6 +684,7 @@ function onMove(e: MouseEvent): void {
   border: var(--hair) solid var(--rule-hi);
   background: transparent;
   cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .prem-toggle.on { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
 .key { width: 12px; height: 2px; display: inline-block; border-radius: 1px; }
@@ -683,11 +701,11 @@ function onMove(e: MouseEvent): void {
   font: 600 9px var(--font-display);
   letter-spacing: 0.1em;
 }
-.pane-div { stroke: var(--rule-hi); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.pane-div { stroke: var(--rule-hi); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .flow-pane-bg { fill: var(--panel); }
 .grid-lines line {
   stroke: var(--rule);
-  stroke-width: 1;
+  stroke-width: 1px;
   vector-effect: non-scaling-stroke;
 }
 .grid-lines text, .premium-axis text, .time-axis text, .axis-cap {
@@ -722,8 +740,26 @@ function onMove(e: MouseEvent): void {
 }
 .flow-trace.call { stroke: var(--call-hi); stroke-width: 1.75; }
 .flow-trace.put { stroke: var(--put-hi); stroke-width: 1.75; }
-.activity-bars .bar.call { fill: var(--call); opacity: 0.95; }
-.activity-bars .bar.put { fill: var(--put); opacity: 0.95; }
+
+/* Activity bars: crisp solid fills, border strokes, and responsive hover transitions */
+.activity-bars .bar {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 1px;
+  opacity: 0.92;
+  transition: opacity 0.15s cubic-bezier(0.16, 1, 0.3, 1), stroke-width 0.15s ease, fill 0.15s ease;
+}
+.activity-bars .bar.call { fill: var(--call); stroke: var(--call-hi); }
+.activity-bars .bar.put { fill: var(--put); stroke: var(--put-hi); }
+.activity-bars g:hover .bar,
+.activity-bars g.is-active .bar {
+  opacity: 1;
+  stroke-width: 1.5px;
+}
+.activity-bars g:hover .bar.call,
+.activity-bars g.is-active .bar.call { fill: var(--call-hi); }
+.activity-bars g:hover .bar.put,
+.activity-bars g.is-active .bar.put { fill: var(--put-hi); }
+
 .anomaly-dot { fill: var(--warn); }
 .opex-marks .opex-line {
   stroke: var(--phosphor-dim);
@@ -749,16 +785,17 @@ function onMove(e: MouseEvent): void {
 }
 .selected-exp-label { fill: var(--phosphor); }
 .level-line {
-  stroke-width: 1.25;
+  stroke-width: 1.25px;
   stroke-dasharray: 5 4;
   opacity: .9;
   vector-effect: non-scaling-stroke;
+  transition: stroke 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .level-line.put { stroke: var(--put); }
 .level-line.call { stroke: var(--call); }
 .level-line.flip { stroke: var(--warn); stroke-dasharray: 3 3; }
-.level-line.spot { stroke: var(--ink); stroke-dasharray: none; stroke-width: 1.15; opacity: .5; }
-.level-leader { stroke-width: 1; opacity: .55; vector-effect: non-scaling-stroke; }
+.level-line.spot { stroke: var(--ink); stroke-dasharray: none; stroke-width: 1.15px; opacity: .5; }
+.level-leader { stroke-width: 1px; opacity: .55; vector-effect: non-scaling-stroke; }
 .level-leader.put { stroke: var(--put); }
 .level-leader.call { stroke: var(--call); }
 .level-leader.flip { stroke: var(--warn); }
@@ -769,19 +806,47 @@ function onMove(e: MouseEvent): void {
   paint-order: stroke;
   stroke: var(--void);
   stroke-width: 3.5px;
+  transition: fill 0.15s ease;
 }
 .level-label.put { fill: var(--put-hi); }
 .level-label.call { fill: var(--call-hi); }
 .level-label.flip { fill: var(--warn); }
 .level-label.spot { fill: var(--ink); }
-.crosshair line {
+
+/* Crosshair overlay */
+.crosshair {
+  transition: opacity 0.15s ease;
+}
+.crosshair .crosshair-v {
   stroke: var(--phosphor);
-  stroke-width: 1;
+  stroke-width: 1px;
   stroke-dasharray: 2 3;
   opacity: .85;
   vector-effect: non-scaling-stroke;
 }
-.crosshair .price-dot { fill: var(--ink); stroke: var(--void); stroke-width: 1; }
+.crosshair .crosshair-h {
+  stroke: var(--rule-hi);
+  stroke-width: 1px;
+  stroke-dasharray: 2 2;
+  opacity: .75;
+  vector-effect: non-scaling-stroke;
+}
+.crosshair .price-dot {
+  fill: var(--phosphor);
+  stroke: var(--void);
+  stroke-width: 1.5px;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.crosshair-pill-bg {
+  fill: var(--panel-raise);
+  stroke: var(--phosphor-dim);
+  stroke-width: 1px;
+}
+.crosshair-pill-text {
+  fill: var(--phosphor);
+  font: 700 9px var(--font-data);
+}
+
 .empty { fill: var(--ink-faint); font: 11px var(--font-display); letter-spacing: .1em; }
 .empty-soft { fill: var(--ink-ghost); font: 10px var(--font-display); letter-spacing: .08em; }
 @media (max-width: 900px) {

@@ -15,7 +15,7 @@ from edge.research.ga.genome import (
     mutate_genes,
     random_genome,
 )
-from edge.research.ga.panel import MarketPanel, build_market_panel
+from edge.research.ga.panel import MarketPanel
 from edge.research.ga.protocol import EvolutionProtocol
 from edge.research.ga.storage import list_runs, run_payload
 

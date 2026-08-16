@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import json
 import math
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
 
 LOG = Path(__file__).resolve().parents[1] / "runs" / "shadow_decisions.jsonl"
 OUT = Path(__file__).resolve().parents[1] / "runs" / "reliability_latest.json"

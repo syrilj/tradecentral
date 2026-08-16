@@ -14,8 +14,6 @@ import sys
 import time
 import types
 from pathlib import Path
-import numpy as np
-import pandas as pd
 
 ROOT = Path("/Users/syriljacob/Desktop/alltrading/edge")
 if 'edge' not in sys.modules:
@@ -31,12 +29,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 from edge.tools.render_dashboard import (
     get_dashboard_data,
     fetch_internal_directional_signals,
-    fetch_sector_flow_signals,
     load_directional_model_universe,
 )
 from edge.daily_plays.adapters.pead_adapter import generate_pead_candidates, _load_broad_universe
 from edge.daily_plays.qlib_scan_score import score_cross_section_asof
-from edge.daily_plays.live_activity import scan_local_market_activity, load_market_symbol_catalog
+from edge.daily_plays.live_activity import load_market_symbol_catalog
 
 
 def measure_latencies(fn, *args, iterations: int = 5, warmup: int = 1, **kwargs) -> list[float]:
@@ -59,13 +56,13 @@ def run_benchmarks():
 
     # 1. Directional model inference
     dir_universe = load_directional_model_universe()
-    print(f"\n[1/5] Benchmarking Directional Models (59 names)...")
+    print("\n[1/5] Benchmarking Directional Models (59 names)...")
     dir_times_59 = measure_latencies(fetch_internal_directional_signals, candidate_limit=len(dir_universe), iterations=5)
     mean_dir_59 = statistics.mean(dir_times_59)
     std_dir_59 = statistics.stdev(dir_times_59)
     print(f"  Directional (59 names): mean={mean_dir_59:.4f}s, std={std_dir_59:.4f}s, runs={[round(x, 4) for x in dir_times_59]}")
 
-    print(f"\n[2/5] Benchmarking Directional Models (25 names, Quick limit)...")
+    print("\n[2/5] Benchmarking Directional Models (25 names, Quick limit)...")
     dir_times_25 = measure_latencies(fetch_internal_directional_signals, candidate_limit=25, iterations=5)
     mean_dir_25 = statistics.mean(dir_times_25)
     std_dir_25 = statistics.stdev(dir_times_25)
@@ -93,7 +90,7 @@ def run_benchmarks():
     print(f"  Qlib ({len(catalog)} names): mean={mean_qlib:.4f}s, std={std_qlib:.4f}s, runs={[round(x, 4) for x in qlib_times]}")
 
     # 4. Full Dashboard Quick Scan
-    print(f"\n[5/5] Benchmarking Full Dashboard Quick Scan...")
+    print("\n[5/5] Benchmarking Full Dashboard Quick Scan...")
     dash_quick_times = measure_latencies(
         get_dashboard_data,
         scan_depth="quick",

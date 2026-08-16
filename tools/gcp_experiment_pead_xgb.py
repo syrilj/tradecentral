@@ -337,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(results, f, indent=2)
 
     print(f"\n{'=' * 70}")
-    print(f"  PEAD XGBoost Results:")
+    print("  PEAD XGBoost Results:")
     print(f"  Win Rate:        {results.get('confirmation_win_rate', 'N/A')}")
     print(f"  Sharpe:          {results.get('sharpe_ratio', 'N/A')}")
     print(f"  Net Annual Ret:  {results.get('net_annual_return_pct', 'N/A')}%")

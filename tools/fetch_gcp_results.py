@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
                 with open(local_path) as f:
                     existing = json.load(f)
                 if existing.get("gcp_validated"):
-                    print(f"  Already GCP-validated — skipping (use --force to re-fetch)")
+                    print("  Already GCP-validated — skipping (use --force to re-fetch)")
                     fetched_results[model_name] = existing
                     continue
             except Exception:
@@ -152,12 +152,12 @@ def main(argv: list[str] | None = None) -> int:
 
         # Check GCS existence
         if not _gsutil_stat(gcs_path):
-            print(f"  ⏳ Not available yet (job may still be running)")
+            print("  ⏳ Not available yet (job may still be running)")
             fetched_results[model_name] = None
             continue
 
         # Download
-        print(f"  Downloading...")
+        print("  Downloading...")
         if _gsutil_cp(gcs_path, local_path):
             try:
                 with open(local_path) as f:
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  ⚠️  Downloaded but parse failed: {e}")
                 fetched_results[model_name] = None
         else:
-            print(f"  ❌ gsutil cp failed")
+            print("  ❌ gsutil cp failed")
             fetched_results[model_name] = None
 
     # Print summary

@@ -8,16 +8,15 @@ should execute the pure quantitative signal without calling the LLM.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
-import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 try:
     from edge.research.counterfactual_ledger import DecisionRecord, CounterfactualLedger
 except ImportError:
-    from research.counterfactual_ledger import DecisionRecord, CounterfactualLedger
+    from research.counterfactual_ledger import DecisionRecord
 
 
 @dataclass

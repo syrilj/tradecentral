@@ -92,6 +92,38 @@ export interface StrategyPresetMeta {
   factory: (spot: number, dte?: number, volPct?: number, premiumHint?: number) => CalcLeg[]
 }
 
+export interface RiskNeutralModel {
+  mu: number
+  sigma: number
+  sigma2: number
+  T: number
+  iv: number
+  low: number
+  high: number
+  horizon: number
+  expectedMove: number
+  expectedLow: number
+  expectedHigh: number
+  twoSigmaLow: number
+  twoSigmaHigh: number
+}
+
+export interface TargetRiskMetrics {
+  targetPrice: number
+  chgPct: number
+  zScore: number
+  probAbove: number
+  probBelow: number
+  probBetweenWalls: number | null
+}
+
+export interface StrategyPoPMetrics {
+  pop: number
+  popPctFormatted: string
+  breakevens: number[]
+  profitZoneDesc: string
+}
+
 export const MULTIPLIER = 100
 export const DEFAULT_RATE = 4.5 // 4.5%
 export const DEFAULT_DIVIDEND = 0.0
@@ -120,6 +152,249 @@ export function erf(x: number): number {
 
 export function normCdf(x: number): number {
   return 0.5 * (1.0 + erf(x / Math.SQRT2))
+}
+
+export function lognormalDensity(x: number, mu: number, sigma: number): number {
+  if (x <= 0 || sigma <= 0) return 0
+  const z = (Math.log(x) - mu) / sigma
+  return (1 / (x * sigma * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * z * z)
+}
+
+/* ------------------------------------------------------------------ Risk-Neutral Distribution Engine */
+
+export function computeRiskNeutralModel(input: {
+  spot: number
+  dteDays: number
+  volPct: number
+  ratePct?: number
+  dividendPct?: number
+  callWall?: number | null
+  putWall?: number | null
+  focusPrice?: number | null
+  breakevens?: readonly number[]
+}): RiskNeutralModel | null {
+  const S = Number(input.spot)
+  const dte = Number(input.dteDays)
+  const volPct = Number(input.volPct)
+  if (!Number.isFinite(S) || S <= 0 || !Number.isFinite(dte) || dte <= 0 || !Number.isFinite(volPct) || volPct <= 0) {
+    return null
+  }
+
+  const r = normalizeRate(input.ratePct)
+  const q = normalizeRate(input.dividendPct)
+  const T = Math.max(dte, 1) / 365.0
+  const iv = volPct > 2.0 ? volPct / 100 : volPct
+  const sigma = iv * Math.sqrt(T)
+  if (!(sigma > 0)) return null
+
+  const mu = Math.log(S) + (r - q - 0.5 * iv * iv) * T
+  const sigma2 = 2 * sigma
+  const expectedMove = S * sigma
+  const expectedLow = Math.max(0.01, S - expectedMove)
+  const expectedHigh = S + expectedMove
+  const twoSigmaLow = Math.max(0.01, S - 2 * expectedMove)
+  const twoSigmaHigh = S + 2 * expectedMove
+
+  let low = Math.max(0.01, S * Math.exp(-2.5 * sigma))
+  let high = S * Math.exp(2.5 * sigma)
+
+  if (input.focusPrice != null && input.focusPrice > 0) {
+    low = Math.min(low, input.focusPrice * 0.95)
+    high = Math.max(high, input.focusPrice * 1.05)
+  }
+  if (input.callWall != null && input.callWall > 0) {
+    high = Math.max(high, input.callWall * 1.05)
+  }
+  if (input.putWall != null && input.putWall > 0) {
+    low = Math.min(low, input.putWall * 0.95)
+  }
+  for (const be of input.breakevens ?? []) {
+    if (be > 0) {
+      low = Math.min(low, be * 0.95)
+      high = Math.max(high, be * 1.05)
+    }
+  }
+
+  return {
+    mu,
+    sigma,
+    sigma2,
+    T,
+    iv,
+    low,
+    high,
+    horizon: dte,
+    expectedMove,
+    expectedLow,
+    expectedHigh,
+    twoSigmaLow,
+    twoSigmaHigh,
+  }
+}
+
+export function probTerminalAbove(
+  strike: number,
+  spot: number,
+  dteDays: number,
+  volPct: number,
+  ratePct = DEFAULT_RATE,
+  dividendPct = DEFAULT_DIVIDEND,
+): number {
+  const K = Number(strike)
+  const S = Number(spot)
+  const dte = Number(dteDays)
+  const vol = normalizeVol(volPct)
+  const r = normalizeRate(ratePct)
+  const q = normalizeRate(dividendPct)
+  const T = Math.max(dte, 1) / 365.0
+  if (K <= 0 || S <= 0 || vol <= 0 || T <= 0) return 0.5
+  const rootT = Math.sqrt(T)
+  const d2 = (Math.log(S / K) + (r - q - 0.5 * vol * vol) * T) / (vol * rootT)
+  return normCdf(d2)
+}
+
+export function probTerminalBelow(
+  strike: number,
+  spot: number,
+  dteDays: number,
+  volPct: number,
+  ratePct = DEFAULT_RATE,
+  dividendPct = DEFAULT_DIVIDEND,
+): number {
+  return 1 - probTerminalAbove(strike, spot, dteDays, volPct, ratePct, dividendPct)
+}
+
+export function computeTargetRiskMetrics(input: {
+  targetPrice: number
+  spot: number
+  dteDays: number
+  volPct: number
+  callWall?: number | null
+  putWall?: number | null
+  ratePct?: number
+  dividendPct?: number
+}): TargetRiskMetrics | null {
+  const tp = Number(input.targetPrice)
+  const S = Number(input.spot)
+  const dte = Number(input.dteDays)
+  const volPct = Number(input.volPct)
+  if (!Number.isFinite(tp) || tp <= 0 || !Number.isFinite(S) || S <= 0 || !Number.isFinite(dte) || dte <= 0 || !Number.isFinite(volPct) || volPct <= 0) {
+    return null
+  }
+
+  const model = computeRiskNeutralModel({
+    spot: S,
+    dteDays: dte,
+    volPct,
+    ratePct: input.ratePct,
+    dividendPct: input.dividendPct,
+  })
+  if (!model) return null
+
+  const chgPct = ((tp - S) / S) * 100
+  const zScore = (Math.log(tp / S) - (model.mu - Math.log(S))) / model.sigma
+  const probAbove = probTerminalAbove(tp, S, dte, volPct, input.ratePct, input.dividendPct)
+  const probBelow = 1 - probAbove
+
+  let probBetweenWalls: number | null = null
+  if (input.putWall && input.callWall && input.putWall < input.callWall) {
+    const pPut = probTerminalAbove(input.putWall, S, dte, volPct, input.ratePct, input.dividendPct)
+    const pCall = probTerminalAbove(input.callWall, S, dte, volPct, input.ratePct, input.dividendPct)
+    probBetweenWalls = Math.max(0, pPut - pCall)
+  }
+
+  return {
+    targetPrice: tp,
+    chgPct,
+    zScore,
+    probAbove,
+    probBelow,
+    probBetweenWalls,
+  }
+}
+
+/**
+ * Calculates the exact analytical Probability of Profit (PoP) for the multi-leg book
+ * under the risk-neutral terminal price lognormal distribution.
+ */
+export function calculateStrategyPoP(input: {
+  legs: readonly CalcLeg[]
+  spot: number
+  dteDays: number
+  volPct: number
+  ratePct?: number
+  dividendPct?: number
+  breakevens?: readonly number[]
+}): StrategyPoPMetrics {
+  const { legs, spot, dteDays, volPct, ratePct = DEFAULT_RATE, dividendPct = DEFAULT_DIVIDEND } = input
+  const usable = usableLegs(legs)
+  const bes = input.breakevens ?? findBreakevens(evaluateBookDualCurves({ legs, spot, dteDays, volPct, ratePct }))
+
+  if (!usable.length || !Number.isFinite(spot) || spot <= 0) {
+    return { pop: 0.5, popPctFormatted: '50.0%', breakevens: [], profitZoneDesc: 'No active legs' }
+  }
+
+  const model = computeRiskNeutralModel({ spot, dteDays, volPct, ratePct, dividendPct })
+  if (!model) {
+    return { pop: 0.5, popPctFormatted: '50.0%', breakevens: [...bes], profitZoneDesc: 'Standard distribution' }
+  }
+
+  // Fast evaluation of PnL at a given terminal spot
+  const debit = netDebit(legs)
+  const evalPnlAt = (s: number) => {
+    let payoff = -debit
+    for (const leg of usable) {
+      const intrinsic = leg.right === 'call' ? Math.max(s - leg.strike, 0) : Math.max(leg.strike - s, 0)
+      payoff += intrinsic * MULTIPLIER * leg.quantity
+    }
+    return payoff
+  }
+
+  // High precision numerical integration over the probability density
+  const nSteps = 240
+  const minS = Math.max(0.01, spot * 0.2)
+  const maxS = spot * 2.5
+  const step = (maxS - minS) / (nSteps - 1)
+  let totalProb = 0
+  let profitProb = 0
+
+  for (let i = 0; i < nSteps; i++) {
+    const s = minS + i * step
+    const d = lognormalDensity(s, model.mu, model.sigma)
+    const mass = d * step
+    totalProb += mass
+    if (evalPnlAt(s) > 0) {
+      profitProb += mass
+    }
+  }
+
+  const rawPoP = totalProb > 0 ? Math.min(1.0, Math.max(0.0, profitProb / totalProb)) : 0.5
+  const pop = Math.round(rawPoP * 1000) / 1000
+  const popPctFormatted = `${(pop * 100).toFixed(1)}%`
+
+  let profitZoneDesc = ''
+  if (!bes.length) {
+    profitZoneDesc = evalPnlAt(spot) > 0 ? 'All price zones profitable' : 'Net debit / Defined loss zone'
+  } else if (bes.length === 1) {
+    const be = bes[0]
+    const aboveProfit = evalPnlAt(be + 5) > 0
+    profitZoneDesc = aboveProfit ? `Profitable above $${be.toFixed(2)}` : `Profitable below $${be.toFixed(2)}`
+  } else if (bes.length === 2) {
+    const [be1, be2] = [...bes].sort((a, b) => a - b)
+    const midProfit = evalPnlAt((be1 + be2) / 2) > 0
+    profitZoneDesc = midProfit
+      ? `Profitable between $${be1.toFixed(2)} and $${be2.toFixed(2)}`
+      : `Profitable outside $${be1.toFixed(2)} – $${be2.toFixed(2)}`
+  } else {
+    profitZoneDesc = `${bes.length} breakeven thresholds`
+  }
+
+  return {
+    pop,
+    popPctFormatted,
+    breakevens: [...bes],
+    profitZoneDesc,
+  }
 }
 
 /* ------------------------------------------------------------------ Black-Scholes Solver */
@@ -686,7 +961,7 @@ export function seedBook(input: {
   return [fallback]
 }
 
-export function usableLegs(legs: readonly CalcLeg[]): ApiLeg[] {
+export function usableLegs(legs: readonly (CalcLeg | ApiLeg)[]): ApiLeg[] {
   const out: ApiLeg[] = []
   for (const leg of legs) {
     const strike = Number(leg.strike)
@@ -707,7 +982,7 @@ export function usableLegs(legs: readonly CalcLeg[]): ApiLeg[] {
   return out
 }
 
-export function netDebit(legs: readonly CalcLeg[], multiplier = MULTIPLIER): number {
+export function netDebit(legs: readonly (CalcLeg | ApiLeg)[], multiplier = MULTIPLIER): number {
   return usableLegs(legs).reduce((sum, leg) => sum + leg.premium * multiplier * leg.quantity, 0)
 }
 

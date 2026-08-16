@@ -10,7 +10,7 @@ export function normalizeWatchSymbol(value: unknown): string {
   return String(value || '')
     .trim()
     .toUpperCase()
-    .replace(/[^A-Z0-9.\-]/g, '')
+    .replace(/[^A-Z0-9.-]/g, '')
     .slice(0, 10)
 }
 

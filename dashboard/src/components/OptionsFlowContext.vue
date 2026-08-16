@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { OptionsIntelligence, OptionsTapeRow } from '@/api'
 import type { OptionsDirectionRead } from '@/optionsDirection'
-import { compact, num, pctFrac, DASH } from '@/format'
+import { optCompact, pctFrac } from '@/format'
 
 const props = defineProps<{
   summary: OptionsIntelligence['summary'] | null | undefined
@@ -21,14 +21,20 @@ const premium = computed(() => {
   let call = 0
   let put = 0
   let fromTape = false
+  let classifiedCount = 0
 
   if (props.tape.length) {
     fromTape = true
     for (const row of props.tape) {
       const prem = Number(row.premium)
       if (!Number.isFinite(prem) || prem < 0) continue
-      if (row.right === 'call') call += prem
-      else if (row.right === 'put') put += prem
+      if (row.right === 'call') {
+        call += prem
+        classifiedCount += 1
+      } else if (row.right === 'put') {
+        put += prem
+        classifiedCount += 1
+      }
     }
   }
 
@@ -39,12 +45,13 @@ const premium = computed(() => {
   }
 
   const total = call + put
-  const callPct = total > 0 ? Math.round((call / total) * 100) : 50
-  const putPct = 100 - callPct
+  const hasPrem = total > 0 && (fromTape ? classifiedCount > 0 : (call > 0 || put > 0))
+  const callPct = hasPrem ? Math.round((call / total) * 100) : 0
+  const putPct = hasPrem ? 100 - callPct : 0
   const dominantPct = Math.max(callPct, putPct)
-  const tone = callPct >= 58 ? 'call' : putPct >= 58 ? 'put' : 'neutral'
-  const conviction = dominantPct >= 72 ? 'HIGH' : dominantPct >= 62 ? 'MED' : 'LOW'
-  const ratio = put > 0 ? call / put : null
+  const tone = !hasPrem ? 'neutral' : callPct >= 58 ? 'call' : putPct >= 58 ? 'put' : 'neutral'
+  const conviction = hasPrem ? (dominantPct >= 72 ? 'HIGH' : dominantPct >= 62 ? 'MED' : 'LOW') : 'NONE'
+  const ratio = (hasPrem && put > 0) ? call / put : null
 
   const label = tone === 'call'
     ? 'CALL-HEAVY ACTIVITY'
@@ -167,18 +174,20 @@ const deskAction = computed(() => {
       <div class="flow-hero-copy">
         <span class="label eyebrow">DISPLAYED TAPE · CONTRACT MIX</span>
         <strong class="fig dominant" :class="premium.tone">{{ premium.label }}</strong>
-        <small class="label identity-note">CALL = BLUE · PUT = AMBER · IDENTITY, NOT DIRECTION</small>
+        <small class="label identity-note">CALL = EMERALD · PUT = CRIMSON · IDENTITY, NOT DIRECTION</small>
       </div>
-      <span class="label feed-state" :class="tapeStatus">
-        <i aria-hidden="true" />{{ tapeTitle }}
-      </span>
-      <span class="label conviction" :class="premium.tone">{{ premium.conviction }} SKEW</span>
+      <div class="flow-hero-badges">
+        <span class="label feed-state" :class="tapeStatus">
+          <i aria-hidden="true" />{{ tapeTitle }}
+        </span>
+        <span class="label conviction" :class="premium.tone">{{ premium.conviction === 'NONE' ? 'NO SKEW' : `${premium.conviction} SKEW` }}</span>
+      </div>
     </section>
 
     <section class="premium-section">
       <div class="section-head label">
         <span>PREMIUM SPLIT</span>
-        <span>TOTAL <b class="fig">${{ compact(premium.total) }}</b></span>
+        <span>TOTAL <b class="fig">${{ optCompact(premium.total) }}</b></span>
       </div>
       <div class="premium-track" aria-label="Call versus put premium split">
         <i class="call-fill" :style="{ width: `${premium.callPct}%` }" />
@@ -198,8 +207,10 @@ const deskAction = computed(() => {
 
     <section class="metric-grid">
       <div class="metric">
-        <span class="label">C / P RATIO</span>
-        <strong class="fig">{{ premium.ratio == null ? DASH : num(premium.ratio, 2) }}</strong>
+        <span class="label">SIGNED NET</span>
+        <strong class="fig" :class="premium.call >= premium.put ? 'call' : 'put'">
+          {{ (premium.call - premium.put >= 0 ? '+' : '') + '$' + optCompact(premium.call - premium.put) }}
+        </strong>
       </div>
       <div class="metric">
         <span class="label">QUALIFIED</span>
@@ -207,7 +218,7 @@ const deskAction = computed(() => {
       </div>
       <div class="metric">
         <span class="label">BUY / SELL SIDE</span>
-        <strong class="fig">{{ signedCoverage == null ? DASH : pctFrac(signedCoverage, 0) }}</strong>
+        <strong class="fig">{{ signedCoverage == null ? '0.00%' : pctFrac(signedCoverage, 0) }}</strong>
         <small class="label">{{ signedFlowAvailable ? 'COVERAGE' : 'NOT SUPPLIED' }}</small>
       </div>
       <div class="metric">
@@ -230,10 +241,10 @@ const deskAction = computed(() => {
 .flow-context {
   --flow-tone: var(--ink-dim);
   display: grid;
-  grid-template-columns: minmax(180px, 0.95fr) minmax(200px, 1.1fr) minmax(220px, 1fr) minmax(200px, 1.15fr);
+  grid-template-columns: minmax(180px, 0.95fr) minmax(180px, 1fr) minmax(220px, 1.1fr) minmax(200px, 1.15fr);
   align-items: stretch;
   min-height: 0;
-  max-height: 72px;
+  max-height: 74px;
   overflow: hidden;
   background: var(--panel);
   color: var(--ink);
@@ -252,22 +263,23 @@ const deskAction = computed(() => {
 
 .flow-hero {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  justify-content: space-between;
+  gap: 6px;
   min-width: 0;
   padding: 6px 10px;
   border-left: 3px solid var(--flow-tone);
   background: var(--void-lift);
 }
-.flow-hero-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
-.eyebrow { color: var(--ink-faint); font-size: 9px; }
-.dominant { color: var(--flow-tone); font-size: 12px; line-height: 1.15; letter-spacing: -0.02em; }
-.feed-state { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-ghost); font-size: 9px; }
-.feed-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-ghost); }
+.flow-hero-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; flex: 1 1 auto; overflow: hidden; }
+.flow-hero-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+.eyebrow { color: var(--ink-faint); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dominant { color: var(--flow-tone); font-size: 12px; line-height: 1.15; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-state { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-ghost); font-size: 9px; white-space: nowrap; }
+.feed-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-ghost); }
 .feed-state.live i { background: var(--phosphor); }
 .feed-state.stale i, .feed-state.warm i { background: var(--warn); }
-.conviction { padding: 1px 6px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: 9px; }
+.conviction { padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: 9px; white-space: nowrap; }
 .conviction.call { color: var(--call-hi); border-color: color-mix(in srgb, var(--call) 50%, var(--rule)); }
 .conviction.put { color: var(--put-hi); border-color: color-mix(in srgb, var(--put) 50%, var(--rule)); }
 

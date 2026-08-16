@@ -6,7 +6,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from .clock import RunContext
 from .config import DailyPlaysConfig, load_config, load_project_environment

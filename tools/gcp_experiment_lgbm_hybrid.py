@@ -278,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(results, f, indent=2)
 
     print(f"\n{'=' * 70}")
-    print(f"  LightGBM Hybrid Results:")
+    print("  LightGBM Hybrid Results:")
     print(f"  Mean IC:         {results.get('mean_rank_ic', 'N/A')}")
     print(f"  IR / Sharpe:     {results.get('sharpe_ratio', 'N/A')}")
     print(f"  Net Annual Ret:  {results.get('net_annual_return', 'N/A')}")

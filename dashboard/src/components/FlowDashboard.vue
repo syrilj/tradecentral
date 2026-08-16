@@ -31,10 +31,17 @@ import {
   concentrationLabel,
   flowLeanTokenClass,
   flowPriorityTokenClass,
+  formatDteBadge,
+  formatMoneyness,
   mixShareLabel,
   pulseWindowCopy,
   signedPrintTokenClass,
 } from '@/flowDisplay'
+import {
+  tickerCompanyName,
+  tickerSector,
+  tickerSectorCode,
+} from '@/tickerIdentity'
 import {
   loadWatchlist,
   toggleWatchlistSymbol,
@@ -55,6 +62,7 @@ const props = defineProps<{
   error: string | null
   minPremium: number
   pollMs: number
+  focusSymbol?: string
 }>()
 
 const emit = defineEmits<{
@@ -69,7 +77,7 @@ const MAX_TAPE_ROWS = 100
 const PULSE_STORAGE_KEY = 'edge.flow.previous-window.v1'
 
 type ActivityFilter = 'all' | 'incoming' | 'sweeps' | 'flagged' | 'near'
-type TapePreset = 'all' | 'book' | 'unusual' | 'sweeps' | 'momentum' | 'moonshot'
+type TapePreset = 'all' | 'book' | 'unusual' | 'sweeps' | 'golden_sweeps' | 'whales' | 'vol_oi' | 'momentum' | 'moonshot'
 type RightFilter = 'all' | 'call' | 'put'
 type DteFilter = 'all' | 'week' | 'month' | 'dated'
 type MoneynessFilter = 'all' | 'otm' | 'atm' | 'itm'
@@ -79,11 +87,14 @@ type TapeSortKey = 'time' | 'symbol' | 'contract' | 'expiry' | 'fill' | 'trade_c
 
 const TAPE_PRESETS: Array<{ id: TapePreset; label: string }> = [
   { id: 'all', label: 'All' },
-  { id: 'book', label: 'My book' },
-  { id: 'unusual', label: 'Unusual' },
+  { id: 'golden_sweeps', label: 'Golden Sweeps' },
   { id: 'sweeps', label: 'Sweeps' },
+  { id: 'whales', label: 'Whales ($500k+)' },
+  { id: 'vol_oi', label: 'Vol > OI' },
+  { id: 'unusual', label: 'Unusual' },
   { id: 'momentum', label: 'Momentum' },
   { id: 'moonshot', label: 'Moonshot' },
+  { id: 'book', label: 'My book' },
 ]
 
 const TOP_TICKER_CATEGORIES: Array<{ id: TopTickerCategory; label: string }> = [
@@ -167,6 +178,19 @@ interface ActionInsight {
   why: string
 }
 
+interface SectorSentimentRow {
+  sector: string
+  code: string
+  totalPremium: number
+  callPremium: number
+  putPremium: number
+  callShare: number
+  putShare: number
+  bullishShare: number | null
+  tickerCount: number
+  topTicker: string
+}
+
 const MAJOR_SYMBOLS = ['SPY', 'QQQ', 'IWM', 'DIA'] as const
 const EMPTY_SYMBOL_PULSE: SymbolPulse = {
   newPrints: 0,
@@ -177,8 +201,21 @@ const EMPTY_SYMBOL_PULSE: SymbolPulse = {
 
 const nowMs = ref(Date.now())
 const symbolQuery = ref('')
+watch(() => props.focusSymbol, (value, previous) => {
+  const next = String(value || '').trim().toUpperCase()
+  const prior = String(previous || '').trim().toUpperCase()
+  if (next) {
+    symbolQuery.value = next
+    return
+  }
+  if (prior && symbolQuery.value.trim().toUpperCase() === prior) {
+    symbolQuery.value = ''
+  }
+}, { immediate: true })
+
 const activityFilter = ref<ActivityFilter>('all')
 const tapePreset = ref<TapePreset>('all')
+const selectedSector = ref<string>('all')
 const book = ref<string[]>(loadWatchlist())
 const bookAlerts = ref<FlowAlert[]>([])
 const seenAlertKeys = ref<Set<string>>(loadSeenAlertKeys())
@@ -199,6 +236,7 @@ const reviewSortDir = ref<'asc' | 'desc'>('desc')
 const tapeSortKey = ref<TapeSortKey>('time')
 const tapeSortDir = ref<'asc' | 'desc'>('desc')
 const tapeExpanded = ref(false)
+const tapeShowAll = ref(false)
 const showAllReviews = ref(false)
 const pulse = shallowRef<FlowPulse>(buildFlowPulse(null, {
   asof: '',
@@ -318,6 +356,16 @@ function flaggedShare(row: UnusualFlowRow): number {
 function printMatchesPreset(row: MarketFlowPrint): boolean {
   if (tapePreset.value === 'all') return true
   if (tapePreset.value === 'book') return watchlistHas(book.value, row.symbol)
+  if (tapePreset.value === 'golden_sweeps') {
+    const classified = classifyFlowOrder(row)
+    return classified.type === 'golden_sweep'
+  }
+  if (tapePreset.value === 'whales') {
+    return (finite(row.premium) ?? 0) >= 500_000
+  }
+  if (tapePreset.value === 'vol_oi') {
+    return computeVolOiRatio(row.contracts ?? row.volume, row.open_interest).isHigh
+  }
   const presets = row.presets ?? []
   if (presets.includes(tapePreset.value)) return true
   if (tapePreset.value === 'unusual') return row.is_unusual === true
@@ -329,6 +377,15 @@ function printMatchesPreset(row: MarketFlowPrint): boolean {
 function aggregateMatchesPreset(row: UnusualFlowRow): boolean {
   if (tapePreset.value === 'all') return true
   if (tapePreset.value === 'book') return watchlistHas(book.value, row.symbol)
+  if (tapePreset.value === 'golden_sweeps') {
+    return (finite(row.sweep_count) ?? 0) > 0 && (finite(row.premium) ?? 0) >= 100_000
+  }
+  if (tapePreset.value === 'whales') {
+    return (finite(row.premium) ?? 0) >= 500_000
+  }
+  if (tapePreset.value === 'vol_oi') {
+    return (finite(row.unusual_contracts) ?? 0) > 0
+  }
   if (tapePreset.value === 'unusual') return (finite(row.unusual_contracts) ?? 0) > 0
   if (tapePreset.value === 'sweeps') return (finite(row.sweep_count) ?? 0) > 0
   if (tapePreset.value === 'momentum') return (finite(row.momentum_contracts) ?? 0) > 0
@@ -354,9 +411,9 @@ function aggregateMatchesActivity(row: UnusualFlowRow): boolean {
 
 function aggregateMatchesRight(row: UnusualFlowRow): boolean {
   if (rightFilter.value === 'all') return true
-  const putShare = finite(row.put_flow_pct)
-  if (putShare == null) return false
-  return rightFilter.value === 'put' ? putShare >= 0.5 : putShare < 0.5
+  const putShareVal = finite(row.put_flow_pct)
+  if (putShareVal == null) return false
+  return rightFilter.value === 'put' ? putShareVal >= 0.5 : putShareVal < 0.5
 }
 
 function aggregateMatchesMoneyness(row: UnusualFlowRow): boolean {
@@ -438,52 +495,59 @@ const filteredRows = computed<UnusualFlowRow[]>(() => {
       && aggregateMatchesPreset(row)
       && aggregateMatchesRight(row)
       && inDteBand(row.average_dte)
-      && aggregateMatchesMoneyness(row),
+      && aggregateMatchesMoneyness(row)
+      && (selectedSector.value === 'all' || tickerSector(row.symbol) === selectedSector.value),
   )
 
   const dir = reviewSortDir.value === 'asc' ? 1 : -1
-  const key = reviewSortKey.value
-
   return [...rows].sort((a, b) => {
-    if (key === 'symbol') {
+    if (reviewSortKey.value === 'symbol') {
       return dir * a.symbol.localeCompare(b.symbol)
     }
-    if (key === 'incoming') {
-      const diff = symbolPulse(b.symbol).newPremium - symbolPulse(a.symbol).newPremium
-      return dir === -1 ? diff : -diff
+    if (reviewSortKey.value === 'incoming') {
+      const av = symbolPulse(a.symbol).newPremium
+      const bv = symbolPulse(b.symbol).newPremium
+      return dir * (av - bv)
     }
-    if (key === 'premium') {
-      const diff = (finite(b.premium) ?? 0) - (finite(a.premium) ?? 0)
-      return dir === -1 ? diff : -diff
+    if (reviewSortKey.value === 'premium') {
+      const av = finite(a.premium) ?? -Infinity
+      const bv = finite(b.premium) ?? -Infinity
+      return dir * (av - bv)
     }
-    if (key === 'sweeps') {
-      const diff = (finite(b.sweep_premium) ?? 0) - (finite(a.sweep_premium) ?? 0)
-      return dir === -1 ? diff : -diff
+    if (reviewSortKey.value === 'sweeps') {
+      const av = finite(a.sweep_premium) ?? -Infinity
+      const bv = finite(b.sweep_premium) ?? -Infinity
+      return dir * (av - bv)
     }
-    if (key === 'flagged') {
-      const diff = flaggedShare(b) - flaggedShare(a)
-      return dir === -1 ? diff : -diff
+    if (reviewSortKey.value === 'mix') {
+      const av = putShare(a) ?? -Infinity
+      const bv = putShare(b) ?? -Infinity
+      return dir * (av - bv)
     }
-    if (key === 'expiry') {
-      const diff = (finite(a.average_dte) ?? Infinity) - (finite(b.average_dte) ?? Infinity)
-      return dir === -1 ? -diff : diff
+    if (reviewSortKey.value === 'concentration') {
+      const av = finite(a.average_dte) ?? -Infinity
+      const bv = finite(b.average_dte) ?? -Infinity
+      return dir * (av - bv)
     }
-    if (key === 'mix') {
-      const diff = (finite(b.put_flow_pct) ?? 0) - (finite(a.put_flow_pct) ?? 0)
-      return dir === -1 ? diff : -diff
+    if (reviewSortKey.value === 'move') {
+      const av = finite(a.ret_1d) ?? -Infinity
+      const bv = finite(b.ret_1d) ?? -Infinity
+      return dir * (av - bv)
     }
-    if (key === 'concentration') {
-      const diff = (finite(b.average_otm_pct) ?? 0) - (finite(a.average_otm_pct) ?? 0)
-      return dir === -1 ? diff : -diff
+    if (reviewSortKey.value === 'lean') {
+      const av = directionRead(a.symbol).state
+      const bv = directionRead(b.symbol).state
+      return dir * av.localeCompare(bv)
     }
-    if (key === 'move') {
-      const diff = (finite(b.ret_1d) ?? 0) - (finite(a.ret_1d) ?? 0)
-      return dir === -1 ? diff : -diff
+    if (reviewSortKey.value === 'flagged') {
+      const av = flaggedShare(a)
+      const bv = flaggedShare(b)
+      return dir * (av - bv)
     }
-    if (key === 'lean') {
-      const la = directionRead(a.symbol).label
-      const lb = directionRead(b.symbol).label
-      return dir * la.localeCompare(lb)
+    if (reviewSortKey.value === 'expiry') {
+      const av = finite(a.average_dte) ?? Infinity
+      const bv = finite(b.average_dte) ?? Infinity
+      return dir * (av - bv)
     }
     const standard = compareFlowReviewRows(a, b, maxPremium.value)
     return dir === -1 ? standard : -standard
@@ -537,7 +601,8 @@ const qualifiedTapeRows = computed<MarketFlowPrint[]>(() =>
       && inDteBand(row.dte)
       && tapeMatchesActivity(row)
       && printMatchesPreset(row)
-      && tapeMatchesMoneyness(row),
+      && tapeMatchesMoneyness(row)
+      && (selectedSector.value === 'all' || tickerSector(row.symbol) === selectedSector.value),
   ),
 )
 
@@ -591,7 +656,11 @@ const sortedTapeRows = computed<MarketFlowPrint[]>(() => {
   return rows
 })
 
-const tapeRows = computed(() => (sortedTapeRows.value ?? qualifiedTapeRows.value.slice(0, MAX_TAPE_ROWS)).slice(0, MAX_TAPE_ROWS))
+const tapeRows = computed(() => {
+  const rows = sortedTapeRows.value ?? qualifiedTapeRows.value
+  const limit = tapeShowAll.value ? rows.length : MAX_TAPE_ROWS
+  return rows.slice(0, limit)
+})
 
 const projectedSummary = computed<ProjectedSummary>(() => {
   const rows = filteredRows.value
@@ -612,6 +681,115 @@ const projectedSummary = computed<ProjectedSummary>(() => {
     sweepPremium: sum((row) => row.sweep_premium),
   }
 })
+
+const marketFlowSentiment = computed(() => {
+  const putPct = projectedSummary.value.putFlowPct != null
+    ? Math.round(projectedSummary.value.putFlowPct * 100)
+    : 50
+  const callPct = 100 - putPct
+  const putDominant = putPct >= 55
+  const callDominant = callPct >= 55
+  const dominantState = callDominant ? 'bullish' : putDominant ? 'bearish' : 'neutral'
+  const dominantPct = Math.max(callPct, putPct)
+  const label = callDominant
+    ? `CALL FLOW ${callPct}%`
+    : putDominant
+      ? `PUT FLOW ${putPct}%`
+      : `BALANCED FLOW 50/50`
+  const premiumLabel = callDominant
+    ? `${moneyCompact(projectedSummary.value.callPremium)} Call Premium`
+    : putDominant
+      ? `${moneyCompact(projectedSummary.value.putPremium)} Put Premium`
+      : `${moneyCompact(projectedSummary.value.totalPremium)} Total Premium`
+
+  return {
+    callPct,
+    putPct,
+    dominantState,
+    dominantPct,
+    label,
+    premiumLabel,
+  }
+})
+
+const sectorSentimentList = computed<SectorSentimentRow[]>(() => {
+  const map = new Map<string, {
+    sector: string
+    code: string
+    totalPremium: number
+    callPremium: number
+    putPremium: number
+    tickers: Map<string, number>
+    bullishCount: number
+    totalDirectional: number
+  }>()
+
+  for (const row of qualifiedRows.value) {
+    const sec = tickerSector(row.symbol)
+    const code = tickerSectorCode(row.symbol)
+    const entry = map.get(sec) ?? {
+      sector: sec,
+      code,
+      totalPremium: 0,
+      callPremium: 0,
+      putPremium: 0,
+      tickers: new Map<string, number>(),
+      bullishCount: 0,
+      totalDirectional: 0,
+    }
+
+    const prem = finite(row.premium) ?? 0
+    const putFrac = finite(row.put_flow_pct) ?? 0.5
+    const callP = finite(row.call_premium) ?? (prem * (1 - putFrac))
+    const putP = finite(row.put_premium) ?? (prem * putFrac)
+
+    entry.totalPremium += prem
+    entry.callPremium += callP
+    entry.putPremium += putP
+    entry.tickers.set(row.symbol, (entry.tickers.get(row.symbol) ?? 0) + prem)
+
+    const lean = directionRead(row.symbol).state
+    if (lean.includes('bullish')) {
+      entry.bullishCount += 1
+      entry.totalDirectional += 1
+    } else if (lean.includes('bearish')) {
+      entry.totalDirectional += 1
+    }
+
+    map.set(sec, entry)
+  }
+
+  return [...map.values()]
+    .filter((e) => e.totalPremium > 0)
+    .sort((a, b) => b.totalPremium - a.totalPremium)
+    .map((e) => {
+      const tot = e.callPremium + e.putPremium
+      const callShare = tot > 0 ? e.callPremium / tot : 0.5
+      const putShare = tot > 0 ? e.putPremium / tot : 0.5
+      const topTicker = [...e.tickers.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—'
+      const bullishShare = e.totalDirectional > 0 ? e.bullishCount / e.totalDirectional : null
+      return {
+        sector: e.sector,
+        code: e.code,
+        totalPremium: e.totalPremium,
+        callPremium: e.callPremium,
+        putPremium: e.putPremium,
+        callShare,
+        putShare,
+        bullishShare,
+        tickerCount: e.tickers.size,
+        topTicker,
+      }
+    })
+})
+
+function toggleSectorFilter(sector: string): void {
+  if (selectedSector.value === sector) {
+    selectedSector.value = 'all'
+  } else {
+    selectedSector.value = sector
+  }
+}
 
 const providerFreshness = computed(() => {
   void nowMs.value
@@ -839,10 +1017,10 @@ function directionRead(symbol: string): DirectionRead {
 
   // Local fallback from premium mix so the card always states bullish/bearish.
   if (boardRow) {
-    const putShare = finite(boardRow.put_flow_pct)
+    const putShareVal = finite(boardRow.put_flow_pct)
     const imb = finite(boardRow.call_put_imbalance)
-    const callHeavy = (imb != null && imb >= 0.15) || (putShare != null && putShare <= 0.42)
-    const putHeavy = (imb != null && imb <= -0.15) || (putShare != null && putShare >= 0.58)
+    const callHeavy = (imb != null && imb >= 0.15) || (putShareVal != null && putShareVal <= 0.42)
+    const putHeavy = (imb != null && imb <= -0.15) || (putShareVal != null && putShareVal >= 0.58)
     if (callHeavy || putHeavy) {
       const bullish = !!callHeavy && !putHeavy
       return {
@@ -1192,6 +1370,7 @@ const activeFilterCount = computed(() =>
   Number(symbolQuery.value.trim().length > 0)
     + Number(activityFilter.value !== 'all')
     + Number(tapePreset.value !== 'all')
+    + Number(selectedSector.value !== 'all')
     + Number(rightFilter.value !== 'all')
     + Number(dteFilter.value !== 'all')
     + Number(moneynessFilter.value !== 'all')
@@ -1278,6 +1457,7 @@ function clearFilters(): void {
   symbolQuery.value = ''
   activityFilter.value = 'all'
   tapePreset.value = 'all'
+  selectedSector.value = 'all'
   rightFilter.value = 'all'
   dteFilter.value = 'all'
   moneynessFilter.value = 'all'
@@ -1332,9 +1512,6 @@ function callBarWidth(row: UnusualFlowRow): string {
   const share = callShare(row)
   return `${share == null ? 0 : share * 100}%`
 }
-
-
-
 
 function tapeTime(timestamp: string): string {
   const date = new Date(timestamp)
@@ -1571,28 +1748,52 @@ function downloadTapeCsv(): void {
     </div>
 
     <template v-else>
-      <section class="snapshot-strip rise" aria-label="Current threshold snapshot">
-        <article>
-          <span class="label">Premium in latest sample</span>
-          <strong class="fig">{{ moneyCompact(projectedSummary.totalPremium) }}</strong>
-          <small>{{ qualifiedRows.length }} tickers above threshold</small>
-        </article>
-        <article>
-          <span class="label">Contracts in scope</span>
-          <strong class="fig">{{ compact(projectedSummary.totalContracts) }}</strong>
-          <small>{{ exactCount(projectedSummary.anomalyContracts) }} contracts with current-tape flags</small>
-        </article>
-        <article>
-          <span class="label">Sweep-class premium</span>
-          <strong class="fig">{{ moneyCompact(projectedSummary.sweepPremium) }}</strong>
-          <small>{{ exactCount(projectedSummary.sweepContracts) }} contracts</small>
-        </article>
-        <article class="freshness-stat">
-          <span class="label">Provider age</span>
-          <strong class="fig">{{ providerFreshness }}</strong>
-          <small>{{ payload.asof ? `As of ${payload.asof}` : 'Timestamp unavailable' }}</small>
-          <span class="fresh-state label" :class="providerFreshnessState">{{ providerFreshnessState.toUpperCase() }}</span>
-        </article>
+      <!-- Hero Sentiment & Snapshot Section (InsiderFinance Inspired Sentiment Bar) -->
+      <section class="flow-sentiment-hero rise" aria-label="Current threshold snapshot">
+        <div class="sentiment-card" :class="marketFlowSentiment.dominantState">
+          <div class="sentiment-top">
+            <span class="label section-kicker">Flow Sentiment</span>
+            <span class="dominant-badge label" :class="marketFlowSentiment.dominantState">
+              {{ marketFlowSentiment.dominantState.toUpperCase() }}
+            </span>
+          </div>
+          <div class="sentiment-headline">
+            <strong class="sentiment-title fig">{{ marketFlowSentiment.label }}</strong>
+            <span class="sentiment-premium fig">{{ marketFlowSentiment.premiumLabel }}</span>
+          </div>
+          <div class="sentiment-bar" aria-label="Call vs Put flow split">
+            <i class="call-segment" :style="{ width: `${marketFlowSentiment.callPct}%` }" />
+            <i class="put-segment" :style="{ width: `${marketFlowSentiment.putPct}%` }" />
+          </div>
+          <div class="sentiment-labels fig">
+            <span class="call-text">CALLS {{ moneyCompact(projectedSummary.callPremium) }} ({{ marketFlowSentiment.callPct }}%)</span>
+            <span class="put-text">PUTS {{ moneyCompact(projectedSummary.putPremium) }} ({{ marketFlowSentiment.putPct }}%)</span>
+          </div>
+        </div>
+
+        <div class="snapshot-metrics">
+          <article>
+            <span class="label">Premium in latest sample</span>
+            <strong class="fig">{{ moneyCompact(projectedSummary.totalPremium) }}</strong>
+            <small>{{ qualifiedRows.length }} tickers above threshold</small>
+          </article>
+          <article>
+            <span class="label">Contracts in scope</span>
+            <strong class="fig">{{ compact(projectedSummary.totalContracts) }}</strong>
+            <small>{{ exactCount(projectedSummary.anomalyContracts) }} contracts with current-tape flags</small>
+          </article>
+          <article>
+            <span class="label">Sweep-class premium</span>
+            <strong class="fig">{{ moneyCompact(projectedSummary.sweepPremium) }}</strong>
+            <small>{{ exactCount(projectedSummary.sweepContracts) }} contracts</small>
+          </article>
+          <article class="freshness-stat">
+            <span class="label">Provider age</span>
+            <strong class="fig">{{ providerFreshness }}</strong>
+            <small>{{ payload.asof ? `As of ${payload.asof}` : 'Timestamp unavailable' }}</small>
+            <span class="fresh-state label" :class="providerFreshnessState">{{ providerFreshnessState.toUpperCase() }}</span>
+          </article>
+        </div>
       </section>
 
       <section class="majors-section rise" aria-labelledby="majors-title">
@@ -1720,6 +1921,119 @@ function downloadTapeCsv(): void {
         <button v-if="bookAlerts.length" type="button" class="label" @click="dismissAlerts">CLEAR</button>
       </section>
 
+      <!-- Sector Sentiment Breakdown (InsiderFinance Inspired) -->
+      <section class="sector-sentiment-rail rise" aria-labelledby="sector-sentiment-title">
+        <header class="sector-head">
+          <div>
+            <span class="label section-kicker">Market breakdown</span>
+            <h2 id="sector-sentiment-title">Options Sector Sentiment</h2>
+          </div>
+          <p class="sector-meta label">
+            {{ sectorSentimentList.length }} active sectors ·
+            <button v-if="selectedSector !== 'all'" type="button" class="sector-clear-link" @click="selectedSector = 'all'">
+              CLEAR SECTOR FILTER ({{ selectedSector }})
+            </button>
+            <span v-else>Click a sector card to isolate flow</span>
+          </p>
+        </header>
+
+        <div v-if="sectorSentimentList.length" class="sector-grid">
+          <button
+            v-for="sec in sectorSentimentList"
+            :key="sec.sector"
+            type="button"
+            class="sector-card"
+            :class="{ active: selectedSector === sec.sector }"
+            @click="toggleSectorFilter(sec.sector)"
+          >
+            <div class="sector-card-top">
+              <strong class="sector-name">{{ sec.sector }}</strong>
+              <span class="sector-code label">{{ sec.code }}</span>
+            </div>
+            <div class="sector-premium fig">
+              {{ moneyCompact(sec.totalPremium) }}
+            </div>
+            <div class="sector-mix-bar" aria-hidden="true">
+              <i class="call-segment" :style="{ width: `${Math.round(sec.callShare * 100)}%` }" />
+              <i class="put-segment" :style="{ width: `${Math.round(sec.putShare * 100)}%` }" />
+            </div>
+            <div class="sector-card-foot">
+              <span class="call-text fig">{{ Math.round(sec.callShare * 100) }}% C</span>
+              <span class="put-text fig">{{ Math.round(sec.putShare * 100) }}% P</span>
+              <span class="top-in-sec label">Top: {{ sec.topTicker }}</span>
+            </div>
+          </button>
+        </div>
+        <p v-else class="sector-empty label">No sector aggregation available in the latest sample.</p>
+      </section>
+
+      <!-- Options Top Tickers (InsiderFinance Inspired with Visual Sentiment Share Bars) -->
+      <section class="leaders-rail rise" aria-labelledby="top-tickers-title">
+        <header class="leaders-head">
+          <div>
+            <span class="label section-kicker">Options-only leaders</span>
+            <h2 id="top-tickers-title">Top Tickers</h2>
+          </div>
+          <p class="book-hits-copy">
+            <span id="book-hits-title">Watchlist hits on this tape</span>
+            · {{ book.length }} pinned · {{ bookHits.length }} printed
+          </p>
+        </header>
+        <div class="ticker-cats" role="tablist" aria-label="Top Tickers categories">
+          <button
+            v-for="category in TOP_TICKER_CATEGORIES"
+            :key="category.id"
+            type="button"
+            role="tab"
+            :class="{ active: topTickerCategory === category.id }"
+            @click="topTickerCategory = category.id"
+          >{{ category.label }}</button>
+        </div>
+        <div v-if="topTickerRows.length" class="symbol-tape">
+          <button
+            v-for="(row, index) in topTickerRows.slice(0, 10)"
+            :key="`${topTickerCategory}-${row.symbol}`"
+            type="button"
+            class="sym-chip"
+            :class="{ on: onBook(row.symbol) }"
+            @click="openSymbol(row.symbol)"
+          >
+            <div class="sym-chip-head">
+              <span class="fig">{{ String(index + 1).padStart(2, '0') }} {{ row.symbol }}</span>
+              <strong class="fig">{{ tickerScore(row.score) }}</strong>
+            </div>
+            <div v-if="row.bullish_share != null || row.bearish_share != null" class="ticker-sentiment-bar" aria-hidden="true">
+              <i class="bull-bar" :style="{ width: `${Math.round((row.bullish_share ?? 0.5) * 100)}%` }" />
+              <i class="bear-bar" :style="{ width: `${Math.round((row.bearish_share ?? 0.5) * 100)}%` }" />
+            </div>
+            <div class="sym-chip-foot">
+              <small>
+                {{ row.bullish_share == null ? 'No classified share' : `${fractionPercent(row.bullish_share, 0)} / ${fractionPercent(row.bearish_share, 0)}` }}
+              </small>
+              <span v-if="row.print_count" class="chip-count label">{{ exactCount(row.print_count) }} prints</span>
+            </div>
+          </button>
+        </div>
+        <p v-else class="ticker-empty label">No names in this category for the latest provider sample.</p>
+        <div v-if="bookHits.length" class="symbol-tape book-tape">
+          <button
+            v-for="row in bookHits.slice(0, 12)"
+            :key="`book-${row.symbol}`"
+            type="button"
+            class="sym-chip book"
+            @click="openSymbol(row.symbol)"
+          >
+            <div class="sym-chip-head">
+              <span class="fig">{{ row.symbol }}</span>
+              <strong class="fig">{{ moneyCompact(row.premium) }}</strong>
+            </div>
+            <div class="sym-chip-foot">
+              <small>{{ exactCount(row.print_count) }} prints · {{ (row.unusual_contracts ?? 0) > 0 ? 'Unusual' : 'On tape' }}</small>
+            </div>
+          </button>
+        </div>
+      </section>
+
       <section class="live-pulse rise" :class="`brief-${workspaceBrief.tone}`" aria-labelledby="live-pulse-title">
         <div class="pulse-copy" :class="workspaceBrief.tone">
           <span class="section-kicker label">{{ workspaceBrief.eyebrow }}</span>
@@ -1758,6 +2072,7 @@ function downloadTapeCsv(): void {
         </button>
       </section>
 
+      <!-- Flow Review Filters (InsiderFinance Inspired Quick Filter Rail) -->
       <section class="filter-shelf rise" aria-label="Flow review filters">
         <div class="filter-intro">
           <span class="label">Review queue filters</span>
@@ -1886,7 +2201,7 @@ function downloadTapeCsv(): void {
               <tr v-for="(row, index) in reviewRows" :key="row.symbol" :class="{ incoming: symbolPulse(row.symbol).newPrints > 0 }">
                 <td class="review-symbol">
                   <span class="row-rank fig">{{ String(index + 1).padStart(2, '0') }}</span>
-                  <button type="button" class="symbol-button fig" @click="openSymbol(row.symbol)">
+                  <button type="button" class="symbol-button fig" :title="tickerCompanyName(row.symbol) || undefined" @click="openSymbol(row.symbol)">
                     {{ row.symbol }}
                   </button>
                   <button
@@ -1968,59 +2283,7 @@ function downloadTapeCsv(): void {
         </div>
       </Panel>
 
-      <section class="leaders-rail rise" aria-labelledby="top-tickers-title">
-        <header class="leaders-head">
-          <div>
-            <span class="label section-kicker">Options-only leaders</span>
-            <h2 id="top-tickers-title">Top Tickers</h2>
-          </div>
-          <p class="book-hits-copy">
-            <span id="book-hits-title">Watchlist hits on this tape</span>
-            · {{ book.length }} pinned · {{ bookHits.length }} printed
-          </p>
-        </header>
-        <div class="ticker-cats" role="tablist" aria-label="Top Tickers categories">
-          <button
-            v-for="category in TOP_TICKER_CATEGORIES"
-            :key="category.id"
-            type="button"
-            role="tab"
-            :class="{ active: topTickerCategory === category.id }"
-            @click="topTickerCategory = category.id"
-          >{{ category.label }}</button>
-        </div>
-        <div v-if="topTickerRows.length" class="symbol-tape">
-          <button
-            v-for="(row, index) in topTickerRows.slice(0, 10)"
-            :key="`${topTickerCategory}-${row.symbol}`"
-            type="button"
-            class="sym-chip"
-            :class="{ on: onBook(row.symbol) }"
-            @click="openSymbol(row.symbol)"
-          >
-            <span class="fig">{{ String(index + 1).padStart(2, '0') }} {{ row.symbol }}</span>
-            <strong class="fig">{{ tickerScore(row.score) }}</strong>
-            <small>
-              {{ row.bullish_share == null ? 'No classified share' : `${fractionPercent(row.bullish_share, 0)} / ${fractionPercent(row.bearish_share, 0)}` }}
-            </small>
-          </button>
-        </div>
-        <p v-else class="ticker-empty label">No names in this category for the latest provider sample.</p>
-        <div v-if="bookHits.length" class="symbol-tape book-tape">
-          <button
-            v-for="row in bookHits.slice(0, 12)"
-            :key="`book-${row.symbol}`"
-            type="button"
-            class="sym-chip book"
-            @click="openSymbol(row.symbol)"
-          >
-            <span class="fig">{{ row.symbol }}</span>
-            <strong class="fig">{{ moneyCompact(row.premium) }}</strong>
-            <small>{{ exactCount(row.print_count) }} · {{ (row.unusual_contracts ?? 0) > 0 ? 'Unusual' : 'On tape' }}</small>
-          </button>
-        </div>
-      </section>
-
+      <!-- Raw Contract Prints (Realtime Option Flow Tape - InsiderFinance Inspired) -->
       <section class="evidence-drawer rise" :class="{ open: tapeExpanded }">
         <button
           type="button"
@@ -2044,9 +2307,14 @@ function downloadTapeCsv(): void {
               Filters above also apply here. <strong>C/P feeds the activity lean; signed buy/sell is separate.</strong>
               Aggressor is shown only when the provider supplies it.
             </p>
-            <button type="button" class="panel-action label" :disabled="!tapeRows.length" @click="downloadTapeCsv">
-              EXPORT TAPE CSV
-            </button>
+            <div class="tape-actions">
+              <button type="button" class="panel-action label" :disabled="!tapeRows.length" @click="downloadTapeCsv">
+                EXPORT TAPE CSV
+              </button>
+              <button type="button" class="panel-action label" @click="tapeShowAll = !tapeShowAll">
+                {{ tapeShowAll ? 'COLLAPSE TAPE' : `SHOW ALL ${qualifiedTapeRows.length}` }}
+              </button>
+            </div>
           </div>
           <div class="history-tape-bar">
             <span class="label">On-demand history</span>
@@ -2115,6 +2383,7 @@ function downloadTapeCsv(): void {
                   <th class="label sortable" role="columnheader" tabindex="0" :aria-sort="tapeSortKey === 'aggressor' ? (tapeSortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="setTapeSort('aggressor')" @keydown.enter="setTapeSort('aggressor')">
                     Aggressor <span class="sort-indicator">{{ tapeSortArrow('aggressor') }}</span>
                   </th>
+                  <th><span class="sr-only">Setup</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -2123,21 +2392,35 @@ function downloadTapeCsv(): void {
                   :key="`${row.timestamp}-${row.symbol}-${row.expiry}-${row.strike}-${index}`"
                   :class="{ incoming: isNewPrint(row) }"
                 >
-                  <td class="fig" :title="row.timestamp">{{ tapeTime(row.timestamp) }}</td>
-                  <td>
-                    <button v-if="row.symbol" type="button" class="symbol-button fig" @click="openSymbol(row.symbol)">
-                      {{ row.symbol }}
-                    </button>
-                    <span v-else>{{ DASH }}</span>
+                  <td class="fig" :title="row.timestamp">
+                    <span class="time-readout">{{ tapeTime(row.timestamp) }}</span>
                     <span v-if="isNewPrint(row)" class="new-badge label">NEW</span>
+                  </td>
+                  <td class="symbol-cell">
+                    <div class="symbol-cell-content">
+                      <button v-if="row.symbol" type="button" class="symbol-button fig" :title="tickerCompanyName(row.symbol) || undefined" @click="openSymbol(row.symbol)">
+                        {{ row.symbol }}
+                      </button>
+                      <span v-else>{{ DASH }}</span>
+                      <small v-if="row.underlying_price != null" class="tape-spot-label fig" :class="row.underlying_price && row.strike ? tone(row.right === 'call' ? (row.underlying_price - row.strike) : (row.strike - row.underlying_price)) : ''">
+                        {{ usd(row.underlying_price, 2) }}
+                      </small>
+                    </div>
                   </td>
                   <td class="contract-cell">
                     <span class="right-chip label" :class="row.right">{{ row.right.toUpperCase() }}</span>
-                    <span class="fig">{{ usd(row.strike, 2) }}</span>
+                    <strong class="strike-val fig">{{ usd(row.strike, 2) }}</strong>
                   </td>
                   <td class="expiry-cell fig" :title="row.expiry ?? undefined">
-                    <strong>{{ shortDate(row.expiry) }}</strong>
-                    <small>{{ row.dte == null ? DASH : `${num(row.dte, 0)}D` }} · {{ fractionPercent(row.otm_pct) }} OTM</small>
+                    <div class="expiry-cell-content">
+                      <div class="expiry-primary">
+                        <strong>{{ shortDate(row.expiry) }}</strong>
+                        <span class="dte-pill label" :class="formatDteBadge(row.dte).className">{{ formatDteBadge(row.dte).label }}</span>
+                      </div>
+                      <span class="moneyness-tag label" :class="formatMoneyness(row.otm_pct).className">
+                        {{ formatMoneyness(row.otm_pct).label }}
+                      </span>
+                    </div>
                   </td>
                   <td class="execution-cell num fig">
                     <strong>{{ usd(row.price, 2) }}</strong>
@@ -2182,6 +2465,17 @@ function downloadTapeCsv(): void {
                       class="aggressor label"
                       :class="signedPrintTokenClass(row.aggressor ?? row.aggressor_label)"
                     >{{ aggressorLabel(row) }}</span>
+                  </td>
+                  <td class="action-cell">
+                    <button
+                      v-if="row.symbol"
+                      type="button"
+                      class="row-open label"
+                      :aria-label="`Build ${row.symbol} live setup`"
+                      @click="openSymbol(row.symbol)"
+                    >
+                      SETUP <span aria-hidden="true">→</span>
+                    </button>
                   </td>
                 </tr>
               </tbody>
@@ -2468,11 +2762,271 @@ button:disabled {
 
 .section-kicker { color: var(--phosphor); font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.08em; }
 
-.top-tickers {
-  padding: var(--s5);
+/* ── Hero Flow Sentiment & Snapshot Section (InsiderFinance Inspired) ────────── */
+.flow-sentiment-hero {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.25fr) minmax(0, 2fr);
   border: var(--hair) solid var(--border-strong);
   background: var(--surface-raised);
 }
+
+.sentiment-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s4) var(--s5);
+  background: var(--surface-base);
+  border-right: var(--hair) solid var(--border-subtle);
+  border-left: 3px solid var(--rule-hi);
+}
+.sentiment-card.bullish { border-left-color: var(--long); }
+.sentiment-card.bearish { border-left-color: var(--short); }
+.sentiment-card.neutral { border-left-color: var(--call); }
+
+.sentiment-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dominant-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: var(--t-micro);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border: var(--hair) solid currentColor;
+  border-radius: 2px;
+}
+.dominant-badge.bullish {
+  color: var(--long);
+  border-color: var(--long);
+  background: var(--long-wash);
+}
+.dominant-badge.bearish {
+  color: var(--short);
+  border-color: var(--short);
+  background: var(--short-wash);
+}
+.dominant-badge.neutral {
+  color: var(--ink-dim);
+  border-color: var(--rule-hi);
+}
+
+.sentiment-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+.sentiment-title {
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 850;
+  letter-spacing: var(--track-tight);
+}
+.sentiment-premium {
+  color: var(--text-secondary);
+  font-size: var(--t-tiny);
+  font-weight: 650;
+}
+
+.sentiment-bar {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  margin-top: 4px;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border-radius: 2px;
+}
+
+.sentiment-labels {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: var(--t-micro);
+  font-weight: 750;
+}
+
+.snapshot-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+}
+.snapshot-metrics article {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  padding: var(--s4);
+  border-right: var(--hair) solid var(--border-subtle);
+}
+.snapshot-metrics article:last-child { border-right: 0; }
+.snapshot-metrics strong {
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.snapshot-metrics small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fresh-state {
+  position: absolute;
+  top: var(--s2);
+  right: var(--s2);
+  padding: 1px 5px;
+  color: var(--text-tertiary);
+  border: var(--hair) solid var(--border-strong);
+  font-size: var(--t-micro);
+  font-weight: 800;
+  border-radius: 2px;
+}
+.fresh-state.live { color: var(--status-live); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
+.fresh-state.stale { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.fresh-state.unavailable { color: var(--short); border-color: var(--short); }
+.freshness-stat > .label:first-child { padding-right: 58px; }
+
+/* ── Sector Sentiment Rail (InsiderFinance Inspired) ────────────────────────── */
+.sector-sentiment-rail {
+  padding: var(--s3) var(--s4);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.sector-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.sector-head h2 {
+  margin-top: 2px;
+  color: var(--text-primary);
+  font: 700 var(--t-small) var(--font-display);
+}
+.sector-meta {
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+}
+.sector-clear-link {
+  color: var(--phosphor);
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+.sector-clear-link:hover { text-decoration: underline; }
+
+.sector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1px;
+  margin-top: var(--s3);
+  background: var(--rule);
+  border: var(--hair) solid var(--rule);
+}
+
+.sector-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  color: inherit;
+  border: 0;
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.sector-card:hover {
+  background: var(--surface-overlay);
+}
+.sector-card.active {
+  background: var(--phosphor-wash);
+  outline: 1px solid var(--phosphor-dim);
+}
+
+.sector-card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.sector-name {
+  color: var(--text-primary);
+  font-size: var(--t-micro);
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sector-code {
+  color: var(--phosphor);
+  font-size: var(--t-micro);
+  font-weight: 800;
+}
+
+.sector-premium {
+  color: var(--ink);
+  font-size: var(--t-tiny);
+  font-weight: 800;
+}
+
+.sector-mix-bar {
+  display: flex;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border-radius: 1px;
+}
+
+.sector-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--t-micro);
+}
+.top-in-sec {
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+}
+
+.sector-empty { margin-top: var(--s2); color: var(--text-tertiary); }
+
+/* ── Top Tickers (InsiderFinance Inspired) ────────────────────────────────── */
+.leaders-rail {
+  padding: var(--s3) var(--s4);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-raised);
+}
+.leaders-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.leaders-head h2 {
+  margin-top: 2px;
+  color: var(--text-primary);
+  font: 700 var(--t-small) var(--font-display);
+}
+.book-hits-copy { color: var(--text-tertiary); font-size: var(--t-micro); }
+
 .ticker-cats {
   display: flex;
   flex-wrap: wrap;
@@ -2496,53 +3050,63 @@ button:disabled {
   border-color: var(--phosphor);
   background: var(--phosphor);
 }
-.leaders-rail {
-  padding: var(--s3) var(--s4);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-raised);
-}
-.leaders-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s3);
-  flex-wrap: wrap;
-}
-.leaders-head h2 {
-  margin-top: 2px;
-  color: var(--text-primary);
-  font: 700 var(--t-small) var(--font-display);
-}
-.book-hits-copy { color: var(--text-tertiary); font-size: var(--t-micro); }
+
 .symbol-tape {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 1px;
   margin-top: var(--s3);
   background: var(--rule);
   border: var(--hair) solid var(--rule);
 }
 .book-tape { margin-top: var(--s2); }
+
 .sym-chip {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto;
-  gap: 1px 8px;
-  min-height: 52px;
-  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
   color: inherit;
   border: 0;
   background: var(--panel);
   text-align: left;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
 }
-.sym-chip span { grid-column: 1; color: var(--phosphor); font-weight: 750; }
-.sym-chip strong { grid-column: 2; grid-row: 1; color: var(--ink); font-size: var(--t-tiny); }
-.sym-chip small { grid-column: 1 / -1; color: var(--ink-faint); font-size: var(--t-micro); }
+.sym-chip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.sym-chip-head span { color: var(--phosphor); font-weight: 750; }
+.sym-chip-head strong { color: var(--ink); font-size: var(--t-tiny); }
+
+.ticker-sentiment-bar {
+  display: flex;
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border-radius: 1px;
+}
+.bull-bar { background: var(--long); }
+.bear-bar { background: var(--short); }
+
+.sym-chip-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+}
+.chip-count { color: var(--text-tertiary); }
+
 .sym-chip:hover,
 .sym-chip.on { background: var(--phosphor-wash); }
 .sym-chip.book span { color: var(--ink); }
 .ticker-empty { margin-top: var(--s2); color: var(--text-tertiary); }
+
 .book-pin {
   margin-left: 6px;
   min-height: 22px;
@@ -2553,6 +3117,7 @@ button:disabled {
   cursor: pointer;
 }
 .book-pin.on { color: var(--phosphor); border-color: var(--phosphor-dim); }
+
 .alert-tray {
   display: flex;
   align-items: center;
@@ -2581,28 +3146,9 @@ button:disabled {
   color: var(--ink-dim);
   font: 650 var(--t-tiny) var(--font-ui);
 }
-.history-panel {
-  padding: var(--s5);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-raised);
-}
-.alert-tray ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-.alert-tray li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.alert-tray ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+.alert-tray li { display: flex; gap: 6px; align-items: baseline; }
 .alert-tray button.fig { color: var(--phosphor); background: none; border: 0; cursor: pointer; }
-.history-tape-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s2);
-  align-items: center;
-  padding: var(--s3) 0;
-}
-.history-tape-bar input {
-  min-height: 28px;
-  padding: 0 8px;
-  color: var(--ink);
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
-}
 
 /* ── Live Pulse Banner ───────────────────────────────────────────────────── */
 .live-pulse {
@@ -2761,7 +3307,7 @@ button:disabled {
 /* ── Filter Shelf ────────────────────────────────────────────────────────── */
 .filter-shelf {
   display: grid;
-  grid-template-columns: minmax(132px, 0.65fr) minmax(150px, 0.8fr) auto auto minmax(120px, 0.6fr) minmax(150px, 0.7fr) auto;
+  grid-template-columns: minmax(132px, 0.65fr) minmax(150px, 0.8fr) auto auto minmax(120px, 0.6fr) minmax(140px, 0.7fr) auto;
   align-items: end;
   gap: var(--s3);
   padding: var(--s4);
@@ -2823,14 +3369,14 @@ button:disabled {
 .input-shell input::placeholder { color: var(--text-tertiary); text-transform: none; }
 
 .seg-filter { min-width: 0; border: 0; }
-.seg-filter > div { display: flex; border: var(--hair) solid var(--border-strong); border-radius: 2px; overflow: hidden; }
+.seg-filter > div { display: flex; flex-wrap: wrap; border: var(--hair) solid var(--border-strong); border-radius: 2px; overflow: hidden; }
 .seg-filter > small,
 .filter-intro small {
   display: none;
 }
 .seg-filter button {
   min-height: 32px;
-  padding: 3px 10px;
+  padding: 3px 9px;
   color: var(--text-secondary);
   border: 0;
   border-right: var(--hair) solid var(--border-strong);
@@ -3092,55 +3638,6 @@ button.major-symbol:hover { color: var(--ink); }
 .major-absent strong { color: var(--text-secondary); }
 .major-absent p { margin-top: 4px; font-size: var(--t-small); }
 
-/* ── Snapshot Strip ──────────────────────────────────────────────────────── */
-.snapshot-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-raised);
-}
-
-.snapshot-strip article {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  padding: var(--s4) var(--s5);
-  border-right: var(--hair) solid var(--border-subtle);
-}
-.snapshot-strip article:last-child { border-right: 0; }
-.snapshot-strip strong {
-  color: var(--text-primary);
-  font-size: 1.35rem;
-  font-weight: 800;
-  line-height: 1.1;
-}
-.snapshot-strip small {
-  overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: var(--t-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fresh-state {
-  position: absolute;
-  top: var(--s2);
-  right: var(--s2);
-  padding: 1px 5px;
-  color: var(--text-tertiary);
-  border: var(--hair) solid var(--border-strong);
-  font-size: var(--t-micro);
-  font-weight: 800;
-  border-radius: 2px;
-}
-.fresh-state.live { color: var(--status-live); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
-.fresh-state.stale { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.fresh-state.unavailable { color: var(--short); border-color: var(--short); }
-
-.freshness-stat > .label:first-child { padding-right: 58px; }
-
 /* ── Review Table (Panel 01) ─────────────────────────────────────────────── */
 .table-scroll {
   min-width: 0;
@@ -3228,6 +3725,7 @@ button.major-symbol:hover { color: var(--ink); }
   line-height: 1.4;
   white-space: normal;
 }
+
 .price-cell strong { display: block; color: var(--text-primary); font-size: var(--t-small); }
 .price-cell small { display: block; max-width: 21ch; margin-top: 3px; color: var(--text-tertiary); font-size: var(--t-micro); line-height: 1.35; white-space: normal; }
 .price-cell small.pos { color: var(--long); }
@@ -3365,10 +3863,17 @@ button.major-symbol:hover { color: var(--ink); }
   padding: var(--s3) var(--s4);
   background: var(--surface-base);
   border-bottom: var(--hair) solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.tape-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
 }
 
 .tape-table {
-  min-width: 1140px;
+  min-width: 1180px;
   font-size: var(--t-tiny);
   border-collapse: separate;
   border-spacing: 0;
@@ -3409,9 +3914,145 @@ th.sortable:hover {
   font-size: 10px;
 }
 
+.time-readout {
+  font-family: var(--font-data);
+}
+
+.symbol-cell-content {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.tape-spot-label {
+  font-size: var(--t-micro);
+  color: var(--text-tertiary);
+}
+.tape-spot-label.pos { color: var(--long); }
+.tape-spot-label.neg { color: var(--short); }
+
+.strike-val {
+  margin-left: 6px;
+  color: var(--text-primary);
+  font-size: var(--t-small);
+}
+
+.expiry-cell-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.expiry-primary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dte-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  font-size: var(--t-micro);
+  font-weight: 800;
+  border-radius: 2px;
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  color: var(--text-secondary);
+}
+.dte-pill.dte-0d { color: var(--short); border-color: var(--short); background: var(--short-wash); }
+.dte-pill.dte-weekly { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.dte-pill.dte-monthly { color: var(--phosphor); border-color: var(--phosphor-dim); }
+
+.moneyness-tag {
+  font-size: var(--t-micro);
+  font-weight: 700;
+}
+.moneyness-tag.moneyness-atm { color: var(--phosphor); }
+.moneyness-tag.moneyness-otm { color: var(--text-tertiary); }
+.moneyness-tag.moneyness-itm { color: var(--warn); }
+
+.flow-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: var(--t-micro);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  border: var(--hair) solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--surface-base);
+  color: var(--text-secondary);
+}
+.flow-badge.badge-golden-sweep {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+.flow-badge.badge-sweep {
+  color: #a78bfa;
+  border-color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.12);
+}
+.flow-badge.badge-block {
+  color: var(--call-hi);
+  border-color: var(--call);
+  background: var(--call-wash);
+}
+.flow-badge.badge-split {
+  color: #38bdf8;
+  border-color: #0284c7;
+  background: rgba(2, 132, 199, 0.12);
+}
+.flow-badge.badge-multileg {
+  color: #2dd4bf;
+  border-color: #0d9488;
+  background: rgba(13, 148, 136, 0.12);
+}
+.badge-pip {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .vol-oi-cell {
   white-space: nowrap;
 }
+.vol-oi-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: var(--t-micro);
+  font-weight: 800;
+  border-radius: 2px;
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  color: var(--text-secondary);
+}
+.vol-oi-pill.vol-oi-high {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+.vol-oi-pill.vol-oi-extreme {
+  color: var(--long);
+  border-color: var(--long);
+  background: var(--long-wash);
+}
+
+.tape-premium {
+  font-weight: 800;
+  font-size: var(--t-small);
+}
+.whale-indicator {
+  display: block;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.whale-indicator.tier-mega-whale { color: var(--warn); }
+.whale-indicator.tier-whale { color: var(--phosphor); }
 
 .right-chip {
   display: inline-flex;
@@ -3426,19 +4067,15 @@ th.sortable:hover {
 .right-chip.call { color: var(--call-hi); border: var(--hair) solid var(--call); background: var(--call-wash); }
 .right-chip.put { color: var(--put-hi); border: var(--hair) solid var(--put); background: var(--put-wash); }
 
-.class-chip {
+.aggressor {
   display: inline-flex;
   align-items: center;
-  min-height: 19px;
-  padding: 1px 5px;
-  color: var(--text-secondary);
-  border: var(--hair) solid var(--border-strong);
-  background: var(--surface-base);
+  padding: 1px 6px;
   font-size: var(--t-micro);
-  font-weight: 750;
+  font-weight: 800;
   border-radius: 2px;
+  border: var(--hair) solid currentColor;
 }
-.class-chip.heuristic { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
 
 .heat-cell {
   display: grid;
@@ -3490,9 +4127,10 @@ th.sortable:hover {
 
 /* ── Responsive Layouts ─────────────────────────────────────────────────── */
 @media (max-width: 1320px) {
+  .flow-sentiment-hero { grid-template-columns: minmax(0, 1fr); }
+  .sentiment-card { border-right: 0; border-bottom: var(--hair) solid var(--border-subtle); }
   .live-pulse { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .pulse-copy { grid-column: 1 / -1; border-bottom: var(--hair) solid var(--border-subtle); }
-  .pulse-stat:first-of-type { border-left: 0; }
   .major-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .major-card:nth-child(2) { border-right: 0; }
   .major-card:nth-child(n + 3) { border-top: var(--hair) solid var(--border-subtle); }
@@ -3524,14 +4162,14 @@ th.sortable:hover {
 }
 
 @media (max-width: 980px) {
+  .snapshot-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .snapshot-metrics article:nth-child(2) { border-right: 0; }
+  .snapshot-metrics article:nth-child(n + 3) { border-top: var(--hair) solid var(--border-subtle); }
   .live-pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pulse-stat:nth-of-type(odd) { border-left: 0; }
   .pulse-stat:nth-of-type(n + 3) { border-top: var(--hair) solid var(--border-subtle); }
   .majors-head { align-items: flex-start; flex-direction: column; gap: var(--s2); }
   .majors-head p { text-align: left; }
-  .snapshot-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .snapshot-strip article:nth-child(2) { border-right: 0; }
-  .snapshot-strip article:nth-child(n + 3) { border-top: var(--hair) solid var(--border-subtle); }
   .filter-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .seg-filter > div { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .seg-filter:not(.activity-filter) > div { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -3553,18 +4191,16 @@ th.sortable:hover {
   .control-status,
   .refresh-button { grid-column: 1; grid-row: auto; }
   .refresh-button { width: 100%; margin-left: 0; }
+  .snapshot-metrics { grid-template-columns: minmax(0, 1fr); }
+  .snapshot-metrics article { border-right: 0; border-top: var(--hair) solid var(--border-subtle); }
+  .snapshot-metrics article:first-child { border-top: 0; }
   .live-pulse { grid-template-columns: minmax(0, 1fr); }
   .pulse-copy { grid-column: auto; }
   .triage-pick { min-height: 142px; border-top: var(--hair) solid var(--border-subtle); border-left: 0; }
-  .pulse-stat,
-  .pulse-stat:nth-of-type(odd) { border-left: 0; border-top: var(--hair) solid var(--border-subtle); }
   .major-grid { grid-template-columns: minmax(0, 1fr); }
   .major-card,
   .major-card:nth-child(2) { min-height: 244px; border-right: 0; border-top: var(--hair) solid var(--border-subtle); }
   .major-card:first-child { border-top: 0; }
-  .snapshot-strip { grid-template-columns: minmax(0, 1fr); }
-  .snapshot-strip article { border-right: 0; border-top: var(--hair) solid var(--border-subtle); }
-  .snapshot-strip article:first-child { border-top: 0; }
   .filter-shelf { grid-template-columns: minmax(0, 1fr); }
   .queue-footer { align-items: flex-start; flex-direction: column; }
   .drawer-toggle { grid-template-columns: 24px minmax(0, 1fr); }

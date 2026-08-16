@@ -27,7 +27,7 @@ except ImportError:
         compute_short_term_price_impact,
         compute_liquidity_shock,
     )
-    from research.ablation import run_ablation_suite, evaluate_single_feature
+    from research.ablation import run_ablation_suite
 
 
 def test_signed_trade_imbalance():

@@ -135,11 +135,13 @@ provide('sectorFlow', {
 
 const primaryNav = [
   { name: 'desk', idx: '01', title: 'Desk', hint: 'Posture · queue · arena', icon: 'desk' },
-  { name: 'market', idx: '02', title: 'Market', hint: 'Symbol research', icon: 'market' },
-  { name: 'options', idx: '03', title: 'Options', hint: 'One underlier', icon: 'options' },
-  { name: 'flow', idx: '04', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
-  { name: 'suggest', idx: '05', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
-  { name: 'research', idx: '06', title: 'Research', hint: 'Methods · gates · models', icon: 'research' },
+  { name: 'plays', idx: '02', title: 'Plays', hint: 'Today\'s decision funnel', icon: 'radar' },
+  { name: 'market', idx: '03', title: 'Market', hint: 'Symbol research', icon: 'market' },
+  { name: 'options', idx: '04', title: 'Options', hint: 'One underlier', icon: 'options' },
+  { name: 'flow', idx: '05', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
+  { name: 'chain', idx: '06', title: 'Chain', hint: 'Value chain & growth', icon: 'chain' },
+  { name: 'suggest', idx: '07', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
+  { name: 'research', idx: '08', title: 'Research', hint: 'Methods · gates · models', icon: 'research' },
 ] as const
 
 const marketTools = [
@@ -302,6 +304,7 @@ const stripWarning = computed(() => {
 })
 function navAlert(name: string): boolean {
   if (name === 'desk') return enterCount.value > 0
+  if (name === 'plays') return enterCount.value > 0
   if (name === 'flow') {
     const top = topRotations.value.in[0]
     let bookHits = 0
@@ -460,7 +463,7 @@ watch(() => route.fullPath, async () => {
 
 function openSymbol(sym: string): void {
   paletteOpen.value = false
-  const clean = sym.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
+  const clean = sym.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
   if (!clean) return
   const currentName = String(route.name || '')
   /* Flow is market-wide; a symbol search belongs on Options for one underlier. */

@@ -23,7 +23,6 @@ Usage:
   python3 edge/tools/fetch_vol_complex.py
 """
 import argparse
-import os
 from pathlib import Path
 import pandas as pd
 import numpy as np

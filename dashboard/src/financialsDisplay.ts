@@ -97,12 +97,12 @@ export function formatSourceLabel(source: string | null | undefined): string {
 
 /** Derive ratio with statement fallback if summary ratio is unavailable */
 export function getDerivedRatio(
-  ratios: Record<string, number | null | undefined> | undefined,
+  ratios: import('@/api').FinancialRatios | Record<string, number | null | undefined> | undefined,
   incRows: Array<{ key?: string; label?: string; values?: (number | null)[] }> | undefined,
   key: string,
 ): number | null {
-  if (ratios && ratios[key] != null && Number.isFinite(ratios[key])) {
-    return ratios[key] as number
+  if (ratios && (ratios as Record<string, unknown>)[key] != null && Number.isFinite((ratios as Record<string, number>)[key])) {
+    return (ratios as Record<string, number>)[key]
   }
   if (!incRows || !incRows.length) return null
 
@@ -131,5 +131,163 @@ export function getDerivedRatio(
   }
 
   return null
+}
+
+/** Internal report-native ML forecast (not Street consensus). */
+export type ModelForecastStatus = 'ok' | 'missing' | 'stale' | string
+
+export interface ModelForecastFactor {
+  key?: string
+  label?: string
+  value?: number | null
+  display?: string | null
+  tone?: string | null
+}
+
+export interface ModelForecastCase {
+  price?: number | null
+  label?: string | null
+  thesis?: string | null
+}
+
+export interface ModelForecastPayload {
+  predicted_price?: number | null
+  forecast_score?: number | null
+  gearing_up_towards?: string | null
+  status?: ModelForecastStatus | null
+  label?: string | null
+  horizon?: string | null
+  timeframe?: string | null
+  timeframe_months?: number | null
+  factors?: ModelForecastFactor[] | null
+  cases?: {
+    bear?: ModelForecastCase | null
+    base?: ModelForecastCase | null
+    bull?: ModelForecastCase | null
+  } | null
+  decision_authorized?: boolean
+  spot_used?: number | null
+  spot_source?: string | null
+  lookthrough_growth?: number | null
+}
+
+export interface ModelForecastCaseView {
+  price: number | null
+  label: string
+  thesis: string | null
+}
+
+export interface ModelForecastView {
+  predictedPrice: number | null
+  forecastScore: number | null
+  gearingUpTowards: string | null
+  spotUsed: number | null
+  spotSource: string | null
+  lookthroughGrowth: number | null
+  timeframe: string | null
+  timeframeMonths: number | null
+  factors: Array<{ label: string; display: string; tone: string }>
+  cases: {
+    bear: ModelForecastCaseView
+    base: ModelForecastCaseView
+    bull: ModelForecastCaseView
+  }
+  status: ModelForecastStatus
+  ready: boolean
+}
+
+function finiteOrNull(val: number | null | undefined): number | null {
+  if (val == null || !Number.isFinite(val)) return null
+  return val
+}
+
+const EMPTY_CASE: ModelForecastCaseView = { price: null, label: '', thesis: null }
+
+function presentCase(raw: ModelForecastCase | null | undefined, fallback: string): ModelForecastCaseView {
+  if (!raw) return { ...EMPTY_CASE, label: fallback }
+  const thesis = raw.thesis && raw.thesis.trim() && raw.thesis !== '0' ? raw.thesis : null
+  return {
+    price: finiteOrNull(raw.price),
+    label: raw.label || fallback,
+    thesis,
+  }
+}
+
+function emptyForecastView(status: ModelForecastStatus): ModelForecastView {
+  return {
+    predictedPrice: null,
+    forecastScore: null,
+    gearingUpTowards: null,
+    spotUsed: null,
+    spotSource: null,
+    lookthroughGrowth: null,
+    timeframe: null,
+    timeframeMonths: null,
+    factors: [],
+    cases: {
+      bear: { ...EMPTY_CASE, label: 'Bear' },
+      base: { ...EMPTY_CASE, label: 'Base' },
+      bull: { ...EMPTY_CASE, label: 'Bull' },
+    },
+    status,
+    ready: false,
+  }
+}
+
+/** Present the model forecast. Missing inputs stay dash-ready nulls — never a fake 0. */
+export function presentModelForecast(
+  raw: ModelForecastPayload | null | undefined,
+): ModelForecastView {
+  const status = (raw?.status || 'missing') as ModelForecastStatus
+  if (raw == null || status === 'missing') {
+    return emptyForecastView('missing')
+  }
+  const predictedPrice = finiteOrNull(raw.predicted_price)
+  const forecastScore = finiteOrNull(raw.forecast_score)
+  const gearingRaw = raw.gearing_up_towards
+  const gearingUpTowards =
+    !gearingRaw || gearingRaw.trim() === '' || gearingRaw === '0' ? null : gearingRaw
+  const factors = (raw.factors || [])
+    .filter((f) => f && f.display && f.display !== '0' && f.display.trim() !== '')
+    .map((f) => ({
+      label: f.label || f.key || 'Factor',
+      display: f.display as string,
+      tone: f.tone || 'flat',
+    }))
+  const timeframe =
+    raw.timeframe && raw.timeframe.trim() && raw.timeframe !== '0' ? raw.timeframe : null
+  return {
+    predictedPrice,
+    forecastScore,
+    gearingUpTowards,
+    spotUsed: finiteOrNull(raw.spot_used),
+    spotSource: raw.spot_source || null,
+    lookthroughGrowth: finiteOrNull(raw.lookthrough_growth),
+    timeframe,
+    timeframeMonths: finiteOrNull(raw.timeframe_months),
+    factors,
+    cases: {
+      bear: presentCase(raw.cases?.bear, 'Bear'),
+      base: presentCase(raw.cases?.base, 'Base'),
+      bull: presentCase(raw.cases?.bull, 'Bull'),
+    },
+    status,
+    ready: status === 'ok' && predictedPrice != null && forecastScore != null,
+  }
+}
+
+export function formatModelPredictedPrice(val: number | null | undefined): string {
+  if (val == null || !Number.isFinite(val)) return DASH
+  return `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+export function formatModelForecastScore(val: number | null | undefined): string {
+  if (val == null || !Number.isFinite(val)) return DASH
+  return val.toFixed(1)
+}
+
+export function formatGearingUp(val: string | null | undefined): string {
+  if (val == null || val.trim() === '' || val === '0') return DASH
+  return val
 }
 

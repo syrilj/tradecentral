@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(results, f, indent=2)
 
     print(f"\n{'=' * 70}")
-    print(f"  XS3 Validation Results:")
+    print("  XS3 Validation Results:")
     print(f"  Mean Rank IC:    {results.get('mean_rank_ic', 'N/A')}")
     print(f"  Net Annual Ret:  {results.get('net_annual_return', 'N/A')}")
     print(f"  Sharpe/IR:       {results.get('sharpe_ratio', 'N/A')}")

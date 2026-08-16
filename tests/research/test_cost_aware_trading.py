@@ -5,8 +5,6 @@ Unit tests for Workstream 2: Cost-Aware Trading Decisions, Net Edge Gating, & Po
 from __future__ import annotations
 
 import pytest
-import pandas as pd
-import numpy as np
 
 try:
     from edge.research.costs import DynamicCostModel
@@ -16,7 +14,6 @@ try:
         apply_cost_aware_sizing,
     )
 except ImportError:
-    from research.costs import DynamicCostModel
     from research.portfolio import (
         PortfolioLimitsConfig,
         compute_expected_net_edge,

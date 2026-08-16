@@ -170,6 +170,7 @@ def test_flow_click_builds_the_exact_symbol_even_outside_the_broad_board(monkeyp
     assert payload["sources"]["symbol_specific"] is True
     assert payload["rows"][0]["symbol"] == "XYZ"
     assert payload["rows"][0]["suggestion"]["right"] == "call"
+    assert payload["decision_authorized"] is False
 
 
 def test_symbol_suggestion_reuses_its_short_live_cache(monkeypatch):

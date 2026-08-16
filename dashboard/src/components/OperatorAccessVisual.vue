@@ -47,11 +47,11 @@ svg { position: absolute; inset: 6px 0 30px; width: 100%; height: calc(100% - 36
 .access-core > span { width: 52px; height: 52px; display: grid; place-items: center; color: #b8ca92; border: 1px solid #666760; }
 .access-core small,
 .access-point small { margin-top: 12px; color: #d97757; font-family: var(--font-display); font-size: 7px; font-weight: 700; letter-spacing: .09em; }
-.access-core strong { margin-top: 5px; font-family: var(--font-ui); font-size: 15px; font-weight: 650; }
+.access-core strong { margin-top: 5px; font-family: var(--font-display); font-size: 15px; font-weight: 600; }
 .access-point { position: absolute; z-index: 3; width: 184px; display: grid; grid-template-columns: 31px 1fr; grid-template-rows: auto auto auto; column-gap: 9px; padding: 13px; border-left: 2px solid #6a9bcc; background: #21211f; }
 .access-point > span { grid-row: 1 / 3; width: 31px; height: 31px; display: grid; place-items: center; color: #8bb3d3; border: 1px solid #555650; }
 .access-point small { grid-column: 2; display: block; margin-top: 0; }
-.access-point strong { grid-column: 2; display: block; margin-top: 3px; font-family: var(--font-ui); font-size: 12px; font-weight: 650; }
+.access-point strong { grid-column: 2; display: block; margin-top: 3px; font-family: var(--font-display); font-size: 12px; font-weight: 600; }
 .access-point p { grid-column: 1 / -1; padding-top: 8px; color: #aaa79f; font-family: var(--font-ui); font-size: 9px; }
 .point-api { top: 50px; left: 3px; }
 .point-flow { right: 4px; bottom: 58px; border-color: #788c5d; }

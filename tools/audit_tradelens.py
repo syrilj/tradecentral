@@ -11,7 +11,6 @@ import argparse
 import sys
 from pathlib import Path
 import numpy as np
-import pandas as pd
 
 # Path setup for direct execution
 repo_root = Path(__file__).resolve().parent.parent
@@ -22,7 +21,7 @@ try:
     from edge.research.counterfactual_ledger import CounterfactualLedger, DecisionRecord
     from edge.eval.tradelens import decompose_tradelens, compute_tradelens_plus_plus
 except ImportError:
-    from research.counterfactual_ledger import CounterfactualLedger, DecisionRecord
+    from research.counterfactual_ledger import CounterfactualLedger
     from eval.tradelens import decompose_tradelens, compute_tradelens_plus_plus
 
 
@@ -39,13 +38,13 @@ def audit_ledger(ledger_path: str, horizon: str = "5d") -> int:
         print(f"No records found in ledger {ledger_path}.")
         return 0
 
-    print(f"\n=======================================================")
-    print(f"           TRADELENS++ SYSTEM & AGENT AUDIT            ")
-    print(f"=======================================================")
+    print("\n=======================================================")
+    print("           TRADELENS++ SYSTEM & AGENT AUDIT            ")
+    print("=======================================================")
     print(f"Ledger Path: {ledger_path}")
     print(f"Total Decision Records: {len(records)}")
     print(f"Evaluation Horizon: {horizon}")
-    print(f"-------------------------------------------------------\n")
+    print("-------------------------------------------------------\n")
 
     agent_pnls = []
     counterfactual_pnls = []

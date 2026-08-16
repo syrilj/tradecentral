@@ -37,7 +37,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -938,7 +938,7 @@ def print_summary(s: Dict) -> None:
         print(f"    Max drawdown (net_gross2) : {p['max_drawdown_net_gross2']*100:.2f}%")
         print(f"    Hit rate (net_gross2)     : {p['hit_rate_net_gross2']:.1%}")
         print(f"    Avg daily turnover        : capital={p['avg_daily_turnover_capital']:.3f}  gross2={p['avg_daily_turnover_gross2']:.3f}")
-        print(f"    Cost sensitivity (net_gross2 Sharpe): " + "  ".join(f"{k}={v:.3f}" for k, v in p["cost_sensitivity_sharpe_net_gross2"].items()))
+        print("    Cost sensitivity (net_gross2 Sharpe): " + "  ".join(f"{k}={v:.3f}" for k, v in p["cost_sensitivity_sharpe_net_gross2"].items()))
         print(f"    Portfolio days            : {p['n_days']:,}")
 
     d = s["dev"]

@@ -17,15 +17,12 @@ function readSrc(rel: string): string {
   return readFileSync(join(root, rel), 'utf8')
 }
 
-/** Classic emerald/red chart palette + glow filters that violate the instrument brief. */
+/** Glow filters and illegal animations that violate the instrument brief. */
 const FORBIDDEN = [
-  '#10b981',
   '#ef4444',
-  '#34d399',
   '#f87171',
   '#059669',
   '#dc2626',
-  '0x10b981',
   '0xef4444',
   'drop-shadow',
   '@keyframes live-pulse',
@@ -125,7 +122,7 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(brief).toContain('SIGNED FLOW')
     expect(brief).toContain('PRICE MOMENTUM')
     expect(brief).toContain('NOT DIRECTION')
-    expect(flow).toContain('CALL = BLUE · PUT = AMBER · IDENTITY, NOT DIRECTION')
+    expect(flow).toContain('CALL = EMERALD · PUT = CRIMSON · IDENTITY, NOT DIRECTION')
     expect(flow).not.toContain('BULLISH · CALL-HEAVY')
     expect(flow).not.toContain('BEARISH · PUT-HEAVY')
   })
@@ -201,6 +198,16 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(src).toMatch(/\.flow-trace\.put\s*\{\s*stroke:\s*var\(--put/)
     expect(src).toMatch(/\.activity-bars \.bar\.call\s*\{\s*fill:\s*var\(--call\)/)
     expect(src).toMatch(/\.activity-bars \.bar\.put\s*\{\s*fill:\s*var\(--put\)/)
+  })
+
+  it('tokens.css defines high-contrast emerald green for calls and crimson red for puts', () => {
+    const css = readSrc('styles/tokens.css')
+    expect(css).toContain('--call: #10b981;')
+    expect(css).toContain('--call-hi: #34d399;')
+    expect(css).toContain('--call-wash: rgba(16, 185, 129, 0.12);')
+    expect(css).toContain('--put: #f43f5e;')
+    expect(css).toContain('--put-hi: #fb7185;')
+    expect(css).toContain('--put-wash: rgba(244, 63, 94, 0.12);')
   })
 })
 

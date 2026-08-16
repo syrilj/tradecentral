@@ -24,7 +24,7 @@ def main():
     print(f"  Project ID:      {project_id}")
     print(f"  Region:          {region}")
     print(f"  Staging Bucket:  {staging_bucket}")
-    print(f"  Task:            Run 15-second non-lookahead verification test")
+    print("  Task:            Run 15-second non-lookahead verification test")
     print("=" * 70)
 
     try:
@@ -58,7 +58,7 @@ def main():
     print("\n======================================================================")
     print("  MICRO-TEST READY!")
     print("  To launch the 15-second micro test job on Vertex AI Spot compute, run:")
-    print(f"  python3 edge/tools/submit_vertex_job.py --job-name micro-test-15s --gpu none --command 'python3 edge/tools/verify_no_lookahead.py'")
+    print("  python3 edge/tools/submit_vertex_job.py --job-name micro-test-15s --gpu none --command 'python3 edge/tools/verify_no_lookahead.py'")
     print("======================================================================")
 
 if __name__ == "__main__":

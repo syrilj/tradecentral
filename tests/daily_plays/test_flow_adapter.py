@@ -219,6 +219,45 @@ def test_broad_flow_activity_ranks_routed_names_without_authorizing_direction():
     assert board["rows"][0]["evidence"]["activity_lean_label"] == "BEARISH"
 
 
+def test_market_flow_fail_closed_on_timeout():
+    reset_lse_circuit()
+
+    def slow_fetcher(**_kwargs):
+        time.sleep(0.1)
+        return [{"underlying": "SPY", "premium": 100_000, "contract_type": "call"}]
+
+    result = load_market_flow_activity(
+        fetcher=slow_fetcher,
+        timeout_seconds=0.01,
+    )
+    assert result["rows"] == []
+    assert result["coverage"]["request_completed"] == 0
+    assert result["warnings"] == ["flow_market_timeout"]
+
+
+def test_market_flow_fail_closed_without_credentials(monkeypatch):
+    monkeypatch.delenv("LSE_API_KEY", raising=False)
+    result = load_market_flow_activity()
+    assert result["rows"] == []
+    assert result["warnings"] == ["flow_lse_credential_missing"]
+    assert result["coverage"] == {
+        "request_completed": 0,
+        "provider_prints": 0,
+        "observed_symbols": 0,
+        "with_activity": 0,
+    }
+
+
+def test_symbol_flow_tape_fail_closed_without_credentials(monkeypatch):
+    monkeypatch.delenv("LSE_API_KEY", raising=False)
+    result = load_symbol_flow_tape("SPY")
+    assert result["symbol"] == "SPY"
+    assert result["tape"] == []
+    assert result["decision_authorized"] is False
+    assert result["feed_status"] == "unavailable"
+    assert result["warnings"] == ["flow_lse_credential_missing"]
+
+
 def test_symbol_flow_tape_filters_window_and_keeps_classification():
     seen = {}
 

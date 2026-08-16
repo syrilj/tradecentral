@@ -15,11 +15,9 @@ This script tests:
 Usage:
   python3 edge/tools/test_this_week_performance.py
 """
-import os
 import sys
 from pathlib import Path
 import pandas as pd
-import numpy as np
 import yfinance as yf
 
 ROOT = Path(__file__).resolve().parents[2]

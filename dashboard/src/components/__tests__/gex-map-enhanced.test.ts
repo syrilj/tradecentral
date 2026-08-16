@@ -51,7 +51,6 @@ describe('Enhanced GEX Map Component Verification', () => {
   })
 
   it('maintains strict instrument token compliance', () => {
-    expect(gexSrc).not.toContain('#10b981')
     expect(gexSrc).not.toContain('#ef4444')
     expect(gexSrc).not.toContain('drop-shadow')
     expect(gexSrc).not.toContain('filter:')

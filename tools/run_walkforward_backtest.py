@@ -33,12 +33,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -750,7 +749,7 @@ def _print_summary(s: Dict) -> None:
     print()
     print(f"  Monotonicity check : {s.get('bucket_monotonic_flag','N/A')}")
     print()
-    print(f"  Execution model :")
+    print("  Execution model :")
     print(f"    Signal at close t, entry {s['entry_bar']}, exit {s['exit_bar']}")
     print(f"    vol_surge lagged        : {s['vol_surge_lagged']}")
     print(f"    Calibration inner-CV    : {s['calibration_inner_cv']}")

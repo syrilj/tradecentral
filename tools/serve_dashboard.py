@@ -113,7 +113,7 @@ def main():
     print(f"  URL:           http://localhost:{PORT}/dashboard.html")
     print(f"  API Status:    http://localhost:{PORT}/api/status")
     print(f"  API GCP:       http://localhost:{PORT}/api/gcp_resources")
-    print(f"  Opening in browser...")
+    print("  Opening in browser...")
     print("=" * 70)
 
     server = None

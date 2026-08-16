@@ -99,6 +99,26 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
   GET  /api/health
       -> {ok, ts, symbols_indexed, uptime_s, flow_feed_contract, suggestion_contract}
 
+  GET  /api/plays
+      -> Latest persisted daily-plays run (market map, scan funnel, actionable
+         ENTER tickets, watchlist, rejections, research board, blockers).
+         Read-only; never recomputes the pipeline.
+
+  POST /api/plays/run[?account=10000]
+      -> Starts the full daily-plays pipeline as a background job and returns
+         its job immediately. Never places orders.
+
+  GET  /api/plays/status[?job_id=<id>]
+      -> Current/recent daily-plays run progress; completed jobs include the
+         full result payload.
+
+  GET  /api/supply-chain[?symbol=X&theme=Y&depth=1|2]
+      -> Multi-tier supply chain knowledge graph, extracted 10-K/transcript
+         evidence citations, and quant-fundamental beneficiary elasticity rankings.
+
+  GET  /api/supply-chain/themes
+      -> Curated thematic ecosystems (AI Data Center, Semi Equipment, Enterprise AI, Energy Grid).
+
   GET  /api/sentiment[?symbol=X]
       -> Accuracy-first desk sentiment: vol complex, CFTC COT, FINRA short
          volume, local options P/C, optional SEC filings for symbol.
@@ -204,9 +224,13 @@ stderr -- one bad symbol or malformed artifact must never kill the server.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pd
+
 import argparse
 from dataclasses import asdict
-from functools import lru_cache
 import gzip
 import http.server
 import json
@@ -299,7 +323,6 @@ from render_dashboard import (  # noqa: E402
     get_dashboard_data as _get_dashboard_data_uncached,
     analyze_symbol_adhoc,
     fetch_sector_flow_signals,
-    load_dynamic_leaderboard,
 )
 from check_gcp_resources import get_all_gcp_resources  # noqa: E402
 from sentiment_anomalies import (  # noqa: E402
@@ -314,6 +337,11 @@ from fetch_float_data import load_float_data  # noqa: E402
 sys.path.insert(0, str(ROOT))
 from edge.daily_plays.config import load_project_environment  # noqa: E402
 from edge.daily_plays.clock import market_clock_status  # noqa: E402
+from edge.daily_plays.config import DailyPlaysConfig, load_config as _load_daily_plays_config  # noqa: E402
+from edge.daily_plays.clock import RunContext  # noqa: E402
+from edge.daily_plays.contracts import RunMode, canonical_json  # noqa: E402
+from edge.daily_plays.ledger import DEFAULT_OUTPUT_ROOT as _DAILY_PLAYS_OUTPUT_ROOT  # noqa: E402
+from edge.daily_plays.pipeline import run_pipeline as _run_daily_plays_pipeline  # noqa: E402
 from edge.daily_plays.options_intelligence import (  # noqa: E402
     OptionsFilters,
     build_options_intelligence,
@@ -1685,6 +1713,294 @@ def _scan_status_payload(job_id: str | None = None) -> tuple[dict[str, Any], int
             return {"status": "idle", "message": "No scan has been started.", "job": None}, 200
         snapshot = _scan_job_snapshot(job)
     return {"status": snapshot["state"], "message": snapshot["message"], "job": snapshot}, 200
+
+
+# --------------------------------------------------------------------------
+# Daily plays -- the full decision-support funnel (market map -> routed targets
+# -> model domain -> directional setups -> live option-chain validation ->
+# ENTER/WATCH/ABSTAIN). This is the same engine as `python -m edge.daily_plays
+# today`, surfaced to the operator as a background job so a live run never
+# monopolizes one browser request. It never places orders.
+# --------------------------------------------------------------------------
+_PLAYS_JOB_LOCK = threading.Lock()
+_PLAYS_JOBS: dict[str, dict[str, Any]] = {}
+_ACTIVE_PLAYS_JOB_ID: str | None = None
+_PLAYS_JOB_HISTORY_LIMIT = 8
+_PLAYS_ACCOUNT_DEFAULT = 10_000.0
+_PLAYS_ACCOUNT_MIN = 100.0
+_PLAYS_ACCOUNT_MAX = 100_000_000.0
+
+
+def _plays_account(raw: str | None) -> float:
+    try:
+        value = float(raw) if raw else _PLAYS_ACCOUNT_DEFAULT
+    except (TypeError, ValueError):
+        return _PLAYS_ACCOUNT_DEFAULT
+    if not math.isfinite(value):
+        return _PLAYS_ACCOUNT_DEFAULT
+    return max(_PLAYS_ACCOUNT_MIN, min(_PLAYS_ACCOUNT_MAX, value))
+
+
+def _plays_job_snapshot(job: Mapping[str, Any]) -> dict[str, Any]:
+    elapsed_end = float(job.get("finished_monotonic") or time.perf_counter())
+    payload = {
+        "id": str(job.get("id") or ""),
+        "state": str(job.get("state") or "queued"),
+        "stage": str(job.get("stage") or "queued"),
+        "progress": int(job.get("progress") or 0),
+        "message": str(job.get("message") or "Plays run queued."),
+        "started_at": job.get("started_at"),
+        "updated_at": job.get("updated_at"),
+        "elapsed_seconds": round(
+            max(0.0, elapsed_end - float(job.get("started_monotonic") or elapsed_end)),
+            1,
+        ),
+        "error": job.get("error"),
+    }
+    if job.get("state") == "completed" and isinstance(job.get("result"), Mapping):
+        payload["result"] = job["result"]
+    return payload
+
+
+def _update_plays_job(job_id: str, **changes: Any) -> None:
+    with _PLAYS_JOB_LOCK:
+        job = _PLAYS_JOBS.get(job_id)
+        if job is None:
+            return
+        job.update(changes)
+        job["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _run_plays_job(job_id: str, account: float) -> None:
+    global _ACTIVE_PLAYS_JOB_ID
+
+    def on_progress(stage: str, percent: int, message: str) -> None:
+        _update_plays_job(
+            job_id,
+            state="running",
+            stage=stage,
+            progress=max(1, min(99, int(percent))),
+            message=message,
+        )
+
+    try:
+        on_progress("starting", 1, "Starting daily plays run.")
+        load_project_environment()
+        config = _load_daily_plays_config()
+        context = RunContext.create(mode=RunMode.LIVE)
+        on_progress("discovery", 15, "Scanning sector flow and routing targets.")
+        result = _run_daily_plays_pipeline(
+            context=context,
+            account=account,
+            config=config,
+            output_root=str(_DAILY_PLAYS_OUTPUT_ROOT),
+        )
+        plays = [row for row in (result.get("plays") or []) if isinstance(row, Mapping)]
+        status = str(result.get("status") or ("COMPLETE" if plays else "NO_PLAY"))
+        message = (
+            f"Daily plays complete: {len(plays)} actionable ticket(s), "
+            f"{len(result.get('watchlist') or [])} watch, "
+            f"{len(result.get('rejections') or [])} rejected."
+        )
+        _update_plays_job(
+            job_id,
+            state="completed",
+            stage="complete",
+            progress=100,
+            message=message,
+            finished_monotonic=time.perf_counter(),
+            result={
+                "status": "ok",
+                "message": message,
+                "asof": result.get("asof_utc"),
+                "data": result,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - job failure must remain inspectable
+        _update_plays_job(
+            job_id,
+            state="failed",
+            stage="failed",
+            message="Daily plays run failed.",
+            error=f"{type(exc).__name__}: {exc}",
+            finished_monotonic=time.perf_counter(),
+        )
+    finally:
+        with _PLAYS_JOB_LOCK:
+            if _ACTIVE_PLAYS_JOB_ID == job_id:
+                _ACTIVE_PLAYS_JOB_ID = None
+
+
+def _start_plays_job(account: float) -> tuple[dict[str, Any], bool]:
+    """Start one plays run or return the already-running job without duplicating work."""
+    global _ACTIVE_PLAYS_JOB_ID
+    with _PLAYS_JOB_LOCK:
+        if _ACTIVE_PLAYS_JOB_ID:
+            active = _PLAYS_JOBS.get(_ACTIVE_PLAYS_JOB_ID)
+            if active and active.get("state") in {"queued", "running"}:
+                return _plays_job_snapshot(active), False
+
+        job_id = uuid.uuid4().hex[:12]
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        job = {
+            "id": job_id,
+            "account": account,
+            "state": "queued",
+            "stage": "queued",
+            "progress": 0,
+            "message": "Daily plays run queued.",
+            "started_at": now,
+            "updated_at": now,
+            "started_monotonic": time.perf_counter(),
+            "error": None,
+        }
+        _PLAYS_JOBS[job_id] = job
+        _ACTIVE_PLAYS_JOB_ID = job_id
+        for stale_id in list(_PLAYS_JOBS)[:-_PLAYS_JOB_HISTORY_LIMIT]:
+            if stale_id != _ACTIVE_PLAYS_JOB_ID:
+                _PLAYS_JOBS.pop(stale_id, None)
+        snapshot = _plays_job_snapshot(job)
+
+    threading.Thread(
+        target=_run_plays_job,
+        args=(job_id, account),
+        daemon=True,
+        name=f"plays-{job_id}",
+    ).start()
+    return snapshot, True
+
+
+def _plays_status_payload(job_id: str | None = None) -> tuple[dict[str, Any], int]:
+    with _PLAYS_JOB_LOCK:
+        resolved = job_id or _ACTIVE_PLAYS_JOB_ID
+        if resolved is None and _PLAYS_JOBS:
+            resolved = next(reversed(_PLAYS_JOBS))
+        job = _PLAYS_JOBS.get(str(resolved or ""))
+        if job is None:
+            if job_id:
+                return {"status": "missing", "message": "Unknown plays run.", "job": None}, 404
+            return {"status": "idle", "message": "No plays run has been started.", "job": None}, 200
+        snapshot = _plays_job_snapshot(job)
+    return {"status": snapshot["state"], "message": snapshot["message"], "job": snapshot}, 200
+
+
+def _latest_plays_payload() -> dict[str, Any]:
+    """Read the most recent persisted daily-plays run without recomputing it.
+
+    The pipeline is fail-closed and normally returns NO_PLAY in live mode; the
+    operator surface must show the whole funnel (market map, watchlist,
+    rejections, research board, blockers) rather than fabricate ENTER tickets.
+    """
+    root = Path(_DAILY_PLAYS_OUTPUT_ROOT)
+    if not root.is_dir():
+        return {"available": False, "reason": "No daily plays runs have been persisted yet."}
+    run_dirs = [p for p in root.iterdir() if p.is_dir() and (p / "manifest.json").is_file()]
+    if not run_dirs:
+        return {"available": False, "reason": "No daily plays runs have been persisted yet."}
+    latest = max(run_dirs, key=lambda p: p.name)
+
+    def _read(name: str) -> Any:
+        path = latest / name
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    manifest = _read("manifest.json")
+    if not isinstance(manifest, Mapping):
+        return {"available": False, "reason": f"Run {latest.name} has no readable manifest."}
+
+    plays = _read("plays.json")
+    decisions = _read("decisions.json")
+    discovery = _read("discovery.json")
+    flow_activity = _read("flow_activity.json")
+    research_board = _read("research_board.json")
+
+    if not isinstance(decisions, list):
+        decisions = []
+    if not isinstance(plays, list):
+        plays = [row for row in decisions if isinstance(row, Mapping) and row.get("state") == "ENTER"]
+    watchlist = [row for row in decisions if isinstance(row, Mapping) and row.get("state") == "WATCH"]
+    rejections = [row for row in decisions if isinstance(row, Mapping) and row.get("state") == "ABSTAIN"]
+
+    discovery_map = discovery if isinstance(discovery, Mapping) else {}
+    flow_map = flow_activity if isinstance(flow_activity, Mapping) else {}
+    coverage = flow_map.get("coverage") if isinstance(flow_map.get("coverage"), Mapping) else {}
+
+    def _setup_ok(row: Mapping) -> bool:
+        internal = row.get("evidence") if isinstance(row.get("evidence"), Mapping) else {}
+        model = internal.get("internal_model") if isinstance(internal, Mapping) else {}
+        return bool(model.get("setup_ok")) and str(row.get("side") or "neutral") != "neutral"
+
+    # Reconstruct the funnel counts the pipeline reports in-memory but does not
+    # persist as a standalone artifact. Chain request/snapshot counts are not
+    # recoverable from the ledger, so they stay null rather than being guessed.
+    scan_scope = {
+        "sector_books_scored": discovery_map.get("sector_books_scored", 0),
+        "targeted_count": discovery_map.get("targeted_count", 0),
+        "model_covered_count": discovery_map.get("model_covered_count", 0),
+        "model_domain_supported": len(discovery_map.get("model_covered_symbols") or []),
+        "successfully_scanned_candidates": len(decisions),
+        "directional_setups": sum(1 for row in decisions if isinstance(row, Mapping) and _setup_ok(row)),
+        "chain_requests": None,
+        "chain_snapshots": None,
+        "flow_activity_requested": int(coverage.get("requested") or 0),
+        "flow_activity_observed": int(coverage.get("with_activity") or 0),
+    }
+
+    # The pipeline's decision_blockers are exactly the stable-unique union of
+    # every decision's confidence reasons. Reconstruct that union here.
+    blockers: list[str] = []
+    seen_blockers: set[str] = set()
+    for row in decisions:
+        if not isinstance(row, Mapping):
+            continue
+        confidence = row.get("confidence") if isinstance(row.get("confidence"), Mapping) else {}
+        for reason in confidence.get("reasons") or []:
+            text = str(reason)
+            if text and text not in seen_blockers:
+                seen_blockers.add(text)
+                blockers.append(text)
+
+    warnings = [str(item) for item in (manifest.get("warnings") or []) if item]
+    advisory_prefixes = (
+        "kronos_", "flow_", "sector_flow_", "research_models_",
+        "directional_research_", "promoted_model_manifest_advisory:",
+    )
+    advisory_evidence_warnings = [
+        warning for warning in warnings
+        if warning.startswith(advisory_prefixes)
+    ]
+    execution_health_warnings = [
+        warning for warning in warnings
+        if warning not in advisory_evidence_warnings
+        and not warning.startswith("unsupported_promoted_symbol:")
+    ]
+
+    return {
+        "available": True,
+        "run_id": str(manifest.get("run_id") or latest.name),
+        "requested_for": manifest.get("requested_for"),
+        "asof_utc": manifest.get("asof_utc"),
+        "market_session": manifest.get("market_session"),
+        "mode": manifest.get("mode"),
+        "account": manifest.get("account"),
+        "config_hash": manifest.get("config_hash"),
+        "warnings": warnings,
+        "status": "COMPLETE" if plays else "NO_PLAY",
+        "market_map": discovery_map.get("market_map") if isinstance(discovery_map.get("market_map"), Mapping) else {},
+        "scan_scope": scan_scope,
+        "flow_activity": flow_map,
+        "plays": plays,
+        "watchlist": watchlist,
+        "rejections": rejections,
+        "research_board": research_board if isinstance(research_board, list) else [],
+        "decision_blockers": blockers,
+        "advisory_evidence_warnings": advisory_evidence_warnings,
+        "execution_health_warnings": execution_health_warnings,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -5149,6 +5465,27 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/api/health":
                 self._send_json(_health_payload())
 
+            elif path == "/api/plays":
+                self._send_json(_latest_plays_payload())
+
+            elif path == "/api/plays/run":
+                account = _plays_account(query.get("account", [None])[0])
+                job, created = _start_plays_job(account)
+                message = (
+                    "Daily plays run started."
+                    if created
+                    else "A daily plays run is already running; attached to that job."
+                )
+                self._send_json(
+                    {"status": job["state"], "message": message, "job": job},
+                    status=202,
+                )
+
+            elif path == "/api/plays/status":
+                job_id = (query.get("job_id", [None])[0] or None)
+                payload, status = _plays_status_payload(job_id)
+                self._send_json(payload, status=status)
+
             elif path == "/api/sentiment":
                 raw_sym = (query.get("symbol", [""])[0] or "").strip()
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
@@ -5451,6 +5788,35 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 from tools.financial_data import get_ownership_payload
                 self._send_json(get_ownership_payload(sym_or_err))
 
+            elif path == "/api/supply-chain":
+                raw_sym = query.get("symbol", [""])[0].strip().upper()
+                sym = None
+                if raw_sym:
+                    ok, sym_or_err = _sanitize_symbol(raw_sym)
+                    if not ok:
+                        self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                        return
+                    sym = sym_or_err
+                theme = query.get("theme", [""])[0].strip().lower() or None
+                raw_depth = query.get("depth", ["2"])[0]
+                try:
+                    depth = max(1, min(3, int(raw_depth)))
+                except (ValueError, TypeError):
+                    depth = 2
+                force = query.get("force", ["0"])[0] in ("1", "true", "yes") or query.get("force_refresh", ["0"])[0] in ("1", "true", "yes")
+                try:
+                    from supply_chain import build_supply_chain_payload
+                except ImportError:
+                    from edge.tools.supply_chain import build_supply_chain_payload
+                self._send_json(build_supply_chain_payload(symbol=sym, theme=theme, depth=depth, force_refresh=force))
+
+            elif path == "/api/supply-chain/themes":
+                try:
+                    from supply_chain import get_available_themes
+                except ImportError:
+                    from edge.tools.supply_chain import get_available_themes
+                self._send_json({"themes": get_available_themes()})
+
             else:
                 self._send_json({"error": "unknown endpoint", "endpoint": path}, status=404)
 
@@ -5557,14 +5923,14 @@ def main():
     display_host = "localhost" if _is_loopback_host(host) else host
     url = f"http://{display_host}:{port}"
 
-    print(f"===========================================================")
-    print(f"  QUANT DASHBOARD API SERVER")
+    print("===========================================================")
+    print("  QUANT DASHBOARD API SERVER")
     print(f"  Listening on: {url}")
     print(f"  Serving SPA from: {_static_root()}")
     print(f"  Symbols indexed: {len(SYMBOL_INDEX)}")
     print(f"  Auth required: {_auth_required()}")
     print(f"  Max requests: {server.max_concurrent_requests}")
-    print(f"===========================================================")
+    print("===========================================================")
 
     def _warm_status_cache():
         try:

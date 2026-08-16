@@ -38,6 +38,10 @@ withDefaults(defineProps<{
       <path d="M4 12 12 16.5 20 12" />
       <path d="M4 16.5 12 21l8-4.5" />
     </template>
+    <template v-else-if="name === 'chain'">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </template>
     <template v-else-if="name === 'flow'">
       <path d="M3 12h3l2.2-6 4 12 2.4-7 1.7 4H21" />
     </template>

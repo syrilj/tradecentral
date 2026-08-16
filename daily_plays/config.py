@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .contracts import canonical_json, stable_hash
+from .contracts import stable_hash
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "daily_plays.json"

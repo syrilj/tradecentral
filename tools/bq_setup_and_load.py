@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -479,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Dataset:   {DATASET}")
     print(f"  Tables:    {', '.join(tables_to_load)}")
     print(f"  Dry-run:   {args.dry_run}")
-    print(f"  Cost:      $0.00  (batch load + free tier queries)")
+    print("  Cost:      $0.00  (batch load + free tier queries)")
     print("=" * 70)
 
     if not args.dry_run:

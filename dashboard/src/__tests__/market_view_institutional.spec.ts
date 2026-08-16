@@ -127,6 +127,8 @@ describe('2. All 10 Institutional Analytical Tabs Contract', () => {
     expect(marketViewSource).toContain('financials-layout')
     expect(marketViewSource).toContain('financials-toolbar')
     expect(marketViewSource).toContain('fin-statement-selector')
+    expect(marketViewSource).toContain('model-forecast-highlight')
+    expect(marketViewSource).toContain('What it should be')
 
     // Tab 3: Forecast
     expect(marketViewSource).toMatch(/activeTab\s*===\s*['"]forecast['"]/)

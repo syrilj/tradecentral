@@ -13,10 +13,14 @@ from __future__ import annotations
 import json
 import math
 import urllib.parse
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 import pytest
 
-from tools import financial_data, api_server
+from tools import financial_data
+
+if TYPE_CHECKING:
+    from tests.e2e.conftest import DirectApiClient
 
 
 # List of endpoints requiring 'symbol' param

@@ -9,9 +9,8 @@ liquidity metrics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 import pandas as pd
-import numpy as np
 
 
 @dataclass(frozen=True)

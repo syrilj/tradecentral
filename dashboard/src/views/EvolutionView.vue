@@ -68,13 +68,14 @@ function fmtFit(v: number | null | undefined): string {
   return Number(v).toFixed(3)
 }
 
-function geneLine(g: Record<string, unknown> | undefined): string {
+function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefined): string {
   if (!g) return DASH
-  const family = String(g.signal_family ?? '?')
-  const lb = g.lookback ?? '?'
-  const h = g.horizon_days ?? '?'
-  const k = g.top_k ?? '?'
-  const mode = g.long_short ?? '?'
+  const rec = g as Record<string, unknown>
+  const family = String(rec.signal_family ?? '?')
+  const lb = rec.lookback ?? '?'
+  const h = rec.horizon_days ?? '?'
+  const k = rec.top_k ?? '?'
+  const mode = rec.long_short ?? '?'
   return `${family} · L${lb} · H${h} · k=${k} · ${mode}`
 }
 </script>
@@ -207,7 +208,7 @@ function geneLine(g: Record<string, unknown> | undefined): string {
         <tbody>
           <tr v-for="e in elites" :key="e.id">
             <td class="fig name">{{ e.id }}</td>
-            <td class="fig dim gene">{{ geneLine(e.genes as unknown as Record<string, unknown>) }}</td>
+            <td class="fig dim gene">{{ geneLine(e.genes) }}</td>
             <td class="fig num">{{ fmtFit(e.fitness) }}</td>
             <td class="fig num">{{ num(e.metrics?.sharpe as number | null, 2) }}</td>
             <td class="fig num">{{ num(e.metrics?.max_drawdown as number | null, 3) }}</td>

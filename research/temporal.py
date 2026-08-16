@@ -11,9 +11,8 @@ record.available_ts <= decision_ts.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional, Union
 import pandas as pd
-import numpy as np
 
 
 @dataclass(frozen=True)

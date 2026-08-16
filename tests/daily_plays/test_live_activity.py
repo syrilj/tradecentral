@@ -118,9 +118,13 @@ def test_quick_activity_is_local_only():
     assert called is False
     assert result["coverage"]["live_requested"] == 0
     assert result["coverage"]["live_completed"] == 0
-    # Quick scan does not require full-universe qlib inference.
-    assert result["qlib_scan"]["quality"] == "skipped"
-    assert result["coverage"]["qlib_scored"] == 0
+    # Quick scan now attaches the zero-fit desk ranker; it still must not hit live flow.
+    assert result["qlib_scan"]["quality"] in {"ok", "missing"}
+    assert result["qlib_scan"]["decision_authorized"] is False
+    if result["qlib_scan"]["quality"] == "ok":
+        assert result["qlib_scan"]["source"] == "desk_ranker_v1"
+        assert result["coverage"]["qlib_scored"] >= 1
+        assert "desk_ranker_slice_not_full_catalog" in (result["qlib_scan"].get("warnings") or [])
 
 
 def test_deep_qlib_failure_leaves_activity_intact():
@@ -349,6 +353,102 @@ def test_call_put_imbalance_uses_premium_not_print_counts():
     assert row["put_flow_pct"] == pytest.approx(0.8, abs=1e-3)
     assert row["call_put_imbalance"] == pytest.approx(-0.6, abs=1e-3)
     assert row["call_put_imbalance"] < 0  # put-heavy by premium, not call-heavy by count
+
+
+def test_unusual_flow_classifies_mixed_prints_without_authorizing_or_inventing_side():
+    frames = {"AAA": _bars(), "BBB": _bars()}
+
+    def flow_fetcher(*, min_premium, **_):
+        return [
+            {
+                "id": "whale-call",
+                "underlying": "AAA",
+                "contract_type": "call",
+                "premium": 1_200_000,
+                "volume": 40,
+                "strike": 150,
+                "underlying_price": 100,
+                "expiry": "2026-08-21",
+                "ts": "2026-08-11T15:00:00Z",
+            },
+            {
+                "id": "unsigned-put",
+                "underlying": "AAA",
+                "contract_type": "put",
+                "premium": 60_000,
+                "volume": 8,
+                "strike": 90,
+                "underlying_price": 100,
+                "expiry": "2026-08-21",
+                "ts": "2026-08-11T15:01:00Z",
+            },
+            {
+                "id": "missing-dte-otm",
+                "underlying": "AAA",
+                "contract_type": "call",
+                "premium": 90_000,
+                "volume": 12,
+                "ts": "2026-08-11T15:02:00Z",
+            },
+            {
+                "id": "named-put",
+                "underlying": "BBB",
+                "contract_type": "put",
+                "premium": 80_000,
+                "volume": 10,
+                "strike": 80,
+                "underlying_price": 100,
+                "expiry": "2026-08-21",
+                "ts": "2026-08-11T15:03:00Z",
+            },
+        ]
+
+    result = build_unusual_options_flow(
+        symbols=list(frames),
+        candle_loader=frames.__getitem__,
+        flow_fetcher=flow_fetcher,
+        row_limit=10,
+        min_premium=25_000,
+    )
+
+    assert result["schema_version"] == "unusual-options-flow-v1"
+    assert result["decision_authorized"] is False
+    assert result["feed_status"] == "live"
+    assert {row["symbol"] for row in result["rows"]} == {"AAA", "BBB"}
+    assert all(row["decision_authorized"] is False for row in result["rows"])
+    assert all(row["context_side"] == "neutral" for row in result["rows"])
+    whale = next(row for row in result["rows"] if row["symbol"] == "AAA")
+    put_row = next(row for row in result["rows"] if row["symbol"] == "BBB")
+    assert whale["premium"] >= 1_200_000
+    assert put_row["put_print_count"] >= 1
+    assert whale["unusual_score"] >= put_row["unusual_score"]
+
+    tape = result["tape"]
+    assert tape
+    unsigned = next(row for row in tape if row.get("timestamp", "").startswith("2026-08-11T15:01"))
+    missing = next(row for row in tape if row.get("timestamp", "").startswith("2026-08-11T15:02"))
+    assert unsigned.get("signed_premium") is None
+    assert not unsigned.get("aggressor")
+    assert missing.get("is_unusual") is False
+    assert missing.get("dte") is None or missing.get("otm_pct") is None
+
+
+def test_unusual_flow_timeout_is_unavailable_fail_closed():
+    def boom(**_):
+        raise TimeoutError("flow_provider_timeout")
+
+    result = build_unusual_options_flow(
+        symbols=["AAA"],
+        candle_loader={"AAA": _bars()}.__getitem__,
+        flow_fetcher=boom,
+        row_limit=5,
+        min_premium=25_000,
+    )
+    assert result["feed_status"] == "unavailable"
+    assert result["rows"] == []
+    assert result["tape"] == []
+    assert result["decision_authorized"] is False
+    assert "flow_market_timeout" in result["warnings"]
 
 
 def test_unusual_flow_never_substitutes_local_activity_for_live_rows():

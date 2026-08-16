@@ -314,8 +314,19 @@ def optimize_panel(
                     window = returns.iloc[start : i + 1][covered]
                     usable_cols = window.columns[window.notna().sum() >= 2]
                     if len(usable_cols) >= 2:
-                        cov = window[usable_cols].cov()
-                        cov_full = cov.reindex(index=covered, columns=covered)
+                        # Listwise deletion: pandas' default pairwise .cov()
+                        # is not guaranteed positive semi-definite when names
+                        # have different NaN patterns (e.g. PIT universe gaps),
+                        # and _symmetric_psd correctly raises on a materially
+                        # negative eigenvalue. A sample covariance over the
+                        # rows where every usable name has a return is PSD by
+                        # construction.
+                        sub = window[usable_cols].dropna()
+                        if len(sub) >= 2:
+                            cov = sub.cov()
+                            cov_full = cov.reindex(index=covered, columns=covered)
+                        else:
+                            cov_full = None
                     else:
                         cov_full = None
 

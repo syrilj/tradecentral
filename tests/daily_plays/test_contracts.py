@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from edge.daily_plays.contracts import (
-    Confidence, ConfidenceKind, Entry, EvidenceGrade, LegSide, OptionLeg,
+    Confidence, ConfidenceKind, EvidenceGrade, LegSide, OptionLeg,
     OptionRight, PlayState, canonical_json, stable_hash,
 )
 

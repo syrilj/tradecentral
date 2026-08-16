@@ -63,8 +63,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "edge" / "tools"))
 
 from qlib_sweep import (  # noqa: E402  - path set above
-    N_DROP, PROVIDER, REBALANCE_DAYS, SEGMENTS, TOPK, UNIVERSES,
-    assert_selection_wall, build_and_fit, rank_ic_metrics, run_backtest,
+    N_DROP, PROVIDER, REBALANCE_DAYS, SEGMENTS, TOPK, assert_selection_wall, build_and_fit, rank_ic_metrics, run_backtest,
 )
 
 OUTDIR = ROOT / "edge" / "runs" / "qlib_xs2"

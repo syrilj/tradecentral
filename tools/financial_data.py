@@ -13,13 +13,11 @@ Data sources:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import math
-import re
 import time
-from datetime import date, datetime, timezone, timedelta
-from typing import Any, Mapping, Sequence
+from datetime import datetime, timezone, timedelta
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -32,8 +30,10 @@ _CACHE_PROFILE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_INSIDERS: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_GOVERNMENT: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_OWNERSHIP: dict[str, tuple[float, dict[str, Any]]] = {}
+_CACHE_TAPE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 CACHE_TTL_S = 900  # 15 minutes
+TAPE_TTL_S = 120
 
 
 def _safe_float(val: Any, default: float | None = None) -> float | None:
@@ -94,7 +94,10 @@ def _build_financials_payload(symbol: str, period: str) -> dict[str, Any]:
 
         if inc_df is not None and not inc_df.empty:
             periods = [col.strftime("%Y-%m-%d") if hasattr(col, "strftime") else str(col)[:10] for col in inc_df.columns][:6]
-            
+            yf_periods = periods
+            target_periods = periods
+            canonical_periods = periods
+
             def extract_row(df: pd.DataFrame, possible_keys: list[str], label: str, **kwargs) -> dict[str, Any] | None:
                 if df is None or df.empty:
                     return None
@@ -268,7 +271,7 @@ def _build_financials_payload(symbol: str, period: str) -> dict[str, Any]:
     if data is None or not data.get("income_statement", {}).get("rows"):
         data = _generate_fallback_financials(symbol, period)
 
-    return data
+    return _with_model_forecast(data)
 
 
 def _find_row_val(rows: list[dict[str, Any]], possible_keys: list[str]) -> float | None:
@@ -337,9 +340,11 @@ def _extract_ratios(
         fcf_latest = ocf_latest - abs(capex_latest)
 
     # Market Cap & Enterprise Value
+    # Live last print only when the provider sent one — never a fabricated 120.
+    current_price = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice"))
     mcap = _safe_float(info.get("marketCap"))
     if mcap is None:
-        px = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")) or 120.0
+        px = current_price if current_price is not None else 120.0
         sh = _safe_float(info.get("sharesOutstanding")) or 1_000_000_000.0
         mcap = px * sh
 
@@ -459,6 +464,7 @@ def _extract_ratios(
 
     return {
         "market_cap": round(mcap, 2),
+        "current_price": round(current_price, 2) if current_price is not None else None,
         "enterprise_value": round(ev, 2),
         "pe_trailing": pe_trailing,
         "pe_forward": pe_forward,
@@ -617,6 +623,7 @@ def _generate_fallback_financials(symbol: str, period: str) -> dict[str, Any]:
 
     ratios = {
         "market_cap": round(shares * 35.0, 2),
+        "current_price": None,
         "enterprise_value": round((shares * 35.0) + lt_debt[0] - cash_vals[0], 2),
         "pe_trailing": round(35.0 / eps_vals[0], 2) if eps_vals[0] > 0 else round(rng.uniform(25.0, 45.0), 2),
         "pe_forward": round(rng.uniform(22.0, 48.0), 2),
@@ -650,6 +657,97 @@ def _generate_fallback_financials(symbol: str, period: str) -> dict[str, Any]:
         "source": "deterministic_synthetic_financials",
         "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
+
+
+def resolve_forecast_intel(symbol: str) -> dict[str, Any]:
+    """Live last print + recent tape. Never a fabricated $35 mark or Street target."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {}
+    now = time.time()
+    cached = _CACHE_TAPE.get(sym)
+    if cached and now - cached[0] < TAPE_TTL_S:
+        return dict(cached[1])
+
+    intel: dict[str, Any] = {}
+    try:
+        import yfinance as yf  # type: ignore[import-not-found]
+        ticker = yf.Ticker(sym)
+        info = ticker.info or {}
+        px = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice"))
+        hi = _safe_float(info.get("fiftyTwoWeekHigh"))
+        lo = _safe_float(info.get("fiftyTwoWeekLow"))
+        hist = ticker.history(period="6mo")
+        closes = None
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            closes = hist["Close"].astype(float).dropna()
+        if px is None and closes is not None and len(closes) > 0:
+            px = float(closes.iloc[-1])
+        if px is not None and px > 0:
+            intel["last_price"] = round(px, 4)
+            intel["current_price"] = round(px, 4)
+        eg = _safe_float(info.get("earningsGrowth"))
+        rg = _safe_float(info.get("revenueGrowth"))
+        if eg is not None:
+            intel["earnings_growth"] = eg
+        if rg is not None:
+            intel["revenue_growth"] = rg
+        feps = _safe_float(info.get("forwardEps"))
+        teps = _safe_float(info.get("trailingEps"))
+        if feps is not None:
+            intel["forward_eps"] = feps
+        if teps is not None:
+            intel["trailing_eps"] = teps
+        if hi and lo and hi > lo and px:
+            intel["range_position"] = (px - lo) / (hi - lo)
+        if closes is not None and len(closes) > 5:
+            last = float(closes.iloc[-1])
+            if last > 0:
+                if len(closes) > 21:
+                    prev = float(closes.iloc[-22])
+                    if prev > 0:
+                        intel["ret_1m"] = last / prev - 1.0
+                lookback = 63 if len(closes) > 63 else max(5, len(closes) - 1)
+                prev3 = float(closes.iloc[-lookback - 1]) if len(closes) > lookback else float(closes.iloc[0])
+                if prev3 > 0:
+                    intel["ret_3m"] = last / prev3 - 1.0
+    except Exception as exc:
+        logger.debug("live tape resolve failed for %s: %s", sym, exc)
+
+    _CACHE_TAPE[sym] = (now, intel)
+    return dict(intel)
+
+
+def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
+    """Attach the report-native ML forecast. Never uses Street targets as labels."""
+    try:
+        from research.financials_ml_forecast import score_report_forecast
+    except ImportError:  # pragma: no cover - checkout-as-edge namespace
+        from edge.research.financials_ml_forecast import score_report_forecast
+    out = dict(data)
+    intel = resolve_forecast_intel(str(out.get("symbol") or ""))
+    if intel.get("last_price"):
+        ratios = dict(out.get("ratios") or {})
+        ratios["current_price"] = intel["last_price"]
+        ratios["spot_source"] = "live"
+        out["ratios"] = ratios
+        out["tape"] = {
+            k: intel[k]
+            for k in (
+                "last_price",
+                "current_price",
+                "ret_1m",
+                "ret_3m",
+                "range_position",
+                "earnings_growth",
+                "revenue_growth",
+                "forward_eps",
+                "trailing_eps",
+            )
+            if k in intel
+        }
+    out["model_forecast"] = score_report_forecast(out, intel)
+    return out
 
 
 # ==============================================================================
@@ -1029,6 +1127,7 @@ def _build_company_profile_payload(symbol: str) -> dict[str, Any]:
             "bears_say": bears_say,
             "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         },
+        "model_forecast": get_financials_payload(symbol).get("model_forecast"),
         "source": "company_intelligence_aggregator",
         "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
@@ -1426,7 +1525,7 @@ def _build_government_payload(symbol: str) -> dict[str, Any]:
         ]
     else:
         patents_pool = [
-            ("US11984210B2", f"Distributed High-Throughput Data Routing and Transaction Processing System for {symbol}", "2026-04-18", f"Architecture for low-latency asynchronous data replication and cryptographic state synchronization across high-capacity networks."),
+            ("US11984210B2", f"Distributed High-Throughput Data Routing and Transaction Processing System for {symbol}", "2026-04-18", "Architecture for low-latency asynchronous data replication and cryptographic state synchronization across high-capacity networks."),
             ("US11865412B1", "Dynamic Resource Allocation and Adaptive Load Balancing in Scalable Computing Clusters", "2025-11-12", "Method and apparatus for predictive algorithmic workload scheduling across heterogeneous node clusters."),
             ("US11749801B2", "Automated Real-Time Telemetry Anomaly Detection via Multi-Variate Statistical Ensembles", "2025-06-04", "System for identifying transient anomalies in continuous time-series sensor feeds using adaptive thresholds."),
             ("US11612049B2", "Secure Fault-Tolerant Enterprise Protocol for High-Reliability Operations", "2024-09-28", "Protocols for uninterrupted state recovery and verifiable cryptographic consensus under high network partitions."),

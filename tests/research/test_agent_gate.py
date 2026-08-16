@@ -1,6 +1,4 @@
 """Unit tests for AgentGate module."""
-import pytest
-import numpy as np
 
 try:
     from edge.research.counterfactual_ledger import DecisionRecord

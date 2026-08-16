@@ -502,39 +502,39 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
           live
         >
           <div class="readout-row">
-            <Readout label="Attention" :value="attention != null ? num(attention, 1) : DASH" />
+            <Readout label="Attention" :value="attention != null ? num(attention, 1) : '0.0'" />
             <Readout
               label="SI % float"
               :value="
-                metrics.short_pct_float != null ? num(Number(metrics.short_pct_float), 2) : DASH
+                metrics.short_pct_float != null ? `${num(Number(metrics.short_pct_float), 2)}%` : '0.00%'
               "
             />
             <Readout
               label="Days cover"
               :value="
-                metrics.days_to_cover != null ? num(Number(metrics.days_to_cover), 2) : DASH
+                metrics.days_to_cover != null ? `${num(Number(metrics.days_to_cover), 1)}d` : '0.0d'
               "
             />
             <Readout
               label="Borrow fee %"
               :value="
-                metrics.borrow_fee_pct != null ? num(Number(metrics.borrow_fee_pct), 2) : DASH
+                metrics.borrow_fee_pct != null ? `${num(Number(metrics.borrow_fee_pct), 2)}%` : '0.00%'
               "
             />
             <Readout
               label="Last"
-              :value="metrics.last_price != null ? num(Number(metrics.last_price), 2) : DASH"
+              :value="metrics.last_price != null ? `$${num(Number(metrics.last_price), 2)}` : '$0.00'"
             />
             <Readout
               label="Unu. opts"
               :value="
                 metrics.unusual_options_prints != null
                   ? String(metrics.unusual_options_prints)
-                  : DASH
+                  : '0'
               "
             />
           </div>
-          <p class="headline">{{ analysis?.headline || '—' }}</p>
+          <p class="headline">{{ analysis?.headline || 'No active analysis headline.' }}</p>
           <ul class="notes">
             <li v-for="(n, i) in notes" :key="i">{{ n }}</li>
           </ul>

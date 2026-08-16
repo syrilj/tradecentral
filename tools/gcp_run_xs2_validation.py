@@ -27,7 +27,7 @@ sys.path.insert(0, str(EDGE))
 
 def _ingest_if_missing() -> None:
     if PROVIDER.exists() and len(list(PROVIDER.glob("**/*.bin"))) > 10:
-        print(f"  qlib provider found — skipping ingest.")
+        print("  qlib provider found — skipping ingest.")
         return
     print("  qlib provider missing — running qlib_ingest.py...")
     os.system(f"python3 {EDGE}/tools/qlib_ingest.py 2>&1 | tail -20")
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(results, f, indent=2)
 
     print(f"\n{'=' * 70}")
-    print(f"  XS2 Validation:")
+    print("  XS2 Validation:")
     print(f"  Mean IC:     {mean_ic:.4f}")
     print(f"  Net Return:  {net_ret:.2%}")
     print(f"  IR:          {ir:.3f}")

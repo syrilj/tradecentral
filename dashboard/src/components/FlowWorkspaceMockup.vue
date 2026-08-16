@@ -167,7 +167,7 @@ const queue = [
 }
 .mock-strip strong {
   color: var(--mock-ink);
-  font-family: 'Poppins', var(--font-ui);
+  font-family: var(--font-display);
   font-size: 11px;
   letter-spacing: -0.03em;
 }
@@ -201,10 +201,10 @@ const queue = [
 .brief-copy h3 {
   margin-top: 7px;
   color: var(--mock-ink);
-  font-family: 'Poppins', var(--font-ui);
+  font-family: var(--font-display);
   font-size: 16px;
-  font-weight: 560;
-  letter-spacing: -0.03em;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   line-height: 1.15;
 }
 .brief-copy span {

@@ -98,4 +98,37 @@ reason. Per [`xs_v3/DECISION_RECORD.md`](../runs/xs_v3/DECISION_RECORD.md) the
 
 ---
 
+## Follow-up corrections (2026-08-16)
+
+Three further instances of the same defect class were closed:
+
+1. **`edge/tools/gcp_experiment_pead_v2.py`** carried the identical lag-0
+   pattern (`port_ret = (long_w * daily_ret).sum(axis=1) - ...` with
+   `daily_ret = close_prices.pct_change(1)` and no shift). It was tracked as a
+   KNOWN GAP in `edge/tests/research/test_portfolio_primitive_guard.py`'s
+   ALLOWLIST. All portfolio accounting now routes through
+   `edge.research.portfolio.simulate_long_short` with `execution_lag=1`, and the
+   file was removed from the ALLOWLIST and added to the guard's migrated-tools
+   positive control. Verified with a synthetic smoke test: a pure-noise signal
+   prints ~zero edge at lag 1, while an oracle signal is still detected.
+
+2. **`edge/tools/backtest_vol_timing.py`** entered options on the same bar
+   whose end-of-day vol-complex data (VIX, term_slope, SKEW) formed the signal,
+   pricing the entry with that same bar's spot and VIX. Entries are now queued
+   on bar `i` and filled at bar `i+1`'s open — one full bar of execution lag.
+
+3. **`edge/research/daily_data.py`** now supports point-in-time universe
+   filtering: `load_daily_universe(..., pit_instruments=<dated-interval
+   instruments file>)` drops rows outside each symbol's membership spans and
+   drops symbols the file never admits. The default remains unfiltered so
+   existing preregistered universes are unchanged; opting a runner into PIT
+   filtering is a protocol change that belongs in a new preregistration.
+
+`edge/research/robustness.py` additionally gained `monte_carlo_robustness`, a
+bootstrap-of-returns diagnostic (max-drawdown distribution, probability of
+loss by holding period, annual compounded-return CI) wired into the daily
+directional runner's artifact as a supplemental, non-promotion diagnostic.
+
+---
+
 *Simulated / historical only. Not financial advice.*

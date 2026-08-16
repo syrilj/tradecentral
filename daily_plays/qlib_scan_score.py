@@ -345,10 +345,10 @@ def load_lgb_scorer(
     return None
 
 
-def _factor_blend_scores(
+def _shipped_factor_blend_scores(
     feature_table: dict[str, dict[str, float | None]],
 ) -> dict[str, float]:
-    """Equal-weight literature factor blend (fallback when LGB missing)."""
+    """Original FACTOR_WEIGHTS blend (raw CS z). Partner for the LGB ensemble."""
     z_by_factor: dict[str, dict[str, float]] = {}
     for factor in FACTOR_WEIGHTS:
         raw_vals = {
@@ -369,6 +369,31 @@ def _factor_blend_scores(
         if den > 0:
             scores[symbol] = num / den
     return scores
+
+
+def _desk_ranker_scores(
+    feature_table: dict[str, dict[str, float | None]],
+    *,
+    vol_regime: str = "MEDIUM",
+) -> dict[str, float]:
+    from edge.daily_plays.desk_ranker import score_feature_table
+
+    return dict(score_feature_table(feature_table, vol_regime=vol_regime).scores)
+
+
+def _factor_blend_scores(
+    feature_table: dict[str, dict[str, float | None]],
+    *,
+    vol_regime: str = "MEDIUM",
+    recipe: str = "shipped",
+) -> dict[str, float]:
+    """Dispatch the literature blend. Desk ranker is opt-in, never a silent swap."""
+    if str(recipe) == "desk_ranker":
+        try:
+            return _desk_ranker_scores(feature_table, vol_regime=vol_regime)
+        except Exception:
+            return {}
+    return _shipped_factor_blend_scores(feature_table)
 
 
 def _lgb_predict_scores(
@@ -460,6 +485,36 @@ def _empty_panel(
     }
 
 
+def _market_vol_regime(
+    *,
+    asof: str | pd.Timestamp | datetime | None,
+    paths: Sequence[Path],
+    candle_loader: Callable[[str], Any] | None,
+) -> str:
+    """Causal SPY vol regime for the desk ranker; MEDIUM if SPY is unavailable."""
+    try:
+        from edge.daily_plays.desk_ranker import classify_market_vol_regime
+    except Exception:
+        return "MEDIUM"
+    raw = None
+    try:
+        if candle_loader is not None:
+            raw = candle_loader("SPY")
+        elif paths:
+            raw = _default_loader("SPY", paths)
+    except Exception:
+        raw = None
+    if raw is None or (hasattr(raw, "empty") and raw.empty):
+        return "MEDIUM"
+    try:
+        frame = truncate_to_asof(_normalize_frame(raw), asof)
+        if frame.empty or "close" not in frame.columns:
+            return "MEDIUM"
+        return classify_market_vol_regime(frame["close"], asof=asof)
+    except Exception:
+        return "MEDIUM"
+
+
 def score_cross_section_asof(
     *,
     symbols: Sequence[str],
@@ -468,6 +523,7 @@ def score_cross_section_asof(
     candle_loader: Callable[[str], Any] | None = None,
     provider: str = "local",
     model_dir: str | Path | None = None,
+    engine: str = "auto",
 ) -> dict[str, Any]:
     """Score the catalog as-of a date. Shared by deep scan and Market tab.
 
@@ -486,6 +542,10 @@ def score_cross_section_asof(
     model_dir:
         Optional ranker artifact directory for champion/challenger feedback
         iteration. Defaults to ``models/qlib_scan_lgb``.
+    engine:
+        ``"auto"`` uses LightGBM when the artifact loads, else the desk
+        ranker. ``"desk_ranker"`` forces the zero-fit rev5+mom12_1 recipe.
+        ``"lgb_ensemble"`` always prefers the trained model path.
     """
     requested = list(dict.fromkeys(_symbol(s) for s in symbols if _symbol(s)))
     warnings: list[str] = []
@@ -566,8 +626,27 @@ def score_cross_section_asof(
     # Prefer trained model (+ optional ensemble with factor blend).
     source = SOURCE_ID_FACTORS
     model_meta: dict[str, Any] = {}
-    factor_scores = _factor_blend_scores(feature_table)
-    loaded = load_lgb_scorer(model_dir, force_reload=model_dir is not None)
+    vol_regime = _market_vol_regime(asof=asof, paths=paths, candle_loader=candle_loader)
+    engine_name = str(engine or "auto").strip().lower()
+    if engine_name == "desk_ranker":
+        factor_scores = _factor_blend_scores(
+            feature_table, vol_regime=vol_regime, recipe="desk_ranker",
+        )
+        if not factor_scores:
+            warnings.append("no_scores_after_model")
+            return _empty_panel(
+                asof=str(asof) if asof is not None else None,
+                requested=len(requested),
+                warnings=warnings,
+            )
+        scores = factor_scores
+        source = "desk_ranker_v1"
+        loaded = None
+    else:
+        factor_scores = _factor_blend_scores(
+            feature_table, vol_regime=vol_regime, recipe="shipped",
+        )
+        loaded = load_lgb_scorer(model_dir, force_reload=model_dir is not None)
     if loaded is not None:
         booster, model_meta = loaded
         feat_names = list(model_meta.get("feature_names") or FEATURE_NAMES)
@@ -603,9 +682,11 @@ def score_cross_section_asof(
             scores = factor_scores
             source = SOURCE_ID_FACTORS
     else:
-        if _LGB_CACHE.get("error"):
+        if engine_name != "desk_ranker" and _LGB_CACHE.get("error"):
             warnings.append(f"lgb_unavailable:{_LGB_CACHE['error']}")
         scores = factor_scores
+        if engine_name == "desk_ranker":
+            source = "desk_ranker_v1"
 
     if not scores:
         warnings.append("no_scores_after_model")
@@ -753,17 +834,18 @@ def merge_qlib_into_activity_rows(
             row["qlib_score"] = qrow.get("qlib_score")
             row["qlib_rank"] = qrow.get("qlib_rank")
             row["qlib_score_kind"] = qrow.get("score_kind") or SCORE_KIND
-            row["qlib_source"] = qrow.get("source") or SOURCE_ID
+            row["qlib_source"] = qrow.get("source") or panel.get("source") or SOURCE_ID
             row["qlib_asof"] = qrow.get("asof") or panel.get("asof")
             sources = list(row.get("sources") or [])
-            if SOURCE_ID not in sources:
-                sources.append(SOURCE_ID)
+            label = str(row["qlib_source"])
+            if label and label not in sources:
+                sources.append(label)
             row["sources"] = sources
         else:
             row["qlib_score"] = None
             row["qlib_rank"] = None
             row["qlib_score_kind"] = SCORE_KIND
-            row["qlib_source"] = SOURCE_ID
+            row["qlib_source"] = panel.get("source") or SOURCE_ID
             row["qlib_asof"] = panel.get("asof")
         out.append(row)
     return out

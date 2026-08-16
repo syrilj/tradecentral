@@ -16,7 +16,18 @@ const sharedStatus = inject<Resource<StatusPayload> | null>('status', null)
 const statusPayload = computed(() => sharedStatus?.data.value ?? null)
 const minPremium = ref(BASE_FLOW_FLOOR)
 const forceNext = ref(false)
-const selectedSetup = ref(String(route.query.setup || '').trim().toUpperCase())
+
+function queryTicker(key: 'setup' | 'symbol'): string {
+  const raw = route.query[key]
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return String(value || '').trim().toUpperCase()
+}
+
+function focusNameFromQuery(): string {
+  return queryTicker('setup') || queryTicker('symbol')
+}
+
+const selectedSetup = ref(focusNameFromQuery())
 
 const unusual = useResource(
   () => api.unusualFlow({
@@ -44,7 +55,7 @@ function openSymbol(symbol: string): void {
   selectedSetup.value = symbol
   void router.replace({
     name: 'flow',
-    query: { ...route.query, setup: symbol },
+    query: { ...route.query, setup: symbol, symbol },
   })
 }
 
@@ -52,11 +63,12 @@ function closeSetup(): void {
   selectedSetup.value = ''
   const query = { ...route.query }
   delete query.setup
+  delete query.symbol
   void router.replace({ name: 'flow', query })
 }
 
-watch(() => route.query.setup, (value) => {
-  selectedSetup.value = String(value || '').trim().toUpperCase()
+watch(() => [route.query.setup, route.query.symbol], () => {
+  selectedSetup.value = focusNameFromQuery()
 })
 </script>
 
@@ -87,6 +99,7 @@ watch(() => route.query.setup, (value) => {
       :error="unusual.error.value"
       :min-premium="minPremium"
       :poll-ms="FLOW_POLL_MS"
+      :focus-symbol="selectedSetup"
       @refresh="void refreshFlow()"
       @threshold="setPremium"
       @open-symbol="openSymbol"

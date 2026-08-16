@@ -47,9 +47,6 @@ try:
     from edge.daily_plays.clock import RunContext
 except ImportError:
     from daily_plays.adapters.internal_models import (
-        BASELINE_MODEL_ID,
-        DEFAULT_DAILY_DATA_PATH,
-        DEFAULT_UNIVERSE_PATH,
         PROBABILITY_TARGET,
         TARGET_HORIZON_DAYS,
         ChainFreeInternalModelsAdapter,
@@ -57,11 +54,9 @@ except ImportError:
         _daily_asof,
         _frame,
         _load_v90_engine,
-        _local_daily_candles,
         _v90_base_predict,
         _v90_signal,
         _v90_signal_from_base,
-        _weekday_session_age,
     )
     from daily_plays.clock import RunContext
 

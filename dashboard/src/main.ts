@@ -29,7 +29,7 @@ createApp(App)
         colorDanger: '#cf5f6b',
         colorSuccess: '#4fae80',
         borderRadius: '2px',
-        fontFamily: 'Instrument Sans Variable, Instrument Sans, sans-serif',
+        fontFamily: 'Geist Variable, Geist, Instrument Sans, sans-serif',
       },
       elements: {
         rootBox: { width: '100%' },
@@ -50,11 +50,11 @@ createApp(App)
         userButtonPopoverActionButton: {
           color: '#c3c9d6',
           borderRadius: '2px',
-          fontFamily: 'Instrument Sans Variable, Instrument Sans, sans-serif',
+          fontFamily: 'Geist Variable, Geist, Instrument Sans, sans-serif',
         },
         userPreviewMainIdentifier: {
           color: '#e9ecf2',
-          fontFamily: 'Martian Mono Variable, Martian Mono, monospace',
+          fontFamily: 'Geist Mono Variable, Geist Mono, monospace',
           fontSize: '12px',
           fontWeight: '600',
         },

@@ -83,6 +83,7 @@ export function setupHeadlineInvalidation(input: {
   invalidationSource?: string | null
   planInvalidation?: number | null
   planInvalidationSource?: string | null
+  supports?: unknown
 }): { price: number | null, source: string | null } {
   if (input.invalidation != null && Number.isFinite(Number(input.invalidation))) {
     return { price: Number(input.invalidation), source: input.invalidationSource ?? null }

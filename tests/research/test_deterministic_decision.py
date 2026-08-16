@@ -4,7 +4,6 @@ Unit tests for Workstream 6 & 7: Deterministic Strategy Decision Interface & Rep
 
 from __future__ import annotations
 
-import pytest
 import pandas as pd
 import numpy as np
 
@@ -13,8 +12,8 @@ try:
     from edge.research.decision import make_decision, DecisionOutput
     from edge.research.replay import run_deterministic_replay
 except ImportError:
-    from research.safety import StrategyState, SafetyConfig
-    from research.decision import make_decision, DecisionOutput
+    from research.safety import StrategyState
+    from research.decision import make_decision
     from research.replay import run_deterministic_replay
 
 

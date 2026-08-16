@@ -86,12 +86,12 @@ function initThree() {
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.7)
   scene.add(ambientLight)
 
-  /* Match flow tokens: --call #5b95b5, --put #c1955e (no green/red neon) */
-  const dirLight1 = new THREE.DirectionalLight(0x5b95b5, 1.2)
+  /* Match flow tokens: --call #10b981, --put #f43f5e */
+  const dirLight1 = new THREE.DirectionalLight(0x10b981, 1.2)
   dirLight1.position.set(5, 10, 7)
   scene.add(dirLight1)
 
-  const dirLight2 = new THREE.DirectionalLight(0xc1955e, 1.0)
+  const dirLight2 = new THREE.DirectionalLight(0xf43f5e, 1.0)
   dirLight2.position.set(-5, -5, -5)
   scene.add(dirLight2)
 
@@ -224,9 +224,9 @@ function buildSurfaceModel() {
   }
 
   addMarkerLine(spot, 0xffffff)
-  /* Match flow call/put tokens: --call #5b95b5, --put #c1955e */
-  if (props.callWall) addMarkerLine(props.callWall, 0x5b95b5)
-  if (props.putWall) addMarkerLine(props.putWall, 0xc1955e)
+  /* Match flow call/put tokens: --call #10b981, --put #f43f5e */
+  if (props.callWall) addMarkerLine(props.callWall, 0x10b981)
+  if (props.putWall) addMarkerLine(props.putWall, 0xf43f5e)
 
   requestRender()
 }

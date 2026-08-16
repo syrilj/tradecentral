@@ -478,7 +478,7 @@ describe('Challenger 1: Tab Switching & Navigation Contract', () => {
 // ============================================================================
 describe('Challenger 1: Rapid Symbol Changes & Input Sanitization', () => {
   function cleanTicker(term: string): string {
-    return term.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
+    return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
   }
 
   it('cleans and sanitizes dirty / malformed ticker search queries', () => {

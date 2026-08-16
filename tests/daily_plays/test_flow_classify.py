@@ -44,6 +44,23 @@ def test_twenty_dte_fifteen_otm_is_unusual_and_call():
     assert "unusual" in row["presets"]
 
 
+def test_missing_dte_or_otm_does_not_invent_unusual():
+    no_expiry = _one(expiry=None)
+    no_strike = classify_options_tape([
+        {key: value for key, value in _print().items() if key != "strike"},
+    ])[0]
+    no_spot = classify_options_tape([
+        {key: value for key, value in _print().items() if key != "underlying_price"},
+    ])[0]
+    assert no_expiry["dte"] is None
+    assert no_expiry["is_unusual"] is False
+    assert "unusual" not in (no_expiry.get("presets") or [])
+    assert no_strike["otm_pct"] is None
+    assert no_strike["is_unusual"] is False
+    assert no_spot["otm_pct"] is None
+    assert no_spot["is_unusual"] is False
+
+
 def test_forty_dte_or_five_otm_is_not_unusual():
     long_dated = _one(expiry="2026-09-09")  # 40 DTE from 2026-07-31
     near_atm = _one(strike=105)  # 5% OTM

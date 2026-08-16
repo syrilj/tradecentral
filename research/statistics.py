@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import sys
 from statistics import NormalDist
 from typing import Any, Iterable
 

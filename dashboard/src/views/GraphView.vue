@@ -229,7 +229,7 @@ const chords = computed(() => {
     const mx = CX + ((a.x + b.x) / 2 - CX) * pull * 0.55
     const my = CY + ((a.y + b.y) / 2 - CY) * pull * 0.55
     out.push({
-      key: `${e.source} ${e.target}`,
+      key: `${e.source}\u0000${e.target}`,
       d: `M${a.x.toFixed(2)},${a.y.toFixed(2)}Q${mx.toFixed(2)},${my.toFixed(2)} ${b.x.toFixed(2)},${b.y.toFixed(2)}`,
       source: e.source,
       target: e.target,

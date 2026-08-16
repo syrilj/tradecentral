@@ -29,6 +29,14 @@ def test_health_and_unusual_flow_twice(api_client):
             assert "presets" in row or "is_unusual" in row
 
 
+def test_options_suggest_is_unauthorized_for_a_named_symbol(api_client):
+    response = api_client.get("/api/options/suggest?symbol=SPY")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, dict)
+    assert body.get("decision_authorized") is False
+
+
 def test_flow_tape_endpoint_is_symbol_scoped(api_client):
     response = api_client.get("/api/flow-tape?symbol=NVDA&from=2026-08-01&to=2026-08-14")
     assert response.status_code == 200

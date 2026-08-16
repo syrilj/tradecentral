@@ -1,7 +1,6 @@
 """Unit tests for TradeLens and TradeLens++ evaluation framework."""
 import pytest
 import numpy as np
-import pandas as pd
 
 try:
     from edge.eval.tradelens import (

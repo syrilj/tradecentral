@@ -79,6 +79,16 @@ def run_vol_timing_backtest(
     
     portfolio_history = []
     
+    # EXECUTION-LAG CORRECTION (2026-08-16): signals are formed from bar i's
+    # end-of-day vol-complex data (VIX, term_slope, SKEW, ...), so the earliest
+    # honest entry is the NEXT bar's open. The previous version entered on bar
+    # i itself, pricing the option with the same bar's spot and VIX that formed
+    # the signal -- the same one-bar lookahead shape the rest of this repo
+    # treats as unrepresentable (edge/docs/LOOKAHEAD_CORRECTION.md,
+    # edge/research/portfolio.py). Pending entries are queued on bar i and
+    # filled at bar i+1's open.
+    pending_entry = None  # {"option_type", "strike", "dte", "signal_date"}
+    
     for i in range(len(df)):
         dt = pd.to_datetime(dates[i])
         spot = prices[i]
@@ -115,31 +125,25 @@ def run_vol_timing_backtest(
                     "exit_date": dt.strftime("%Y-%m-%d"),
                     "underlying": underlying,
                     "type": position["option_type"],
-                    "entry_spot": position["entry_spot"],
-                    "exit_spot": spot,
-                    "holding_days": days_held,
-                    "capital": position["capital_allocated"],
-                    "pnl": pnl,
-                    "return_pct": ret_pct,
+                    "entry_spot": float(position["entry_spot"]),
+                    "exit_spot": float(spot),
+                    "holding_days": int(days_held),
+                    "capital": float(position["capital_allocated"]),
+                    "pnl": float(pnl),
+                    "return_pct": float(ret_pct),
                 })
                 cash = current_portfolio_value
                 position = None
         else:
             current_portfolio_value = cash
             
-            # Entry Signals
-            # 1. Long CALL: Volatility backwardation panic -> expected mean reversion rally
-            is_call_signal = (slope >= enter_call_term_slope) or (stresses[i] >= 1.08 if not np.isnan(stresses[i]) else False)
-            # 2. Long PUT: Extreme market complacency + elevated tail risk demand -> hedge crash
-            is_put_signal = (skew >= enter_put_skew) and (slope <= enter_put_term_slope)
-            
-            if is_call_signal or is_put_signal:
-                opt_type = "call" if is_call_signal else "put"
-                # Select At-The-Money (ATM) strike
-                strike = round(spot, 0)
-                dte = 45 # 45 DTE target
+            # Fill a pending entry at THIS bar's open (signal was formed at
+            # the prior bar's close -- one full bar of execution lag).
+            if pending_entry is not None:
+                opt_type = pending_entry["option_type"]
+                strike = pending_entry["strike"]
+                dte = pending_entry["dte"]
                 t_years = dte / 365.0
-                
                 raw_opt_price = bs_price(spot=spot, strike=strike, t_years=t_years, r=0.03, iv=vix, option_type=opt_type)
                 ask_price = raw_opt_price + cost_per_side # Charge $0.01 ask spread
                 
@@ -160,6 +164,25 @@ def run_vol_timing_backtest(
                         "contracts": n_contracts,
                         "capital_allocated": actual_cost,
                     }
+                pending_entry = None
+            
+            # Entry Signals (formed at this bar's close; executed next bar)
+            # 1. Long CALL: Volatility backwardation panic -> expected mean reversion rally
+            is_call_signal = (slope >= enter_call_term_slope) or (stresses[i] >= 1.08 if not np.isnan(stresses[i]) else False)
+            # 2. Long PUT: Extreme market complacency + elevated tail risk demand -> hedge crash
+            is_put_signal = (skew >= enter_put_skew) and (slope <= enter_put_term_slope)
+            
+            if is_call_signal or is_put_signal:
+                opt_type = "call" if is_call_signal else "put"
+                # Select At-The-Money (ATM) strike
+                strike = round(spot, 0)
+                dte = 45 # 45 DTE target
+                pending_entry = {
+                    "option_type": opt_type,
+                    "strike": strike,
+                    "dte": dte,
+                    "signal_date": dt.strftime("%Y-%m-%d"),
+                }
                     
         portfolio_history.append({"Date": dt, "portfolio_value": current_portfolio_value})
 
@@ -228,6 +251,7 @@ def run_vol_timing_backtest(
         "n_trades": n_trades,
         "win_rate": float(win_rate),
         "avg_trade_pnl": float(avg_trade_pnl),
+        "trades": trades,
         "regime_breakdown": regime_results,
         "positive_regimes_count": positive_regimes,
         "gate_checks": gate_checks,

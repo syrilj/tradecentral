@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from datetime import datetime
+from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 import yfinance as yf

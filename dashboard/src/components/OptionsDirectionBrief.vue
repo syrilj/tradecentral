@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OptionsDirectionRead } from '@/optionsDirection'
-import { num, pctFrac, DASH } from '@/format'
+import { num, pctFrac } from '@/format'
 
 defineProps<{
   symbol: string
@@ -8,7 +8,7 @@ defineProps<{
 }>()
 
 function signedScore(value: number | null): string {
-  if (value == null) return DASH
+  if (value == null) return '+0.0'
   return `${value > 0 ? '+' : ''}${num(value, 1)}`
 }
 
@@ -16,7 +16,7 @@ function directionArrow(state: OptionsDirectionRead['state']): string {
   if (state === 'bullish') return '↗'
   if (state === 'bearish') return '↘'
   if (state === 'mixed') return '↕'
-  return '—'
+  return '•'
 }
 </script>
 
@@ -40,9 +40,9 @@ function directionArrow(state: OptionsDirectionRead['state']): string {
 
     <div class="score-block">
       <div class="score-head label">
-        <span>BEARISH</span>
+        <span class="score-side-label bear">BEARISH</span>
         <strong class="fig">{{ signedScore(read.score) }}<small>/100</small></strong>
-        <span>BULLISH</span>
+        <span class="score-side-label bull">BULLISH</span>
       </div>
       <div class="score-track" aria-label="Directional squeeze score from bearish to bullish">
         <i class="score-zero" />
@@ -65,20 +65,20 @@ function directionArrow(state: OptionsDirectionRead['state']): string {
       <div class="evidence-cell">
         <span class="label">SIGNED FLOW</span>
         <strong class="fig" :class="read.signedFlow != null ? (read.signedFlow > 0 ? 'pos' : read.signedFlow < 0 ? 'neg' : '') : ''">
-          {{ read.signedFlow == null ? DASH : `${read.signedFlow > 0 ? '+' : ''}${pctFrac(read.signedFlow, 1)}` }}
+          {{ read.signedFlow == null ? '+0.0%' : `${read.signedFlow > 0 ? '+' : ''}${pctFrac(read.signedFlow, 1)}` }}
         </strong>
         <small class="label">{{ read.signedConfidence == null ? 'NO BUY / SELL SIDE' : `${pctFrac(read.signedConfidence, 0)} CONF.` }}</small>
       </div>
       <div class="evidence-cell">
         <span class="label">PRICE MOMENTUM</span>
         <strong class="fig" :class="read.momentum != null ? (read.momentum > 0 ? 'pos' : read.momentum < 0 ? 'neg' : '') : ''">
-          {{ read.momentum == null ? DASH : `${read.momentum > 0 ? '+' : ''}${pctFrac(read.momentum, 2)}` }}
+          {{ read.momentum == null ? '+0.00%' : `${read.momentum > 0 ? '+' : ''}${pctFrac(read.momentum, 2)}` }}
         </strong>
         <small class="label">{{ read.momentumFresh ? 'FRESH' : 'STALE · EXCLUDED' }}</small>
       </div>
       <div class="evidence-cell activity" :class="read.activity">
         <span class="label">CONTRACT MIX</span>
-        <strong class="fig">{{ read.callPct == null ? DASH : `${read.callPct}%C / ${read.putPct}%P` }}</strong>
+        <strong class="fig">{{ read.callPct == null ? '0% C / 0% P' : `${read.callPct}% C / ${read.putPct}% P` }}</strong>
         <small class="label">NOT DIRECTION</small>
       </div>
     </div>
@@ -146,6 +146,8 @@ function directionArrow(state: OptionsDirectionRead['state']): string {
 .score-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); color: var(--ink-ghost); font-size: var(--t-micro); }
 .score-head strong { color: var(--direction-tone); font-size: 0.95rem; }
 .score-head small { color: var(--ink-faint); font-size: var(--t-micro); }
+.score-side-label.bull { color: var(--long); font-weight: 600; }
+.score-side-label.bear { color: var(--short); font-weight: 600; }
 .score-track { position: relative; height: 8px; overflow: hidden; border: var(--hair) solid var(--rule-hi); background: var(--panel); }
 .score-zero { position: absolute; z-index: 2; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--ink-dim); }
 .score-fill { position: absolute; top: 1px; bottom: 1px; background: var(--direction-tone); }

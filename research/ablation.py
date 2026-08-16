@@ -12,7 +12,7 @@ Tests proposed features independently against baseline models, calculating:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 import numpy as np
 import pandas as pd
 from scipy import stats

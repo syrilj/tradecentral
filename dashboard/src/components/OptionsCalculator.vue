@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { api } from '@/api'
+import { api, type OptionsIntelligence, type OptionsProbability } from '@/api'
 import { useChartSize } from '@/composables/useChartSize'
 import { debounce } from '@/composables/useResource'
 import { DASH, num, usd } from '@/format'
@@ -8,6 +8,7 @@ import {
   asStrategy,
   bookAllocation,
   buildPayoffChart,
+  calculateStrategyPoP,
   computeBookGreeks,
   evaluateBookDualCurves,
   evaluateRiskRewardBounds,
@@ -23,6 +24,7 @@ import {
   type OptionRight,
 } from '@/optionsCalculator'
 import Panel from '@/components/Panel.vue'
+import ProbabilityDensityChart from '@/components/ProbabilityDensityChart.vue'
 import Readout from '@/components/Readout.vue'
 
 const props = defineProps<{
@@ -35,6 +37,9 @@ const props = defineProps<{
   symbol?: string | null
 }>()
 
+const QUICK_TICKERS = ['SPY', 'QQQ', 'NVDA', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'AMD', 'META', 'GOOGL']
+
+const symbolInput = ref(props.symbol ? props.symbol.toUpperCase() : '')
 const strategy = ref<CalcStrategy>(asStrategy(props.defaultStrategy))
 const spot = ref(props.defaultSpot && props.defaultSpot > 0 ? props.defaultSpot : 100)
 const strikeHint = ref(props.defaultStrike && props.defaultStrike > 0 ? props.defaultStrike : 105)
@@ -43,6 +48,13 @@ const volPct = ref(props.defaultVol && props.defaultVol > 0 ? props.defaultVol *
 const skewPct = ref(0)
 const smilePct = ref(0)
 const premiumHint = ref(props.defaultPremium != null && props.defaultPremium >= 0 ? props.defaultPremium : 5)
+const callWall = ref<number | null>(null)
+const putWall = ref<number | null>(null)
+
+const liveIntel = ref<OptionsIntelligence | null>(null)
+const syncingLive = ref(false)
+const syncError = ref<string | null>(null)
+
 const legs = ref<CalcLeg[]>(seedBook({
   strategy: strategy.value === 'custom' ? 'long_call' : strategy.value,
   strike: strikeHint.value,
@@ -58,6 +70,59 @@ const result = ref<{
   pnl_at_expiry: Array<{ spot: number; pnl: number }>
   legs: Array<Record<string, unknown>>
 } | null>(null)
+
+async function syncLive(targetSym?: string): Promise<void> {
+  const sym = (targetSym || symbolInput.value).trim().toUpperCase()
+  if (!sym) return
+  syncingLive.value = true
+  syncError.value = null
+  try {
+    const intel = await api.options({ symbol: sym, mode: 'live' })
+    liveIntel.value = intel
+    symbolInput.value = sym
+    if (intel.summary?.spot && intel.summary.spot > 0) {
+      spot.value = Math.round(intel.summary.spot * 100) / 100
+    }
+    if (intel.probability?.atm_iv && intel.probability.atm_iv > 0) {
+      volPct.value = Math.round(intel.probability.atm_iv * 1000) / 10
+    }
+    if (intel.probability?.horizon_days && intel.probability.horizon_days > 0) {
+      dte.value = intel.probability.horizon_days
+    }
+    if (intel.summary?.call_wall) {
+      callWall.value = intel.summary.call_wall
+    }
+    if (intel.summary?.put_wall) {
+      putWall.value = intel.summary.put_wall
+    }
+    if (strategy.value !== 'custom' && spot.value > 0) {
+      strikeHint.value = Math.round(spot.value)
+      legs.value = seedBook({
+        strategy: strategy.value,
+        strike: strikeHint.value,
+        premium: premiumHint.value,
+        dte: dte.value,
+        vol: volPct.value,
+      })
+    }
+  } catch (err) {
+    syncError.value = err instanceof Error ? err.message : 'Live chain sync failed'
+  } finally {
+    syncingLive.value = false
+  }
+}
+
+function selectQuickTicker(sym: string): void {
+  symbolInput.value = sym
+  void syncLive(sym)
+}
+
+watch(() => props.symbol, (value) => {
+  if (value && value.trim()) {
+    symbolInput.value = value.trim().toUpperCase()
+    void syncLive(value.trim().toUpperCase())
+  }
+}, { immediate: true })
 
 watch(() => props.defaultStrategy, (value) => {
   if (!value) return
@@ -144,6 +209,37 @@ const samplePnl = computed(() => samplePnlRows(
   dualSeries.value,
   [spot.value, ...legs.value.map((leg) => Number(leg.strike))],
 ))
+
+const strategyPoP = computed(() => calculateStrategyPoP({
+  legs: legs.value,
+  spot: spot.value,
+  dteDays: dte.value,
+  volPct: volPct.value,
+  breakevens: breakevens.value,
+}))
+
+const activeProbability = computed<OptionsProbability | null>(() => {
+  if (liveIntel.value?.probability?.available && liveIntel.value.probability.atm_iv && liveIntel.value.probability.horizon_days) {
+    return liveIntel.value.probability
+  }
+  const S = Number(spot.value)
+  const iv = volPct.value > 2.0 ? volPct.value / 100 : volPct.value
+  const T = Math.max(dte.value, 1) / 365.0
+  const sigma = iv * Math.sqrt(T)
+  const expMove = S * sigma
+  return {
+    available: true,
+    method: 'black_scholes_lognormal',
+    atm_iv: iv,
+    horizon_days: dte.value,
+    expected_move: expMove,
+    expected_low: Math.max(0.01, S - expMove),
+    expected_high: S + expMove,
+    prob_above_call_wall: null,
+    prob_below_put_wall: null,
+    prob_between_walls: null,
+  }
+})
 
 const chartHost = ref<HTMLElement | null>(null)
 const { W: chartW } = useChartSize(chartHost, { minW: 320, minH: 220, fallbackW: 720, fallbackH: 240 })
@@ -298,6 +394,49 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
 
 <template>
   <div class="calc">
+    <!-- Underlier & Live Chain Sync Shelf -->
+    <div class="underlier-shelf">
+      <div class="symbol-sync-group">
+        <span class="label group-tag">UNDERLIER</span>
+        <div class="symbol-input-box">
+          <input
+            v-model="symbolInput"
+            type="text"
+            placeholder="TICKER (e.g. SPY, NVDA)"
+            class="sym-input"
+            @keyup.enter="syncLive()"
+          />
+          <button
+            type="button"
+            class="btn-quiet sync-btn"
+            :disabled="syncingLive || !symbolInput.trim()"
+            @click="syncLive()"
+          >
+            {{ syncingLive ? 'SYNCING LIVE…' : 'SYNC LIVE CHAIN' }}
+          </button>
+        </div>
+        <div class="quick-tickers">
+          <button
+            v-for="sym in QUICK_TICKERS"
+            :key="sym"
+            type="button"
+            class="btn-quiet ticker-pill"
+            :class="{ on: symbolInput.toUpperCase() === sym }"
+            @click="selectQuickTicker(sym)"
+          >
+            {{ sym }}
+          </button>
+        </div>
+      </div>
+      <div v-if="liveIntel?.summary" class="live-meta-facts">
+        <span class="gex-meta-badge">LIVE SPOT {{ usd(liveIntel.summary.spot) }}</span>
+        <span v-if="liveIntel.summary.call_wall" class="gex-meta-badge call">CALL WALL {{ usd(liveIntel.summary.call_wall, 0) }}</span>
+        <span v-if="liveIntel.summary.put_wall" class="gex-meta-badge put">PUT WALL {{ usd(liveIntel.summary.put_wall, 0) }}</span>
+        <span v-if="liveIntel.summary.total_gex_m != null" class="gex-meta-badge">GEX {{ liveIntel.summary.total_gex_m >= 0 ? '+' : '' }}{{ num(liveIntel.summary.total_gex_m, 1) }}M</span>
+      </div>
+      <p v-if="syncError" class="sync-error-text label">{{ syncError }}</p>
+    </div>
+
     <!-- Strategy Presets Toolbar (11 Institutional Presets) -->
     <div class="presets-shelf">
       <div class="presets-group">
@@ -343,7 +482,7 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
         label="Book"
         index="01"
         flush
-        :meta="`${symbol ? `${symbol} · ` : ''}${strategyLabel} · ${legs.length} LEG${legs.length === 1 ? '' : 'S'}`"
+        :meta="`${symbolInput || symbol ? `${symbolInput || symbol} · ` : ''}${strategyLabel} · ${legs.length} LEG${legs.length === 1 ? '' : 'S'}`"
       >
         <template #action>
           <button type="button" class="btn-quiet" @click="addLeg">Add leg</button>
@@ -436,12 +575,19 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
             :value="usd(debit, 0)"
             :tone="debit > 0 ? 'neg' : debit < 0 ? 'pos' : 'flat'"
           />
+          <Readout
+            label="Prob of Profit"
+            :value="strategyPoP.popPctFormatted"
+            :tone="strategyPoP.pop >= 0.5 ? 'pos' : 'neg'"
+            :title="strategyPoP.profitZoneDesc"
+          />
         </dl>
       </aside>
     </div>
 
     <p v-if="error" class="calc-error">{{ error }}</p>
 
+    <!-- Panel 02: P/L at Expiry & T+0 Curve -->
     <Panel
       label="P/L at expiry"
       index="02"
@@ -558,12 +704,126 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
         </table>
       </div>
     </Panel>
+
+    <!-- Panel 03: Risk-Neutral Probability & Target Analysis -->
+    <Panel
+      label="Risk-neutral probability"
+      index="03"
+      flush
+      :meta="`${symbolInput || symbol || 'PORTFOLIO'} · IV ${num(volPct, 1)}% · ${dte}D HORIZON · ±1σ ${usd(spot * (volPct / 100) * Math.sqrt(Math.max(dte, 1) / 365))}`"
+    >
+      <ProbabilityDensityChart
+        :probability="activeProbability"
+        :spot="spot"
+        :dte="dte"
+        :vol="volPct"
+        :call-wall="callWall"
+        :put-wall="putWall"
+        :breakevens="breakevens"
+        :strikes="legs"
+        :pop="strategyPoP.pop"
+        :strategy-label="strategyLabel"
+        :height="220"
+      />
+    </Panel>
+
     <p class="calc-note">Multi-leg P/L is computed using closed-form Black-Scholes and intrinsic expiry curves. Diagnostic only — not an order ticket.</p>
   </div>
 </template>
 
 <style scoped>
 .calc { display: grid; gap: var(--s4); }
+
+.underlier-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+}
+
+.symbol-sync-group {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.symbol-input-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sym-input {
+  width: 140px;
+  min-height: var(--density-control-h);
+  padding: 0 var(--s3);
+  color: var(--ink);
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule-hi);
+  font-family: var(--font-data);
+  font-weight: 700;
+  font-size: var(--t-small);
+  text-transform: uppercase;
+}
+
+.sym-input:focus {
+  border-color: var(--phosphor);
+  outline: none;
+}
+
+.sync-btn {
+  min-height: var(--density-control-h);
+  padding: 0 12px;
+  font-size: var(--t-micro, 10px);
+  font-weight: 700;
+}
+
+.quick-tickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ticker-pill {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ticker-pill.on {
+  color: var(--phosphor);
+  border-color: var(--phosphor);
+  background: var(--phosphor-wash);
+}
+
+.live-meta-facts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.gex-meta-badge {
+  font-size: var(--t-micro, 10px);
+  color: var(--ink-dim);
+  font-family: var(--font-data);
+  padding: 2px 6px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+}
+
+.gex-meta-badge.call { color: var(--call-hi); border-color: var(--call-dim); }
+.gex-meta-badge.put { color: var(--put-hi); border-color: var(--put-dim); }
+
+.sync-error-text {
+  color: var(--warn);
+  font-size: 10px;
+  margin-top: 4px;
+}
 
 .presets-shelf {
   display: flex;
@@ -613,127 +873,228 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
   font-size: var(--t-small);
   border-radius: 2px;
 }
+
 .btn-quiet.on {
   color: var(--phosphor);
   border-color: var(--phosphor);
   background: var(--phosphor-wash);
 }
-.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+
 .calc-desk {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+  grid-template-columns: minmax(0, 1fr) 280px;
   gap: var(--s4);
   align-items: start;
 }
-.alloc-stack { display: grid; gap: var(--s3); min-width: 0; }
+
+@media (max-width: 960px) {
+  .calc-desk { grid-template-columns: 1fr; }
+}
+
+.table-scroll { overflow-x: auto; max-width: 100%; }
+
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
+
+.grid th,
+.grid td {
+  padding: var(--s2) var(--s3);
+  border-bottom: var(--hair) solid var(--rule);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.grid th.num,
+.grid td.num { text-align: right; }
+
+.seg { display: inline-flex; gap: 2px; }
+
+.alloc-stack { display: grid; gap: var(--s3); }
+
 .alloc-card {
+  padding: var(--s3);
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
   display: grid;
   gap: var(--s3);
-  padding: var(--s3);
-  border: var(--hair) solid var(--rule);
-  background: var(--panel);
 }
+
 .alloc-card header {
   display: flex;
-  align-items: baseline;
   justify-content: space-between;
-  gap: var(--s2);
+  align-items: baseline;
 }
-.alloc-card header strong { color: var(--ink); font-size: var(--t-small); }
+
 .alloc-bar {
   display: flex;
-  height: 8px;
+  height: 6px;
+  background: var(--void-lift);
   overflow: hidden;
-  background: var(--rule-faint);
+  border-radius: 1px;
 }
-.alloc-bar .call-seg { display: block; background: var(--call); }
-.alloc-bar .put-seg { display: block; background: var(--put); }
+
+.alloc-bar .call-seg {
+  background: var(--call);
+  height: 100%;
+  transition: width 0.15s ease;
+}
+
+.alloc-bar .put-seg {
+  background: var(--put);
+  height: 100%;
+  transition: width 0.15s ease;
+}
+
 .alloc-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--s3);
+  gap: var(--s2) var(--s3);
+  margin: 0;
 }
-.alloc-grid dd { margin-top: 2px; }
+
+.alloc-grid dt { font-size: var(--t-micro); color: var(--ink-dim); }
+.alloc-grid dd {
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: var(--t-small);
+  font-weight: 600;
+}
 .alloc-grid small { color: var(--ink-faint); font-size: var(--t-micro); }
+
 .call-text { color: var(--call-hi); }
 .put-text { color: var(--put-hi); }
+
 .greeks {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--s3);
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s2);
+  margin: 0;
 }
+
+.calc-error {
+  color: var(--warn);
+  padding: var(--s2) var(--s3);
+  background: var(--warn-wash, rgba(234, 179, 8, 0.08));
+  border: var(--hair) solid var(--warn);
+  font-size: var(--t-small);
+}
+
 .payoff-host {
   position: relative;
-  min-height: 240px;
-  background: var(--void-lift);
-}
-.payoff {
-  display: block;
   width: 100%;
-  height: 240px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule-hi);
+  overflow: hidden;
 }
-.payoff .gridlines line { stroke: var(--rule-faint); stroke-width: 1; }
-.payoff .axis { stroke: var(--rule-hi); stroke-width: 1; }
-.payoff .spot { stroke: var(--phosphor); stroke-width: 1; stroke-dasharray: 3 3; }
-.payoff .strike { stroke-width: 1; stroke-dasharray: 2 3; }
-.payoff .strike.call { stroke: var(--call); }
-.payoff .strike.put { stroke: var(--put); }
-.payoff .curve { fill: none; stroke: var(--ink); stroke-width: 1.5; }
-.payoff .t0-curve { fill: none; stroke: var(--call-hi); stroke-width: 1.5; stroke-dasharray: 4 2; }
-.payoff .profit-fill { fill: var(--long-wash); }
-.payoff .loss-fill { fill: var(--short-wash); }
-.payoff .be-dot { fill: var(--ink); }
-.payoff .hover { stroke: var(--ink-dim); stroke-width: 1; }
-.payoff .axis-labels text {
-  fill: var(--ink-faint);
-  font: 500 10px var(--font-data);
-  text-anchor: end;
+
+.payoff { display: block; width: 100%; height: auto; }
+
+.gridlines line {
+  stroke: var(--rule);
+  stroke-dasharray: 2 4;
 }
-.payoff .axis-labels .x-tick { text-anchor: middle; }
-.payoff .spot-tag,
-.payoff .be-tag { text-anchor: start; fill: var(--phosphor); }
-.payoff .be-tag { fill: var(--ink-dim); }
+
+.profit-fill {
+  fill: var(--call-wash);
+  opacity: 0.85;
+}
+
+.loss-fill {
+  fill: var(--put-wash);
+  opacity: 0.85;
+}
+
+.axis { stroke: var(--rule-hi); stroke-width: 1px; }
+
+.spot {
+  stroke: var(--ink-dim);
+  stroke-width: 1px;
+  stroke-dasharray: 4 4;
+}
+
+.strike {
+  stroke-width: 1px;
+  stroke-dasharray: 2 2;
+  opacity: 0.8;
+}
+.strike.call { stroke: var(--call); }
+.strike.put { stroke: var(--put); }
+
+.curve {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2px;
+}
+
+.t0-curve {
+  fill: none;
+  stroke: var(--phosphor);
+  stroke-width: 2px;
+  stroke-dasharray: 5 3;
+}
+
+.be-dot { fill: var(--phosphor); stroke: var(--void); stroke-width: 1px; }
+
+.hover {
+  stroke: var(--phosphor);
+  stroke-width: 1px;
+  stroke-dasharray: 2 2;
+}
+
+.axis-labels text {
+  fill: var(--ink-dim);
+  font-family: var(--font-data);
+  font-size: 10px;
+}
+
+.spot-tag {
+  fill: var(--ink) !important;
+  font-weight: 700;
+}
+
+.be-tag {
+  fill: var(--phosphor) !important;
+  font-weight: 700;
+}
+
 .hover-read {
   position: absolute;
   top: 8px;
-  right: 10px;
-  color: var(--ink);
-  font-size: var(--t-tiny);
+  right: 12px;
+  padding: 4px 8px;
   background: var(--panel-hi);
-  padding: 2px 6px;
   border: var(--hair) solid var(--rule-hi);
+  font-size: 11px;
+  color: var(--ink);
 }
+
 .curve-legend {
   position: absolute;
   bottom: 8px;
-  right: 10px;
+  left: 12px;
   display: flex;
-  gap: var(--s3);
-  font-size: 9px;
+  gap: 12px;
+  font-size: 10px;
   color: var(--ink-dim);
+  background: var(--panel-wash, rgba(10, 11, 15, 0.7));
+  padding: 2px 6px;
+  border: var(--hair) solid var(--rule);
 }
-.leg-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.swatch {
-  width: 10px;
-  height: 2px;
-  display: inline-block;
-}
-.swatch.expiry { background: var(--ink); }
-.swatch.theo { background: var(--call-hi); }
 
-.pos { color: var(--long); }
-.neg { color: var(--short); }
-.calc-note, .calc-error { color: var(--ink-faint); font-size: var(--t-micro); }
-.calc-error { color: var(--warn); }
-@media (max-width: 980px) {
-  .calc-desk { grid-template-columns: 1fr; }
-  .greeks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (max-width: 640px) {
-  .greeks { grid-template-columns: 1fr 1fr; }
+.leg-item { display: flex; align-items: center; gap: 4px; }
+.swatch { display: inline-block; width: 12px; height: 2px; }
+.swatch.expiry { background: var(--ink); }
+.swatch.theo { background: var(--phosphor); }
+
+.pos { color: var(--call-hi); }
+.neg { color: var(--put-hi); }
+
+.calc-note {
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+  margin-top: var(--s2);
 }
 </style>

@@ -181,7 +181,7 @@ watch(
     linear-gradient(90deg, rgba(250, 249, 245, 0.025) 1px, transparent 1px),
     var(--auth-dark);
   background-size: 40px 40px;
-  font-family: 'Lora', Georgia, var(--font-ui);
+  font-family: var(--font-ui);
 }
 
 .auth-topbar,
@@ -211,9 +211,9 @@ watch(
 .auth-brand:hover { text-decoration: none; }
 .auth-wordmark { display: grid; line-height: 1.05; }
 .auth-wordmark strong {
-  font-family: 'Poppins', var(--font-ui);
+  font-family: var(--font-display);
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 .auth-wordmark small {
@@ -260,10 +260,10 @@ watch(
   margin-top: 22px;
   max-width: 16ch;
   color: var(--auth-paper);
-  font-family: 'Poppins', var(--font-ui);
+  font-family: var(--font-display);
   font-size: clamp(38px, 4.8vw, 62px);
-  font-weight: 560;
-  letter-spacing: -0.055em;
+  font-weight: 600;
+  letter-spacing: -0.04em;
   line-height: 0.99;
 }
 .context-copy {
@@ -349,10 +349,10 @@ watch(
 }
 .panel-head h2 {
   margin-top: 11px;
-  font-family: 'Poppins', var(--font-ui);
+  font-family: var(--font-display);
   font-size: 28px;
-  font-weight: 620;
-  letter-spacing: -0.035em;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 .panel-head > span {
   display: block;

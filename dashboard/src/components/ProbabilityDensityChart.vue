@@ -17,14 +17,20 @@ const RiskNeutral3DModel = defineAsyncComponent(
  */
 const props = withDefaults(
   defineProps<{
-    probability: OptionsProbability | null | undefined
+    probability?: OptionsProbability | null
     spot: number
     callWall?: number | null
     putWall?: number | null
     focusPrice?: number | null
     height?: number
+    dte?: number | null
+    vol?: number | null
+    breakevens?: number[]
+    strikes?: Array<{ strike: number; right: 'call' | 'put'; quantity?: number }>
+    pop?: number | null
+    strategyLabel?: string
   }>(),
-  { height: 260, callWall: null, putWall: null, focusPrice: null },
+  { probability: null, height: 260, callWall: null, putWall: null, focusPrice: null, dte: null, vol: null, breakevens: () => [], strikes: () => [], pop: null, strategyLabel: undefined },
 )
 
 const hostRef = ref<HTMLDivElement | null>(null)
@@ -62,30 +68,42 @@ const activeTargetPrice = computed(() =>
 
 const model = computed(() => {
   const p = props.probability
-  if (!p?.available || !props.spot || !p.atm_iv || !p.horizon_days) return null
-  const T = Math.max(p.horizon_days, 1) / 365
-  const sigma = p.atm_iv * Math.sqrt(T)
+  const spotVal = Number(props.spot)
+  const dteVal = p?.horizon_days ?? (props.dte != null && props.dte > 0 ? props.dte : 30)
+  const ivVal = p?.atm_iv ?? (props.vol != null && props.vol > 0 ? (props.vol > 2 ? props.vol / 100 : props.vol) : 0.30)
+
+  if (!spotVal || spotVal <= 0 || !ivVal || ivVal <= 0 || !dteVal || dteVal <= 0) return null
+  const T = Math.max(dteVal, 1) / 365
+  const sigma = ivVal * Math.sqrt(T)
   if (!(sigma > 0)) return null
-  const mu = Math.log(props.spot) - 0.5 * p.atm_iv * p.atm_iv * T
+  const mu = Math.log(spotVal) - 0.5 * ivVal * ivVal * T
   const sigma2 = 2 * sigma
-  let low = Math.max(0.01, (p.expected_low ?? props.spot * 0.85) * 0.85)
-  let high = (p.expected_high ?? props.spot * 1.15) * 1.15
+  let low = Math.max(0.01, (p?.expected_low ?? spotVal * (1 - sigma)) * 0.85)
+  let high = (p?.expected_high ?? spotVal * (1 + sigma)) * 1.15
   if (props.focusPrice != null && props.focusPrice > 0) {
     low = Math.min(low, props.focusPrice * 0.96)
     high = Math.max(high, props.focusPrice * 1.04)
+  }
+  if (props.breakevens && props.breakevens.length) {
+    for (const be of props.breakevens) {
+      if (be > 0) {
+        low = Math.min(low, be * 0.95)
+        high = Math.max(high, be * 1.05)
+      }
+    }
   }
   return {
     mu,
     sigma,
     sigma2,
     T,
-    iv: p.atm_iv,
+    iv: ivVal,
     low,
     high,
-    horizon: p.horizon_days,
-    expectedMove: p.expected_move ?? props.spot * sigma,
-    expectedLow: p.expected_low ?? props.spot - props.spot * sigma,
-    expectedHigh: p.expected_high ?? props.spot + props.spot * sigma,
+    horizon: dteVal,
+    expectedMove: p?.expected_move ?? spotVal * sigma,
+    expectedLow: p?.expected_low ?? spotVal - spotVal * sigma,
+    expectedHigh: p?.expected_high ?? spotVal + spotVal * sigma,
   }
 })
 
@@ -157,8 +175,29 @@ const curve = computed(() => {
     })
   }
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ')
-  const area = `${line} L${pts[pts.length - 1].x.toFixed(2)},${(H.value - pad.value.b).toFixed(2)} L${pts[0].x.toFixed(2)},${(H.value - pad.value.b).toFixed(2)} Z`
-  return { pts, line, area, maxD, m, plotH, plotW }
+  const baseBottom = (H.value - pad.value.b).toFixed(2)
+  const area = `${line} L${pts[pts.length - 1].x.toFixed(2)},${baseBottom} L${pts[0].x.toFixed(2)},${baseBottom} Z`
+
+  // Split into lower tail (put wash below spot) and upper tail (call wash above spot)
+  const spotPrice = props.spot || (m.low + m.high) / 2
+  const spotU = (spotPrice - m.low) / (m.high - m.low)
+  const spotX = pad.value.l + Math.max(0, Math.min(1, spotU)) * plotW
+  const spotDens = density(spotPrice, m.mu, m.sigma)
+  const spotY = H.value - pad.value.b - (spotDens / maxD) * plotH
+
+  // Lower tail (prices <= spot)
+  const lowerPts = pts.filter((p) => p.price <= spotPrice)
+  const lowerSegments = lowerPts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`)
+  lowerSegments.push(`L${spotX.toFixed(2)},${spotY.toFixed(2)}`)
+  const putArea = `${lowerSegments.join(' ')} L${spotX.toFixed(2)},${baseBottom} L${pts[0].x.toFixed(2)},${baseBottom} Z`
+
+  // Upper tail (prices >= spot)
+  const upperPts = pts.filter((p) => p.price >= spotPrice)
+  const upperSegments = [`M${spotX.toFixed(2)},${spotY.toFixed(2)}`]
+  upperPts.forEach((p) => upperSegments.push(`L${p.x.toFixed(2)},${p.y.toFixed(2)}`))
+  const callArea = `${upperSegments.join(' ')} L${pts[pts.length - 1].x.toFixed(2)},${baseBottom} L${spotX.toFixed(2)},${baseBottom} Z`
+
+  return { pts, line, area, putArea, callArea, maxD, m, plotH, plotW, spotX, spotY }
 })
 
 function xOfPrice(price: number): number | null {
@@ -178,6 +217,15 @@ const oneSigmaBand = computed(() => {
   return { x: Math.min(xLo, xHi), width: Math.abs(xHi - xLo) }
 })
 
+const oneSigmaBounds = computed(() => {
+  const c = curve.value
+  if (!c) return null
+  const xLo = xOfPrice(c.m.expectedLow)
+  const xHi = xOfPrice(c.m.expectedHigh)
+  if (xLo == null || xHi == null) return null
+  return { xLo, xHi, expectedLow: c.m.expectedLow, expectedHigh: c.m.expectedHigh }
+})
+
 const markers = computed(() => {
   const items: { key: string; x: number; label: string; cls: string; price: number }[] = []
   const add = (key: string, price: number | null | undefined, label: string, cls: string) => {
@@ -190,6 +238,16 @@ const markers = computed(() => {
   add('spot', props.spot, 'SPOT', 'spot')
   add('call', props.callWall, 'CALL', 'call')
   add('focus', props.focusPrice, 'FOCUS', 'focus')
+  if (props.breakevens && props.breakevens.length) {
+    props.breakevens.forEach((be, i) => {
+      add(`be-${i}`, be, 'BE', 'focus')
+    })
+  }
+  if (props.strikes && props.strikes.length) {
+    props.strikes.forEach((stk, i) => {
+      add(`strike-${i}`, stk.strike, stk.right === 'call' ? 'CALL K' : 'PUT K', stk.right)
+    })
+  }
   if (activeTargetPrice.value > 0 && activeTargetPrice.value !== props.spot) {
     add('target', activeTargetPrice.value, 'TARGET', 'target')
   }
@@ -198,14 +256,45 @@ const markers = computed(() => {
   let prevX = -Infinity
   let lane = 0
   return sorted.map((item) => {
-    if (item.x - prevX < MIN_GAP) lane = 1 - lane
+    if (item.x - prevX < MIN_GAP) lane = (lane + 1) % 3
     else lane = 0
     prevX = item.x
     return {
       ...item,
-      labelY: pad.value.t - 8 - lane * 12,
+      labelY: pad.value.t - 8 - lane * 10,
     }
   })
+})
+
+function setQuickTarget(deltaPct: number): void {
+  if (!props.spot) return
+  targetPrice.value = Math.round(props.spot * (1 + deltaPct / 100) * 100) / 100
+}
+
+function setTargetToLevel(price: number | null | undefined): void {
+  if (price != null && price > 0) {
+    targetPrice.value = Math.round(price * 100) / 100
+  }
+}
+
+const activeProbability = computed<OptionsProbability | null>(() => {
+  if (props.probability?.available && props.probability.atm_iv && props.probability.horizon_days) {
+    return props.probability
+  }
+  const m = model.value
+  if (!m || !props.spot) return null
+  return {
+    available: true,
+    method: 'black_scholes_lognormal',
+    atm_iv: m.iv,
+    horizon_days: m.horizon,
+    expected_move: m.expectedMove,
+    expected_low: m.expectedLow,
+    expected_high: m.expectedHigh,
+    prob_above_call_wall: null,
+    prob_below_put_wall: null,
+    prob_between_walls: null,
+  }
 })
 
 const xTicks = computed(() => {
@@ -292,7 +381,7 @@ watch(canRender3d, (available) => {
         >3D MODEL</button>
       </div>
 
-      <div class="facts" v-if="model">
+      <div v-if="model" class="facts">
         <span class="label model-tag">{{ viewMode === '3d' ? '3D SURFACE MODEL' : '2D PDF f(S_T)' }}</span>
         <span class="label">IV <b class="fig">{{ pctFrac(model.iv, 1) }}</b></span>
         <span class="label">{{ model.horizon }}D</span>
@@ -313,7 +402,7 @@ watch(canRender3d, (available) => {
     <!-- 3D Surface Model view -->
     <RiskNeutral3DModel
       v-if="viewMode === '3d' && canRender3d"
-      :probability="probability"
+      :probability="activeProbability"
       :spot="spot"
       :call-wall="callWall"
       :put-wall="putWall"
@@ -333,6 +422,7 @@ watch(canRender3d, (available) => {
         @mousemove="onMove"
         @mouseleave="hoverX = null"
       >
+        <!-- 1σ Expected Move Shaded Band -->
         <rect
           v-if="oneSigmaBand"
           class="sigma-band"
@@ -340,10 +430,17 @@ watch(canRender3d, (available) => {
           :y="pad.t"
           :width="oneSigmaBand.width"
           :height="H - pad.t - pad.b"
-          fill="var(--rule)"
-          opacity="0.55"
         />
 
+        <!-- 1σ Expected Move Boundary Lines -->
+        <g v-if="oneSigmaBounds" class="sigma-bounds">
+          <line :x1="oneSigmaBounds.xLo" :x2="oneSigmaBounds.xLo" :y1="pad.t" :y2="H - pad.b" class="sigma-bound low" />
+          <line :x1="oneSigmaBounds.xHi" :x2="oneSigmaBounds.xHi" :y1="pad.t" :y2="H - pad.b" class="sigma-bound high" />
+          <text :x="oneSigmaBounds.xLo" :y="pad.t - 4" text-anchor="middle" class="sigma-label low">-1σ {{ num(oneSigmaBounds.expectedLow, 0) }}</text>
+          <text :x="oneSigmaBounds.xHi" :y="pad.t - 4" text-anchor="middle" class="sigma-label high">+1σ {{ num(oneSigmaBounds.expectedHigh, 0) }}</text>
+        </g>
+
+        <!-- Base Axes -->
         <line class="baseline" :x1="pad.l" :x2="W - pad.r" :y1="H - pad.b" :y2="H - pad.b" />
         <line class="baseline" :x1="pad.l" :x2="pad.l" :y1="pad.t" :y2="H - pad.b" />
         <text class="axis-cap" :x="(pad.l + W - pad.r) / 2" :y="H - 4" text-anchor="middle">TERMINAL PRICE $</text>
@@ -355,23 +452,34 @@ watch(canRender3d, (available) => {
           :transform="`rotate(-90 12 ${(pad.t + H - pad.b) / 2})`"
         >REL DENSITY</text>
 
-        <path class="area" :d="curve.area" fill="var(--phosphor-wash)" />
+        <!-- 2D Lognormal Tails: Crimson Lower Tail, Emerald Upper Tail -->
+        <path class="area put-tail" :d="curve.putArea" fill="var(--put-wash)" />
+        <path class="area call-tail" :d="curve.callArea" fill="var(--call-wash)" />
         <path class="curve" :d="curve.line" />
 
+        <!-- Strike Level Markers -->
         <g v-for="m in markers" :key="m.key" class="marker" :class="m.cls">
           <line :x1="m.x" :x2="m.x" :y1="pad.t" :y2="H - pad.b" />
           <text :x="m.x" :y="m.labelY" text-anchor="middle">{{ m.label }}</text>
         </g>
 
+        <!-- Interactive Probe / Cursor Crosshair -->
         <g v-if="focus" class="probe">
-          <line :x1="focus.x" :x2="focus.x" :y1="focus.y" :y2="H - pad.b" />
-          <circle :cx="focus.x" :cy="focus.y" r="4.5" />
-          <text
-            class="probe-price"
-            :x="focus.x"
-            :y="Math.max(pad.t + 12, focus.y - 10)"
-            text-anchor="middle"
-          >{{ usd(focus.price) }}</text>
+          <line :x1="focus.x" :x2="focus.x" :y1="focus.y" :y2="H - pad.b" class="probe-line" />
+          <circle :cx="focus.x" :cy="focus.y" r="4.5" class="probe-dot" />
+          <g class="probe-tooltip" :transform="`translate(${focus.x}, ${Math.max(pad.t + 16, focus.y - 12)})`">
+            <rect
+              :x="-44"
+              :y="-16"
+              width="88"
+              height="18"
+              rx="2"
+              class="probe-tip-bg"
+            />
+            <text text-anchor="middle" y="-3.5" class="probe-tip-text">
+              {{ usd(focus.price) }} · {{ pctFrac(focus.probAbove, 0) }} P(&gt;)
+            </text>
+          </g>
         </g>
 
         <g class="x-axis">
@@ -414,6 +522,17 @@ watch(canRender3d, (available) => {
             class="target-slider"
             @input="targetPrice = Number(($event.target as HTMLInputElement).value)"
           />
+          <div class="target-chips">
+            <button type="button" class="chip-btn" @click="setQuickTarget(-10)">-10%</button>
+            <button type="button" class="chip-btn" @click="setQuickTarget(-5)">-5%</button>
+            <button type="button" class="chip-btn" @click="setTargetToLevel(model.expectedLow)">-1σ</button>
+            <button type="button" class="chip-btn" @click="setTargetToLevel(model.expectedHigh)">+1σ</button>
+            <button type="button" class="chip-btn" @click="setQuickTarget(5)">+5%</button>
+            <button type="button" class="chip-btn" @click="setQuickTarget(10)">+10%</button>
+            <button v-if="putWall" type="button" class="chip-btn put" @click="setTargetToLevel(putWall)">PUT WALL</button>
+            <button v-if="callWall" type="button" class="chip-btn call" @click="setTargetToLevel(callWall)">CALL WALL</button>
+            <button v-for="(be, idx) in breakevens" :key="`be-chip-${idx}`" type="button" class="chip-btn accent" @click="setTargetToLevel(be)">BE {{ num(be, 0) }}</button>
+          </div>
         </div>
         <div v-if="targetCalc" class="calc-metrics">
           <div class="calc-tile">
@@ -437,6 +556,10 @@ watch(canRender3d, (available) => {
           <div v-if="targetCalc.probBetweenWalls != null" class="calc-tile">
             <span class="label">PROB INSIDE WALLS</span>
             <strong class="fig accent">{{ pctFrac(targetCalc.probBetweenWalls, 1) }}</strong>
+          </div>
+          <div v-if="pop != null" class="calc-tile">
+            <span class="label">STRATEGY POP</span>
+            <strong class="fig" :class="pop >= 0.5 ? 'call' : 'put'">{{ pctFrac(pop, 1) }}</strong>
           </div>
         </div>
       </div>
@@ -503,44 +626,71 @@ watch(canRender3d, (available) => {
   border: var(--hair) solid var(--rule-hi);
 }
 .svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.axis-cap {
-  fill: var(--ink-dim);
-  font: 700 9px var(--font-display);
-  letter-spacing: 0.08em;
+.sigma-band {
+  fill: var(--void-lift);
+  opacity: 0.65;
 }
+.sigma-bound {
+  stroke: var(--rule-hi);
+  stroke-width: 1px;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.85;
+}
+.sigma-label {
+  fill: var(--ink-faint);
+  font: 700 8.5px var(--font-display);
+  letter-spacing: 0.04em;
+  paint-order: stroke;
+  stroke: var(--void);
+  stroke-width: 3px;
+}
+.sigma-label.low { fill: var(--put-hi); }
+.sigma-label.high { fill: var(--call-hi); }
+
 .curve {
   fill: none;
   stroke: var(--phosphor);
-  stroke-width: 2;
+  stroke-width: 2px;
   vector-effect: non-scaling-stroke;
 }
-.area { opacity: 0.85; }
+.area.put-tail {
+  fill: var(--put-wash);
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
+}
+.area.call-tail {
+  fill: var(--call-wash);
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
+}
 .baseline {
   stroke: var(--rule-hi);
-  stroke-width: 1;
+  stroke-width: 1px;
   vector-effect: non-scaling-stroke;
 }
 .marker line {
-  stroke-width: 1.25;
+  stroke-width: 1.25px;
   stroke-dasharray: 4 3;
   vector-effect: non-scaling-stroke;
+  transition: stroke 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.marker.put line { stroke: var(--put); }
-.marker.call line { stroke: var(--call); }
+.marker.put line { stroke: var(--put-hi); }
+.marker.call line { stroke: var(--call-hi); }
 .marker.spot line {
   stroke: var(--ink);
   stroke-dasharray: none;
-  stroke-width: 1.5;
+  stroke-width: 1.5px;
 }
 .marker.focus line {
   stroke: var(--phosphor);
   stroke-dasharray: none;
-  stroke-width: 1.5;
+  stroke-width: 1.5px;
 }
 .marker.target line {
   stroke: var(--warn);
   stroke-dasharray: 2 2;
-  stroke-width: 1.5;
+  stroke-width: 1.5px;
 }
 .marker text {
   fill: var(--ink-soft);
@@ -549,29 +699,35 @@ watch(canRender3d, (available) => {
   paint-order: stroke;
   stroke: var(--void);
   stroke-width: 3px;
+  transition: fill 0.15s ease;
 }
 .marker.put text { fill: var(--put-hi); }
 .marker.call text { fill: var(--call-hi); }
 .marker.spot text { fill: var(--ink); }
 .marker.focus text { fill: var(--phosphor); }
 .marker.target text { fill: var(--warn); }
-.probe line {
+.probe {
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+}
+.probe-line {
   stroke: var(--phosphor);
-  stroke-width: 1.25;
+  stroke-width: 1.25px;
   stroke-dasharray: 2 3;
   vector-effect: non-scaling-stroke;
 }
-.probe circle {
+.probe-dot {
   fill: var(--phosphor);
   stroke: var(--void);
-  stroke-width: 1.5;
+  stroke-width: 1.5px;
 }
-.probe-price {
+.probe-tip-bg {
+  fill: var(--panel-raise);
+  stroke: var(--phosphor-dim);
+  stroke-width: 1px;
+}
+.probe-tip-text {
   fill: var(--phosphor);
-  font: 700 10px var(--font-data);
-  paint-order: stroke;
-  stroke: var(--void);
-  stroke-width: 3px;
+  font: 700 9px var(--font-data);
 }
 .x-axis line { stroke: var(--rule-hi); vector-effect: non-scaling-stroke; }
 .x-axis text {
@@ -647,6 +803,29 @@ watch(canRender3d, (available) => {
   cursor: pointer;
   height: 18px;
 }
+.target-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.chip-btn {
+  padding: 2px 6px;
+  font: 700 9px var(--font-display);
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+.chip-btn:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.chip-btn.call { color: var(--call-hi); border-color: var(--call-dim); }
+.chip-btn.put { color: var(--put-hi); border-color: var(--put-dim); }
+.chip-btn.accent { color: var(--phosphor); border-color: var(--phosphor-dim); }
 .calc-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

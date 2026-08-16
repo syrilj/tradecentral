@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from edge.daily_plays.qlib_scan_score import (
     SCORE_KIND,
@@ -25,9 +24,10 @@ from edge.daily_plays.qlib_scan_score import (
 def _ok_source(src: str | None) -> bool:
     s = str(src or "")
     return (
-        s in {SOURCE_ID, SOURCE_ID_FACTORS, SOURCE_ID_LGB, "qlib_scan_lgb_v1", "qlib_scan_lgb_v2"}
+        s in {SOURCE_ID, SOURCE_ID_FACTORS, SOURCE_ID_LGB, "qlib_scan_lgb_v1", "qlib_scan_lgb_v2", "desk_ranker_v1"}
         or s.startswith("qlib_scan_lgb_")
         or s.startswith("qlib_alpha_factor")
+        or s.startswith("desk_ranker")
     )
 
 
@@ -165,7 +165,7 @@ def test_merge_and_priority_helpers():
     merged = merge_qlib_into_activity_rows(activity, panel)
     assert merged[0]["qlib_rank"] is not None
     assert merged[0]["qlib_score_kind"] == SCORE_KIND
-    assert SOURCE_ID in merged[0]["sources"]
+    assert merged[0]["qlib_source"] in merged[0]["sources"]
     assert merged[1]["qlib_rank"] is None  # ZZZ not scored
     assert merged[1]["qlib_score"] is None
 

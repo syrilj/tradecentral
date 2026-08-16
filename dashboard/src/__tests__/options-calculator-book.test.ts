@@ -3,9 +3,14 @@ import {
   asStrategy,
   bookAllocation,
   buildPayoffChart,
+  calculateStrategyPoP,
+  computeRiskNeutralModel,
+  computeTargetRiskMetrics,
   findBreakevens,
   netDebit,
   nextLegId,
+  probTerminalAbove,
+  probTerminalBelow,
   samplePnlRows,
   seedBook,
   usableLegs,
@@ -97,5 +102,93 @@ describe('options book helpers', () => {
     expect(chart?.maxLoss).toBe(-400)
     expect(chart?.spotX).toBeGreaterThan(chart!.pad.l)
     expect(chart?.spotX).toBeLessThan(chart!.width - chart!.pad.r)
+  })
+
+  it('evaluates risk-neutral lognormal model and 1σ/2σ expected move boundaries', () => {
+    const model = computeRiskNeutralModel({
+      spot: 100,
+      dteDays: 30,
+      volPct: 30,
+    })
+    expect(model).not.toBeNull()
+    expect(model!.expectedMove).toBeCloseTo(100 * 0.3 * Math.sqrt(30 / 365), 3)
+    expect(model!.expectedLow).toBeCloseTo(100 - model!.expectedMove, 3)
+    expect(model!.expectedHigh).toBeCloseTo(100 + model!.expectedMove, 3)
+    expect(model!.twoSigmaLow).toBeCloseTo(100 - 2 * model!.expectedMove, 3)
+    expect(model!.twoSigmaHigh).toBeCloseTo(100 + 2 * model!.expectedMove, 3)
+    expect(model!.low).toBeLessThan(model!.expectedLow)
+    expect(model!.high).toBeGreaterThan(model!.expectedHigh)
+  })
+
+  it('computes terminal price risk-neutral probabilities above, below, and target risk metrics', () => {
+    // Spot = 100, Strike = 100 -> ATM is roughly 50%
+    const pAtmAbove = probTerminalAbove(100, 100, 30, 30)
+    expect(pAtmAbove).toBeGreaterThan(0.40)
+    expect(pAtmAbove).toBeLessThan(0.60)
+
+    const pAtmBelow = probTerminalBelow(100, 100, 30, 30)
+    expect(pAtmAbove + pAtmBelow).toBeCloseTo(1.0, 5)
+
+    // OTM Strike = 120 -> Prob above is significantly lower
+    const pOtmAbove = probTerminalAbove(120, 100, 30, 30)
+    expect(pOtmAbove).toBeLessThan(0.20)
+
+    // Target metrics
+    const target = computeTargetRiskMetrics({
+      targetPrice: 110,
+      spot: 100,
+      dteDays: 30,
+      volPct: 30,
+      callWall: 115,
+      putWall: 95,
+    })
+    expect(target).not.toBeNull()
+    expect(target!.chgPct).toBeCloseTo(10.0, 2)
+    expect(target!.zScore).toBeGreaterThan(0)
+    expect(target!.probAbove).toBeGreaterThan(0)
+    expect(target!.probAbove).toBeLessThan(0.5)
+    expect(target!.probBetweenWalls).toBeGreaterThan(0)
+  })
+
+  it('calculates exact Strategy Probability of Profit (PoP) for directional and multi-leg books', () => {
+    // 1. Long Call at 100 for $5 debit -> Breakeven 105 -> PoP is P(S > 105)
+    const longCallPoP = calculateStrategyPoP({
+      legs: [{ id: '1', right: 'call', strike: 100, quantity: 1, premium: 5 }],
+      spot: 100,
+      dteDays: 30,
+      volPct: 30,
+    })
+    expect(longCallPoP.pop).toBeGreaterThan(0.20)
+    expect(longCallPoP.pop).toBeLessThan(0.50)
+    expect(longCallPoP.breakevens.length).toBeGreaterThanOrEqual(1)
+    expect(longCallPoP.profitZoneDesc).toContain('Profitable above')
+
+    // 2. Bull Put Spread (Credit spread collecting premium -> high PoP)
+    const bullPutPoP = calculateStrategyPoP({
+      legs: [
+        { id: '1', right: 'put', strike: 100, quantity: -1, premium: 4 },
+        { id: '2', right: 'put', strike: 95, quantity: 1, premium: 1.5 },
+      ],
+      spot: 100,
+      dteDays: 30,
+      volPct: 30,
+    })
+    expect(bullPutPoP.pop).toBeGreaterThan(0.55)
+    expect(bullPutPoP.profitZoneDesc).toContain('Profitable')
+
+    // 3. Iron Condor (Profitable between wings)
+    const condorPoP = calculateStrategyPoP({
+      legs: [
+        { id: '1', right: 'put', strike: 90, quantity: 1, premium: 1 },
+        { id: '2', right: 'put', strike: 95, quantity: -1, premium: 2.5 },
+        { id: '3', right: 'call', strike: 105, quantity: -1, premium: 2.5 },
+        { id: '4', right: 'call', strike: 110, quantity: 1, premium: 1 },
+      ],
+      spot: 100,
+      dteDays: 30,
+      volPct: 30,
+    })
+    expect(condorPoP.pop).toBeGreaterThan(0.40)
+    expect(condorPoP.profitZoneDesc).toContain('Profitable')
   })
 })

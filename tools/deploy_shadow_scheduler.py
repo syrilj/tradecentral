@@ -11,10 +11,7 @@ Cost: $0.00 (under 3 free cron jobs per GCP account).
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
-import sys
-from pathlib import Path
 
 import gcp_config
 
@@ -29,7 +26,7 @@ def deploy_scheduler_jobs(dry_run: bool = False) -> None:
     print(f"  Project:   {PROJECT_ID}")
     print(f"  Region:    {REGION}")
     print(f"  Dry-run:   {dry_run}")
-    print(f"  Cost:      $0.00 (under 3 free cron jobs limit)")
+    print("  Cost:      $0.00 (under 3 free cron jobs limit)")
     print("=" * 60)
 
     jobs = [

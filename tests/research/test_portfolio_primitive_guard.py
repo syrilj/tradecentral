@@ -154,20 +154,6 @@ ALLOWLIST: dict[str, str] = {
         "expects without reconstructing a full daily weight panel from the "
         "event table first."
     ),
-    "gcp_experiment_pead_v2.py": (
-        "KNOWN GAP -- and unlike the entries above, this one IS a live bug, "
-        "not just an architecture mismatch: `port_ret = (long_w * daily_ret)"
-        ".sum(axis=1) - (short_w * daily_ret).sum(axis=1)` with `daily_ret = "
-        "close_prices.pct_change(1)` and NO shift anywhere -- the exact "
-        "lag-0, weight-earns-its-own-formation-bar's-return pattern that "
-        "produced the retracted +502.98% (LOOKAHEAD_CORRECTION.md). Found "
-        "during the P1-5 audit of edge/tools/ for 'any others that emit a "
-        "gate verdict'. Out of this task's assigned file list -- a GCP "
-        "Vertex remote-execution duplicate of build_pead_catalyst_model.py's "
-        "PRE-FIX logic, not wired into any checked-in GATE_*_RESULT.md per "
-        "STATUS.md -- so not fixed here, but flagged prominently rather than "
-        "silently left for whoever runs it next."
-    ),
 }
 
 
@@ -221,6 +207,7 @@ def test_migrated_tools_import_the_primitive() -> None:
         "xs_baseline.py",
         "build_pead_catalyst_model.py",
         "build_pead_factor_hybrid.py",
+        "gcp_experiment_pead_v2.py",
     ]
     missing = [
         name for name in migrated

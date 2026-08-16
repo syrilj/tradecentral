@@ -31,5 +31,20 @@ export default defineConfig(({ mode }) => {
         '/api': { target: 'http://localhost:8787', changeOrigin: true },
       },
     },
+    test: {
+      environment: 'node',
+      coverage: {
+        provider: 'v8',
+        reporter: ['text', 'json-summary'],
+        include: ['src/**/*.ts'],
+        exclude: ['src/**/*.vue', 'src/**/__tests__/**'],
+        thresholds: {
+          lines: 60,
+          functions: 60,
+          statements: 60,
+          branches: 50,
+        },
+      },
+    },
   }
 })

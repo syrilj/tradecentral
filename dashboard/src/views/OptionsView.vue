@@ -16,18 +16,17 @@ import {
   type UnusualFlowRow,
 } from '@/api'
 import { debounce, useResource, type Resource } from '@/composables/useResource'
-import { compact, num, pctFrac, shortDate, signed, signedPct, tone, usd, DASH } from '@/format'
+import { compact, num, optUsd, pctFrac, shortDate, signed, signedPct, tone, usd } from '@/format'
 import Panel from '@/components/Panel.vue'
 import GammaExposureMap from '@/components/GammaExposureMap.vue'
 import SqueezeScreener from '@/components/SqueezeScreener.vue'
-import ProbabilityDensityChart from '@/components/ProbabilityDensityChart.vue'
 import OptionsFlowContext from '@/components/OptionsFlowContext.vue'
 import OptionsConvictionBoard from '@/components/OptionsConvictionBoard.vue'
 import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
 
 import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
-import { activityLeanRead, printWhy } from '@/optionsTape'
+import { activityLeanRead } from '@/optionsTape'
 import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
 type NoisePreset = 'strict' | 'balanced' | 'raw'
@@ -575,33 +574,27 @@ const keyLevels = computed(() => squeeze.value?.key_levels)
 const wallPct = (side: 'call' | 'put') => {
   // Prefer summary (directional walls from _gex_map); fall back to squeeze levels.
   const fromSummary = side === 'call' ? s.value?.call_wall_pct : s.value?.put_wall_pct
-  if (fromSummary != null) return fromSummary
+  if (fromSummary != null && Number.isFinite(fromSummary)) return fromSummary
   const pct = side === 'call' ? keyLevels.value?.call_wall_pct : keyLevels.value?.put_wall_pct
-  return pct == null ? null : pct
+  if (pct != null && Number.isFinite(pct)) return pct
+  const spot = s.value?.spot
+  const wall = side === 'call' ? s.value?.call_wall : s.value?.put_wall
+  if (spot == null || spot <= 0 || wall == null || wall <= 0) return null
+  const calc = (wall - spot) / spot
+  return Number.isFinite(calc) ? calc : null
 }
-
-/** Notes collapsed by default — open when there are operational warnings. */
-const notesOpen = ref(false)
-const dataNotes = computed(() => {
-  const warns = d.value?.warnings ?? []
-  const caveats = (d.value?.caveats ?? []).slice(0, 3)
-  return warns.length ? warns : caveats
-})
-watch(
-  () => d.value?.warnings?.length ?? 0,
-  (n) => { if (n > 0) notesOpen.value = true },
-)
 
 function isItm(row: OptionsTapeRow): boolean {
   const spotPrice = row.underlying_price ?? d.value?.summary?.spot
-  if (spotPrice == null || row.strike == null) return false
+  if (spotPrice == null || spotPrice <= 0 || row.strike == null || row.strike <= 0) return false
   return row.right === 'call' ? spotPrice > row.strike : spotPrice < row.strike
 }
 
 function moneynessInfo(row: OptionsTapeRow): { text: string; cls: 'itm' | 'otm' | 'atm' } | null {
   const spotPrice = row.underlying_price ?? d.value?.summary?.spot
-  if (spotPrice == null || row.strike == null || row.strike <= 0) return null
+  if (spotPrice == null || spotPrice <= 0 || row.strike == null || row.strike <= 0) return null
   const diffPct = ((spotPrice - row.strike) / row.strike) * 100
+  if (!Number.isFinite(diffPct)) return null
   const isCall = row.right === 'call'
   const inTheMoney = isCall ? diffPct > 0.1 : diffPct < -0.1
   const atTheMoney = Math.abs(diffPct) <= 0.1
@@ -792,7 +785,7 @@ function tapeLean(row: OptionsTapeRow): { label: string; cls: string; title: str
   if (row.right === 'put' || row.activity_side === 'put' || row.edge_label === 'PUT') {
     return { label: 'PUT', cls: 'put', title: 'Put print — activity only, no buy/sell side from feed' }
   }
-  return { label: '—', cls: 'unsigned', title: 'Unresolved' }
+  return { label: 'N/A', cls: 'unsigned', title: 'Unresolved' }
 }
 
 function tradeClassLabel(row: OptionsTapeRow): string {
@@ -822,7 +815,8 @@ function premiumTierCls(premium: number): string {
   if (premium >= 1_000_000) return 'whale-indicator tier-mega-whale'
   if (premium >= 500_000) return 'whale-indicator tier-500k'
   if (premium >= 100_000) return 'whale-indicator tier-100k'
-  return ''
+  if (premium >= 25_000) return 'whale-indicator tier-25k'
+  return 'whale-indicator tier-std'
 }
 
 /** Premium tier label for the indicator */
@@ -830,7 +824,8 @@ function premiumTierLabel(premium: number): string {
   if (premium >= 1_000_000) return '$1M+'
   if (premium >= 500_000) return '$500K+'
   if (premium >= 100_000) return '$100K+'
-  return ''
+  if (premium >= 25_000) return '$25K+'
+  return 'STD'
 }
 
 /** Vol/OI ratio tier for the vol-oi-pill */
@@ -849,7 +844,7 @@ function volOiPillCls(ratio: number | null): string {
 }
 
 function volOiLabel(ratio: number | null): string {
-  if (ratio == null) return '—'
+  if (ratio == null) return '0.00x'
   if (ratio >= 10) return '>10x'
   return `${ratio.toFixed(1)}x`
 }
@@ -865,16 +860,10 @@ function pricePaid(row: OptionsTapeRow): number | null {
   return null
 }
 
-function aggressorLabel(row: OptionsTapeRow): { label: string; cls: string } {
-  if (row.aggressor === 'buy' || row.aggressor_label === 'BUY') return { label: 'BUY', cls: 'buy' }
-  if (row.aggressor === 'sell' || row.aggressor_label === 'SELL') return { label: 'SELL', cls: 'sell' }
-  return { label: row.aggressor_label || 'NO SIDE', cls: 'unknown' }
-}
-
 const signedFlowAvailable = computed(() => Boolean(d.value?.provider?.signed_flow_available))
 
 function formatLag(seconds: number | null | undefined): string {
-  if (seconds == null || !Number.isFinite(seconds)) return '—'
+  if (seconds == null || !Number.isFinite(seconds)) return '0s'
   const s = Math.max(0, Math.round(seconds))
   if (s < 60) return `${s}s`
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
@@ -943,7 +932,7 @@ const tapeHealth = computed(() => {
       status: 'history' as const,
       lamp: 'history',
       title: d.value.mode_resolved === 'history_fallback' ? 'HIST FALLBACK' : 'HISTORY',
-      sub: `Dated chain · ${historyMeta.value?.selected_asof ?? d.value.asof_utc?.slice(0, 10) ?? '—'}`,
+      sub: `Dated chain · ${historyMeta.value?.selected_asof ?? d.value.asof_utc?.slice(0, 10) ?? 'N/A'}`,
       lag,
       detail: `${d.value.quality?.chain_contracts_included ?? 0} contracts kept`,
     }
@@ -1071,6 +1060,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             {{ onBook ? '★ BOOK' : '☆ BOOK' }}
           </button>
         </div>
+      </div>
+
+      <div class="quick-tickers" role="group" aria-label="Liquid underlier shortcuts">
+        <button
+          v-for="t in ['SPY', 'QQQ', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'META']"
+          :key="t"
+          type="button"
+          class="ticker-chip label"
+          :class="{ on: symbol === t }"
+          @click="loadSymbol(t)"
+        >{{ t }}</button>
       </div>
 
       <form class="symbol-form" @submit.prevent="selectSymbol">
@@ -1264,81 +1264,51 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <button class="label" type="button" @click="void resource.refresh({ clear: true })">LOAD CHAIN</button>
     </div>
 
-    <section v-if="dataNotes.length" class="data-notes" :class="{ open: notesOpen }">
-      <button class="notes-toggle label" type="button" @click="notesOpen = !notesOpen">
-        <span class="notes-dot" aria-hidden="true" />
-        {{ dataNotes.length }} DATA NOTE{{ dataNotes.length === 1 ? '' : 'S' }}
-        <span class="notes-chev">{{ notesOpen ? '▴' : '▾' }}</span>
-      </button>
-      <ul v-if="notesOpen">
-        <li v-for="(note, i) in dataNotes" :key="i">{{ note }}</li>
-      </ul>
-      <span v-else class="notes-preview label">{{ dataNotes[0] }}</span>
-    </section>
-
     <OptionsDirectionBrief
       :symbol="symbol"
       :read="directionRead"
     />
 
-    <section class="lean-auth rise" :class="leanRead.lean" :title="leanRead.title">
-      <div class="lean-auth-sign">
-        <span class="label">ACTIVITY SIGN</span>
-        <strong class="fig">{{ leanRead.label }}</strong>
-        <em class="label">{{ leanRead.sourceLabel.toUpperCase() }}</em>
-      </div>
-      <p class="lean-auth-copy">
-        {{ leanRead.lean === 'neutral'
-          ? 'No bullish/bearish activity sign on this tape. Call/put identity is not a trade side.'
-          : `${leanRead.label} is an activity sign from ${leanRead.sourceLabel}. It is not an aggressor and not a ticket.` }}
-      </p>
-      <div class="lean-auth-gate">
-        <span class="label">AUTHORIZED</span>
-        <strong class="fig">NO</strong>
-        <em class="label">TAPE CANNOT ENTER</em>
-      </div>
-    </section>
-
     <!-- Dense structure KPI rail -->
     <section class="kpi-rail rise">
       <div class="kpi spot">
         <span class="label">SPOT</span>
-        <strong class="fig">{{ usd(s?.spot) }}</strong>
+        <strong class="fig">{{ optUsd(s?.spot) }}</strong>
         <em class="label">UNDERLYING</em>
       </div>
       <div class="kpi" :class="s?.regime">
         <span class="label">NET GEX</span>
-        <strong class="fig" :class="tone(s?.total_gex_m)">{{ s?.total_gex_m == null ? DASH : `${s.total_gex_m >= 0 ? '+' : ''}$${num(s.total_gex_m, 1)}M` }}</strong>
+        <strong class="fig" :class="tone(s?.total_gex_m)">{{ s?.total_gex_m == null ? '$0.0M' : `${s.total_gex_m >= 0 ? '+' : ''}$${num(s.total_gex_m, 1)}M` }}</strong>
         <em class="label">{{ (s?.regime ?? 'UNKNOWN').toUpperCase() }} GAMMA</em>
       </div>
       <div class="kpi call">
         <span class="label">CALL WALL</span>
-        <strong class="fig call">{{ usd(s?.call_wall) }}</strong>
-        <em class="label call-tag">{{ wallPct('call') == null ? DASH : (wallPct('call')! >= 0 ? '+' : '') + pctFrac(wallPct('call'), 1) }}</em>
+        <strong class="fig call">{{ optUsd(s?.call_wall) }}</strong>
+        <em class="label call-tag">{{ wallPct('call') == null ? '+0.0%' : (wallPct('call')! >= 0 ? '+' : '') + pctFrac(wallPct('call'), 1) }}</em>
       </div>
       <div class="kpi put">
         <span class="label">PUT WALL</span>
-        <strong class="fig put">{{ usd(s?.put_wall) }}</strong>
-        <em class="label put-tag">{{ wallPct('put') == null ? DASH : (wallPct('put')! >= 0 ? '+' : '') + pctFrac(wallPct('put'), 1) }}</em>
+        <strong class="fig put">{{ optUsd(s?.put_wall) }}</strong>
+        <em class="label put-tag">{{ wallPct('put') == null ? '-0.0%' : (wallPct('put')! >= 0 ? '+' : '') + pctFrac(wallPct('put'), 1) }}</em>
       </div>
       <div class="kpi">
         <span class="label">FLIP</span>
-        <strong class="fig accent">{{ usd(s?.gamma_flip) }}</strong>
+        <strong class="fig accent">{{ optUsd(s?.gamma_flip) }}</strong>
         <em class="label">ZERO-GAMMA LEVEL</em>
       </div>
       <div class="kpi">
         <span class="label">IV</span>
-        <strong class="fig">{{ p?.atm_iv != null ? pctFrac(p.atm_iv, 1) : DASH }}</strong>
-        <em class="label">ATM · {{ p?.horizon_days ?? DASH }}D</em>
+        <strong class="fig">{{ p?.atm_iv != null ? pctFrac(p.atm_iv, 1) : '0.0%' }}</strong>
+        <em class="label">ATM · {{ p?.horizon_days ?? 0 }}D</em>
       </div>
       <div class="kpi">
         <span class="label">C/P PREM</span>
         <strong class="fig">
-          <span class="call">{{ flowPremSplit.call != null ? `$${compact(flowPremSplit.call)}` : DASH }}</span>
+          <span class="call">{{ flowPremSplit.call != null ? `$${compact(flowPremSplit.call)}` : '$0' }}</span>
           <span class="dim">/</span>
-          <span class="put">{{ flowPremSplit.put != null ? `$${compact(flowPremSplit.put)}` : DASH }}</span>
+          <span class="put">{{ flowPremSplit.put != null ? `$${compact(flowPremSplit.put)}` : '$0' }}</span>
         </strong>
-        <em class="label">RATIO {{ flowPremSplit.ratio == null ? DASH : num(flowPremSplit.ratio, 2) }}</em>
+        <em class="label">RATIO {{ flowPremSplit.ratio == null ? '1.00x' : num(flowPremSplit.ratio, 2) }}</em>
       </div>
       <div class="kpi" :class="leanRead.lean">
         <span class="label">LEAN</span>
@@ -1349,22 +1319,21 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         <span class="label">SQUEEZE</span>
         <div class="kpi-squeeze-body">
           <strong class="fig">
-            {{ squeeze?.score ?? squeeze?.bullish_setup?.score ?? squeeze?.bearish_setup?.score ?? DASH }}
+            {{ squeeze?.score ?? squeeze?.bullish_setup?.score ?? squeeze?.bearish_setup?.score ?? 0 }}
             <small v-if="squeeze">/100</small>
           </strong>
           <span
             v-if="squeeze?.primary || squeeze?.bullish_setup?.likelihood || squeeze?.bearish_setup?.likelihood"
             class="squeeze-tag label"
-          >{{ (squeeze?.primary || squeeze?.bullish_setup?.likelihood || squeeze?.bearish_setup?.likelihood || '').toUpperCase().replace(/_/g, '-') }}</span>
+          >{{ (squeeze?.primary || squeeze?.bullish_setup?.likelihood || squeeze?.bearish_setup?.likelihood || 'UNLIKELY').toUpperCase().replace(/_/g, '-') }}</span>
         </div>
       </div>
     </section>
 
-    <!-- Dense workbench: compact flow bar, then squeeze + dominant GEX. -->
+    <!-- Dense workbench: Flow context bar + Squeeze + Dominant GEX -->
     <div class="workbench">
       <Panel
-        label="FLOW EVIDENCE"
-        index="03"
+        label="FLOW CONVICTION & AGGRESSOR SPREAD"
         flush
         class="cell flow-context-cell flow-context-bar"
       >
@@ -1430,10 +1399,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         >
           <template #action>
             <div class="panel-action-group">
-              <span class="gex-meta-badge">EXPOSURE {{ !gexMeasurable || s?.total_gex_m == null ? DASH : `$${num(s.total_gex_m, 1)}M` }}</span>
-              <span class="gex-meta-badge">SPOT {{ usd(s?.spot) }}</span>
-              <span v-if="s?.gamma_flip != null" class="gex-meta-badge flip">FLIP {{ usd(s.gamma_flip) }}</span>
-              <span v-if="s?.zero_gamma != null" class="gex-meta-badge flip">ZERO-GAMMA {{ usd(s.zero_gamma) }}</span>
+              <span class="gex-meta-badge">EXPOSURE {{ !gexMeasurable || s?.total_gex_m == null ? '$0.0M' : `$${num(s.total_gex_m, 1)}M` }}</span>
+              <span class="gex-meta-badge">SPOT {{ optUsd(s?.spot) }}</span>
+              <span v-if="s?.gamma_flip != null" class="gex-meta-badge flip">FLIP {{ optUsd(s.gamma_flip) }}</span>
+              <span v-if="s?.zero_gamma != null" class="gex-meta-badge flip">ZERO-GAMMA {{ optUsd(s.zero_gamma) }}</span>
             </div>
           </template>
           <LoadingState v-if="loadingSymbol && !d" label="Loading GEX" compact />
@@ -1487,8 +1456,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <span
                 v-for="row in d.oi_by_strike.slice(0, 12)"
                 :key="row.strike"
-                class="label"
-              >{{ usd(row.strike) }} · C {{ compact(row.call_oi) }} / P {{ compact(row.put_oi) }}</span>
+                class="oi-strike-chip label"
+              >{{ usd(row.strike) }} · <b class="call">C {{ compact(row.call_oi) }}</b> / <b class="put">P {{ compact(row.put_oi) }}</b></span>
             </div>
           </template>
         </Panel>
@@ -1513,35 +1482,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       >OPEN CALCULATOR</RouterLink>
     </p>
 
-    <!-- Panel 04: Risk-Neutral Probability & Target Calculator -->
-    <Panel
-      label="RISK-NEUTRAL PROBABILITY"
-      index="04"
-      flush
-      class="prob-calc-panel rise"
-    >
-      <template #action>
-        <div class="panel-action-group" v-if="p">
-          <span class="gex-meta-badge" v-if="p.atm_iv">IV {{ pctFrac(p.atm_iv, 1) }}</span>
-          <span class="gex-meta-badge" v-if="p.horizon_days">{{ p.horizon_days }}D HORIZON</span>
-          <span class="gex-meta-badge" v-if="p.expected_move">±1σ {{ usd(p.expected_move) }}</span>
-        </div>
-      </template>
-      <LoadingState v-if="loadingSymbol && !p" label="Calculating Probability" compact />
-      <ProbabilityDensityChart
-        v-else
-        :probability="p"
-        :spot="s?.spot ?? 0"
-        :call-wall="s?.call_wall ?? null"
-        :put-wall="s?.put_wall ?? null"
-        :focus-price="focusStrike"
-        :height="180"
-      />
-    </Panel>
-
     <Panel
       label="QUALIFIED FLOW TAPE"
-      index="05"
+      index="03"
+      :meta="`${visibleTape.length}/${d?.flow_tape.length ?? 0} PRINTS · ${tapeClassCounts.whales} WHALES · ${tapeClassCounts.sweeps} SWEEPS · ${tapeClassCounts.blocks} BLOCKS`"
+      :live="tapeHealth.status === 'live'"
+      flush
+      class="tape-panel tape-panel-full"
+    >
       :meta="`${visibleTape.length}/${d?.flow_tape.length ?? 0} PRINTS · ${tapeClassCounts.whales} WHALES · ${tapeClassCounts.sweeps} SWEEPS · ${tapeClassCounts.blocks} BLOCKS`"
       :live="tapeHealth.status === 'live'"
       flush
@@ -1627,11 +1575,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             }"
           >
             <div class="card-head-row">
-              <span class="type-pill label" :class="row.right">{{ row.right === 'call' ? 'CALL' : 'PUT' }}</span>
               <span class="lean-pill label" :class="tapeLean(row).cls">{{ tapeLean(row).label }}</span>
               <span class="ts-time fig">{{ row.timestamp.slice(11, 19) }}</span>
               <span
-                v-if="premiumTierCls(row.premium)"
                 :class="premiumTierCls(row.premium)"
               >{{ premiumTierLabel(row.premium) }}</span>
               <span :class="tradeClassTokenCls(tradeClassLabel(row))" style="margin-left:auto;">{{ tradeClassLabel(row) }}</span>
@@ -1640,22 +1586,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <div class="card-body-row">
               <div class="strike-box">
                 <span class="strike-label label">STRIKE</span>
-                <strong class="strike-val fig">${{ usd(row.strike) }}</strong>
+                <strong class="strike-val fig">{{ optUsd(row.strike) }}</strong>
                 <span v-if="moneynessInfo(row)" class="money-tag label" :class="moneynessInfo(row)!.cls">{{ moneynessInfo(row)!.text }}</span>
               </div>
               <div class="prem-box" :class="row.right">
                 <span class="prem-label label">PREMIUM</span>
-                <strong class="prem-val fig">${{ compact(row.premium) }}</strong>
-                <span class="fill-sub label">{{ num(contractsOf(row), 0) }} ct @ {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row), 2)}` }}</span>
+                <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
+                <span class="fill-sub label">{{ num(contractsOf(row), 0) }} contracts @ {{ pricePaid(row) == null ? '$0.00' : `$${num(pricePaid(row), 2)}` }}</span>
               </div>
             </div>
 
             <div class="card-foot-row">
               <span class="class-chip label" :class="tradeClassLabel(row).toLowerCase()">{{ tradeClassLabel(row) }}</span>
-              <span class="exp-tag label">{{ row.expiry ? shortDate(row.expiry) : '—' }}</span>
-              <span class="agg label" :class="aggressorLabel(row).cls">{{ aggressorLabel(row).label }}</span>
+              <span class="exp-tag label">{{ row.expiry ? shortDate(row.expiry) : 'N/A' }}</span>
               <span v-for="flag in row.anomaly_flags" :key="flag" class="flag-chip label" :class="flag">{{ anomalyLabel(flag) }}</span>
-              <span v-if="printWhy(row).length" class="why-line label" :title="printWhy(row).join(' · ')">{{ printWhy(row).join(' · ') }}</span>
             </div>
           </div>
         </div>
@@ -1669,18 +1613,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <th class="label flag-col">Tier</th>
               <th class="label">Time</th>
               <th class="label tape-col-group">Lean</th>
-              <th class="label">Side</th>
               <th class="label">Class</th>
               <th class="label tape-col-group">Expiry</th>
               <th class="label num-col">Strike</th>
               <th class="label num-col tape-col-group stock-head">Spot</th>
               <th class="label num-col tape-col-group">Fill</th>
-              <th class="label num-col">Ct</th>
+              <th class="label num-col">Contracts</th>
               <th class="label num-col vol-oi-head">Vol/OI</th>
               <th class="label num-col tape-premium-head">Premium</th>
-              <th class="label tape-col-group">Side</th>
-              <th class="label num-col">Signed</th>
-              <th class="label">Why</th>
             </tr>
           </thead>
           <tbody>
@@ -1697,12 +1637,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             >
               <td class="flag-col">
                 <span
-                  v-if="premiumTierCls(row.premium)"
                   :class="premiumTierCls(row.premium)"
                   :title="`Premium tier: ${premiumTierLabel(row.premium)}`"
                 >{{ premiumTierLabel(row.premium) }}</span>
-                <span v-else-if="row.anomaly_flags.length" class="flag-chip label">FLAG</span>
-                <span v-else class="no-flag label">—</span>
               </td>
               <td class="fig dim ts-cell">{{ row.timestamp.slice(11, 19) }}</td>
               <td class="tape-col-group">
@@ -1711,23 +1648,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </span>
               </td>
               <td>
-                <span class="type-chip label" :class="row.right">{{ row.right === 'call' ? 'C' : 'P' }}</span>
-              </td>
-              <td>
                 <span :class="tradeClassTokenCls(tradeClassLabel(row))">
                   {{ tradeClassLabel(row) }}
                 </span>
               </td>
-              <td class="fig dim tape-col-group expiry-cell">{{ row.expiry ? shortDate(row.expiry) : '—' }}</td>
-              <td class="fig num-col strike-cell">{{ usd(row.strike) }}</td>
+              <td class="fig dim tape-col-group expiry-cell">{{ row.expiry ? shortDate(row.expiry) : 'N/A' }}</td>
+              <td class="fig num-col strike-cell">{{ optUsd(row.strike) }}</td>
               <td class="fig num-col tape-col-group stock-cell">
                 <div class="stock-lockup">
-                  <span class="stock-val">{{ (row.underlying_price ?? s?.spot) == null ? DASH : usd(row.underlying_price ?? s?.spot) }}</span>
+                  <span class="stock-val">{{ (row.underlying_price ?? s?.spot) == null ? '$0.00' : optUsd(row.underlying_price ?? s?.spot) }}</span>
                   <span v-if="moneynessInfo(row)" class="moneyness-tag label" :class="moneynessInfo(row)!.cls">{{ moneynessInfo(row)!.text }}</span>
                 </div>
               </td>
               <td class="fig num-col tape-col-group" :title="row.premium_estimated ? 'Back-solved from notional' : 'Per-contract fill'">
-                {{ pricePaid(row) == null ? DASH : num(pricePaid(row)!, 2) }}
+                {{ pricePaid(row) == null ? '$0.00' : `$${num(pricePaid(row)!, 2)}` }}
               </td>
               <td class="fig num-col">{{ num(contractsOf(row), 0) }}</td>
               <td class="num-col">
@@ -1736,30 +1670,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </span>
               </td>
               <td class="fig num-col premium-cell" :class="[row.right, { 'whale-prem': row.premium >= 100_000 }]">
-                ${{ compact(row.premium) }}
+                ${{ compact(row.premium || 0) }}
                 <small v-if="row.premium_estimated" class="est">≈</small>
-              </td>
-              <td class="tape-col-group">
-                <span class="agg label" :class="aggressorLabel(row).cls" :title="aggressorLabel(row).cls === 'unknown' ? 'Feed does not report buy/sell on this print' : ''">
-                  {{ aggressorLabel(row).label }}
-                </span>
-              </td>
-              <td class="fig num-col">
-                <span
-                  class="edge-chip label"
-                  :class="row.signed_premium != null ? (row.signed_premium >= 0 ? 'bull' : 'bear') : 'unsigned'"
-                  :title="row.signed_premium == null
-                    ? 'No buy/sell from feed — premium is unsigned notional only'
-                    : `Signed $${compact(row.signed_premium)}`"
-                >
-                  <template v-if="row.signed_premium != null">
-                    {{ row.signed_premium > 0 ? '+' : '−' }}${{ compact(Math.abs(row.signed_premium)) }}
-                  </template>
-                  <template v-else>unsig</template>
-                </span>
-              </td>
-              <td class="why-cell label" :title="printWhy(row).join(' · ') || 'No unusual flags'">
-                {{ printWhy(row).join(' · ') || '—' }}
               </td>
             </tr>
           </tbody>
@@ -1833,9 +1745,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           <tbody>
             <tr v-for="row in historyTape.slice(0, 50)" :key="`${row.timestamp}-${row.strike}-${row.premium}`">
               <td class="fig">{{ shortDate(row.timestamp) }}</td>
-              <td class="fig">{{ row.right }} {{ row.strike ?? '—' }}</td>
-              <td class="label">{{ (row.presets ?? []).join(' · ') || row.trade_class || '—' }}</td>
-              <td class="fig num">{{ usd(row.premium, 0) }}</td>
+              <td class="fig">{{ row.right }} {{ row.strike != null ? optUsd(row.strike) : 'N/A' }}</td>
+              <td class="label">{{ (row.presets ?? []).join(' · ') || row.trade_class || 'STANDARD' }}</td>
+              <td class="fig num">{{ optUsd(row.premium, 0) }}</td>
             </tr>
           </tbody>
         </table>
@@ -1930,7 +1842,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <span class="put">P{{ row.put_print_count }}</span>
                 </td>
                 <td class="fig num" :class="tone((row.ret_1d ?? 0) * 100)">
-                  {{ row.ret_1d == null ? DASH : signedPct((row.ret_1d ?? 0) * 100, 1) }}
+                  {{ row.ret_1d == null ? '+0.0%' : signedPct((row.ret_1d ?? 0) * 100, 1) }}
                 </td>
                 <td>
                   <span
@@ -2040,13 +1952,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <span class="basis label" :class="row.signal_basis">{{ signalBasisLabel(row.signal_basis) }}</span>
                 </td>
                 <td class="fig num" :class="tone((row.ret_1d ?? 0) * 100)">
-                  {{ row.ret_1d == null ? DASH : signedPct((row.ret_1d ?? 0) * 100, 1) }}
+                  {{ row.ret_1d == null ? '+0.0%' : signedPct((row.ret_1d ?? 0) * 100, 1) }}
                 </td>
-                <td class="fig num">{{ pctFrac(row.spread_pct, 1) }}</td>
-                <td class="fig num">{{ num(row.open_interest, 0) }}</td>
-                <td class="fig num">{{ row.selected_dte == null ? DASH : `${row.selected_dte}D` }}</td>
+                <td class="fig num">{{ pctFrac(row.spread_pct ?? 0, 1) }}</td>
+                <td class="fig num">{{ num(row.open_interest ?? 0, 0) }}</td>
+                <td class="fig num">{{ row.selected_dte == null ? '0D' : `${row.selected_dte}D` }}</td>
                 <td class="fig num" :class="imbalanceTone(row.call_put_imbalance)">
-                  {{ row.call_put_imbalance == null ? DASH : signedPct((row.call_put_imbalance ?? 0) * 100, 0) }}
+                  {{ row.call_put_imbalance == null ? '+0%' : signedPct((row.call_put_imbalance ?? 0) * 100, 0) }}
                 </td>
               </tr>
             </tbody>
@@ -2100,30 +2012,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .options-view :deep(.panel > .head .idx) { color: var(--phosphor); }
 
 /* ---- view tabs ----------------------------------------------------------- */
-.view-tabs {
-  display: flex;
-  border-bottom: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-  flex: 0 0 auto;
-}
-.view-tab {
-  padding: var(--s2) var(--s3);
-  border: none;
-  border-right: var(--hair) solid var(--rule);
-  background: transparent;
-  color: var(--ink-dim);
-  cursor: pointer;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  font-size: var(--t-micro);
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
-}
-.view-tab:hover { color: var(--ink); background: var(--panel-hi); }
-.view-tab.on {
-  color: var(--phosphor);
-  background: var(--phosphor-wash);
-  border-bottom: 2px solid var(--phosphor);
-}
 .market-flow-link {
   display: inline-flex;
   align-items: center;
@@ -2135,16 +2023,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   text-decoration: none;
 }
 .market-flow-link:hover { color: var(--phosphor); background: var(--phosphor-wash); text-decoration: none; }
-.options-scope {
-  margin: calc(var(--s2) * -1) 0 0;
-  padding: 0 var(--s2);
-  color: var(--ink-ghost);
-  white-space: normal;
-}
 
 .command {
-  display: grid;
-  grid-template-columns: auto minmax(128px, 176px) auto auto minmax(120px, 168px) minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s2) var(--s3);
   min-height: 56px;
@@ -2157,6 +2039,41 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   display: flex;
   align-items: center;
   min-width: 0;
+}
+.quick-tickers {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.ticker-chip {
+  padding: 3px 7px;
+  min-height: 26px;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void-lift);
+  color: var(--ink-dim);
+  font: 700 9.5px var(--font-data);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: var(--r-xs, 2px);
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.ticker-chip:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+  border-color: var(--rule);
+}
+.ticker-chip.on {
+  color: var(--void);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+}
+.command-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-left: auto;
+  flex-wrap: wrap;
 }
 .symbol-lockup {
   display: flex;
@@ -2182,7 +2099,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   align-items: end;
   padding: var(--s3);
 }
-.active-symbol { font-size: var(--t-fig); font-weight: 500; letter-spacing: var(--track-tight); color: var(--ink); }
+.active-symbol { font-size: var(--t-fig); font-weight: 600; letter-spacing: var(--track-tight); color: var(--ink); }
 .slash { font: 300 1rem var(--font-display); color: var(--rule-hi); }
 .view-name { font: 700 0.85rem var(--font-display); letter-spacing: .1em; color: var(--ink-dim); }
 .observed { color: var(--ink-ghost); font-size: var(--t-micro); white-space: nowrap; }
@@ -2216,7 +2133,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--phosphor-wash);
 }
 .jump-last-good:hover { color: var(--void); background: var(--phosphor); }
-.focus-note { color: var(--phosphor); font-weight: 650; }
 .symbol-entry {
   display: flex;
   height: 34px;
@@ -2423,6 +2339,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: 1px solid var(--rule-hi);
   background: var(--panel-hi);
   font-size: var(--t-micro);
+}
+.expiry-select:hover { border-color: var(--rule); }
+.seg:focus-visible,
+.expiry-select:focus-visible,
+.symbol-entry:focus-within {
+  outline: var(--hair) solid var(--phosphor);
+  outline-offset: 2px;
 }
 /* ---- live lag badge + quick filters (always visible) ------------------- */
 .live-filter-bar {
@@ -2668,89 +2591,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border-radius: 50%;
   background: var(--warn);
 }
-.notes-chev { color: var(--ink-ghost); }
-.notes-preview {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-ghost);
-}
-.data-notes ul {
-  list-style: none;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 4px 0 0;
-  padding: 0;
-  color: var(--ink-dim);
-}
-.data-notes li { padding-left: 12px; border-left: 2px solid var(--rule-hi); line-height: 1.4; }
-
-.lean-auth {
-  display: grid;
-  grid-template-columns: minmax(140px, 180px) 1fr minmax(120px, 160px);
-  gap: var(--s4);
-  align-items: center;
-  padding: var(--s3) var(--s4);
-  border: var(--hair) solid var(--rule);
-  background: var(--panel);
-}
-.lean-auth.bullish { box-shadow: inset 3px 0 var(--long); }
-.lean-auth.bearish { box-shadow: inset 3px 0 var(--short); }
-.lean-auth.mixed { box-shadow: inset 3px 0 var(--warn); }
-.lean-auth-sign,
-.lean-auth-gate { display: grid; gap: 2px; }
-.lean-auth-sign strong,
-.lean-auth-gate strong {
-  font: 700 var(--t-display) / 1 var(--font-display);
-  letter-spacing: 0.04em;
-}
-.lean-auth.bullish .lean-auth-sign strong { color: var(--long); }
-.lean-auth.bearish .lean-auth-sign strong { color: var(--short); }
-.lean-auth-gate strong { color: var(--ink-dim); }
-.lean-auth-copy {
-  margin: 0;
-  color: var(--ink-dim);
-  font-size: var(--t-small);
-  max-width: 72ch;
-}
-.insider-panel { margin-top: var(--s3); }
-.insider-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--s4);
-  padding: var(--s3) var(--s4);
-}
-.insider-grid h3 { margin: 0 0 var(--s2); color: var(--ink-soft); }
-.insider-list {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.insider-list li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
-.insider-list .dim { color: var(--ink-ghost); }
-.kind { padding: 1px 6px; border: var(--hair) solid var(--rule); }
-.kind.buy, .kind.insider { color: var(--long); }
-.kind.sell { color: var(--short); }
-.kind.event, .kind.holder { color: var(--ink-soft); }
-.insider-more { display: inline-block; margin: 0 var(--s4) var(--s3); color: var(--phosphor); }
-.why-cell, .why-line {
-  color: var(--ink-ghost);
-  font-size: var(--t-micro);
-  max-width: 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-@media (max-width: 900px) {
-  .lean-auth, .insider-grid { grid-template-columns: 1fr; }
-}
-
 /* ---- compact KPI rail ------------------------------------------------- */
 .kpi-rail {
   display: grid;
@@ -2763,26 +2603,54 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
+@media (max-width: 1380px) {
+  .kpi-rail {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+@media (max-width: 860px) {
+  .kpi-rail {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 580px) {
+  .kpi-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .kpi .dim { color: var(--ink-ghost); margin: 0 2px; }
 .kpi {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
-  min-height: 88px;
-  padding: var(--s3) var(--s4);
+  min-height: 76px;
+  padding: 8px 12px;
   border: 0;
   background: var(--panel);
+  overflow: hidden;
 }
-.kpi .label { color: var(--ink-faint); font-family: var(--font-data); font-size: var(--t-micro); letter-spacing: 0.07em; line-height: 1.2; font-weight: 700; }
+.kpi .label {
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .kpi strong {
-  font-size: 1.08rem;
+  font-size: 1.0rem;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--ink);
   line-height: 1.15;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
 .kpi em {
@@ -2790,31 +2658,41 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-faint);
   font-size: var(--t-micro);
   line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* SPOT is the anchor — larger and slightly bolder */
 .kpi.spot { box-shadow: inset 3px 0 var(--phosphor); background: var(--phosphor-wash); }
-.kpi.spot strong { font-size: var(--t-fig); color: var(--ink); font-weight: 700; letter-spacing: -0.03em; }
+.kpi.spot strong { font-size: 1.2rem; color: var(--ink); font-weight: 700; letter-spacing: -0.03em; }
 .kpi.positive { border-color: color-mix(in srgb, var(--long) 32%, var(--rule)); }
 .kpi.negative { border-color: color-mix(in srgb, var(--short) 32%, var(--rule)); }
-.kpi.call strong, .kpi .call { color: var(--call); }
-.kpi.put strong, .kpi .put { color: var(--put); }
+.kpi.bullish { box-shadow: inset 3px 0 var(--long); }
+.kpi.bearish { box-shadow: inset 3px 0 var(--short); }
+.kpi.call strong, .kpi .call { color: var(--call-hi, var(--call)); }
+.kpi.put strong, .kpi .put { color: var(--put-hi, var(--put)); }
 .kpi .accent { color: var(--phosphor); }
-.call-tag { color: var(--call); font-weight: 600; margin-left: 4px; }
-.put-tag { color: var(--put); font-weight: 600; margin-left: 4px; }
+.call-tag { color: var(--call-hi, var(--call)); font-weight: 600; margin-left: 2px; }
+.put-tag { color: var(--put-hi, var(--put)); font-weight: 600; margin-left: 2px; }
 .kpi-squeeze-body {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 4px;
+  overflow: hidden;
 }
 .squeeze-tag {
-  padding: 1px 5px;
+  padding: 1px 4px;
   border: var(--hair) solid color-mix(in srgb, var(--warn) 55%, var(--rule));
   background: var(--warn-wash);
   color: var(--warn);
   font-family: var(--font-data);
-  font-size: var(--t-micro);
+  font-size: 9px;
   font-weight: 600;
   border-radius: var(--r-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
 }
 
 /* ---- workbench: flow bar, then squeeze + dominant GEX ------------------- */
@@ -2888,11 +2766,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .oi-by-strike {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px 10px;
   padding: var(--s3);
   border-top: var(--hair) solid var(--rule);
 }
 .oi-by-strike > .label:first-child { color: var(--phosphor); }
+.oi-by-strike .oi-strike-chip {
+  padding: 1px 6px;
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs);
+}
+.oi-by-strike .call { color: var(--call-hi); font-weight: 700; }
+.oi-by-strike .put { color: var(--put-hi); font-weight: 700; }
 
 .view-label {
   font-size: var(--t-micro);
@@ -2943,83 +2830,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   justify-content: flex-end;
 }
 
-.chart-legend-pill {
-  font-size: var(--t-micro);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 1px 4px;
-}
-.chart-legend-pill.price { color: var(--ink-dim); }
-.chart-legend-pill.call { color: var(--call); }
-.chart-legend-pill.put { color: var(--put); }
-.chart-legend-pill.flip { color: var(--warn); }
-.chart-legend-pill.spot { color: var(--ink); }
-
-.range-select, .density-days-select {
-  background: var(--panel-hi);
-  border: var(--hair) solid var(--rule-hi);
-  color: var(--ink);
-  font-size: var(--t-micro);
-  padding: 1px 4px;
-  font-weight: 700;
-}
-
 .gex-meta-badge {
   font-size: var(--t-micro);
   color: var(--ink-dim);
   font-family: var(--font-data);
   margin-left: 6px;
 }
-
-.gex-aux {
-  flex: 0 0 auto;
-  border-top: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-}
-.gex-aux > summary {
-  cursor: pointer;
-  padding: 3px 6px;
-  color: var(--ink-faint);
-  list-style: none;
-}
-.gex-aux > summary::-webkit-details-marker { display: none; }
-.gex-aux[open] > summary {
-  border-bottom: var(--hair) solid var(--rule);
-  color: var(--ink-dim);
-}
-
-.expiry-gex.compact {
-  margin: 0;
-  padding: 4px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 72px;
-  overflow: auto;
-}
-.expiry-gex-row {
-  display: grid;
-  grid-template-columns: 48px 28px 1fr 52px;
-  align-items: center;
-  gap: 4px;
-  min-height: 14px;
-}
-.expiry-gex-row .exp { color: var(--ink-dim); font-size: var(--t-micro); }
-.expiry-gex-row .dte { color: var(--ink-ghost); text-align: right; font-size: var(--t-micro); }
-.expiry-gex-row .bar-track {
-  height: 4px;
-  background: var(--rule);
-  overflow: hidden;
-}
-.expiry-gex-row .bar-track i {
-  display: block;
-  height: 100%;
-  min-width: 2px;
-}
-.expiry-gex-row .bar-track i.pos { background: var(--call); }
-.expiry-gex-row .bar-track i.neg { background: var(--put); }
-.expiry-gex-row .fig { text-align: right; font-size: var(--t-micro); color: var(--ink-soft); }
-.empty-note { color: var(--ink-dim); padding: 10px 6px; font-size: var(--t-tiny); }
 
 .tape-panel-full { min-height: 280px; width: 100%; }
 .prob-calc-panel {
@@ -3076,6 +2892,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-tabs button:hover:not(.on) { color: var(--ink-soft); background: var(--panel-hi); }
 .tape-tabs button.on { color: var(--ink); background: var(--panel-hi); font-weight: 700; box-shadow: inset 0 -2px var(--phosphor); }
 .tape-tabs button:disabled { color: var(--ink-ghost); opacity: 0.45; cursor: not-allowed; background: transparent; }
+.tape-tabs button:focus-visible {
+  outline: var(--hair) solid var(--phosphor);
+  outline-offset: -2px;
+}
 /* Tab count badge */
 .tab-count {
   display: inline-block;
@@ -3123,6 +2943,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .sort-control { display: flex; align-items: center; gap: var(--s2); }
 .sort-control select { min-height: 26px; padding: 0 18px 0 6px; color: var(--ink); border: var(--hair) solid var(--rule-hi); background: var(--panel); font-size: var(--t-micro); }
+.sort-control select:hover { border-color: var(--rule); }
 .anomaly-method { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-dim); font: var(--t-micro) var(--font-display); letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
 .anomaly-method i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); flex: 0 0 auto; }
 .anomaly-method i.live { background: var(--phosphor); }
@@ -3220,17 +3041,17 @@ tr.anomalous td, tr.isWhale td, tr.isMegaWhale td { color: var(--ink); }
   font-weight: 700;
   letter-spacing: 0.05em;
 }
-.type-chip.call { color: var(--call); border-color: color-mix(in srgb, var(--call) 45%, var(--rule)); background: var(--call-wash); }
-.type-chip.put { color: var(--put); border-color: color-mix(in srgb, var(--put) 45%, var(--rule)); background: var(--put-wash); }
-td.call { color: var(--call); }
-td.put { color: var(--put); }
+.type-chip.call { color: var(--call-hi, var(--call)); border-color: color-mix(in srgb, var(--call) 45%, var(--rule)); background: var(--call-wash); }
+.type-chip.put { color: var(--put-hi, var(--put)); border-color: color-mix(in srgb, var(--put) 45%, var(--rule)); background: var(--put-wash); }
+td.call { color: var(--call-hi, var(--call)); }
+td.put { color: var(--put-hi, var(--put)); }
 .agg.buy { color: var(--long); background: var(--long-wash); border-color: color-mix(in srgb, var(--long) 40%, var(--rule)); font-weight: 800; }
 .agg.sell { color: var(--short); background: var(--short-wash); border-color: color-mix(in srgb, var(--short) 40%, var(--rule)); font-weight: 800; }
 .agg.unknown { color: var(--ink-faint); font-size: var(--t-micro); }
 .bias-chip.bull, .edge-chip.bull { color: var(--long); border-color: color-mix(in srgb, var(--long) 50%, var(--rule)); background: var(--long-wash); }
 .bias-chip.bear, .edge-chip.bear { color: var(--short); border-color: color-mix(in srgb, var(--short) 50%, var(--rule)); background: var(--short-wash); }
-.bias-chip.call { color: var(--call); border-color: color-mix(in srgb, var(--call) 40%, var(--rule)); background: var(--call-wash); }
-.bias-chip.put { color: var(--put); border-color: color-mix(in srgb, var(--put) 40%, var(--rule)); background: var(--put-wash); }
+.bias-chip.call { color: var(--call-hi, var(--call)); border-color: color-mix(in srgb, var(--call) 40%, var(--rule)); background: var(--call-wash); }
+.bias-chip.put { color: var(--put-hi, var(--put)); border-color: color-mix(in srgb, var(--put) 40%, var(--rule)); background: var(--put-wash); }
 .bias-chip.unsigned, .edge-chip.unsigned { color: var(--ink-ghost); background: var(--panel-hi); border-color: var(--rule); }
 /* Trade class is a classification, not a live/selection state — phosphor is
    reserved for that, so SWEEP reads via weight + a raised neutral fill
@@ -3240,15 +3061,30 @@ td.put { color: var(--put); }
 .class-chip.block { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--rule)); background: var(--warn-wash); font-weight: 800; }
 .class-chip.single { color: var(--ink-dim); background: transparent; }
 .est { color: var(--ink-faint); margin-left: 2px; font-size: var(--t-micro); }
-/* Notes always scannable — denser strip for power-user desk */
-.data-notes {
-  min-height: 32px;
-  border-left: 3px solid var(--warn);
-  background: color-mix(in srgb, var(--warn) 6%, var(--panel));
+.whale-indicator {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
 }
-.data-notes.open ul {
-  max-height: 120px;
-  overflow: auto;
+.tier-100k {
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 50%, var(--rule));
+}
+.tier-500k {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.14);
+  border: var(--hair) solid color-mix(in srgb, #f59e0b 60%, var(--rule));
+}
+.tier-mega-whale {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.18);
+  border: var(--hair) solid color-mix(in srgb, #fbbf24 70%, var(--rule));
+  font-weight: 800;
 }
 .no-tape { min-height: 180px; display: grid; place-content: center; justify-items: center; gap: var(--s2); color: var(--ink-dim); text-align: center; padding: var(--s4); }
 .no-tape strong { font: 650 var(--t-small) var(--font-display); letter-spacing: .08em; color: var(--ink); }
@@ -3266,7 +3102,6 @@ td.put { color: var(--put); }
 }
 .raw-btn:hover { border-color: var(--phosphor); }
 .tape-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.tape-glyph { font: 2.25rem var(--font-display); color: var(--rule-hi); line-height: 1; }
 .compact-empty { min-height: 140px; }
 
 .methodology {

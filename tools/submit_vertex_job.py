@@ -21,7 +21,6 @@ import argparse
 import os
 import sys
 import subprocess
-import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,7 +79,7 @@ def main():
 
     container_uri = args.container_uri or prebuilt_containers[args.gpu]
 
-    print(f"\n[JOB CONFIGURATION]")
+    print("\n[JOB CONFIGURATION]")
     print(f"  Job Name:          {args.job_name}")
     print(f"  GCP Project:       {project_id}")
     print(f"  Region:            {args.region}")

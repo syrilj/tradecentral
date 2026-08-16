@@ -5,8 +5,16 @@
  * the active (higher) side is featured. Structure is never hard-zeroed.
  */
 import { computed } from 'vue'
-import type { OptionsSqueeze, SqueezeSetup, SqueezeFactor } from '@/api'
-import { usd } from '@/format'
+import type { OptionsSqueeze, SqueezeFactor } from '@/api'
+import { optUsd } from '@/format'
+import {
+  calculateFeaturedSetup,
+  calculateRingOffset,
+  formatNearSpotGex,
+  calculateTrackWidthPct,
+  buildTakeaways,
+  RING_CIRCUMFERENCE,
+} from '@/squeezeCalc'
 
 const props = defineProps<{
   squeeze: OptionsSqueeze | null | undefined
@@ -25,29 +33,19 @@ const fuel = computed(() => {
 })
 
 /** Featured setup: highest structure score, with primary bias as tie-break. */
-const featured = computed((): { side: 'bullish' | 'bearish'; setup: SqueezeSetup | undefined } => {
-  const b = bull.value
-  const r = bear.value
-  const bs = b?.score ?? 0
-  const rs = r?.score ?? 0
-  if (primary.value === 'bearish' || (rs > bs && primary.value !== 'bullish')) {
-    return { side: 'bearish', setup: r }
-  }
-  if (primary.value === 'bullish' || bs >= rs) {
-    return { side: 'bullish', setup: b }
-  }
-  return { side: 'bearish', setup: r }
-})
+const featured = computed(() =>
+  calculateFeaturedSetup(primary.value, bull.value, bear.value, signedScore.value),
+)
 
 const boardScore = computed(() => featured.value.setup?.score ?? 0)
 const likelihood = computed(() => featured.value.setup?.likelihood ?? 'unlikely')
 const factors = computed(() => featured.value.setup?.factors ?? [])
 const analysis = computed(() => featured.value.setup?.setup_analysis ?? [])
-const spectrumPct = computed(() => Math.max(0, Math.min(100, boardScore.value)))
+const spectrumPct = computed(() => Math.max(0, Math.min(100, Math.abs(boardScore.value))))
 
 /** Full ring: circumference of r=42 → 2πr ≈ 263.9 */
-const RING_C = 263.89
-const ringOffset = computed(() => RING_C * (1 - boardScore.value / 100))
+const RING_C = RING_CIRCUMFERENCE
+const ringOffset = computed(() => calculateRingOffset(boardScore.value, RING_C))
 
 function scoreCls(score: number): string {
   if (score >= 75) return 'hot'
@@ -90,46 +88,17 @@ function factorTheme(f: SqueezeFactor): string {
   return 'accent'
 }
 
-const displayTakeaways = computed(() => {
-  if (analysis.value && analysis.value.length > 0) {
-    return analysis.value.map((line) => {
-      const l = line.toLowerCase()
-      let icon = '↑'
-      let type: 'pos' | 'warn' | 'info' = 'pos'
-      if (l.includes('dampen') || l.includes('zero-gamma') || l.includes('long gamma')) {
-        icon = '●'
-        type = 'warn'
-      } else if (l.includes('partial') || l.includes('structure') || l.includes('alone') || l.includes('lean')) {
-        icon = '●'
-        type = 'info'
-      } else if (l.includes('near') || l.includes('magnet') || l.includes('call wall') || l.includes('upside')) {
-        icon = '↑'
-        type = 'pos'
-      }
-      return { line, icon, type }
-    })
-  }
-  const lines: { line: string; icon: string; type: 'pos' | 'warn' | 'info' }[] = []
-  if (featuredWall.value.level != null) {
-    const pct = featuredWall.value.pct
-    const pctTxt = pct == null ? '' : ` (${pct >= 0 ? '+' : ''}${(pct * 100).toFixed(1)}%)`
-    lines.push({
-      line: `${featuredWall.value.label} at ${usd(featuredWall.value.level)}${pctTxt}.`,
-      icon: featured.value.side === 'bullish' ? '↑' : '↓',
-      type: 'pos',
-    })
-  }
-  if (dampened.value) {
-    lines.push({ line: 'Long-gamma regime dampens squeeze follow-through below flip.', icon: '●', type: 'warn' })
-  }
-  if (featured.value.setup?.trading_implication) {
-    lines.push({ line: featured.value.setup.trading_implication, icon: '●', type: 'info' })
-  }
-  if (!lines.length) {
-    lines.push({ line: 'Insufficient structure factors for a squeeze read on this chain.', icon: '●', type: 'info' })
-  }
-  return lines
-})
+const displayTakeaways = computed(() =>
+  buildTakeaways({
+    analysis: analysis.value,
+    side: featured.value.side,
+    wallLevel: featuredWall.value.level,
+    wallPct: featuredWall.value.pct,
+    wallLabel: featuredWall.value.label,
+    dampened: dampened.value,
+    implication: featured.value.setup?.trading_implication ?? '',
+  }),
+)
 
 const implication = computed(() => featured.value.setup?.trading_implication ?? '')
 const stronger = computed(() => featured.value.setup?.for_stronger ?? [])
@@ -203,10 +172,10 @@ const otherSide = computed(() => {
             class="fig"
             :class="signedScore != null && signedScore > 0 ? 'call' : signedScore != null && signedScore < 0 ? 'put' : ''"
           >
-            {{ signedScore == null ? '—' : `${signedScore > 0 ? '+' : ''}${signedScore}` }}
+            {{ signedScore == null ? '+0' : `${signedScore > 0 ? '+' : ''}${signedScore}` }}
           </strong>
           <span v-if="levels?.near_spot_net_gex_m != null" class="near">
-            near ${{ levels.near_spot_net_gex_m.toFixed(1) }}M
+            near {{ formatNearSpotGex(levels.near_spot_net_gex_m) }}
           </span>
         </div>
       </div>
@@ -219,16 +188,16 @@ const otherSide = computed(() => {
         <div class="kl-cell">
           <span class="label">{{ featuredWall.label || 'WALL' }}</span>
           <strong class="fig" :class="featured.side === 'bullish' ? 'call' : 'put'">
-            {{ featuredWall.level != null ? usd(featuredWall.level) : '—' }}
+            {{ featuredWall.level != null ? optUsd(featuredWall.level) : '$0.00' }}
           </strong>
         </div>
         <div class="kl-cell">
           <span class="label">FLIP</span>
-          <strong class="fig accent">{{ levels?.gamma_flip != null ? usd(levels.gamma_flip) : '—' }}</strong>
+          <strong class="fig accent">{{ levels?.gamma_flip != null ? optUsd(levels.gamma_flip) : '$0.00' }}</strong>
         </div>
         <div class="kl-cell">
           <span class="label">SPOT</span>
-          <strong class="fig">{{ usd(spot ?? levels?.spot ?? featured.setup?.spot) }}</strong>
+          <strong class="fig">{{ optUsd(spot ?? levels?.spot ?? featured.setup?.spot) }}</strong>
         </div>
       </div>
     </section>
@@ -243,7 +212,7 @@ const otherSide = computed(() => {
             <i
               class="factor-fill"
               :class="[factorTheme(f), scoreCls(f.max ? (f.score / f.max) * 100 : 0)]"
-              :style="{ width: `${f.max ? Math.min(100, (f.score / f.max) * 100) : 0}%` }"
+              :style="{ width: `${calculateTrackWidthPct(f.score, f.max)}%` }"
             />
           </div>
           <span class="factor-score fig">{{ f.score }}/{{ f.max }}</span>
@@ -275,9 +244,9 @@ const otherSide = computed(() => {
       <i class="side-dot" :class="otherSide.side === 'bullish' ? 'call' : 'put'" />
       <span class="label">{{ otherSide.side === 'bullish' ? 'BULL' : 'BEAR' }} ALT</span>
       <span class="fig">{{ otherSide.setup.score ?? 0 }}/100</span>
-      <span class="lik label">{{ (otherSide.setup.likelihood || '—').toUpperCase() }}</span>
+      <span class="lik label">{{ (otherSide.setup.likelihood || 'UNLIKELY').toUpperCase() }}</span>
       <div class="otrack">
-        <i :class="otherSide.side" :style="{ width: `${Math.min(100, otherSide.setup.score ?? 0)}%` }" />
+        <i :class="otherSide.side" :style="{ width: `${calculateTrackWidthPct(otherSide.setup.score, 100)}%` }" />
       </div>
     </div>
   </div>
@@ -328,8 +297,8 @@ const otherSide = computed(() => {
   border-bottom: var(--hair) solid var(--rule-hi);
   flex: 0 0 auto;
 }
-.sq.bullish .hero { box-shadow: inset 3px 0 0 var(--call); }
-.sq.bearish .hero { box-shadow: inset 3px 0 0 var(--put); }
+.sq.bullish .hero { border-left: 2px solid var(--call-dim, rgba(16, 185, 129, 0.4)); }
+.sq.bearish .hero { border-left: 2px solid var(--put-dim, rgba(244, 63, 94, 0.4)); }
 
 .ring-block {
   display: flex;
@@ -359,7 +328,7 @@ const otherSide = computed(() => {
   fill: none;
   stroke-width: 8;
   stroke-linecap: round;
-  transition: stroke-dashoffset var(--dur) var(--ease-out);
+  transition: stroke-dashoffset 0.6s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .ring-fill.bullish { stroke: var(--call-hi); }
 .ring-fill.bearish { stroke: var(--put-hi); }
@@ -384,7 +353,8 @@ const otherSide = computed(() => {
 }
 .sq.bullish .score-num { color: var(--call-hi); }
 .sq.bearish .score-num { color: var(--put-hi); }
-.score-num.hot { color: var(--warn); }
+.sq.bullish .score-num.hot { color: var(--call-hi); }
+.sq.bearish .score-num.hot { color: var(--put-hi); }
 .score-num.elev { color: inherit; }
 .score-num.mid { color: inherit; opacity: 0.9; }
 .score-num.low { color: var(--ink-faint); }
@@ -561,16 +531,18 @@ const otherSide = computed(() => {
 .kl-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0;
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
+  gap: 1px;
+  border: var(--hair) solid var(--rule);
+  background: var(--rule);
+  border-radius: var(--r-xs, 2px);
+  overflow: hidden;
 }
 .kl-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: var(--s2) var(--s3);
-  border-right: var(--hair) solid var(--rule);
+  gap: 2px;
+  padding: 6px 10px;
+  background: var(--void-lift);
   min-width: 0;
 }
 .kl-cell:last-child { border-right: 0; }
@@ -669,6 +641,7 @@ const otherSide = computed(() => {
   background: var(--ink-faint);
 }
 .takeaway-dot.pos { background: var(--call); }
+.takeaway-dot.neg { background: var(--put); }
 .takeaway-dot.warn { background: var(--warn); }
 .takeaway-dot.info { background: var(--phosphor-dim); }
 .takeaway-text { min-width: 0; }

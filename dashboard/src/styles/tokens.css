@@ -71,12 +71,12 @@
   --long-wash: rgba(79, 174, 128, 0.12);
   --short: #cf5f6b;
   --short-wash: rgba(207, 95, 107, 0.12);
-  --call: #5b95b5;
-  --call-hi: #86b7d1;
-  --call-wash: rgba(91, 149, 181, 0.11);
-  --put: #c1955e;
-  --put-hi: #d8b183;
-  --put-wash: rgba(193, 149, 94, 0.11);
+  --call: #10b981;
+  --call-hi: #34d399;
+  --call-wash: rgba(16, 185, 129, 0.12);
+  --put: #f43f5e;
+  --put-hi: #fb7185;
+  --put-wash: rgba(244, 63, 94, 0.12);
   --warn: #d9a441;
   --warn-wash: rgba(217, 164, 65, 0.12);
   --halt: #cf5f6b;
@@ -97,11 +97,14 @@
   --unknown: var(--ink-faint);
   --running: var(--warn);
 
-  /* ---- type: Mistral AI refined typography system ----------------------- */
-  --font-display: 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-ui: 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-data: 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
-  --font-mono: 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
+  /* ---- type: self-hosted Geist system ------------------------------------
+     Geist for display/UI, Geist Mono for data. Lora is the serif accent for
+     the public paper surfaces (landing/auth) only — never on the desk. */
+  --font-display: 'Geist Variable', 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-ui: 'Geist Variable', 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-data: 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
+  --font-mono: 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
+  --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
 
   --t-micro: 0.6875rem;   /* 11px — crisp technical labels     */
   --t-tiny: 0.75rem;      /* 12px — dense table meta           */

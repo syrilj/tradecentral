@@ -4,9 +4,7 @@ Unit tests for Workstream 5: Point-In-Time Historical Universe Engine.
 
 from __future__ import annotations
 
-import pytest
 import pandas as pd
-import numpy as np
 
 try:
     from edge.research.universe import InstrumentMaster, UniverseConfig, get_universe

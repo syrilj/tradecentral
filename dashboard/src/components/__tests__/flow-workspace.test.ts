@@ -47,7 +47,7 @@ describe('Standalone Flow workspace contract', () => {
   it('projects thresholds locally and bounds the contract tape', () => {
     expect(dashboard).toMatch(/Number\(row\.premium\) >= props\.minPremium/)
     expect(dashboard).toMatch(/const MAX_TAPE_ROWS = 100/)
-    expect(dashboard).toMatch(/qualifiedTapeRows\.value\.slice\(0, MAX_TAPE_ROWS\)/)
+    expect(dashboard).toMatch(/tapeShowAll\.value \? rows\.length : MAX_TAPE_ROWS/)
   })
 
   it('states the premium-share formula and labels bullish/bearish activity lean', () => {
@@ -176,7 +176,13 @@ describe('Standalone Flow workspace contract', () => {
     expect(flow).toContain('FlowSuggestionDrawer')
     expect(flow).toContain('@open-symbol="openSymbol"')
     expect(flow).toContain(':symbol="selectedSetup"')
-    expect(flow).toContain("query: { ...route.query, setup: symbol }")
+    expect(flow).toContain(':focus-symbol="selectedSetup"')
+    expect(flow).toContain('queryTicker')
+    expect(flow).toContain("queryTicker('setup') || queryTicker('symbol')")
+    expect(flow).toContain("query: { ...route.query, setup: symbol, symbol }")
+    expect(flow).toContain('delete query.symbol')
+    expect(dashboard).toContain('focusSymbol')
+    expect(dashboard).toContain('symbolQuery.value = next')
     expect(drawer).toContain('api.flowSuggestions({ symbol: props.symbol')
     expect(drawer).toContain('POLL_MS = 15_000')
     expect(drawer).toContain('SetupRiskPanel')

@@ -13,7 +13,6 @@ Usage:
   # Submit job to Vertex AI (Spot Compute):
   python3 edge/tools/submit_pead_gcp.py
 """
-import os
 import sys
 import subprocess
 from pathlib import Path

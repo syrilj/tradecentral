@@ -54,7 +54,7 @@ const err = ref<string | null>(null)
 const input = ref<HTMLInputElement | null>(null)
 
 function cleanTicker(term: string): string {
-  return term.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
+  return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
 }
 
 const matchingViews = computed(() => {

@@ -12,11 +12,8 @@ Verifies:
 """
 from __future__ import annotations
 
-import json
-import os
 import sys
 from pathlib import Path
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
@@ -24,7 +21,7 @@ sys.path.insert(0, str(TOOLS))
 
 import gcp_config
 from audit_gcp_costs import GCPCostAuditor
-from check_gcp_resources import get_all_gcp_resources, get_gcp_cost_breakdown, get_bigquery_status
+from check_gcp_resources import get_all_gcp_resources, get_bigquery_status
 
 
 def test_gcp_config_defaults_and_env_overrides(monkeypatch):

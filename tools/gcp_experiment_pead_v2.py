@@ -17,6 +17,19 @@ GATE criteria (same as PEAD v1 for fair comparison):
 
 Results are written to edge/runs/pead_v2/results.json and uploaded to GCS.
 
+EXECUTION-LAG CORRECTION (2026-08-16)
+-------------------------------------
+This file previously carried the exact lag-0 lookahead documented in
+edge/docs/LOOKAHEAD_CORRECTION.md: `port_ret = (long_w * daily_ret).sum(axis=1)
+- (short_w * daily_ret).sum(axis=1)` with `daily_ret = close_prices.pct_change(1)`
+and NO shift anywhere, so a weight formed from bar i's features earned bar i's
+own realised return. That is the pattern that produced the retracted +502.98% /
+Sharpe 5.38 PEAD result. All portfolio return accounting here now routes through
+`edge.research.portfolio.simulate_long_short` with `execution_lag=1`, the one
+audited accounting primitive (see edge/tests/research/test_portfolio.py). The
+rank-IC computation is unchanged: it is a signal-quality statistic, not a P&L
+path, and it never multiplies a weight by a price.
+
 Usage:
   python3 edge/tools/gcp_experiment_pead_v2.py
   python3 edge/tools/gcp_experiment_pead_v2.py --smoke  (fast local test)
@@ -32,9 +45,12 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from edge.research.portfolio import simulate_long_short
+
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "edge" / "runs" / "pead_v2"
 COST_PER_SIDE = 0.0010  # 10bp
+EXECUTION_LAG = 1        # weights formed from bar i's features earn from bar i+1
 
 # Symbols — same lead names as PEAD v1 for direct head-to-head comparison
 LEAD_SYMBOLS = [
@@ -169,27 +185,27 @@ def run_backtest(
             for s in top_short.index:
                 short_w.iloc[i:i+holding_days, short_w.columns.get_loc(s)] = 1.0 / len(top_short)
 
+    # All P&L accounting routes through the audited primitive with
+    # execution_lag=1: a weight formed from bar i's features earns from bar
+    # i+1 onward, never bar i's own return (LOOKAHEAD_CORRECTION.md).
     close_prices = pd.DataFrame({s: d["Close"] for s, d in data.items()}).reindex(dates).ffill()
-    daily_ret = close_prices.pct_change(1).fillna(0.0)
-    port_ret = (long_w * daily_ret).sum(axis=1) - (short_w * daily_ret).sum(axis=1)
-
-    long_turnover = (long_w.diff().abs()).sum(axis=1).mean() * 252.0
-    short_turnover = (short_w.diff().abs()).sum(axis=1).mean() * 252.0
-    total_turnover = float(long_turnover + short_turnover)
-    cost_drag = total_turnover * COST_PER_SIDE
-    gross_annual = float(port_ret.mean() * 252.0)
-    net_annual = float(gross_annual - cost_drag)
-    daily_std = port_ret.std()
-    sharpe = float(port_ret.mean() / daily_std * np.sqrt(252)) if daily_std > 0 else 0.0
+    res = simulate_long_short(
+        long_weights=long_w,
+        short_weights=short_w,
+        close=close_prices,
+        execution_lag=EXECUTION_LAG,
+        cost_per_side=COST_PER_SIDE,
+    )
 
     return {
         "mean_rank_ic": mean_ic,
         "rank_icir": icir,
-        "annual_turnover": total_turnover,
-        "cost_drag_pct": cost_drag * 100.0,
-        "gross_annual_return_pct": gross_annual * 100.0,
-        "net_annual_return_pct": net_annual * 100.0,
-        "sharpe_ratio": sharpe,
+        "execution_lag": EXECUTION_LAG,
+        "annual_turnover": res.annual_turnover,
+        "cost_drag_pct": res.cost_drag * 100.0,
+        "gross_annual_return_pct": res.gross_annual_return * 100.0,
+        "net_annual_return_pct": res.net_annual_return * 100.0,
+        "sharpe_ratio": res.sharpe,
         "n_ic_observations": len(ic_list),
     }
 
@@ -319,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(results, f, indent=2)
 
     print(f"\n{'=' * 70}")
-    print(f"  PEAD v2 Confirmation Results:")
+    print("  PEAD v2 Confirmation Results:")
     print(f"  Mean Rank IC:    {res_conf['mean_rank_ic']:.4f}")
     print(f"  Net Annual Ret:  {res_conf['net_annual_return_pct']:.2f}%")
     print(f"  Sharpe:          {res_conf['sharpe_ratio']:.2f}")

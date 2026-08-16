@@ -3,7 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from edge.research.robustness import oof_underlying_robustness_diagnostics
+from edge.research.robustness import (
+    monte_carlo_robustness,
+    oof_underlying_robustness_diagnostics,
+)
 
 
 def _oof() -> pd.DataFrame:
@@ -47,3 +50,53 @@ def test_holdout_and_invalid_oof_rows_are_rejected_without_reading_them() -> Non
     invalid = _oof().copy(); invalid.iloc[0, invalid.columns.get_loc("position")] = 0
     with pytest.raises(ValueError, match="flat"):
         oof_underlying_robustness_diagnostics(invalid)
+
+
+def _net_oof() -> pd.DataFrame:
+    """Date-aggregated net returns with a known positive mean and spread."""
+    dates = pd.bdate_range("2025-01-02", periods=40)
+    rows = []
+    for date in dates:
+        rows.extend([
+            {"timestamp": date, "symbol": "AAA", "net_return": .004},
+            {"timestamp": date, "symbol": "BBB", "net_return": .002},
+        ])
+    return pd.DataFrame(rows).set_index(["timestamp", "symbol"])
+
+
+def test_monte_carlo_robustness_is_deterministic_and_supplemental_only() -> None:
+    first = monte_carlo_robustness(_net_oof(), n_simulations=300, seed=7)
+    second = monte_carlo_robustness(_net_oof(), n_simulations=300, seed=7)
+    assert first == second
+    assert first["scope"] == "development_oof_supplemental_diagnostic"
+    assert first["option_profitability"] == "not_evaluated"
+    assert first["live_portfolio_drawdown"] == "not_evaluated"
+    assert first["promotion_criteria"] == "unchanged"
+    assert first["n_dates"] == 40
+    drawdowns = first["max_drawdown_distribution"]
+    assert drawdowns["n_simulations"] == 300
+    assert drawdowns["worst_case"] <= drawdowns["expected_max_drawdown"] <= 0.0
+    assert drawdowns["worst_case"] <= drawdowns["worst_95pct"] <= 0.0
+    assert first["probability_of_loss_by_holding_period"]["21"] == pytest.approx(0.0)
+    assert first["annual_compounded_return_ci"] is None  # 40 dates < 252
+
+
+def test_monte_carlo_robustness_reports_loss_probability_and_annual_ci() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=300)
+    rows = []
+    for date in dates:
+        rows.append({"timestamp": date, "symbol": "AAA", "net_return": .0005})
+    report = monte_carlo_robustness(
+        pd.DataFrame(rows).set_index(["timestamp", "symbol"]),
+        n_simulations=200, seed=0,
+    )
+    assert report["n_dates"] == 300
+    assert report["annual_compounded_return_ci"]["periods"] == 252
+    assert report["annual_compounded_return_ci"]["lower_bound"] > 0.0
+    assert report["probability_of_loss_by_holding_period"]["252"] == pytest.approx(0.0)
+
+
+def test_monte_carlo_robustness_rejects_holdout_rows() -> None:
+    held_out = _net_oof().reset_index().assign(partition="terminal_holdout").set_index(["timestamp", "symbol"])
+    with pytest.raises(ValueError, match="holdout"):
+        monte_carlo_robustness(held_out)

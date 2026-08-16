@@ -39,8 +39,8 @@ columns ``open, high, low, close, volume`` and an ascending, duplicate-free
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import pandas as pd

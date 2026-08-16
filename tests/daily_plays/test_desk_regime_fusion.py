@@ -1,11 +1,8 @@
 """Unit and property tests for Desk regime-conditioned multi-stream fusion."""
 from __future__ import annotations
 
-import math
-from typing import Any
 import numpy as np
 import pandas as pd
-import pytest
 
 from edge.daily_plays.adaptive_signal import (
     AdaptiveSignalInputs,

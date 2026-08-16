@@ -26,7 +26,6 @@ describe('Insiders desk is reachable from options without authorizing trades', (
     expect(view).toContain("name: 'options'")
     expect(view).not.toMatch(/place order|broker|dark pool/i)
     expect(options).toContain("name: 'insiders'")
-    expect(options).toContain('ACTIVITY SIGN')
-    expect(options).toContain('AUTHORIZED')
+    expect(options).toContain('ACTIVITY · NOT AUTH')
   })
 })

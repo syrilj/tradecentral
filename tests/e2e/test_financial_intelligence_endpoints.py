@@ -1,8 +1,12 @@
 """Tests for new stock financial intelligence, profile, insiders, government, and ownership endpoints."""
 from __future__ import annotations
 
-import json
-import pytest
+import math
+
+try:
+    from edge.research.financials_ml_forecast import score_report_forecast
+except ImportError:
+    from research.financials_ml_forecast import score_report_forecast
 
 
 def test_financials_endpoint_quarterly_and_annual(api_client):
@@ -27,6 +31,19 @@ def test_financials_endpoint_quarterly_and_annual(api_client):
     ratios = data_q["ratios"]
     assert "market_cap" in ratios
     assert "debt_to_equity" in ratios
+
+    forecast = data_q.get("model_forecast")
+    assert isinstance(forecast, dict)
+    assert "predicted_price" in forecast
+    assert "forecast_score" in forecast
+    assert "gearing_up_towards" in forecast
+    assert forecast.get("decision_authorized") is False
+    if forecast.get("status") == "ok":
+        assert forecast["predicted_price"] is not None
+        assert forecast["forecast_score"] is not None
+        assert math.isfinite(forecast["predicted_price"])
+        assert math.isfinite(forecast["forecast_score"])
+        assert forecast["gearing_up_towards"]
 
     # 2. Annual
     res_a = api_client.get("/api/financials?symbol=ASTS&period=annual")
@@ -56,6 +73,37 @@ def test_company_profile_endpoint(api_client):
     assert "bull_bear" in data
     assert "bulls_say" in data["bull_bear"]
     assert "bears_say" in data["bull_bear"]
+    assert "model_forecast" in data
+    assert data["model_forecast"].get("label") == "what it should be"
+
+
+def test_financials_model_forecast_consistent_and_symbol_specific(api_client):
+    """Operator /api/financials forecast is deterministic and matches the shipped scorer."""
+    first = api_client.get("/api/financials?symbol=ASTS&period=quarterly")
+    second = api_client.get("/api/financials?symbol=ASTS&period=quarterly")
+    other = api_client.get("/api/financials?symbol=AAPL&period=quarterly")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert other.status_code == 200
+    a1 = first.json()["model_forecast"]
+    a2 = second.json()["model_forecast"]
+    b = other.json()["model_forecast"]
+    assert a1["predicted_price"] == a2["predicted_price"]
+    assert a1["forecast_score"] == a2["forecast_score"]
+    assert a1["gearing_up_towards"] == a2["gearing_up_towards"]
+    assert a1["status"] == "ok"
+    assert a1["predicted_price"] not in (None, 0, "0")
+    assert a1["forecast_score"] not in (None, 0, "0")
+    assert a1["gearing_up_towards"]
+    replay = score_report_forecast(first.json())
+    assert replay["predicted_price"] == a1["predicted_price"]
+    assert replay["forecast_score"] == a1["forecast_score"]
+    assert replay["gearing_up_towards"] == a1["gearing_up_towards"]
+    assert (b["predicted_price"], b["forecast_score"], b["gearing_up_towards"]) != (
+        a1["predicted_price"],
+        a1["forecast_score"],
+        a1["gearing_up_towards"],
+    )
 
 
 def test_insiders_endpoint(api_client):

@@ -108,7 +108,7 @@ const skippedInfo = computed(() => {
    field with a debounced dropdown over the same /api/search index, rather
    than inventing a new picker. */
 function cleanTicker(term: string): string {
-  return term.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
+  return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
 }
 
 const initialSymbol = typeof route.query.symbol === 'string' ? cleanTicker(route.query.symbol) : ''

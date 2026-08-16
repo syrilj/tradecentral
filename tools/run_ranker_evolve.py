@@ -183,7 +183,6 @@ def main(argv: list[str] | None = None) -> int:
             champion_snap = None
             try:
                 from edge.tools.eval_qlib_scan_accuracy import evaluate
-                from pathlib import Path as _P
 
                 champ_dir = EDGE_ROOT / "models" / "qlib_scan_lgb"
                 data_dirs = tuple(

@@ -1,7 +1,4 @@
 """Unit tests for Counterfactual Ledger module."""
-import pytest
-from pathlib import Path
-import tempfile
 
 try:
     from edge.research.counterfactual_ledger import DecisionRecord, CounterfactualLedger

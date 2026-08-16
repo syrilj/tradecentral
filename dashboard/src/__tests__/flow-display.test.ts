@@ -13,6 +13,8 @@ import {
   flowLeanTokenClass,
   flowPriorityTokenClass,
   flowWhaleTier,
+  formatDteBadge,
+  formatMoneyness,
   mixShareLabel,
   namedEmpty,
   pulseWindowCopy,
@@ -169,14 +171,14 @@ describe('flow display helpers (shipped)', () => {
   it('computes Vol / OI ratios with proper edge case handling', () => {
     expect(computeVolOiRatio(null, null)).toEqual({
       ratio: null,
-      formatted: '—',
+      formatted: '0.00x',
       isHigh: false,
       isExtreme: false,
     })
 
     expect(computeVolOiRatio(100, null)).toEqual({
       ratio: null,
-      formatted: '—',
+      formatted: '0.00x',
       isHigh: false,
       isExtreme: false,
     })
@@ -190,7 +192,7 @@ describe('flow display helpers (shipped)', () => {
 
     expect(computeVolOiRatio(0, 0)).toEqual({
       ratio: null,
-      formatted: '—',
+      formatted: '0.00x',
       isHigh: false,
       isExtreme: false,
     })
@@ -255,4 +257,25 @@ describe('flow display helpers (shipped)', () => {
     expect(flowWhaleTier(150_000).tier).toBe('100k')
     expect(flowWhaleTier(30_000).tier).toBeNull()
   })
+
+  it('formats DTE badges with clean N/A fallback on missing inputs', () => {
+    expect(formatDteBadge(null)).toEqual({ label: 'N/A', className: 'dte-unknown' })
+    expect(formatDteBadge(undefined)).toEqual({ label: 'N/A', className: 'dte-unknown' })
+    expect(formatDteBadge(NaN)).toEqual({ label: 'N/A', className: 'dte-unknown' })
+    expect(formatDteBadge(0)).toEqual({ label: '0D', className: 'dte-0d' })
+    expect(formatDteBadge(5)).toEqual({ label: '5D', className: 'dte-weekly' })
+    expect(formatDteBadge(21)).toEqual({ label: '21D', className: 'dte-monthly' })
+    expect(formatDteBadge(45)).toEqual({ label: '45D', className: 'dte-quarterly' })
+    expect(formatDteBadge(120)).toEqual({ label: '120D', className: 'dte-leap' })
+  })
+
+  it('formats moneyness with clean N/A fallback on missing inputs', () => {
+    expect(formatMoneyness(null)).toEqual({ label: 'N/A', className: 'moneyness-none' })
+    expect(formatMoneyness(undefined)).toEqual({ label: 'N/A', className: 'moneyness-none' })
+    expect(formatMoneyness(NaN)).toEqual({ label: 'N/A', className: 'moneyness-none' })
+    expect(formatMoneyness(0.005)).toEqual({ label: 'ATM', className: 'moneyness-atm' })
+    expect(formatMoneyness(0.05)).toEqual({ label: 'OTM +5.0%', className: 'moneyness-otm' })
+    expect(formatMoneyness(-0.05)).toEqual({ label: 'ITM -5.0%', className: 'moneyness-itm' })
+  })
 })
+

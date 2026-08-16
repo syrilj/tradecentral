@@ -26,4 +26,12 @@ describe('public entry and operator routing', () => {
     expect(routerSource).toContain("return fallback")
     expect(routerSource).toContain("fallback = '/flow'")
   })
+
+  it('aliases /quantitative-research onto the Market Financials model highlight', () => {
+    expect(routerSource).toContain("path: '/quantitative-research'")
+    expect(routerSource).toContain("name: 'quantitative-research'")
+    expect(routerSource).toContain("name: 'market'")
+    expect(routerSource).toContain("highlight: 'model-forecast'")
+    expect(routerSource).toContain("tab: 'financials'")
+  })
 })

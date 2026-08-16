@@ -7,8 +7,7 @@ produce byte-identical decision sequences.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 import pandas as pd
 
 from .safety import StrategyState

@@ -3,8 +3,8 @@
  * Net-GEX & Call/Put Strike Profile — vertical dual bars & net profile across the options desk.
  *
  *   · X axis = strike (low → high, left → right)
- *   · Call GEX / Call OI = positive call-blue bar ABOVE zero line (var(--call))
- *   · Put GEX / Put OI = negative put-amber bar BELOW zero line (var(--put))
+ *   · Call GEX / Call OI = positive call-emerald bar ABOVE zero line (var(--call))
+ *   · Put GEX / Put OI = negative put-crimson bar BELOW zero line (var(--put))
  *   · Net GEX / Net OI = flat ink circle marker on top (var(--ink))
  *   · Net Trace = continuous profile line connecting net markers
  *   · Regime Zones = subtle demarcation of Long Gamma vs Short Gamma relative to Flip
@@ -12,7 +12,7 @@
  * Dual-bar representation ensures neutral strikes (e.g. +$50M Call / -$50M Put)
  * show full gamma battleground instead of disappearing into a 0-height net line.
  */
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { GexStrikeRow } from '@/api'
 import { niceTicks } from '@/charts'
 import { useChartSize } from '@/composables/useChartSize'
@@ -104,16 +104,16 @@ watch(
 const hostRef = ref<HTMLDivElement | null>(null)
 const { W: hostW, H: hostH } = useChartSize(hostRef, {
   minW: 200,
-  minH: 140,
+  minH: 160,
   fallbackW: 800,
-  fallbackH: 320,
+  fallbackH: 340,
 })
 
-const left = 52
-const right = 20
-const top = 30
-const bottom = 36
-const minCol = 14
+const left = 56
+const right = 24
+const top = 46
+const bottom = 34
+const minCol = 15
 
 const hoverStrike = ref<number | null>(null)
 const strikeScope = ref<'atm' | 'near' | 'wide' | 'all'>('near')
@@ -135,11 +135,11 @@ const visible = computed(() => {
 const orderedRows = computed(() => [...visible.value].sort((a, b) => a.strike - b.strike))
 const colCount = computed(() => Math.max(orderedRows.value.length, 1))
 
-const H = computed(() => Math.max(140, hostH.value || 320))
-const plotInnerH = computed(() => Math.max(60, H.value - top - bottom))
+const H = computed(() => Math.max(160, hostH.value || 340))
+const plotInnerH = computed(() => Math.max(80, H.value - top - bottom))
 const plotBottom = computed(() => top + plotInnerH.value)
 const zeroY = computed(() => top + plotInnerH.value / 2)
-const halfPlotH = computed(() => Math.max(1, plotInnerH.value / 2 - 4))
+const halfPlotH = computed(() => Math.max(1, plotInnerH.value / 2 - 8))
 
 const plotInnerW = computed(() => {
   const minNeed = colCount.value * minCol
@@ -242,7 +242,7 @@ const bars = computed<Bar[]>(() => {
     const netH = Math.max(2, (Math.abs(net) / maxAbs.value) * halfPlotH.value)
     const cumNetY = zeroY.value - (cumNet / cumDenominator) * halfPlotH.value
 
-    const thickness = Math.max(4, Math.min(bandW.value * 0.72, 28))
+    const thickness = Math.max(4, Math.min(bandW.value * 0.76, 26))
     const cx = bandCenter(index)
 
     const isSpotNear = Math.abs(row.strike - props.spot) <= (bandW.value > 0 ? (props.spot * 0.01) : 0.5)
@@ -316,7 +316,7 @@ const levels = computed<Level[]>(() => {
 
   if (!placed.length) return []
 
-  const minGap = 52
+  const minGap = 56
   const minBoundary = left + 28
   const maxBoundary = left + plotInnerW.value - 28
 
@@ -356,10 +356,10 @@ const levels = computed<Level[]>(() => {
 
   return placed.map((level, i) => {
     const labelX = Math.max(minBoundary, Math.min(maxBoundary, xs[i]))
-    // Stagger tier 0 (top + 10) vs tier 1 (top + 22) when congested
+    // Position labels cleanly above the bars in the dedicated top banner lane [12 .. 32]
     const labelY = (hasRemainingOverlap || isWidthConstrained)
-      ? (i % 2 === 0 ? top + 10 : top + 22)
-      : top + 10
+      ? (i % 2 === 0 ? 16 : 28)
+      : 22
 
     return {
       ...level,
@@ -401,8 +401,8 @@ const yTicks = computed(() => {
 const strikeTicks = computed(() => {
   const rows = orderedRows.value
   const n = rows.length
-  if (!n) return [] as { x: number; label: string; strike: number }[]
-  const maxLabels = Math.min(n, Math.max(4, Math.floor(plotInnerW.value / 48)))
+  if (!n) return [] as { x: number; label: string; strike: number; isSpot: boolean }[]
+  const maxLabels = Math.min(n, Math.max(4, Math.floor(plotInnerW.value / 52)))
   const indices = new Set<number>()
   if (maxLabels <= 1) indices.add(0)
   else {
@@ -419,7 +419,12 @@ const strikeTicks = computed(() => {
   indices.add(nearest)
   return Array.from(indices)
     .sort((a, b) => a - b)
-    .map((i) => ({ x: bandCenter(i), label: strikeLabel(rows[i].strike), strike: rows[i].strike }))
+    .map((i) => ({
+      x: bandCenter(i),
+      label: strikeLabel(rows[i].strike),
+      strike: rows[i].strike,
+      isSpot: i === nearest,
+    }))
 })
 
 function barAriaLabel(bar: Bar): string {
@@ -437,8 +442,39 @@ function jumpToLevel(strike: number | null): void {
   )
   if (closest) {
     lockStrike(closest.strike)
+    scrollToStrike(closest.strike)
   }
 }
+
+function scrollToStrike(strike: number): void {
+  if (!hostRef.value || !scrollable.value) return
+  const targetX = xOfPrice(strike)
+  if (targetX != null) {
+    const containerW = hostRef.value.clientWidth
+    hostRef.value.scrollTo({
+      left: Math.max(0, targetX - containerW / 2),
+      behavior: 'smooth',
+    })
+  }
+}
+
+function centerOnSpot(): void {
+  if (props.spot > 0) {
+    scrollToStrike(props.focusStrike ?? props.spot)
+  }
+}
+
+onMounted(() => {
+  nextTick(() => {
+    centerOnSpot()
+  })
+})
+
+watch(() => [props.spot, props.rows, strikeScope.value], () => {
+  nextTick(() => {
+    centerOnSpot()
+  })
+})
 </script>
 
 <template>
@@ -560,10 +596,10 @@ function jumpToLevel(strike: number | null): void {
         </div>
       </div>
 
-      <div v-if="focusBar" class="strike-focus" :class="{ locked: focusStrike != null }">
+      <div v-if="(hoverStrike != null || focusStrike != null) && focusBar" class="strike-focus" :class="{ locked: focusStrike != null }">
         <div class="focus-strike">
           <span class="label">
-            {{ hoverStrike != null ? 'INSPECTING' : focusStrike != null ? 'LOCKED STRIKE' : 'NEAREST SPOT' }}
+            {{ hoverStrike != null ? 'INSPECTING' : 'LOCKED STRIKE' }}
           </span>
           <strong class="fig">${{ strikeLabel(focusBar.strike) }}</strong>
           <small class="dist-tag">{{ distanceLabel(focusBar.strike) }}</small>
@@ -607,17 +643,32 @@ function jumpToLevel(strike: number | null): void {
     >
       <svg
         :viewBox="`0 0 ${W} ${H}`"
+        :width="scrollable ? W : '100%'"
+        :height="H"
         :style="{
           height: '100%',
           width: scrollable ? `${W}px` : '100%',
           minWidth: scrollable ? `${W}px` : '100%',
           display: 'block'
         }"
-        preserveAspectRatio="none"
         role="img"
         aria-label="Call and Put gamma exposure by strike. Calls up, Puts down, Net indicator as circle."
       >
         <title>Call vs Put GEX by strike. Call GEX up, Put GEX down, Net as circle marker.</title>
+
+        <defs>
+          <!-- Plot frame clip path to guarantee zero bar overflow -->
+          <clipPath id="gex-plot-clip">
+            <rect
+              :x="left"
+              :y="top"
+              :width="plotInnerW"
+              :height="plotInnerH"
+              rx="1"
+              ry="1"
+            />
+          </clipPath>
+        </defs>
 
         <!-- Base Plot Background Frame -->
         <rect
@@ -629,7 +680,7 @@ function jumpToLevel(strike: number | null): void {
         />
 
         <!-- Optional Gamma Regime Zones Background Shading -->
-        <g v-if="showRegimes && flipX != null && rows.length" class="regime-zones" aria-hidden="true">
+        <g v-if="showRegimes && flipX != null && rows.length" class="regime-zones" clip-path="url(#gex-plot-clip)" aria-hidden="true">
           <!-- Negative Gamma Zone (Below Flip) -->
           <rect
             v-if="flipX > left"
@@ -657,7 +708,7 @@ function jumpToLevel(strike: number | null): void {
           <text
             v-if="flipX < left + plotInnerW - 70"
             :x="left + plotInnerW - 8"
-            :y="top + 12"
+            :y="top + 14"
             text-anchor="end"
             class="regime-label pos"
           >LONG GAMMA · VOLATILITY DAMPENED</text>
@@ -687,21 +738,31 @@ function jumpToLevel(strike: number | null): void {
           />
         </g>
 
-        <!-- Vertical Structural Levels (Put Wall, Flip, Spot, Call Wall) -->
+        <!-- Structural Level Guides & Top Labels (Rendered cleanly above the bar peaks) -->
         <g v-for="level in levels" :key="level.key" class="level" :class="level.cls">
+          <!-- Guide line inside plot frame -->
           <line :x1="level.x" :x2="level.x" :y1="top" :y2="plotBottom" />
+          <!-- Header connector -->
           <path
-            v-if="Math.abs(level.labelX - level.x) > 3"
-            :d="`M ${level.x} ${top} L ${level.labelX} ${level.labelY - 8}`"
+            :d="`M ${level.labelX} ${level.labelY + 8} L ${level.labelX} ${top - 6} L ${level.x} ${top}`"
             class="level-connector"
           />
-          <text :x="level.labelX" :y="level.labelY" text-anchor="middle">
+          <!-- Badge background pill -->
+          <rect
+            :x="level.labelX - 32"
+            :y="level.labelY - 11"
+            width="64"
+            height="18"
+            rx="3"
+            class="level-badge-bg"
+          />
+          <text :x="level.labelX" :y="level.labelY + 2" text-anchor="middle">
             {{ level.label }} ${{ strikeLabel(level.value) }}
           </text>
         </g>
 
         <!-- Hover / Focus Column Guide Beam -->
-        <g v-if="focusBar" class="focus-beam" aria-hidden="true">
+        <g v-if="focusBar" class="focus-beam" clip-path="url(#gex-plot-clip)" aria-hidden="true">
           <rect
             :x="focusBar.cx - bandW / 2"
             :y="top"
@@ -717,13 +778,13 @@ function jumpToLevel(strike: number | null): void {
         </g>
 
         <!-- Cumulative Area / Line (when in cumulative viewMode) -->
-        <g v-if="viewMode === 'cumulative' && rows.length" class="cumulative-group">
+        <g v-if="viewMode === 'cumulative' && rows.length" class="cumulative-group" clip-path="url(#gex-plot-clip)">
           <path class="cum-area" :d="cumulativeAreaPath" />
           <path class="cum-line" :d="cumulativeLinePath" />
         </g>
 
-        <!-- STRIKE DATA BARS & INTERACTIVE TARGETS -->
-        <g v-if="rows.length" class="bars">
+        <!-- STRIKE DATA BARS & INTERACTIVE TARGETS (Clipped safely inside plot frame) -->
+        <g v-if="rows.length" class="bars" clip-path="url(#gex-plot-clip)">
           <g
             v-for="bar in bars"
             :key="bar.strike"
@@ -756,7 +817,7 @@ function jumpToLevel(strike: number | null): void {
 
             <!-- DUAL BARS MODE: Call UP / Put DOWN -->
             <template v-if="viewMode === 'dual'">
-              <!-- Call Bar (Call Blue, grows UP from zeroY) -->
+              <!-- Call Bar (Call Emerald, grows UP from zeroY) -->
               <rect
                 v-if="bar.callH > 0"
                 class="call-bar"
@@ -764,11 +825,13 @@ function jumpToLevel(strike: number | null): void {
                 :y="bar.callY"
                 :width="bar.thickness"
                 :height="bar.callH"
+                rx="1.5"
+                ry="1.5"
               >
                 <title>${{ strikeLabel(bar.strike) }} Call {{ metricValue(bar.callVal) }}</title>
               </rect>
 
-              <!-- Put Bar (Put Amber, grows DOWN from zeroY) -->
+              <!-- Put Bar (Put Crimson, grows DOWN from zeroY) -->
               <rect
                 v-if="bar.putH > 0"
                 class="put-bar"
@@ -776,6 +839,8 @@ function jumpToLevel(strike: number | null): void {
                 :y="bar.putY"
                 :width="bar.thickness"
                 :height="bar.putH"
+                rx="1.5"
+                ry="1.5"
               >
                 <title>${{ strikeLabel(bar.strike) }} Put {{ metricValue(bar.putVal) }}</title>
               </rect>
@@ -790,6 +855,8 @@ function jumpToLevel(strike: number | null): void {
                 :y="bar.net >= 0 ? zeroY - bar.netH : zeroY"
                 :width="bar.thickness"
                 :height="bar.netH"
+                rx="1.5"
+                ry="1.5"
               >
                 <title>${{ strikeLabel(bar.strike) }} Net {{ metricValue(bar.net, true) }}</title>
               </rect>
@@ -807,7 +874,7 @@ function jumpToLevel(strike: number | null): void {
         </g>
 
         <!-- Continuous Net Trace Polyline -->
-        <g v-if="showTrace && viewMode !== 'cumulative' && rows.length" class="net-trace-group" aria-hidden="true">
+        <g v-if="showTrace && viewMode !== 'cumulative' && rows.length" class="net-trace-group" clip-path="url(#gex-plot-clip)" aria-hidden="true">
           <path class="net-trace-path" :d="netTracePath" />
         </g>
 
@@ -816,8 +883,8 @@ function jumpToLevel(strike: number | null): void {
           <text
             v-for="tick in yTicks"
             :key="`yt-${tick.value}`"
-            :x="left - 6"
-            :y="tick.y + 3"
+            :x="left - 8"
+            :y="tick.y + 3.5"
             text-anchor="end"
           >{{ tick.value === 0 ? '0' : metricValue(tick.value, true) }}</text>
         </g>
@@ -825,7 +892,7 @@ function jumpToLevel(strike: number | null): void {
           v-if="rows.length"
           class="axis-cap"
           :x="left"
-          :y="top - 6"
+          :y="top - 8"
         >
           {{
             viewMode === 'cumulative'
@@ -837,8 +904,10 @@ function jumpToLevel(strike: number | null): void {
         <!-- X Axis Strikes & Tick Marks -->
         <g v-if="rows.length" class="x-axis">
           <template v-for="tick in strikeTicks" :key="`st-${tick.strike}`">
-            <line :x1="tick.x" :x2="tick.x" :y1="plotBottom" :y2="plotBottom + 4" />
-            <text :x="tick.x" :y="H - 6" text-anchor="middle">${{ tick.label }}</text>
+            <line :x1="tick.x" :x2="tick.x" :y1="plotBottom" :y2="plotBottom + 5" :class="{ 'spot-tick': tick.isSpot }" />
+            <text :x="tick.x" :y="plotBottom + 18" text-anchor="middle" :class="{ 'spot-label': tick.isSpot }">
+              ${{ tick.label }}
+            </text>
           </template>
         </g>
 
@@ -873,15 +942,15 @@ function jumpToLevel(strike: number | null): void {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  gap: 6px;
+  gap: 8px;
   background: var(--panel);
-  padding: 6px 10px 8px;
+  padding: 8px 12px 10px;
 }
 
 .map-controls {
   display: flex;
   align-items: center;
-  gap: 4px 6px;
+  gap: 6px 8px;
   margin: 0;
   flex: 0 0 auto;
   flex-wrap: wrap;
@@ -897,22 +966,23 @@ function jumpToLevel(strike: number | null): void {
 
 .mini-segment {
   display: flex;
-  min-height: 22px;
+  min-height: 24px;
   border: var(--hair) solid var(--rule-hi);
   background: var(--void);
+  border-radius: var(--r-xs, 2px);
   overflow: hidden;
 }
 
 .mini-segment button {
-  padding: 0 7px;
+  padding: 0 8px;
   color: var(--ink-dim);
   border-right: var(--hair) solid var(--rule);
   font: 600 9px var(--font-display);
   letter-spacing: 0.04em;
-  min-height: 22px;
+  min-height: 24px;
   cursor: pointer;
   background: transparent;
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  transition: color 0.12s ease, background 0.12s ease;
 }
 
 .mini-segment button:last-child {
@@ -928,18 +998,20 @@ function jumpToLevel(strike: number | null): void {
   color: var(--phosphor);
   background: var(--phosphor-wash);
   box-shadow: inset 0 -2px var(--phosphor);
+  font-weight: 700;
 }
 
 .pill-toggle {
-  padding: 1px 6px;
-  min-height: 22px;
+  padding: 2px 8px;
+  min-height: 24px;
   color: var(--ink-dim);
   border: var(--hair) solid var(--rule-hi);
   background: var(--void);
+  border-radius: var(--r-xs, 2px);
   font: 600 8.5px var(--font-display);
   letter-spacing: 0.05em;
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition: all 0.12s ease;
 }
 
 .pill-toggle:hover {
@@ -958,8 +1030,9 @@ function jumpToLevel(strike: number | null): void {
   align-items: center;
   gap: 4px;
   background: var(--void);
-  padding: 2px 5px;
+  padding: 2px 6px;
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs, 2px);
   flex-wrap: wrap;
 }
 
@@ -970,13 +1043,14 @@ function jumpToLevel(strike: number | null): void {
 }
 
 .level-chip {
-  padding: 1px 5px;
+  padding: 2px 6px;
   font: 700 8.5px var(--font-display);
   letter-spacing: 0.03em;
   cursor: pointer;
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs, 2px);
   background: var(--void-lift);
-  transition: all var(--dur-fast) var(--ease-out);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease, background 0.15s ease;
   white-space: nowrap;
 }
 
@@ -984,10 +1058,10 @@ function jumpToLevel(strike: number | null): void {
   background: var(--panel-hi);
 }
 
-.level-chip.put { color: var(--put-hi); border-color: var(--put); }
-.level-chip.call { color: var(--call-hi); border-color: var(--call); }
-.level-chip.flip { color: var(--warn); border-color: var(--warn); }
-.level-chip.spot { color: var(--ink); border-color: var(--ink-dim); }
+.level-chip.put { color: var(--put-hi); border-color: var(--put); background: var(--put-wash); }
+.level-chip.call { color: var(--call-hi); border-color: var(--call); background: var(--call-wash); }
+.level-chip.flip { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.level-chip.spot { color: var(--ink); border-color: var(--ink-dim); background: var(--void-lift); }
 
 .coverage {
   margin-left: auto;
@@ -995,7 +1069,7 @@ function jumpToLevel(strike: number | null): void {
   font: 500 9.5px var(--font-data);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -1034,32 +1108,35 @@ function jumpToLevel(strike: number | null): void {
   flex: 0 0 auto;
   background: var(--rule);
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs, 2px);
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
 }
 
 .exposure-totals {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
-  flex: 1 1 240px;
+  flex: 1 1 260px;
   min-width: 0;
   background: var(--rule);
 }
 
 .exposure-total {
   min-width: 0;
-  min-height: 36px;
-  padding: 4px 8px;
+  min-height: 38px;
+  padding: 4px 10px;
   background: var(--void-lift);
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
   position: relative;
   overflow: hidden;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease, background 0.15s ease;
 }
 
 .exposure-total::after {
@@ -1096,15 +1173,16 @@ function jumpToLevel(strike: number | null): void {
 .exposure-total.net.negative { color: var(--put-hi); }
 
 .strike-focus {
-  display: grid;
-  grid-template-columns: minmax(80px, 0.9fr) repeat(3, minmax(64px, 1fr)) auto;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  background: var(--panel-raise);
-  padding: 4px 8px;
-  flex: 1.2 1 300px;
+  gap: 12px;
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs, 2px);
+  padding: 3px 10px;
   min-width: 0;
   overflow: hidden;
+  transition: opacity 0.15s ease;
 }
 
 .focus-strike, .focus-metric {
@@ -1169,15 +1247,29 @@ function jumpToLevel(strike: number | null): void {
   max-width: 100%;
   min-width: 0;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs, 2px);
   flex: 1 1 0;
   min-height: 0;
   background: var(--void);
 }
 
+.plot-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.plot-scroll::-webkit-scrollbar-track {
+  background: var(--void);
+}
+.plot-scroll::-webkit-scrollbar-thumb {
+  background: var(--rule-hi);
+  border-radius: 3px;
+}
+.plot-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--rule);
+}
+
 svg {
   display: block;
   background: var(--void);
-  overflow: visible;
 }
 
 .plot-frame {
@@ -1187,11 +1279,11 @@ svg {
 }
 
 .regime-zone.neg {
-  fill: rgba(193, 149, 94, 0.04);
+  fill: rgba(244, 63, 94, 0.04);
 }
 
 .regime-zone.pos {
-  fill: rgba(91, 149, 181, 0.04);
+  fill: rgba(16, 185, 129, 0.04);
 }
 
 .regime-label {
@@ -1201,33 +1293,33 @@ svg {
 }
 
 .regime-label.neg {
-  fill: var(--put);
-  opacity: 0.65;
+  fill: var(--put-hi);
+  opacity: 0.75;
 }
 
 .regime-label.pos {
-  fill: var(--call);
-  opacity: 0.65;
+  fill: var(--call-hi);
+  opacity: 0.75;
 }
 
 .grid line {
   stroke: var(--rule-hi);
-  stroke-width: 1;
-  opacity: 0.4;
+  stroke-width: 1px;
+  opacity: 0.35;
   vector-effect: non-scaling-stroke;
 }
 
 .grid line.zero {
-  stroke: var(--ink-dim);
-  stroke-width: 1.5;
+  stroke: var(--rule-hi);
+  stroke-width: 1px;
   opacity: 0.9;
 }
 
 .zero-baseline {
-  stroke: var(--ink-dim);
-  stroke-width: 1.25;
-  stroke-dasharray: 2 2;
-  opacity: 0.6;
+  stroke: var(--rule-hi);
+  stroke-width: 1px;
+  stroke-dasharray: 3 3;
+  opacity: 0.85;
   vector-effect: non-scaling-stroke;
 }
 
@@ -1237,9 +1329,19 @@ svg {
   letter-spacing: 0.02em;
 }
 
+.x-axis text.spot-label {
+  fill: var(--ink);
+  font-weight: 700;
+}
+
 .x-axis line {
   stroke: var(--rule-hi);
   vector-effect: non-scaling-stroke;
+}
+
+.x-axis line.spot-tick {
+  stroke: var(--phosphor);
+  stroke-width: 1.5px;
 }
 
 .axis-cap {
@@ -1276,13 +1378,13 @@ svg {
   pointer-events: none;
 }
 
-/* Flat call/put fills — same palette as flow momentum dots */
+/* Flat call/put fills — crisp strokes with high-contrast borders for high-DPI clarity */
 .strike-bar .call-bar,
 .strike-bar .put-bar {
   vector-effect: non-scaling-stroke;
-  stroke-width: 0.5;
+  stroke-width: 1px;
   opacity: 0.92;
-  transition: opacity var(--dur-fast) var(--ease-out), stroke-width var(--dur-fast) var(--ease-out);
+  transition: opacity 0.12s ease, stroke-width 0.12s ease;
 }
 
 .strike-bar .call-bar { fill: var(--call); stroke: var(--call-hi); }
@@ -1311,13 +1413,13 @@ svg {
 .strike-bar:hover .put-bar,
 .strike-bar.active .put-bar {
   opacity: 1;
-  stroke-width: 1.25;
+  stroke-width: 1.5px;
 }
 
 .strike-bar.locked .call-bar,
 .strike-bar.locked .put-bar {
   opacity: 1;
-  stroke-width: 1.5;
+  stroke-width: 1.75px;
 }
 
 .strike-bar.locked .net-dot {
@@ -1338,7 +1440,7 @@ svg {
 
 .cumulative-group .cum-area {
   fill: var(--phosphor-wash);
-  opacity: 0.6;
+  opacity: 0.55;
   pointer-events: none;
 }
 
@@ -1359,8 +1461,8 @@ svg {
 
 .clear-lock {
   margin-left: 2px;
-  padding: 2px 5px;
-  min-height: 18px;
+  padding: 2px 6px;
+  min-height: 20px;
   color: var(--phosphor);
   border: var(--hair) solid var(--phosphor-dim);
   background: var(--phosphor-wash);
@@ -1374,28 +1476,29 @@ svg {
 }
 
 .level line {
-  stroke-width: 1.25;
+  stroke-width: 1.25px;
   stroke-dasharray: 4 4;
   vector-effect: non-scaling-stroke;
-  opacity: 0.95;
+  opacity: 0.85;
+  transition: stroke 0.12s ease, opacity 0.12s ease;
 }
 
-.level.call line { stroke: var(--call); }
-.level.put line { stroke: var(--put); }
+.level.call line { stroke: var(--call-hi); }
+.level.put line { stroke: var(--put-hi); }
 .level.spot line {
   stroke: var(--ink);
   stroke-dasharray: none;
-  stroke-width: 1.5;
-  opacity: 0.85;
+  stroke-width: 1.5px;
+  opacity: 0.9;
 }
 .level.flip line { stroke: var(--warn); }
 
 .level-connector {
   fill: none;
   stroke: var(--rule-hi);
-  stroke-width: 1;
+  stroke-width: 1px;
   stroke-dasharray: 2 2;
-  opacity: 0.7;
+  opacity: 0.75;
   pointer-events: none;
 }
 .level.call .level-connector { stroke: var(--call-hi); }
@@ -1403,13 +1506,20 @@ svg {
 .level.spot .level-connector { stroke: var(--ink-dim); }
 .level.flip .level-connector { stroke: var(--warn); }
 
+.level-badge-bg {
+  fill: var(--void-lift);
+  stroke: var(--rule-hi);
+  stroke-width: 1px;
+}
+.level.call .level-badge-bg { fill: var(--call-wash); stroke: var(--call); }
+.level.put .level-badge-bg { fill: var(--put-wash); stroke: var(--put); }
+.level.spot .level-badge-bg { fill: var(--void-lift); stroke: var(--ink-dim); }
+.level.flip .level-badge-bg { fill: var(--warn-wash); stroke: var(--warn); }
+
 .level text {
   font: 700 8.5px var(--font-display);
-  paint-order: stroke;
-  stroke: var(--void);
-  stroke-width: 3px;
-  stroke-linejoin: round;
   letter-spacing: 0.04em;
+  pointer-events: none;
 }
 
 .level.call text { fill: var(--call-hi); }

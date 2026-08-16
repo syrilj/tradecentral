@@ -184,7 +184,7 @@ def test_analyze_symbol_attaches_shared_qlib_context_or_explicit_missing(monkeyp
     """Market ad-hoc path reuses the same scorer provenance as deep scan."""
     import numpy as np
     import pandas as pd
-    from edge.daily_plays.qlib_scan_score import SCORE_KIND, SOURCE_ID, score_cross_section_asof
+    from edge.daily_plays.qlib_scan_score import SCORE_KIND, score_cross_section_asof
 
     dates = pd.bdate_range("2024-01-02", periods=280)
     close = np.linspace(100, 120, len(dates))

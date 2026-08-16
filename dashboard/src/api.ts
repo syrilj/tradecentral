@@ -55,7 +55,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
       headers,
       signal: controller.signal,
     })
-  } catch (e) {
+  } catch {
     const timedOut = controller.signal.aborted && !init?.signal?.aborted
     throw new ApiError(
       timedOut
@@ -2291,6 +2291,19 @@ export const api = {
       `/api/scan_status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
     ),
 
+  plays: () => req<PlaysPayload>('/api/plays'),
+
+  playsRun: (account?: number) =>
+    req<PlaysJobPayload>(
+      `/api/plays/run${account != null ? `?account=${encodeURIComponent(String(account))}` : ''}`,
+      { method: 'POST' },
+    ),
+
+  playsStatus: (jobId?: string) =>
+    req<PlaysJobPayload>(
+      `/api/plays/status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
+    ),
+
   /** QuiverQuant-style stock financials & intelligence endpoints */
   financials: (symbol: string, period: 'quarterly' | 'annual' = 'quarterly') =>
     req<FinancialsPayload>(
@@ -2308,6 +2321,20 @@ export const api = {
 
   ownership: (symbol: string) =>
     req<OwnershipPayload>(`/api/ownership?symbol=${encodeURIComponent(symbol)}`),
+
+  /** Supply chain & thematic beneficiary propagation engine */
+  supplyChain: (opts?: { symbol?: string; theme?: string; depth?: number; force?: boolean }) => {
+    const q = new URLSearchParams()
+    if (opts?.symbol) q.set('symbol', opts.symbol.trim().toUpperCase())
+    if (opts?.theme) q.set('theme', opts.theme)
+    if (opts?.depth != null) q.set('depth', String(opts.depth))
+    if (opts?.force) q.set('force', '1')
+    const qs = q.toString()
+    return req<SupplyChainPayload>(`/api/supply-chain${qs ? `?${qs}` : ''}`)
+  },
+
+  supplyChainThemes: () =>
+    req<{ themes: SupplyChainThemeSummary[] }>('/api/supply-chain/themes'),
 }
 
 /* ---------------------------------------------------------------- fintel ----
@@ -2414,8 +2441,39 @@ export interface RevenueBreakdown {
   by_geography: RevenueGeography[]
 }
 
+export interface ModelForecast {
+  predicted_price?: number | null
+  forecast_score?: number | null
+  gearing_up_towards?: string | null
+  status?: 'ok' | 'missing' | 'stale' | string
+  label?: string | null
+  horizon?: string | null
+  decision_authorized?: boolean
+  live_capital_authorized?: boolean
+  features_used?: string[]
+  observed_feature_count?: number
+  spot_used?: number | null
+  spot_source?: string | null
+  lookthrough_growth?: number | null
+  timeframe?: string | null
+  timeframe_months?: number | null
+  factors?: Array<{
+    key?: string
+    label?: string
+    value?: number | null
+    display?: string | null
+    tone?: string | null
+  }>
+  cases?: {
+    bear?: { price?: number | null; label?: string | null; thesis?: string | null }
+    base?: { price?: number | null; label?: string | null; thesis?: string | null }
+    bull?: { price?: number | null; label?: string | null; thesis?: string | null }
+  }
+}
+
 export interface FinancialRatios {
   market_cap?: number | null
+  current_price?: number | null
   enterprise_value?: number | null
   pe_trailing?: number | null
   pe_forward?: number | null
@@ -2446,6 +2504,7 @@ export interface FinancialsPayload {
   cash_flow: StatementTable
   revenue_breakdown: RevenueBreakdown
   ratios: FinancialRatios
+  model_forecast?: ModelForecast
   source?: string
   asof?: string
 }
@@ -2551,6 +2610,7 @@ export interface CompanyProfilePayload {
   forecast: StockForecast
   smart_score: SmartScore
   bull_bear: BullBearCase
+  model_forecast?: ModelForecast
   source?: string
   asof?: string
 }
@@ -2727,7 +2787,255 @@ export interface OwnershipPayload {
   asof?: string
 }
 
+/* --------------------------------------------------------- supply chain ----
+   Multi-tier supply chain knowledge graph, extracted 10-K / transcript evidence,
+   and quant-fundamental beneficiary elasticity models. Inspired by OpenPlanter. */
+
+export type SupplyTier =
+  | 'mega_driver'
+  | 'tier1_supplier'
+  | 'tier2_supplier'
+  | 'horizontal_enabler'
+  | 'downstream_customer'
+
+export type RelationshipType =
+  | 'supplies_to'
+  | 'purchases_from'
+  | 'co_dependent'
+  | 'technology_partner'
+  | 'infrastructure_enabler'
+  | 'peer'
+
+export interface ChainEvidence {
+  source_type: 'earnings_transcript' | 'sec_10k' | 'sec_10q' | 'guidance_press'
+  filing_date: string
+  period: string
+  speaker?: string
+  quote: string
+  context: string
+  confidence: number
+}
+
+export interface BeneficiaryMetrics {
+  elasticity_score: number
+  capex_sensitivity: number
+  revenue_concentration_pct: number
+  operating_leverage: number
+  forward_pe: number | null
+  peg_ratio: number | null
+  gross_margin_trend: 'expanding' | 'stable' | 'contracting'
+  yoy_revenue_growth: number | null
+  next_earnings_date: string | null
+  flow_sentiment_score: number
+  options_skew: string
+}
+
+export interface SupplyChainNode {
+  symbol: string
+  name: string
+  sector: string
+  sub_industry: string
+  tier: SupplyTier
+  market_cap_billions: number
+  metrics: BeneficiaryMetrics
+  evidence: ChainEvidence[]
+  is_focus?: boolean
+}
+
+export interface SupplyChainEdge {
+  id: string
+  source: string
+  target: string
+  relationship: RelationshipType
+  strength: number
+  supply_category: string
+  annual_contract_value_est_m?: number
+  evidence_count: number
+}
+
+export interface CatalystTimelineEvent {
+  date: string
+  event: string
+  impacted_tickers: string[]
+}
+
+export interface RelatedTheme {
+  id: string
+  theme_name: string
+  shared_tickers: string[]
+}
+
+export interface ThematicSummary {
+  theme_name: string
+  capex_catalyst_narrative: string
+  total_ecosystem_market_cap_b: number
+  top_beneficiaries: string[]
+  catalyst_timeline: CatalystTimelineEvent[]
+  related_themes?: RelatedTheme[]
+}
+
+export interface SupplyChainPayload {
+  asof: string
+  query: { symbol?: string; theme?: string; depth: number }
+  focal_entity: SupplyChainNode
+  nodes: SupplyChainNode[]
+  edges: SupplyChainEdge[]
+  thematic_summary: ThematicSummary
+}
+
+export interface SupplyChainThemeSummary {
+  id: string
+  theme_name: string
+  description: string
+  default_focus: string
+  total_ecosystem_market_cap_b: number
+  node_count: number
+  top_beneficiaries: string[]
+  catalyst_timeline: CatalystTimelineEvent[]
+}
+
 /** The server may return a bare array or a wrapped object; accept both. */
 function normalizeSearch(r: { results: SearchHit[] } | SearchHit[]): SearchHit[] {
   return Array.isArray(r) ? r : (r.results ?? [])
+}
+
+/* ------------------------------------------------------------------ Daily plays */
+
+export interface PlaysOptionLeg {
+  side: string
+  right: string
+  occ_symbol: string
+  underlying: string
+  expiry: string
+  dte: number
+  strike: number
+  multiplier: number
+  bid: number
+  ask: number
+  mid: number
+  spread_pct: number
+  volume: number
+  open_interest: number
+  quote_asof_utc: string
+  provider: string
+  iv?: number | null
+  delta?: number | null
+  gamma?: number | null
+}
+
+export interface PlaysConfidence {
+  state: 'ENTER' | 'WATCH' | 'ABSTAIN' | string
+  confidence_kind: string
+  evidence_grade: string
+  model_probability: number | null
+  calibrated_probability: number | null
+  calibration_version: string | null
+  probability_target: string | null
+  horizon_days: number | null
+  entry_threshold: number | null
+  threshold_version: string | null
+  model_artifact_sha256: string | null
+  promotion_authorized: boolean
+  reasons: string[]
+  failed_checks: string[]
+}
+
+export interface PlaysDecision {
+  play_id: string
+  symbol: string
+  side: string
+  strategy: string
+  state: 'ENTER' | 'WATCH' | 'ABSTAIN' | string
+  rank: number
+  thesis: string[]
+  invalidation: string[]
+  entry: {
+    limit_reference: number
+    underlying_reference: number
+    quote_asof_utc: string
+    max_quote_age_seconds: number
+  }
+  legs: PlaysOptionLeg[]
+  risk: {
+    account: number
+    max_loss_dollars: number
+    max_loss_pct: number
+    contracts: number
+    reward_risk_reference: number | null
+  }
+  confidence: PlaysConfidence
+  evidence: Record<string, unknown>
+  freshness: Record<string, unknown>
+  provenance: Record<string, unknown>
+}
+
+export interface PlaysScanScope {
+  sector_books_scored: number
+  targeted_count: number
+  model_covered_count: number
+  model_domain_supported: number
+  successfully_scanned_candidates: number
+  directional_setups: number
+  chain_requests: number | null
+  chain_snapshots: number | null
+  flow_activity_requested: number
+  flow_activity_observed: number
+}
+
+export interface PlaysMarketMap {
+  asof?: string | null
+  asof_bar?: string | null
+  source?: string | null
+  money_in?: Array<Record<string, unknown>>
+  money_out?: Array<Record<string, unknown>>
+  rotation?: Record<string, unknown>
+  [k: string]: unknown
+}
+
+export interface PlaysPayload {
+  available: boolean
+  reason?: string
+  run_id?: string
+  requested_for?: string
+  asof_utc?: string
+  market_session?: string
+  mode?: string
+  account?: number
+  config_hash?: string
+  warnings?: string[]
+  status?: 'COMPLETE' | 'NO_PLAY' | string
+  market_map?: PlaysMarketMap
+  scan_scope?: PlaysScanScope
+  flow_activity?: Record<string, unknown>
+  plays?: PlaysDecision[]
+  watchlist?: PlaysDecision[]
+  rejections?: PlaysDecision[]
+  research_board?: Array<Record<string, unknown>>
+  decision_blockers?: string[]
+  advisory_evidence_warnings?: string[]
+  execution_health_warnings?: string[]
+}
+
+export type PlaysJobState = 'queued' | 'running' | 'completed' | 'failed'
+export interface PlaysJob {
+  id: string
+  state: PlaysJobState
+  stage: string
+  progress: number
+  message: string
+  started_at: string | null
+  updated_at: string | null
+  elapsed_seconds: number
+  error: string | null
+  result?: {
+    status: 'ok'
+    message: string
+    asof?: string
+    data: PlaysPayload
+  }
+}
+export interface PlaysJobPayload {
+  status: PlaysJobState | 'idle' | 'missing'
+  message: string
+  job: PlaysJob | null
 }

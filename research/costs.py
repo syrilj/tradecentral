@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 import pandas as pd
-import numpy as np
 
 from .labels import FROZEN_HORIZONS
 
