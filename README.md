@@ -91,7 +91,8 @@ Specialist routes currently include Sectors, Pulse, Momentum, Fintel, Gates, Evo
 | Layer | Current implementation |
 |---|---|
 | Frontend | Vue 3, TypeScript, Vue Router, Vite |
-| Frontend testing | Vitest, `vue-tsc` |
+| Frontend design | Dark "instrument" design-token system (`tokens.css`, `base.css`, `docs/DESIGN.md`) |
+| Frontend testing | Vitest, `vue-tsc`, static design-conformance guard test |
 | Visualization | Dependency-light SVG chart primitives plus Three.js where 3D rendering is required |
 | API | Python `http.server` with threaded request handling |
 | Data / numerical work | pandas, NumPy and research-specific Python packages |
