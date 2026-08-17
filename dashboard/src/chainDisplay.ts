@@ -98,6 +98,45 @@ export function optionsSkewLabel(skew: string | undefined): { label: string; ton
   }
 }
 
+export function flowTypeClass(
+  rel: RelationshipType | string | undefined,
+  srcCol: number,
+  tgtCol: number,
+): 'flow-supply' | 'flow-demand' | 'flow-partner' | 'flow-peer' {
+  if (rel === 'peer') return 'flow-peer'
+  if (rel === 'technology_partner' || rel === 'co_dependent') return 'flow-partner'
+  if (rel === 'purchases_from' || srcCol > tgtCol) return 'flow-demand'
+  return 'flow-supply'
+}
+
+export function flowMarkerId(
+  flowType: 'flow-supply' | 'flow-demand' | 'flow-partner' | 'flow-peer',
+  active: boolean,
+): string {
+  if (!active) return 'url(#arrow-default)'
+  switch (flowType) {
+    case 'flow-supply':
+      return 'url(#arrow-supply)'
+    case 'flow-demand':
+      return 'url(#arrow-demand)'
+    case 'flow-partner':
+      return 'url(#arrow-partner)'
+    case 'flow-peer':
+      return 'url(#arrow-peer)'
+  }
+}
+
+export function edgeRelationshipSummary(
+  rel: RelationshipType | string | undefined,
+  category?: string,
+  strength?: number,
+): string {
+  const relStr = relationshipLabel(rel)
+  const catStr = category ? ` · ${category}` : ''
+  const sensStr = strength ? ` (${(strength * 100).toFixed(0)}% link)` : ''
+  return `${relStr}${catStr}${sensStr}`
+}
+
 export function rankBeneficiaries(
   nodes: SupplyChainNode[],
   subIndustryFilter?: string | null,

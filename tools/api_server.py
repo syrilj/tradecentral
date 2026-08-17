@@ -3552,12 +3552,40 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
             ),
         }
         if not chain_rows:
-            return {
-                "error": f"No options chain is available for {symbol}.",
-                "endpoint": "/api/options",
-                "warnings": warnings,
-                "history": history_meta,
-            }, 404
+            # Names outside the cached option_chains universe (QBTS-class)
+            # have no dated parquet. Capture a delayed yfinance snapshot so
+            # the desk can still measure structure instead of 404ing into
+            # a wall of fake-zero boxes.
+            capture_dte = min(max(int(filters.max_dte or 60), 60), 180)
+            delayed_ok, delayed_err = _ensure_delayed_chain_snapshot(
+                symbol, max_dte=capture_dte,
+            )
+            if delayed_ok:
+                chain_rows, latest_label, available_dates = _historical_option_rows(
+                    symbol, asof=requested_asof, all_days=False,
+                )
+                history_chain_rows, _, _ = _historical_option_rows(
+                    symbol, all_days=True,
+                )
+                history_meta = {
+                    "available_dates": available_dates,
+                    "selected_asof": latest_label,
+                    "last_good_asof": available_dates[-1] if available_dates else None,
+                    "auto_selected": True,
+                }
+                warnings.append(
+                    "Live chain empty; captured a delayed yfinance snapshot for this name."
+                )
+            if not chain_rows:
+                return {
+                    "error": f"No options chain is available for {symbol}.",
+                    "endpoint": "/api/options",
+                    "symbol": symbol,
+                    "reason": "live_empty_and_no_local_snapshot",
+                    "delayed_snapshot_error": delayed_err if not delayed_ok else None,
+                    "warnings": warnings,
+                    "history": history_meta,
+                }, 404
         mode_resolved = "history" if mode == "history" else "history_fallback"
         chain_source = f"cached_chain:{latest_label or 'unknown'}"
         flow_source = "unavailable"
@@ -5803,12 +5831,13 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     depth = max(1, min(3, int(raw_depth)))
                 except (ValueError, TypeError):
                     depth = 2
+                mode = query.get("mode", ["dedicated"])[0]
                 force = query.get("force", ["0"])[0] in ("1", "true", "yes") or query.get("force_refresh", ["0"])[0] in ("1", "true", "yes")
                 try:
                     from supply_chain import build_supply_chain_payload
                 except ImportError:
                     from edge.tools.supply_chain import build_supply_chain_payload
-                self._send_json(build_supply_chain_payload(symbol=sym, theme=theme, depth=depth, force_refresh=force))
+                self._send_json(build_supply_chain_payload(symbol=sym, theme=theme, depth=depth, mode=mode, force_refresh=force))
 
             elif path == "/api/supply-chain/themes":
                 try:

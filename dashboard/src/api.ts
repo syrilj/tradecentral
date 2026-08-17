@@ -2323,11 +2323,12 @@ export const api = {
     req<OwnershipPayload>(`/api/ownership?symbol=${encodeURIComponent(symbol)}`),
 
   /** Supply chain & thematic beneficiary propagation engine */
-  supplyChain: (opts?: { symbol?: string; theme?: string; depth?: number; force?: boolean }) => {
+  supplyChain: (opts?: { symbol?: string; theme?: string; depth?: number; mode?: 'dedicated' | 'intertwined'; force?: boolean }) => {
     const q = new URLSearchParams()
     if (opts?.symbol) q.set('symbol', opts.symbol.trim().toUpperCase())
     if (opts?.theme) q.set('theme', opts.theme)
     if (opts?.depth != null) q.set('depth', String(opts.depth))
+    if (opts?.mode) q.set('mode', opts.mode)
     if (opts?.force) q.set('force', '1')
     const qs = q.toString()
     return req<SupplyChainPayload>(`/api/supply-chain${qs ? `?${qs}` : ''}`)
@@ -2543,15 +2544,15 @@ export interface CompensationRow {
   bonus?: number | null
   stock_awards?: number | null
   total_compensation?: number | null
-  year: string
+  year?: string | null
 }
 
 export interface ExecutiveCompensation {
-  highest_paid_name: string
-  highest_paid_total: number
-  median_employee_pay: number
-  ceo_pay_ratio: number
-  year: string
+  highest_paid_name?: string | null
+  highest_paid_total?: number | null
+  median_employee_pay?: number | null
+  ceo_pay_ratio?: number | null
+  year?: string | null
   rows: CompensationRow[]
 }
 
@@ -2564,24 +2565,47 @@ export interface AnalystUpgradeDowngrade {
   to_grade?: string
   current: string
   previous: string
+  target?: number | null
+  prior_target?: number | null
+  target_action?: string | null
+}
+
+export interface AnalystEstimate {
+  date?: string
+  firm: string
+  action?: string
+  current?: string
+  previous?: string
+  target?: number | null
+  prior_target?: number | null
+  target_action?: string | null
+  vs_mark_pct?: number | null
+  hit?: boolean | null
 }
 
 export interface StockForecast {
-  consensus_rating: string
-  recommendation_mean?: number
-  target_price_high?: number
-  target_price_median?: number
-  target_price_low?: number
-  current_price?: number
-  upside_pct?: number
-  recommendations: {
-    strong_buy: number
-    buy: number
-    hold: number
-    underperform: number
-    sell: number
-  }
+  consensus_rating?: string | null
+  recommendation_mean?: number | null
+  recommendation_key?: string | null
+  analyst_count?: number | null
+  target_price_high?: number | null
+  target_price_median?: number | null
+  target_price_mean?: number | null
+  target_price_low?: number | null
+  current_price?: number | null
+  upside_pct?: number | null
+  recommendations?: {
+    strong_buy?: number
+    buy?: number
+    hold?: number
+    sell?: number
+    strong_sell?: number
+    underperform?: number
+  } | null
   upgrades_downgrades: AnalystUpgradeDowngrade[]
+  estimates?: AnalystEstimate[]
+  estimates_hit?: number | null
+  estimates_open?: number | null
 }
 
 export interface SmartScore {
@@ -2874,13 +2898,21 @@ export interface ThematicSummary {
   related_themes?: RelatedTheme[]
 }
 
+export interface ThematicBridge {
+  id: string
+  theme_name: string
+  role?: string
+  shared_tickers?: string[]
+}
+
 export interface SupplyChainPayload {
   asof: string
-  query: { symbol?: string; theme?: string; depth: number }
+  query: { symbol?: string; theme?: string; depth: number; mode?: 'dedicated' | 'intertwined' }
   focal_entity: SupplyChainNode
   nodes: SupplyChainNode[]
   edges: SupplyChainEdge[]
   thematic_summary: ThematicSummary
+  thematic_bridges?: ThematicBridge[]
 }
 
 export interface SupplyChainThemeSummary {

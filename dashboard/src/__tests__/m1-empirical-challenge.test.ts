@@ -565,6 +565,10 @@ describe('Milestone 1 Empirical Challenge: Frontend Optimizations & Invariants',
       expect(optionsViewCode).toContain('enabled: () => opportunitiesOpen.value')
       expect(optionsViewCode).toContain('watch(unusualOpen')
       expect(optionsViewCode).toContain('watch(opportunitiesOpen')
+      expect(optionsViewCode).toContain('const tapeLimit = ref(200)')
+      expect(optionsViewCode).toContain('const TAPE_RENDER_CAP = 80')
+      expect(optionsViewCode).toContain('renderedTape')
+      expect(optionsViewCode).toContain('{ intervalMs: 90_000 }')
     })
 
     it('RiskNeutral3DModel.vue satisfies WebGL disposal and render-on-demand patterns', () => {

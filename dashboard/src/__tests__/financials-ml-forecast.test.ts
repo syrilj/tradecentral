@@ -7,7 +7,10 @@ import {
   formatGearingUp,
   formatModelForecastScore,
   formatModelPredictedPrice,
+  presentCaseRange,
   presentModelForecast,
+  presentPriceScale,
+  scaleLeftPct,
 } from '@/financialsDisplay'
 
 const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -111,5 +114,58 @@ describe('Market Financials highlight + /quantitative-research', () => {
     expect(formatModelPredictedPrice(missing.cases.bear.price)).toBe(DASH)
     expect(formatModelPredictedPrice(missing.cases.bull.price)).toBe(DASH)
     expect(missing.factors).toEqual([])
+  })
+})
+
+describe('mark vs predicted / Street target hit', () => {
+  it('marks a prediction hit only when the live mark has reached the target', async () => {
+    const { presentPredictionHit } = await import('../financialsDisplay')
+    const hit = presentPredictionHit(70.98, 50.8)
+    const open = presentPredictionHit(70.98, 78)
+    const missing = presentPredictionHit(null, 78)
+    expect(hit.hit).toBe(true)
+    expect(hit.remainingPct).toBeNull()
+    expect(open.hit).toBe(false)
+    expect(open.remainingPct).toBeCloseTo(((78 - 70.98) / 70.98) * 100, 4)
+    expect(missing.hit).toBeNull()
+    expect(missing.remainingPct).toBeNull()
+  })
+
+  it('scales a case rail that includes prices below the live mark', () => {
+    const scale = presentPriceScale([40, 70.98, 110, 160])
+    expect(scale).not.toBeNull()
+    expect(scale!.min).toBeLessThan(40)
+    expect(scale!.max).toBeGreaterThan(160)
+    const range = presentCaseRange({
+      spot: 70.98,
+      bear: 40,
+      base: 110,
+      bull: 160,
+    })
+    expect(range).not.toBeNull()
+    expect(range!.marks.map((m) => m.key)).toEqual(['bear', 'spot', 'base', 'bull'])
+    const bearPct = Number.parseFloat(range!.marks[0].pct)
+    const spotPct = Number.parseFloat(range!.marks[1].pct)
+    expect(bearPct).toBeLessThan(spotPct)
+    expect(scaleLeftPct(0, scale)).toBeNull()
+    expect(presentPriceScale([0, null])).toBeNull()
+    expect(presentCaseRange({ spot: null, bear: null, base: null, bull: null })).toBeNull()
+  })
+
+  it('Financials markup draws the case rail and the overview chart includes case levels', () => {
+    expect(marketViewSource).toContain('presentCaseRange')
+    expect(marketViewSource).toContain('data-testid="model-forecast-range"')
+    expect(marketViewSource).toContain('forecastLevels')
+    expect(marketViewSource).toContain(':levels="mode === \'price\' ? forecastLevels : []"')
+  })
+
+  it('Forecast tab renders firm-level estimates and rating buckets from observed data', () => {
+    expect(marketViewSource).toContain('analyst-estimates-table')
+    expect(marketViewSource).toMatch(/forecast(?:\.|\?\.)estimates/)
+    expect(marketViewSource).toContain('strong_sell')
+    expect(marketViewSource).toContain('presentPredictionHit')
+    expect(marketViewSource).toContain('signedPct')
+    expect(marketViewSource).not.toMatch(/\+\$\{profile\.forecast\.upside_pct\}%/)
+    expect(marketViewSource).not.toMatch(/recommendations\.(strong_buy|buy|hold|underperform|sell)\s*\?\?\s*0/)
   })
 })

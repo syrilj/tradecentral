@@ -209,3 +209,73 @@ def test_depth_filter_and_related_themes():
     # Ecosystem market cap is aggregated from member nodes.
     assert full["thematic_summary"]["total_ecosystem_market_cap_b"] > 0
 
+
+def test_arbitrary_ticker_multi_tier_synthesis():
+    """Any arbitrary stock symbol must produce a valid 4-tier ecosystem with quant metrics."""
+    for test_sym in ["AAPL", "UBER", "COIN"]:
+        payload = build_supply_chain_payload(symbol=test_sym, force_refresh=True)
+        assert payload is not None
+        assert payload["focal_entity"]["symbol"] == test_sym
+        assert payload["focal_entity"]["is_focus"] is True
+        
+        nodes = payload["nodes"]
+        symbols = {n["symbol"] for n in nodes}
+        assert test_sym in symbols
+        assert len(nodes) >= 6
+
+        # Check multi-tier representation
+        tiers = {n.get("tier") for n in nodes}
+        assert "tier2_supplier" in tiers or "tier1_supplier" in tiers
+
+        # Check directional edges
+        edges = payload["edges"]
+        assert len(edges) >= 4
+        assert any(e["source"] == test_sym or e["target"] == test_sym for e in edges)
+
+        # Check alpha & elasticity metrics
+        focal_metrics = payload["focal_entity"]["metrics"]
+        assert focal_metrics["elasticity_score"] > 0
+        assert focal_metrics["operating_leverage"] > 0
+
+        # Check thematic narrative and summary
+        summary = payload["thematic_summary"]
+        assert summary["total_ecosystem_market_cap_b"] > 0
+        assert len(summary["top_beneficiaries"]) > 0
+        assert len(summary["catalyst_timeline"]) > 0
+
+
+def test_theme_auto_routing_on_symbol_query():
+    """Querying a curated symbol without explicit theme should auto-route to its native theme."""
+    payload = build_supply_chain_payload(symbol="ASTS", theme="ai_datacenter", force_refresh=True)
+    # ASTS belongs to space_defense, so it should auto-route properly
+    assert payload["query"]["symbol"] == "ASTS"
+    assert payload["focal_entity"]["symbol"] == "ASTS"
+    symbols = {n["symbol"] for n in payload["nodes"]}
+    assert "ASTS" in symbols
+
+
+def test_spcx_dedicated_aerospace_ecosystem():
+    """Verify SPCX generates its dedicated aerospace/defense value chain with correct focal tier and suppliers."""
+    payload = build_supply_chain_payload(symbol="SPCX", mode="dedicated")
+    focal = payload["focal_entity"]
+    assert focal["symbol"] == "SPCX"
+    assert focal["tier"] == "mega_driver"
+    assert focal["sector"] == "Industrials"
+
+    node_symbols = {n["symbol"] for n in payload["nodes"]}
+    assert "SPCX" in node_symbols
+    assert "RKLB" in node_symbols
+    assert "RDW" in node_symbols
+    assert "HEI" in node_symbols
+    assert "LMT" in node_symbols
+
+    # Verify no accidental semiconductor fallback nodes
+    assert "TSM" not in node_symbols
+    assert "ASML" not in node_symbols
+
+    # Verify bridges
+    bridges = payload.get("thematic_bridges", [])
+    bridge_ids = {b["id"] for b in bridges}
+    assert "space_defense" in bridge_ids
+
+

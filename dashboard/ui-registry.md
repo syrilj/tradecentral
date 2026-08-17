@@ -126,7 +126,7 @@ Owns GO / NO-GO / UNKNOWN / RUNNING only. Do not reuse for generic tags. Lamp is
 ### App shell (rail + strip)
 
 File: `src/App.vue`
-Last updated: 2026-08-14
+Last updated: 2026-08-16
 
 | Property | Class |
 | ---------------- | --------------- |
@@ -142,6 +142,74 @@ Last updated: 2026-08-14
 
 **Pattern notes:**
 One navigation system. Active state is phosphor, not a filled neon rail. Signed colors appear only on change figures (`--long` / `--short`). Skip-link is the only shell primary fill (`--phosphor` on `--void` text). `.strip-search` and `.more-search` are quiet `--ink-dim` controls; hover is `--phosphor` text on `--phosphor-wash`.
+
+Strip gauges are a 2-row grid (`auto 1fr`) so the header pins top and the value row sits on the baseline — do not `justify-content: center` or the cell floats. Rotation is an IN/OUT board (`.rot-board`), not a centered pair. Fear/greed is a full-width spectrum (left fear / right greed) with a thumb — never a fill-from-left bar that makes fear look empty. Label it as desk structure, never CNN. Missing composite stays `NO DATA`, never a fake 50. Research lives under Tools, not the primary rail.
+
+---
+
+### Ownership mix
+
+File: `src/views/MarketView.vue` + `src/ownershipDisplay.ts`
+Last updated: 2026-08-16
+
+| Property | Class |
+| ---------------- | --------------- |
+| Background | track `var(--void)` |
+| Border | `var(--hair) solid var(--rule)` |
+| Border radius | `0` |
+| Text — primary | value `var(--ink)` |
+| Text — secondary | label `var(--ink-dim)` |
+| Spacing | row grid `12ch 1fr 7ch`; gap `var(--s3)` |
+| Hover state | none |
+| Shadow | none |
+| Accent usage | inst fill `--phosphor`; insider `--ink-dim`; retail `--rule-hi` |
+
+**Pattern notes:**
+13F + insider + retail are independent meters, not a stacked 100% bar. Overlapping slices must not overflow or hide labels.
+
+---
+
+### Forecast case rail
+
+File: `src/views/MarketView.vue` + `src/financialsDisplay.ts`
+Last updated: 2026-08-16
+
+| Property | Class |
+| ---------------- | --------------- |
+| Background | track `var(--void)`; span phosphor wash |
+| Border | `var(--hair) solid var(--rule)` |
+| Border radius | `0` |
+| Text — primary | mark `--ink`; base `--phosphor` |
+| Text — secondary | caption `--ink-dim` |
+| Spacing | track 10px; caption gap `var(--s2) var(--s4)` |
+| Hover state | none |
+| Shadow | none |
+| Accent usage | bear `--short`; bull `--long`; base `--phosphor` |
+
+**Pattern notes:**
+Scale includes prices below the live mark. Bear is a downside scenario, not a cheaper bull.
+
+---
+
+### SqueezeScreener
+
+File: `src/components/SqueezeScreener.vue`
+Last updated: 2026-08-16
+
+| Property | Class |
+| ---------------- | --------------- |
+| Background | transparent inside Panel; no second card wash |
+| Border | inset 2px side bar `--call` / `--put` on `.sq` |
+| Border radius | `0` on the board; chips `2px` |
+| Text — primary | score `--call-hi` / `--put-hi`; figures `--ink` |
+| Text — secondary | `--ink-ghost` / `--ink-faint` labels |
+| Spacing | root `var(--s3)`; hero rule `var(--hair) solid var(--rule)` |
+| Hover state | none |
+| Shadow | inset side bar only |
+| Accent usage | call/put for structure side; phosphor only on the active likelihood stop |
+
+**Pattern notes:**
+The Panel is the box. Do not add a nested `--panel` background or negative-margin hero. Key levels are a 3-cell hairline grid on `--void-lift`, not a 1px-gap table.
 
 ---
 
@@ -271,6 +339,28 @@ Files: `src/views/DeskView.vue`, `src/views/OptionsView.vue`, `src/views/FlowVie
 
 **Pattern notes:**
 Desk KPI tiles, scan console, and authorization queue now use corner ticks. Options no longer overrides Panel background (ticks stay). Flow header and control rail match the same title/button scale. Specialist surfaces (Sectors, Gates, etc.) were not part of this pass.
+
+---
+
+### Options empty-chain recovery
+
+File: `src/views/OptionsView.vue`
+Last updated: 2026-08-16
+
+| Property | Class |
+| ---------------- | --------------- |
+| Background | `.chain-recovery` → `var(--panel)` |
+| Border | `var(--hair) solid var(--rule)`; left `2px solid var(--warn)` |
+| Border radius | `0` |
+| Text — primary | `.fig` → `var(--ink)` / `--t-fig` |
+| Text — secondary | body `var(--ink-dim)` / `--t-small` |
+| Spacing | pad `var(--s3) var(--s4)`; gap `var(--s4)` |
+| Hover state | none |
+| Shadow | none |
+| Accent usage | warn left rule only; no fake-zero KPI / GEX boxes |
+
+**Pattern notes:**
+A missing live+cached chain is one recovery panel (`NO CHAIN` + RETRY LIVE / FETCH DELAYED CHAIN). Do not render `OptionsDirectionBrief`, the 9-cell KPI rail, or the 560px workbench with `$0.00` placeholders. Measured KPI cells stay 48px, radius 0, shelf `0 1px 0 rgba(0,0,0,0.18)`.
 
 ---
 

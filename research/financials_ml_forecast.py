@@ -582,8 +582,8 @@ def _case_thesis(side: str, gearing: str | None, future_g: float | None) -> str:
         if gearing == GEARING_REPAIR:
             return "De-levering stalls or cash stays tight; the multiple compresses."
         if gearing == GEARING_EXPANSION:
-            return "Growth or funding slips; the story is marked back toward the live print."
-        return "Growth misses and the multiple comes in."
+            return "Growth or funding slips; the multiple compresses and the mark can print below today's price."
+        return "Growth misses and the multiple comes in — downside can sit below the live print."
     if gearing == GEARING_EXPANSION:
         return "Base case looks through the growth they are building toward."
     return "Base case follows the filings and live tape, not Street targets."
@@ -597,10 +597,16 @@ def scenario_case_prices(
     gearing: str | None,
     rd_intensity: float | None,
 ) -> tuple[float, float, float]:
-    """Bear / base / bull from the same growth engine. Ordered bear < base < bull."""
+    """Bear / base / bull from the same growth engine.
+
+    Bear is a downside scenario from the live mark — it is allowed (and
+    expected) to print below spot. A cheaper bull is not a bear case.
+    Ordered bear < min(spot, base) < base < bull.
+    """
     g = 0.0 if future_g is None else future_g
     g_bull = float(np.clip(g * 1.40 + 0.06, -0.15, 1.05))
-    g_bear = float(np.clip(g * 0.40 - 0.10, -0.45, 0.55))
+    # Growth slip + multiple compression. Never keep compounding the boom.
+    g_bear = float(np.clip(min(g * 0.25 - 0.18, -0.06), -0.50, 0.04))
     bull_lt = growth_lookthrough_log_return(
         g_bull,
         GEARING_EXPANSION if g_bull >= 0.10 else gearing,
@@ -608,19 +614,26 @@ def scenario_case_prices(
     )
     bear_lt = growth_lookthrough_log_return(
         g_bear,
-        GEARING_REPAIR if g_bear < 0.05 else gearing,
+        GEARING_REPAIR,
         rd_intensity,
     )
     bull_log = float(np.clip(0.22 * ridge_ret + 0.78 * bull_lt + 0.10, -0.40, 1.60))
-    bear_log = float(np.clip(0.30 * ridge_ret + 0.70 * bear_lt - 0.14, -0.65, 1.10))
+    bear_log = float(np.clip(0.22 * ridge_ret + 0.78 * bear_lt - 0.22, -0.80, 0.08))
     bull = spot * math.exp(bull_log)
     bear = spot * math.exp(bear_log)
-    bear = min(bear, predicted_price * 0.92)
-    bull = max(bull, predicted_price * 1.10)
+    bear = min(bear, spot * 0.92, predicted_price * 0.85)
+    bull = max(bull, predicted_price * 1.10, spot * 1.08)
     if bear >= predicted_price:
-        bear = predicted_price * 0.88
+        bear = min(predicted_price * 0.82, spot * 0.88)
+    if bear >= spot:
+        bear = spot * 0.88
     if bull <= predicted_price:
-        bull = predicted_price * 1.12
+        bull = max(predicted_price * 1.12, spot * 1.12)
+    if bear >= bull:
+        floor = min(spot, predicted_price)
+        ceiling = max(spot, predicted_price)
+        bear = floor * 0.80
+        bull = ceiling * 1.20
     return round(float(bear), 4), round(float(predicted_price), 4), round(float(bull), 4)
 
 

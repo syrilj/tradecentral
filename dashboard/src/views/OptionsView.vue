@@ -27,6 +27,7 @@ import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
 import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
 import { activityLeanRead } from '@/optionsTape'
+import { calculateFeaturedSetup } from '@/squeezeCalc'
 import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
 type NoisePreset = 'strict' | 'balanced' | 'raw'
@@ -57,7 +58,8 @@ const minDte = ref(0)
 /** Full chain window for multi-expiry GEX (IF uses all listed expiries). */
 const maxDte = ref(365)
 /** Match backend default so the list and print counts stay aligned. */
-const tapeLimit = ref(500)
+const tapeLimit = ref(200)
+const TAPE_RENDER_CAP = 80
 /** Default to near-dated signed flow so actionable prints show first.
  *  User can switch to 'all' to see the full tape without DTE restriction. */
 const tapeView = ref<TapeView>('near')
@@ -116,6 +118,10 @@ async function loadHistoryTape(): Promise<void> {
   }
 }
 
+function openInsiders(): void {
+  void router.push({ name: 'insiders', query: { symbol: symbol.value } })
+}
+
 /* Market-style search typeahead */
 const searchHits = ref<SearchHit[]>([])
 const searching = ref(false)
@@ -136,7 +142,7 @@ const resource = useResource<OptionsIntelligence>(() => api.options({
   dateFrom: dateFrom.value || undefined,
   // In history mode, `to` selects which dated chain day to load.
   dateTo: dateTo.value || undefined,
-}), { intervalMs: 60_000 })
+}), { intervalMs: 90_000 })
 
 /**
  * Set true for exactly one refresh so a manual "SCAN LIVE FLOW" click bypasses the
@@ -295,8 +301,8 @@ async function backfillOi(): Promise<void> {
   backfilling.value = true
   backfillError.value = null
   try {
-    await api.backfillOptionOi(symbol.value)
-    await resource.refresh()
+    await api.backfillOptionOi(symbol.value, { maxDte: maxDte.value })
+    await resource.refresh({ clear: true })
   } catch (e) {
     backfillError.value = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
   } finally {
@@ -527,8 +533,8 @@ const historyDays = computed(() => historyMeta.value?.available_dates ?? [])
  * forever with no chain — even though loading had finished.
  */
 const loadingSymbol = computed(() => resource.loading.value)
-/** First paint / post-error empty: no matching payload and nothing in flight. */
-const chainMissing = computed(() => !payloadMatches.value && !resource.loading.value)
+/** Measured desk only. Missing chain must not paint fake-zero KPI / GEX boxes. */
+const deskHasChain = computed(() => Boolean(d.value))
 
 const unusualRows = computed<UnusualFlowRow[]>(() => unusual.data.value?.rows ?? [])
 const unusualLiveCount = computed(() => unusualRows.value.filter((r) => r.live).length)
@@ -665,6 +671,51 @@ const visibleTape = computed<OptionsTapeRow[]>(() => {
     })
   }
   return rows.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+})
+
+const renderedTape = computed(() => visibleTape.value.slice(0, TAPE_RENDER_CAP))
+const tapeTruncated = computed(() => visibleTape.value.length > TAPE_RENDER_CAP)
+
+const tapePanelMeta = computed(() => {
+  const counts = tapeClassCounts.value
+  const total = d.value?.flow_tape.length ?? 0
+  const shown = `${renderedTape.value.length}/${visibleTape.value.length}`
+  return `${shown} OF ${total} PRINTS · ${counts.whales} WHALES · ${counts.sweeps} SWEEPS · ${counts.blocks} BLOCKS`
+})
+
+const featuredSqueeze = computed(() => {
+  if (!squeeze.value) return null
+  return calculateFeaturedSetup(
+    squeeze.value.primary,
+    squeeze.value.bullish_setup,
+    squeeze.value.bearish_setup,
+    squeeze.value.score,
+  )
+})
+
+const squeezeKpiTone = computed(() => {
+  if (featuredSqueeze.value?.side) return featuredSqueeze.value.side
+  const v = squeeze.value?.score
+  if (v == null || !Number.isFinite(v) || v === 0) return ''
+  return v > 0 ? 'bullish' : 'bearish'
+})
+
+const squeezeKpiScore = computed(() => {
+  if (featuredSqueeze.value?.setup?.score != null) {
+    return featuredSqueeze.value.setup.score
+  }
+  return squeeze.value?.score ?? 0
+})
+
+const squeezeKpiTag = computed(() => {
+  if (featuredSqueeze.value?.setup?.likelihood) {
+    return featuredSqueeze.value.setup.likelihood.toUpperCase()
+  }
+  const raw = squeeze.value?.primary
+    || squeeze.value?.bullish_setup?.likelihood
+    || squeeze.value?.bearish_setup?.likelihood
+    || ''
+  return raw ? raw.toUpperCase().replace(/_/g, '-') : ''
 })
 
 const tapeClassCounts = computed(() => {
@@ -900,8 +951,8 @@ const tapeHealth = computed(() => {
     return {
       status: 'idle' as const,
       lamp: 'pending',
-      title: 'NO DATA',
-      sub: 'Load a ticker',
+      title: 'NO CHAIN',
+      sub: resource.error.value || `${symbol.value} has no measured payload`,
       lag: null as string | null,
       detail: '',
     }
@@ -1059,6 +1110,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           <button type="button" class="book-pin label" :class="{ on: onBook }" @click="toggleBook">
             {{ onBook ? '★ BOOK' : '☆ BOOK' }}
           </button>
+          <button type="button" class="book-pin label" :title="`Inspect ${symbol} insider filings`" @click="openInsiders">
+            INSIDERS
+          </button>
         </div>
       </div>
 
@@ -1134,9 +1188,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 
       <div class="command-right">
         <span class="scope-chip label">{{ mode === 'live' ? 'LIVE / DELAYED' : 'HISTORICAL' }}</span>
-        <RouterLink class="market-flow-link label" :to="{ name: 'flow' }">MARKET FLOW</RouterLink>
-        <RouterLink class="market-flow-link label" :to="{ name: 'insiders', query: { symbol } }">INSIDERS</RouterLink>
-        <RouterLink class="market-flow-link label" :to="{ name: 'calculator' }">CALCULATOR</RouterLink>
         <button class="tune label" type="button" :class="{ on: filtersOpen }" @click="filtersOpen = !filtersOpen">
           TUNE {{ filtersOpen ? '▴' : '▾' }}
         </button>
@@ -1206,6 +1257,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           <select v-model.number="tapeLimit" class="label">
             <option :value="50">50</option>
             <option :value="100">100</option>
+            <option :value="200">200</option>
             <option :value="250">250</option>
             <option :value="500">500</option>
           </select>
@@ -1244,12 +1296,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       >JUMP TO LAST GOOD</button>
     </section>
 
-    <div v-if="resource.error.value" class="fault-strip">
-      <span class="label">FEED ERROR</span>
-      {{ resource.error.value }}
-      <button class="label" type="button" @click="void resource.refresh({ clear: !d })">RETRY</button>
-    </div>
-
     <div v-if="loadingSymbol && !d" class="fault-strip loading-strip">
       <span class="label">CALCULATING</span>
       Loading GEX · squeeze · tape for <strong class="fig">{{ symbol }}</strong>…
@@ -1258,12 +1304,38 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <span class="label">REFRESHING {{ symbol }}</span>
       Recomputing squeeze and structure…
     </div>
-    <div v-else-if="chainMissing && !resource.error.value" class="fault-strip">
-      <span class="label">NO CHAIN</span>
-      No options payload for <strong class="fig">{{ symbol }}</strong> yet.
-      <button class="label" type="button" @click="void resource.refresh({ clear: true })">LOAD CHAIN</button>
-    </div>
 
+    <section
+      v-if="!deskHasChain && !loadingSymbol"
+      class="chain-recovery rise"
+      role="status"
+    >
+      <div class="recovery-copy">
+        <span class="label">NO CHAIN</span>
+        <strong class="fig">{{ symbol }} has no live or cached options payload</strong>
+        <p>
+          Live LSE returned no contracts and this name is not in the local
+          option-chain snapshots. That is missing coverage, not a $0 GEX market.
+        </p>
+        <p v-if="resource.error.value" class="recovery-detail">{{ resource.error.value }}</p>
+        <p v-if="backfillError" class="recovery-detail warn">{{ backfillError }}</p>
+      </div>
+      <div class="recovery-actions">
+        <button class="label" type="button" @click="void resource.refresh({ clear: true })">
+          RETRY LIVE
+        </button>
+        <button
+          class="label scan-btn"
+          type="button"
+          :disabled="backfilling"
+          @click="void backfillOi()"
+        >
+          {{ backfilling ? 'FETCHING…' : 'FETCH DELAYED CHAIN' }}
+        </button>
+      </div>
+    </section>
+
+    <template v-if="deskHasChain">
     <OptionsDirectionBrief
       :symbol="symbol"
       :read="directionRead"
@@ -1315,17 +1387,18 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         <strong class="fig">{{ leanRead.label }}</strong>
         <em class="label">ACTIVITY · NOT AUTH</em>
       </div>
-      <div class="kpi squeeze-kpi">
+      <div class="kpi squeeze-kpi" :class="squeezeKpiTone">
         <span class="label">SQUEEZE</span>
         <div class="kpi-squeeze-body">
           <strong class="fig">
-            {{ squeeze?.score ?? squeeze?.bullish_setup?.score ?? squeeze?.bearish_setup?.score ?? 0 }}
+            {{ squeezeKpiScore }}
             <small v-if="squeeze">/100</small>
           </strong>
           <span
-            v-if="squeeze?.primary || squeeze?.bullish_setup?.likelihood || squeeze?.bearish_setup?.likelihood"
+            v-if="squeezeKpiTag"
             class="squeeze-tag label"
-          >{{ (squeeze?.primary || squeeze?.bullish_setup?.likelihood || squeeze?.bearish_setup?.likelihood || 'UNLIKELY').toUpperCase().replace(/_/g, '-') }}</span>
+            :class="squeezeKpiTone"
+          >{{ squeezeKpiTag }}</span>
         </div>
       </div>
     </section>
@@ -1361,12 +1434,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             </span>
           </template>
           <LoadingState v-if="loadingSymbol && !squeeze" label="Calculating" compact />
-          <div v-else-if="chainMissing" class="unmeasured">
-            <p class="unmeasured-head label">CHAIN NOT LOADED</p>
-            <p class="unmeasured-body">
-              Squeeze needs a matching options payload for {{ symbol }}. Use LOAD CHAIN if this panel stays empty.
-            </p>
-          </div>
           <div v-else-if="!gexMeasurable" class="unmeasured">
             <p class="unmeasured-head label">SQUEEZE UNMEASURED</p>
             <p class="unmeasured-body">
@@ -1406,13 +1473,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             </div>
           </template>
           <LoadingState v-if="loadingSymbol && !d" label="Loading GEX" compact />
-          <div v-else-if="chainMissing" class="unmeasured">
-            <p class="unmeasured-head label">CHAIN NOT LOADED</p>
-            <p class="unmeasured-body">
-              Waiting for a matching options payload for {{ symbol }}. If this sticks,
-              hit LOAD CHAIN above or retry after the feed recovers.
-            </p>
-          </div>
           <div v-else-if="!gexMeasurable" class="unmeasured">
             <p class="unmeasured-head label">GAMMA UNMEASURED</p>
             <p class="unmeasured-body">
@@ -1451,14 +1511,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               :focus-strike="focusStrike"
               @update:focus-strike="focusStrike = $event"
             />
-            <div v-if="d?.oi_by_strike?.length" class="oi-by-strike">
-              <span class="label">OI by strike</span>
-              <span
-                v-for="row in d.oi_by_strike.slice(0, 12)"
-                :key="row.strike"
-                class="oi-strike-chip label"
-              >{{ usd(row.strike) }} · <b class="call">C {{ compact(row.call_oi) }}</b> / <b class="put">P {{ compact(row.put_oi) }}</b></span>
-            </div>
           </template>
         </Panel>
       </div>
@@ -1485,12 +1537,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
     <Panel
       label="QUALIFIED FLOW TAPE"
       index="03"
-      :meta="`${visibleTape.length}/${d?.flow_tape.length ?? 0} PRINTS · ${tapeClassCounts.whales} WHALES · ${tapeClassCounts.sweeps} SWEEPS · ${tapeClassCounts.blocks} BLOCKS`"
-      :live="tapeHealth.status === 'live'"
-      flush
-      class="tape-panel tape-panel-full"
-    >
-      :meta="`${visibleTape.length}/${d?.flow_tape.length ?? 0} PRINTS · ${tapeClassCounts.whales} WHALES · ${tapeClassCounts.sweeps} SWEEPS · ${tapeClassCounts.blocks} BLOCKS`"
+      :meta="tapePanelMeta"
       :live="tapeHealth.status === 'live'"
       flush
       class="tape-panel tape-panel-full"
@@ -1560,10 +1607,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       </div>
 
       <!-- CARDS MODE: Visual Stalker Stream -->
-      <div v-if="visibleTape.length && tapeDisplayMode === 'cards'" class="tape-cards-container">
+      <div v-if="renderedTape.length && tapeDisplayMode === 'cards'" class="tape-cards-container">
         <div class="tape-cards-grid">
           <div
-            v-for="row in visibleTape"
+            v-for="row in renderedTape"
             :key="`card-${row.timestamp}-${row.right}-${row.strike}-${row.premium}`"
             class="tape-stalker-card"
             :class="{
@@ -1606,7 +1653,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       </div>
 
       <!-- TABLE MODE -->
-      <div v-else-if="visibleTape.length" class="table-scroll table-scroll-tall">
+      <div v-else-if="renderedTape.length" class="table-scroll table-scroll-tall">
         <table class="tape-table">
           <thead>
             <tr>
@@ -1625,7 +1672,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </thead>
           <tbody>
             <tr
-              v-for="row in visibleTape"
+              v-for="row in renderedTape"
               :key="`${row.timestamp}-${row.right}-${row.strike}-${row.premium}`"
               :class="{
                 anomalous: row.anomaly_flags.length,
@@ -1676,6 +1723,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             </tr>
           </tbody>
         </table>
+        <p v-if="tapeTruncated" class="label dim tape-cap-note">
+          Showing first {{ TAPE_RENDER_CAP }} of {{ visibleTape.length }} matching prints. Narrow the view or raise the premium floor.
+        </p>
       </div>
       <div v-else-if="d?.flow_tape.length" class="no-tape compact-empty">
         <strong>NO PRINTS MATCH THIS TABLE VIEW</strong>
@@ -1753,6 +1803,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         </table>
       </div>
     </Panel>
+    </template><!-- /measured desk -->
 
     </template><!-- /FLOW TAB -->
 
@@ -2561,6 +2612,44 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink);
 }
 
+.chain-recovery {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s4);
+  min-height: 0;
+  padding: var(--s3) var(--s4);
+  border: var(--hair) solid var(--rule);
+  border-left: 2px solid var(--warn);
+  background: var(--panel);
+}
+.recovery-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.recovery-copy > .label { color: var(--warn); }
+.recovery-copy strong { color: var(--ink); font-size: var(--t-fig); }
+.recovery-copy p {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  line-height: 1.4;
+}
+.recovery-detail { color: var(--ink-soft); }
+.recovery-detail.warn { color: var(--warn); }
+.recovery-actions {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+}
+@media (max-width: 760px) {
+  .chain-recovery { flex-direction: column; }
+}
 .fault-strip { display: flex; align-items: center; gap: var(--s2); min-height: 28px; padding: 4px var(--s3); font-size: var(--t-small); color: var(--short); background: var(--short-wash); border-left: 2px solid var(--short); }
 .fault-strip .label { color: inherit; }
 .fault-strip button { margin-left: auto; color: inherit; }
@@ -2598,9 +2687,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: 1px;
   padding: 1px;
   background: var(--rule);
-  border: 1px solid var(--rule-hi);
-  border-radius: var(--r-md);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 0;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
   overflow: hidden;
 }
 @media (max-width: 1380px) {
@@ -2623,10 +2712,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  min-height: 76px;
-  padding: 8px 12px;
+  min-height: 48px;
+  padding: 4px 8px;
   border: 0;
   background: var(--panel);
   overflow: hidden;
@@ -2643,7 +2732,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   text-overflow: ellipsis;
 }
 .kpi strong {
-  font-size: 1.0rem;
+  font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--ink);
@@ -2663,8 +2752,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   text-overflow: ellipsis;
 }
 /* SPOT is the anchor — larger and slightly bolder */
-.kpi.spot { box-shadow: inset 3px 0 var(--phosphor); background: var(--phosphor-wash); }
-.kpi.spot strong { font-size: 1.2rem; color: var(--ink); font-weight: 700; letter-spacing: -0.03em; }
+.kpi.spot { box-shadow: inset 2px 0 var(--phosphor); background: var(--phosphor-wash); }
+.kpi.spot strong { font-size: 1.05rem; color: var(--ink); font-weight: 700; letter-spacing: -0.03em; }
 .kpi.positive { border-color: color-mix(in srgb, var(--long) 32%, var(--rule)); }
 .kpi.negative { border-color: color-mix(in srgb, var(--short) 32%, var(--rule)); }
 .kpi.bullish { box-shadow: inset 3px 0 var(--long); }
@@ -2682,17 +2771,27 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .squeeze-tag {
   padding: 1px 4px;
-  border: var(--hair) solid color-mix(in srgb, var(--warn) 55%, var(--rule));
-  background: var(--warn-wash);
-  color: var(--warn);
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void-lift);
+  color: var(--ink-dim);
   font-family: var(--font-data);
   font-size: 9px;
   font-weight: 600;
-  border-radius: var(--r-xs);
+  border-radius: 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 80px;
+}
+.squeeze-tag.bullish {
+  color: var(--long);
+  border-color: color-mix(in srgb, var(--long) 45%, var(--rule));
+  background: var(--long-wash);
+}
+.squeeze-tag.bearish {
+  color: var(--short);
+  border-color: color-mix(in srgb, var(--short) 45%, var(--rule));
+  background: var(--short-wash);
 }
 
 /* ---- workbench: flow bar, then squeeze + dominant GEX ------------------- */
@@ -2703,9 +2802,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: var(--s3);
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--rule);
-  border-radius: var(--r-md);
+  border-radius: 0;
   background: var(--panel);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
 }
 .workbench {
   display: flex;
@@ -2715,7 +2814,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .workbench-top {
   display: grid;
-  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
   grid-template-rows: minmax(560px, 62vh);
   gap: 8px;
   min-width: 0;

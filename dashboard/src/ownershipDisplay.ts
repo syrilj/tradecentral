@@ -155,3 +155,51 @@ export function holderPctBarWidth(
   const scale = tableMaxPct != null && Number.isFinite(tableMaxPct) && tableMaxPct > 0 ? tableMaxPct : pct
   return Math.min(1, pct / scale)
 }
+
+export type OwnershipMixKey = 'inst' | 'insider' | 'retail'
+
+export interface OwnershipMixRow {
+  key: OwnershipMixKey
+  label: string
+  pct: number | null
+  widthPct: number | null
+}
+
+export interface OwnershipMixView {
+  rows: OwnershipMixRow[]
+  observedSum: number | null
+  /** True only when the three slices look like a 100% partition. */
+  partition: boolean
+}
+
+function finitePct(val: number | null | undefined): number | null {
+  if (val == null || !Number.isFinite(val)) return null
+  return val
+}
+
+/**
+ * Institutions, insiders, and retail/float are not a clean partition —
+ * 13F + insider holdings can overlap. Render independent meters, never a
+ * stacked bar that overflows 100% and clips the labels.
+ */
+export function presentOwnershipMix(
+  breakdown: OwnershipPayload['breakdown'] | null | undefined,
+): OwnershipMixView {
+  const parts: Array<{ key: OwnershipMixKey; label: string; raw: number | null }> = [
+    { key: 'inst', label: 'Institutions', raw: finitePct(breakdown?.institutional_pct) },
+    { key: 'insider', label: 'Insiders', raw: finitePct(breakdown?.insider_pct) },
+    { key: 'retail', label: 'Retail / float', raw: finitePct(breakdown?.retail_float_pct) },
+  ]
+  const observed = parts.filter((p) => p.raw != null)
+  const sum = observed.reduce((acc, p) => acc + (p.raw as number), 0)
+  return {
+    rows: parts.map((p) => ({
+      key: p.key,
+      label: p.label,
+      pct: p.raw,
+      widthPct: p.raw == null ? null : Math.min(100, Math.max(0, p.raw)),
+    })),
+    observedSum: observed.length ? Number(sum.toFixed(1)) : null,
+    partition: observed.length >= 2 && sum >= 90 && sum <= 100.5,
+  }
+}

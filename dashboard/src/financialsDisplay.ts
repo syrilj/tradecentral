@@ -291,3 +291,117 @@ export function formatGearingUp(val: string | null | undefined): string {
   return val
 }
 
+export interface PredictionHitView {
+  hit: boolean | null
+  remainingPct: number | null
+}
+
+/** Live mark vs a predicted / Street target. Missing inputs stay null — never a fake hit. */
+export function presentPredictionHit(
+  mark: number | null | undefined,
+  target: number | null | undefined,
+): PredictionHitView {
+  const live = finiteOrNull(mark)
+  const pred = finiteOrNull(target)
+  if (live == null || pred == null || live <= 0 || pred <= 0) {
+    return { hit: null, remainingPct: null }
+  }
+  if (live >= pred) return { hit: true, remainingPct: null }
+  return { hit: false, remainingPct: ((pred - live) / live) * 100 }
+}
+
+export function forecastRatingTone(rating: string | null | undefined): string {
+  const r = (rating || '').toLowerCase()
+  if (!r) return 'dim'
+  if (/outperform|overweight|strong buy/.test(r) || /(^|[^a-z])buy([^a-z]|$)/.test(r)) return 'pos'
+  if (/underperform|underweight|sell/.test(r)) return 'neg'
+  return 'dim'
+}
+
+export interface PriceScale {
+  min: number
+  max: number
+}
+
+/** Inclusive scale over observed positive prices. Never invents a $0 rail. */
+export function presentPriceScale(
+  values: Array<number | null | undefined>,
+  padFrac = 0.03,
+): PriceScale | null {
+  const nums = values.filter((v): v is number => v != null && Number.isFinite(v) && v > 0)
+  if (!nums.length) return null
+  const lo = Math.min(...nums)
+  const hi = Math.max(...nums)
+  const span = hi - lo
+  const pad = Math.max(span * padFrac, lo * 0.02, 0.01)
+  if (span <= 0) {
+    return { min: Math.max(0, lo - pad), max: hi + pad }
+  }
+  return { min: Math.max(0, lo - pad), max: hi + pad }
+}
+
+export function scaleLeftPct(
+  price: number | null | undefined,
+  scale: PriceScale | null | undefined,
+): string | null {
+  if (price == null || !Number.isFinite(price) || price <= 0 || !scale) return null
+  const span = scale.max - scale.min
+  if (span <= 0) return null
+  const pct = ((price - scale.min) / span) * 100
+  return `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`
+}
+
+export interface CaseRangeMark {
+  key: 'bear' | 'spot' | 'base' | 'bull'
+  label: string
+  price: number
+  pct: string
+  title: string
+}
+
+export interface CaseRangeView {
+  scale: PriceScale
+  marks: CaseRangeMark[]
+  spanLeft: string
+  spanWidth: string
+}
+
+/** Bear / mark / base / bull on one rail. Scale includes values below the live print. */
+export function presentCaseRange(opts: {
+  spot: number | null | undefined
+  bear: number | null | undefined
+  base: number | null | undefined
+  bull: number | null | undefined
+}): CaseRangeView | null {
+  const scale = presentPriceScale([opts.spot, opts.bear, opts.base, opts.bull])
+  if (!scale) return null
+  const raw: Array<{ key: CaseRangeMark['key']; label: string; price: number | null | undefined }> = [
+    { key: 'bear', label: 'Bear', price: opts.bear },
+    { key: 'spot', label: 'Mark', price: opts.spot },
+    { key: 'base', label: 'Base', price: opts.base },
+    { key: 'bull', label: 'Bull', price: opts.bull },
+  ]
+  const marks: CaseRangeMark[] = []
+  for (const row of raw) {
+    const pct = scaleLeftPct(row.price, scale)
+    if (row.price == null || !Number.isFinite(row.price) || !pct) continue
+    marks.push({
+      key: row.key,
+      label: row.label,
+      price: row.price,
+      pct,
+      title: `${row.label} ${formatModelPredictedPrice(row.price)}`,
+    })
+  }
+  if (marks.length < 2) return null
+  const lefts = marks.map((m) => Number.parseFloat(m.pct))
+  const left = Math.min(...lefts)
+  const right = Math.max(...lefts)
+  return {
+    scale,
+    marks,
+    spanLeft: `${left.toFixed(1)}%`,
+    spanWidth: `${Math.max(2, right - left).toFixed(1)}%`,
+  }
+}
+

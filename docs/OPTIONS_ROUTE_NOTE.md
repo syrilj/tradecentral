@@ -56,7 +56,7 @@ Search fallback after auth is `/flow` (`safeRedirect`). That is intentional: mar
 
 | Method | Path | Role | Must not |
 |---|---|---|---|
-| `GET` | `/api/options?symbol=&mode=live\|history&range=` | Single-name chain + intelligence | Invent NBBO/OI when LSE omitted them |
+| `GET` | `/api/options?symbol=&mode=live\|history&range=` | Single-name chain + intelligence. Live miss + no local parquet captures a delayed yfinance snapshot before 404. | Invent NBBO/OI when LSE omitted them |
 | `GET` | `/api/options/board[?force=1]` | Cross-name options board | Treat board rank as promotion |
 | `GET\|POST` | `/api/options/backfill_oi?symbol=` | Persist OI snapshot; invalidate that symbol's `/api/options` cache | Relabel last-trade time as quote time |
 | `GET` | `/api/options/opportunities` | Same payload as suggest | Authorize `ENTER` |

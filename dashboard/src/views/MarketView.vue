@@ -29,9 +29,14 @@ import {
   formatGearingUp,
   formatModelForecastScore,
   formatModelPredictedPrice,
+  forecastRatingTone,
   getDerivedRatio,
   getGrowthTone,
+  presentCaseRange,
   presentModelForecast,
+  presentPredictionHit,
+  presentPriceScale,
+  scaleLeftPct,
 } from '@/financialsDisplay'
 import { presentSecFilings } from '@/insiderDisplay'
 import { sparkline } from '@/charts'
@@ -50,6 +55,7 @@ import {
   holderPctBarWidth,
   institutionPageCount,
   paginateHolders,
+  presentOwnershipMix,
   reportedInstitutionCount,
   tableMaxPctOut,
   type InstitutionSortField,
@@ -360,9 +366,58 @@ const modelForecast = computed(() =>
   presentModelForecast(finData.value?.model_forecast ?? profile.value?.model_forecast),
 )
 const highlightModelForecast = computed(() => route.query.highlight === 'model-forecast')
+const streetEstimates = computed(() => profile.value?.forecast?.estimates || [])
+const modelPredictionVsMark = computed(() =>
+  presentPredictionHit(
+    s.value?.last_price ?? modelForecast.value.spotUsed,
+    modelForecast.value.predictedPrice,
+  ),
+)
+
+const liveMark = computed(
+  () => s.value?.last_price ?? modelForecast.value.spotUsed ?? profile.value?.forecast?.current_price ?? null,
+)
+
+const caseRange = computed(() =>
+  presentCaseRange({
+    spot: liveMark.value,
+    bear: modelForecast.value.cases.bear.price,
+    base: modelForecast.value.cases.base.price ?? modelForecast.value.predictedPrice,
+    bull: modelForecast.value.cases.bull.price,
+  }),
+)
+
+const forecastLevels = computed(() => {
+  const rows: Array<{ label: string; price: number; tone: 'pos' | 'neg' | 'accent' | 'flat' }> = []
+  const bear = modelForecast.value.cases.bear.price
+  const base = modelForecast.value.cases.base.price ?? modelForecast.value.predictedPrice
+  const bull = modelForecast.value.cases.bull.price
+  if (bear != null) rows.push({ label: 'BEAR', price: bear, tone: 'neg' })
+  if (liveMark.value != null) rows.push({ label: 'MARK', price: liveMark.value, tone: 'flat' })
+  if (base != null) rows.push({ label: 'BASE', price: base, tone: 'accent' })
+  if (bull != null) rows.push({ label: 'BULL', price: bull, tone: 'pos' })
+  return rows
+})
+
+const streetTargetScale = computed(() => {
+  const fc = profile.value?.forecast
+  return presentPriceScale([
+    fc?.target_price_low,
+    fc?.target_price_high,
+    fc?.target_price_median,
+    liveMark.value,
+    ...(fc?.estimates ?? []).map((est) => est.target),
+  ])
+})
+
+function gaugeLeftPct(price: number | null | undefined): string | null {
+  return scaleLeftPct(price, streetTargetScale.value)
+}
+
 const insData = computed(() => insidersRes.data.value)
 const govData = computed(() => governmentRes.data.value)
 const ownData = computed(() => ownershipRes.data.value)
+const ownershipMix = computed(() => presentOwnershipMix(ownData.value?.breakdown))
 
 function observedAgeDays(value: string | null | undefined): number | null {
   if (!value) return null
@@ -929,6 +984,7 @@ const finChartData = computed(() => {
             :mode="mode"
             :render-as="mode === 'price' ? chartStyle : 'line'"
             :height="400"
+            :levels="mode === 'price' ? forecastLevels : []"
           />
 
           <div class="stats-grid">
@@ -1091,7 +1147,9 @@ const finChartData = computed(() => {
           <div class="card-body">
             <div class="card-kpi-row">
               <span class="kpi-l label">Consensus</span>
-              <strong class="kpi-v lab pos">{{ profile?.forecast?.consensus_rating || DASH }}</strong>
+              <strong class="kpi-v lab" :class="forecastRatingTone(profile?.forecast?.consensus_rating)">
+                {{ profile?.forecast?.consensus_rating || DASH }}
+              </strong>
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Median Target</span>
@@ -1100,7 +1158,7 @@ const finChartData = computed(() => {
             <div class="card-kpi-row">
               <span class="kpi-l label">Implied Upside</span>
               <strong class="kpi-v fig" :class="getGrowthTone(profile?.forecast?.upside_pct)">
-                {{ profile?.forecast?.upside_pct != null ? `+${profile.forecast.upside_pct}%` : DASH }}
+                {{ profile?.forecast?.upside_pct != null ? signedPct(profile.forecast.upside_pct, 1) : DASH }}
               </strong>
             </div>
           </div>
@@ -1224,6 +1282,14 @@ const finChartData = computed(() => {
             <span v-if="modelForecast.spotUsed != null" class="mf-sub label dim">
               from live mark {{ formatModelPredictedPrice(modelForecast.spotUsed) }}
             </span>
+            <span
+              v-if="modelPredictionVsMark.hit === true"
+              class="mf-sub label pos"
+            >Mark has reached the predicted price</span>
+            <span
+              v-else-if="modelPredictionVsMark.hit === false && modelPredictionVsMark.remainingPct != null"
+              class="mf-sub label dim"
+            >{{ signedPct(modelPredictionVsMark.remainingPct, 1) }} to predicted</span>
           </div>
           <div class="mf-metric">
             <span class="mf-lbl label">Forecast score</span>
@@ -1257,6 +1323,24 @@ const finChartData = computed(() => {
             <span class="mf-lbl label">Bull case</span>
             <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bull.price) }}</strong>
             <p class="mf-thesis">{{ modelForecast.cases.bull.thesis || DASH }}</p>
+          </div>
+        </div>
+        <div v-if="caseRange" class="mf-range" data-testid="model-forecast-range">
+          <div class="mf-range-track">
+            <span class="mf-range-span" :style="{ left: caseRange.spanLeft, width: caseRange.spanWidth }" />
+            <span
+              v-for="m in caseRange.marks"
+              :key="m.key"
+              class="mf-range-mark"
+              :class="m.key"
+              :style="{ left: m.pct }"
+              :title="m.title"
+            />
+          </div>
+          <div class="mf-range-caption label">
+            <span v-for="m in caseRange.marks" :key="`cap-${m.key}`" class="mf-range-cap" :class="m.key">
+              {{ m.label }} {{ formatModelPredictedPrice(m.price) }}
+            </span>
           </div>
         </div>
         <div class="mf-factors">
@@ -1882,6 +1966,14 @@ const finChartData = computed(() => {
             <span v-if="modelForecast.spotUsed != null" class="mf-sub label dim">
               from live mark {{ formatModelPredictedPrice(modelForecast.spotUsed) }}
             </span>
+            <span
+              v-if="modelPredictionVsMark.hit === true"
+              class="mf-sub label pos"
+            >Mark has reached the predicted price</span>
+            <span
+              v-else-if="modelPredictionVsMark.hit === false && modelPredictionVsMark.remainingPct != null"
+              class="mf-sub label dim"
+            >{{ signedPct(modelPredictionVsMark.remainingPct, 1) }} to predicted</span>
           </div>
           <div class="mf-metric">
             <span class="mf-lbl label">Forecast score</span>
@@ -1917,6 +2009,24 @@ const finChartData = computed(() => {
             <p class="mf-thesis">{{ modelForecast.cases.bull.thesis || DASH }}</p>
           </div>
         </div>
+        <div v-if="caseRange" class="mf-range" data-testid="model-forecast-range-forecast">
+          <div class="mf-range-track">
+            <span class="mf-range-span" :style="{ left: caseRange.spanLeft, width: caseRange.spanWidth }" />
+            <span
+              v-for="m in caseRange.marks"
+              :key="`fc-${m.key}`"
+              class="mf-range-mark"
+              :class="m.key"
+              :style="{ left: m.pct }"
+              :title="m.title"
+            />
+          </div>
+          <div class="mf-range-caption label">
+            <span v-for="m in caseRange.marks" :key="`fcc-${m.key}`" class="mf-range-cap" :class="m.key">
+              {{ m.label }} {{ formatModelPredictedPrice(m.price) }}
+            </span>
+          </div>
+        </div>
         <div class="mf-factors">
           <span class="mf-lbl label">Factors</span>
           <ul v-if="modelForecast.factors.length" class="mf-factor-list">
@@ -1931,10 +2041,16 @@ const finChartData = computed(() => {
 
       <div class="forecast-top-grid">
         <!-- Ratings Breakdown -->
-        <Panel label="Analyst Ratings Consensus" index="T1" :meta="profile?.forecast?.consensus_rating || DASH">
-          <div v-if="profile?.forecast" class="forecast-rating-box">
+        <Panel
+          label="Analyst Ratings Consensus"
+          index="T1"
+          :meta="profile?.forecast?.analyst_count != null ? `${profile.forecast.analyst_count} RATINGS` : (profile?.forecast?.consensus_rating || DASH)"
+        >
+          <div v-if="profile?.forecast?.recommendations || profile?.forecast?.consensus_rating" class="forecast-rating-box">
             <div class="rating-consensus-hero">
-              <strong class="consensus-badge lab pos">{{ profile.forecast.consensus_rating || DASH }}</strong>
+              <strong class="consensus-badge lab" :class="forecastRatingTone(profile.forecast.consensus_rating)">
+                {{ profile.forecast.consensus_rating || DASH }}
+              </strong>
               <span class="consensus-sub label dim">
                 {{ profile.forecast.recommendation_mean != null ? `Score: ${profile.forecast.recommendation_mean} / 5.0 (1.0 = Max Conviction)` : 'Score: —' }}
               </span>
@@ -1942,23 +2058,23 @@ const finChartData = computed(() => {
             <div v-if="profile.forecast.recommendations" class="rec-distribution-bars">
               <div class="rec-bar-item">
                 <span class="rec-lbl label pos">Strong Buy</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.strong_buy ?? 0 }}</span>
+                <span class="rec-count fig">{{ profile.forecast.recommendations.strong_buy ?? DASH }}</span>
               </div>
               <div class="rec-bar-item">
                 <span class="rec-lbl label pos">Buy</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.buy ?? 0 }}</span>
+                <span class="rec-count fig">{{ profile.forecast.recommendations.buy ?? DASH }}</span>
               </div>
               <div class="rec-bar-item">
                 <span class="rec-lbl label">Hold</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.hold ?? 0 }}</span>
-              </div>
-              <div class="rec-bar-item">
-                <span class="rec-lbl label neg">Underperform</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.underperform ?? 0 }}</span>
+                <span class="rec-count fig">{{ profile.forecast.recommendations.hold ?? DASH }}</span>
               </div>
               <div class="rec-bar-item">
                 <span class="rec-lbl label neg">Sell</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.sell ?? 0 }}</span>
+                <span class="rec-count fig">{{ profile.forecast.recommendations.sell ?? DASH }}</span>
+              </div>
+              <div class="rec-bar-item">
+                <span class="rec-lbl label neg">Strong Sell</span>
+                <span class="rec-count fig">{{ profile.forecast.recommendations.strong_sell ?? profile.forecast.recommendations.underperform ?? DASH }}</span>
               </div>
             </div>
           </div>
@@ -1983,7 +2099,9 @@ const finChartData = computed(() => {
               <div class="pt-val-item highlight">
                 <span class="pt-lbl label pos">Median Target</span>
                 <strong class="pt-num fig pos">{{ usd(profile.forecast.target_price_median) }}</strong>
-                <span v-if="profile.forecast.upside_pct != null" class="pt-upside label pos">+{{ profile.forecast.upside_pct }}% Upside</span>
+                <span v-if="profile.forecast.upside_pct != null" class="pt-upside label" :class="getGrowthTone(profile.forecast.upside_pct)">
+                  {{ signedPct(profile.forecast.upside_pct, 1) }} vs mark
+                </span>
                 <span v-else class="pt-upside label dim">—</span>
               </div>
               <div class="pt-val-item">
@@ -1991,34 +2109,27 @@ const finChartData = computed(() => {
                 <strong class="pt-num fig">{{ usd(profile.forecast.target_price_high) }}</strong>
               </div>
             </div>
-            <div class="pt-gauge-track">
+            <div v-if="streetTargetScale" class="pt-gauge-track">
               <div
+                v-if="gaugeLeftPct(profile.forecast.target_price_low) && gaugeLeftPct(profile.forecast.target_price_high)"
                 class="pt-gauge-range"
-                :style="(() => {
-                  const lo = profile.forecast.target_price_low ?? 0
-                  const hi = profile.forecast.target_price_high ?? 0
-                  const median = profile.forecast.target_price_median ?? 0
-                  const cur = s?.last_price ?? median
-                  const min = Math.min(lo, cur) * 0.97
-                  const max = Math.max(hi, cur) * 1.03
-                  const span = max - min || 1
-                  const leftPct = ((lo - min) / span) * 100
-                  const widthPct = ((hi - lo) / span) * 100
-                  return { left: `${leftPct.toFixed(1)}%`, width: `${Math.max(4, widthPct).toFixed(1)}%` }
-                })()"
+                :style="{
+                  left: gaugeLeftPct(profile.forecast.target_price_low)!,
+                  width: `${Math.max(4, Number.parseFloat(gaugeLeftPct(profile.forecast.target_price_high)!) - Number.parseFloat(gaugeLeftPct(profile.forecast.target_price_low)!)).toFixed(1)}%`,
+                }"
               />
               <div
+                v-for="est in streetEstimates"
+                :key="`${est.firm}-${est.date}`"
+                class="pt-gauge-estimate"
+                :class="est.hit ? 'hit' : 'open'"
+                :style="gaugeLeftPct(est.target) ? { left: gaugeLeftPct(est.target)! } : undefined"
+                :title="`${est.firm} ${usd(est.target)}`"
+              />
+              <div
+                v-if="gaugeLeftPct(liveMark)"
                 class="pt-gauge-current-marker"
-                :style="(() => {
-                  const lo = profile.forecast.target_price_low ?? 0
-                  const hi = profile.forecast.target_price_high ?? 0
-                  const median = profile.forecast.target_price_median ?? 0
-                  const cur = s?.last_price ?? median
-                  const min = Math.min(lo, cur) * 0.97
-                  const max = Math.max(hi, cur) * 1.03
-                  const span = max - min || 1
-                  return { left: `${(((cur - min) / span) * 100).toFixed(1)}%` }
-                })()"
+                :style="{ left: gaugeLeftPct(liveMark)! }"
                 title="Current Price"
               />
             </div>
@@ -2038,6 +2149,56 @@ const finChartData = computed(() => {
           </div>
         </Panel>
       </div>
+
+      <Panel
+        label="Analyst Price Target Estimates"
+        index="T2b"
+        :meta="streetEstimates.length ? `${profile?.forecast?.estimates_hit ?? 0} of ${streetEstimates.length} reached` : DASH"
+      >
+        <div v-if="streetEstimates.length" class="table-scroll-container analyst-estimates-table">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th class="label">Date</th>
+                <th class="label">Research Firm</th>
+                <th class="label">Grade</th>
+                <th class="label">Target</th>
+                <th class="label">Prior</th>
+                <th class="label">vs Mark</th>
+                <th class="label">Hit</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="est in streetEstimates" :key="`${est.firm}-${est.date}-${est.target}`">
+                <td class="dim fig">{{ est.date || DASH }}</td>
+                <td class="lab bold">{{ est.firm }}</td>
+                <td class="fig" :class="forecastRatingTone(est.current)">{{ est.current || DASH }}</td>
+                <td class="fig">{{ usd(est.target) }}</td>
+                <td class="dim fig">{{ usd(est.prior_target) }}</td>
+                <td class="fig" :class="getGrowthTone(est.vs_mark_pct)">
+                  {{ est.vs_mark_pct != null ? signedPct(est.vs_mark_pct, 1) : DASH }}
+                </td>
+                <td>
+                  <span
+                    class="kind label"
+                    :class="est.hit === true ? 'pos' : 'dim'"
+                  >
+                    {{ est.hit === true ? 'Reached' : (est.hit === false ? 'Open' : DASH) }}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="institutional-unavailable-container">
+          <span class="unavail-eyebrow label dim">FIRM TARGETS</span>
+          <h3 class="unavail-title lab">No Individual Price Targets Reported</h3>
+          <p class="unavail-desc">Per-firm 12-month price targets were not returned for {{ symbol }}.</p>
+          <div class="unavail-meta label dim">
+            <span>Source: <strong>Yahoo Finance upgrades / downgrades tape</strong></span>
+          </div>
+        </div>
+      </Panel>
 
       <!-- Upgrades / Downgrades History -->
       <Panel
@@ -2079,6 +2240,8 @@ const finChartData = computed(() => {
                 <th class="label">Action</th>
                 <th class="label">Current Grade</th>
                 <th class="label">Prior Grade</th>
+                <th class="label">Target</th>
+                <th class="label">Prior Target</th>
               </tr>
             </thead>
             <tbody>
@@ -2101,6 +2264,8 @@ const finChartData = computed(() => {
                   {{ rev.current || rev.to_grade || DASH }}
                 </td>
                 <td class="dim fig">{{ rev.previous || rev.from_grade || DASH }}</td>
+                <td class="fig">{{ usd(rev.target) }}</td>
+                <td class="dim fig">{{ usd(rev.prior_target) }}</td>
               </tr>
             </tbody>
           </table>
@@ -2678,28 +2843,24 @@ const finChartData = computed(() => {
       <!-- Ownership Structure Breakdown -->
       <Panel label="Ownership Structure & Float Distribution" index="W1" meta="Shareholder Registry">
         <div v-if="ownData?.breakdown" class="ownership-distribution-card">
-          <div class="ownership-bars-row">
-            <div
-              v-if="ownData.breakdown.institutional_pct"
-              class="own-bar-seg inst"
-              :style="{ width: `${ownData.breakdown.institutional_pct}%` }"
-            >
-              <span class="bar-lbl label">Institutions {{ ownData.breakdown.institutional_pct }}%</span>
+          <div class="own-mix">
+            <div v-for="row in ownershipMix.rows" :key="row.key" class="own-mix-row">
+              <span class="own-mix-label label">{{ row.label }}</span>
+              <div class="own-mix-track">
+                <div
+                  v-if="row.widthPct != null"
+                  class="own-mix-fill"
+                  :class="row.key"
+                  :style="{ width: `${row.widthPct}%` }"
+                />
+              </div>
+              <strong class="own-mix-val fig">{{ row.pct != null ? `${row.pct}%` : DASH }}</strong>
             </div>
-            <div
-              v-if="ownData.breakdown.insider_pct"
-              class="own-bar-seg insider"
-              :style="{ width: `${ownData.breakdown.insider_pct}%` }"
-            >
-              <span class="bar-lbl label">Insiders {{ ownData.breakdown.insider_pct }}%</span>
-            </div>
-            <div
-              v-if="ownData.breakdown.retail_float_pct"
-              class="own-bar-seg retail"
-              :style="{ width: `${ownData.breakdown.retail_float_pct}%` }"
-            >
-              <span class="bar-lbl label">Retail Float {{ ownData.breakdown.retail_float_pct }}%</span>
-            </div>
+            <p class="own-mix-note label dim">
+              {{ ownershipMix.partition
+                ? 'Slices sum to outstanding.'
+                : 'Independent shares of outstanding — 13F and insider holdings can overlap, so they are not stacked to 100%.' }}
+            </p>
           </div>
 
           <div class="ownership-stats-grid">
@@ -3628,6 +3789,52 @@ const finChartData = computed(() => {
 .mf-case.bear .mf-val { color: var(--short); }
 .mf-case.bull .mf-val { color: var(--long); }
 
+.mf-range {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.mf-range-track {
+  position: relative;
+  height: 10px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+}
+
+.mf-range-span {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: color-mix(in srgb, var(--phosphor) 16%, transparent);
+}
+
+.mf-range-mark {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 16px;
+  transform: translateX(-50%);
+  background: var(--ink);
+}
+
+.mf-range-mark.bear { background: var(--short); }
+.mf-range-mark.bull { background: var(--long); }
+.mf-range-mark.base { background: var(--phosphor); width: 3px; }
+.mf-range-mark.spot { background: var(--ink); width: 3px; }
+
+.mf-range-caption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  color: var(--ink-dim);
+}
+
+.mf-range-cap.bear { color: var(--short); }
+.mf-range-cap.bull { color: var(--long); }
+.mf-range-cap.base { color: var(--phosphor); }
+.mf-range-cap.spot { color: var(--ink); }
+
 .mf-thesis {
   margin: 6px 0 0;
   color: var(--ink-dim);
@@ -3963,8 +4170,8 @@ const finChartData = computed(() => {
 .pt-gauge-track {
   position: relative;
   height: 8px;
-  background: var(--panel);
-  border-radius: 4px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
 }
 
 .pt-gauge-range {
@@ -3982,6 +4189,20 @@ const finChartData = computed(() => {
   height: 16px;
   background: var(--ink);
   border-radius: 2px;
+}
+
+.pt-gauge-estimate {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 12px;
+  background: var(--ink-dim);
+  opacity: 0.7;
+}
+
+.pt-gauge-estimate.hit {
+  background: var(--phosphor);
+  opacity: 1;
 }
 
 .pt-caption-row {
@@ -4103,7 +4324,6 @@ const finChartData = computed(() => {
   padding: var(--s4);
   background: var(--void);
   border: var(--hair) solid var(--rule);
-  border-radius: var(--r-sm);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -4116,24 +4336,37 @@ const finChartData = computed(() => {
   gap: var(--s4);
 }
 
-.ownership-bars-row {
+.own-mix {
   display: flex;
-  height: 28px;
-  border-radius: var(--r-sm);
-  overflow: hidden;
+  flex-direction: column;
+  gap: var(--s3);
 }
 
-.own-bar-seg {
-  display: flex;
+.own-mix-row {
+  display: grid;
+  grid-template-columns: 12ch minmax(0, 1fr) 7ch;
   align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
+  gap: var(--s3);
 }
 
-.own-bar-seg.inst { background: var(--phosphor); color: var(--void); }
-.own-bar-seg.insider { background: var(--rule-hi); color: var(--ink); }
-.own-bar-seg.retail { background: var(--panel-raise); color: var(--ink-soft); }
+.own-mix-label { color: var(--ink-dim); }
+.own-mix-val { text-align: right; color: var(--ink); }
+
+.own-mix-track {
+  height: 8px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+}
+
+.own-mix-fill { height: 100%; }
+.own-mix-fill.inst { background: var(--phosphor); }
+.own-mix-fill.insider { background: var(--ink-dim); }
+.own-mix-fill.retail { background: var(--rule-hi); }
+
+.own-mix-note {
+  margin: 0;
+  line-height: 1.4;
+}
 
 .ownership-stats-grid {
   display: grid;

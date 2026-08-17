@@ -55,6 +55,25 @@ describe('chainDisplay helpers', () => {
     expect(optionsSkewLabel('hedged')).toEqual({ label: 'Hedged', tone: 'cool' })
   })
 
+  it('computes flow types and marker URLs correctly', async () => {
+    const { flowTypeClass, flowMarkerId, edgeRelationshipSummary } = await import('@/chainDisplay')
+    expect(flowTypeClass('supplies_to', 0, 1)).toBe('flow-supply')
+    expect(flowTypeClass('purchases_from', 2, 1)).toBe('flow-demand')
+    expect(flowTypeClass('technology_partner', 1, 1)).toBe('flow-partner')
+    expect(flowTypeClass('peer', 1, 1)).toBe('flow-peer')
+
+    expect(flowMarkerId('flow-supply', false)).toBe('url(#arrow-default)')
+    expect(flowMarkerId('flow-supply', true)).toBe('url(#arrow-supply)')
+    expect(flowMarkerId('flow-demand', true)).toBe('url(#arrow-demand)')
+    expect(flowMarkerId('flow-partner', true)).toBe('url(#arrow-partner)')
+    expect(flowMarkerId('flow-peer', true)).toBe('url(#arrow-peer)')
+
+    const summary = edgeRelationshipSummary('supplies_to', '800G Optics', 0.85)
+    expect(summary).toContain('Supplies to')
+    expect(summary).toContain('800G Optics')
+    expect(summary).toContain('85% link')
+  })
+
   it('ranks and filters beneficiaries by elasticity and sub-industry', () => {
     const mockNodes: SupplyChainNode[] = [
       {

@@ -109,11 +109,11 @@ const { W: hostW, H: hostH } = useChartSize(hostRef, {
   fallbackH: 340,
 })
 
-const left = 56
-const right = 24
-const top = 46
-const bottom = 34
-const minCol = 15
+const left = 48
+const right = 16
+const top = 36
+const bottom = 26
+const minCol = 14
 
 const hoverStrike = ref<number | null>(null)
 const strikeScope = ref<'atm' | 'near' | 'wide' | 'all'>('near')
@@ -581,7 +581,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
     <!-- Aggregate HUD bar + Interactive Strike Inspector -->
     <div class="exposure-head">
-      <div class="exposure-totals">
+      <div v-if="!((hoverStrike != null || focusStrike != null) && focusBar)" class="exposure-totals">
         <div class="exposure-total call">
           <span class="label">{{ metric === 'gex' ? 'CALL GEX' : 'CALL OI' }}</span>
           <strong class="fig">{{ metricValue(callTotal, true) }}</strong>
@@ -596,7 +596,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
         </div>
       </div>
 
-      <div v-if="(hoverStrike != null || focusStrike != null) && focusBar" class="strike-focus" :class="{ locked: focusStrike != null }">
+      <div v-else-if="focusBar" class="strike-focus" :class="{ locked: focusStrike != null }">
         <div class="focus-strike">
           <span class="label">
             {{ hoverStrike != null ? 'INSPECTING' : 'LOCKED STRIKE' }}
@@ -942,9 +942,9 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  gap: 8px;
+  gap: 6px;
   background: var(--panel);
-  padding: 8px 12px 10px;
+  padding: 6px 10px 8px;
 }
 
 .map-controls {
@@ -1103,31 +1103,29 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
 .exposure-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: 1px;
-  flex: 0 0 auto;
-  background: var(--rule);
+  min-height: 36px;
+  max-height: 38px;
+  background: var(--void-lift);
   border: var(--hair) solid var(--rule-hi);
   border-radius: var(--r-xs, 2px);
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
 }
 
 .exposure-totals {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
-  flex: 1 1 260px;
+  width: 100%;
   min-width: 0;
   background: var(--rule);
 }
 
 .exposure-total {
   min-width: 0;
-  min-height: 38px;
-  padding: 4px 10px;
+  min-height: 34px;
+  padding: 3px 10px;
   background: var(--void-lift);
   display: flex;
   flex-direction: row;
@@ -1136,7 +1134,6 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   gap: 8px;
   position: relative;
   overflow: hidden;
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease, background 0.15s ease;
 }
 
 .exposure-total::after {
@@ -1175,14 +1172,14 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 .strike-focus {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  width: 100%;
   gap: 12px;
   background: var(--void-lift);
-  border: var(--hair) solid var(--rule-hi);
-  border-radius: var(--r-xs, 2px);
-  padding: 3px 10px;
+  padding: 2px 10px;
   min-width: 0;
+  min-height: 34px;
   overflow: hidden;
-  transition: opacity 0.15s ease;
 }
 
 .focus-strike, .focus-metric {

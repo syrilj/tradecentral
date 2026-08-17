@@ -16,6 +16,7 @@ import {
   formatInstitutionsPanelMeta,
   holderChangeTone,
   holderPctBarWidth,
+  presentOwnershipMix,
   institutionPageCount,
   listedInstitutionCount,
   paginateHolders,
@@ -189,5 +190,40 @@ describe('ownership display — last-quarter change and % bars', () => {
     expect(byChange).toHaveLength(234)
     expect(byChange[0].change_pct).toBe(1.2)
     expect(byChange[byChange.length - 1].change_pct).toBe(-5.0)
+  })
+})
+
+describe('ownership mix — independent meters', () => {
+  it('does not treat overlapping 13F + insider slices as a stacked 100% bar', () => {
+    const mix = presentOwnershipMix({
+      institutional_pct: 82,
+      insider_pct: 28,
+      retail_float_pct: 19,
+      shares_outstanding: 100,
+      float_shares: 70,
+    })
+    expect(mix.partition).toBe(false)
+    expect(mix.observedSum).toBe(129)
+    expect(mix.rows[0].widthPct).toBe(82)
+    expect(mix.rows[1].widthPct).toBe(28)
+  })
+
+  it('MarketView binds the mix helper instead of a stacked overflow bar', () => {
+    expect(marketViewSource).toContain('presentOwnershipMix')
+    expect(marketViewSource).toContain('own-mix')
+    expect(marketViewSource).not.toContain('ownership-bars-row')
+  })
+
+  it('dashes missing slices instead of hiding them behind a falsy v-if', () => {
+    const mix = presentOwnershipMix({
+      institutional_pct: 40,
+      insider_pct: null,
+      retail_float_pct: null,
+      shares_outstanding: null,
+      float_shares: null,
+    })
+    expect(mix.rows[1].pct).toBeNull()
+    expect(mix.rows[1].widthPct).toBeNull()
+    expect(presentOwnershipMix(null).observedSum).toBeNull()
   })
 })

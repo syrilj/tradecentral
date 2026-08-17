@@ -32,6 +32,10 @@ describe('Supply Chain & Thematic Beneficiaries Workspace', () => {
     expect(chainView).toContain('EvidenceDrawer')
     expect(chainView).toMatch(/api\.supplyChain/)
     expect(chainView).toMatch(/api\.supplyChainThemes/)
+    expect(chainView).toContain('mode-toggle-group')
+    expect(chainView).toContain('Dedicated Chain')
+    expect(chainView).toContain('Thematic Intertwine')
+    expect(chainView).toContain('thematic-bridges-strip')
   })
 
   it('ThematicBanner displays narrative and timeline', () => {
@@ -48,6 +52,10 @@ describe('Supply Chain & Thematic Beneficiaries Workspace', () => {
     expect(graph).toContain('Downstream Cloud & Enterprise')
     expect(graph).toContain('chain-edge')
     expect(graph).toContain('node-card')
+    expect(graph).toContain('arrow-supply')
+    expect(graph).toContain('arrow-demand')
+    expect(graph).toContain('relationship-legend')
+    expect(graph).toContain('floating-edge-pill')
   })
 
   it('BeneficiaryTable provides filtering and elasticity ranking', () => {

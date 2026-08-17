@@ -2,7 +2,7 @@
 import { computed, nextTick, provide, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ClerkLoaded, ClerkLoading, UserButton, useAuth, useClerk, useUser } from '@clerk/vue'
-import { api, configureApiAuth, type StatusPayload, type Readiness, type MarketClock, type ComparePayload, type ScanDepth, type SectorFlowPayload } from '@/api'
+import { api, configureApiAuth, type StatusPayload, type Readiness, type MarketClock, type ComparePayload, type ScanDepth, type SectorFlowPayload, type SentimentPayload } from '@/api'
 import { isAllowedOperatorEmail } from '@/auth'
 import { formatMarketCountdown, marketSessionClass as sessionClassOf, marketSessionLabel as sessionLabelOf } from '@/marketSession'
 import { placeToolsMenuStyle, type ToolsMenuStyle } from '@/toolsMenu'
@@ -71,6 +71,11 @@ const sectorFlowRes = useResource<SectorFlowPayload>(
   },
   { intervalMs: 180_000, enabled: authEnabled },
 )
+/** Desk structure composite — shown as a fear/greed gauge. Not CNN. */
+const sentimentRes = useResource<SentimentPayload>(
+  () => api.sentiment(),
+  { intervalMs: 300_000, enabled: authEnabled },
+)
 
 async function refreshSectorFlow(opts?: { force?: boolean; clear?: boolean }): Promise<void> {
   if (opts?.force) sectorForceNext.value = true
@@ -93,6 +98,7 @@ watch(isSignedIn, (signedIn) => {
       marketClock.refresh(),
       tapeMarks.refresh(),
       refreshSectorFlow({ force: true }),
+      sentimentRes.refresh(),
     ])
   } else {
     status.clear()
@@ -100,6 +106,7 @@ watch(isSignedIn, (signedIn) => {
     marketClock.clear()
     tapeMarks.clear()
     sectorFlowRes.clear()
+    sentimentRes.clear()
   }
 })
 
@@ -141,7 +148,6 @@ const primaryNav = [
   { name: 'flow', idx: '05', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
   { name: 'chain', idx: '06', title: 'Chain', hint: 'Value chain & growth', icon: 'chain' },
   { name: 'suggest', idx: '07', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
-  { name: 'research', idx: '08', title: 'Research', hint: 'Methods · gates · models', icon: 'research' },
 ] as const
 
 const marketTools = [
@@ -154,12 +160,13 @@ const marketTools = [
 ] as const
 
 const researchTools = [
-  { name: 'gates', idx: 'R1', title: 'Gates', hint: 'Pre-registered verdicts', icon: 'gate' },
-  { name: 'evolution', idx: 'R2', title: 'Evolution', hint: 'GA survivors lab', icon: 'evolution' },
-  { name: 'adaptive', idx: 'R3', title: 'Live Blend', hint: 'Regime multi-stream', icon: 'adaptive' },
-  { name: 'graph', idx: 'R4', title: 'Graph', hint: 'Knowledge graph', icon: 'graph' },
-  { name: 'changepoints', idx: 'R5', title: 'Breaks', hint: 'Bayesian regime breaks', icon: 'changepoints' },
-  { name: 'cloud', idx: 'R6', title: 'Cloud', hint: 'Vertex AI training', icon: 'cloud' },
+  { name: 'research', idx: 'R1', title: 'Research', hint: 'IC decay · quantile spread', icon: 'research' },
+  { name: 'gates', idx: 'R2', title: 'Gates', hint: 'Pre-registered verdicts', icon: 'gate' },
+  { name: 'evolution', idx: 'R3', title: 'Evolution', hint: 'GA survivors lab', icon: 'evolution' },
+  { name: 'adaptive', idx: 'R4', title: 'Live Blend', hint: 'Regime multi-stream', icon: 'adaptive' },
+  { name: 'graph', idx: 'R5', title: 'Graph', hint: 'Knowledge graph', icon: 'graph' },
+  { name: 'changepoints', idx: 'R6', title: 'Breaks', hint: 'Bayesian regime breaks', icon: 'changepoints' },
+  { name: 'cloud', idx: 'R7', title: 'Cloud', hint: 'Vertex AI training', icon: 'cloud' },
 ] as const
 
 const secondaryNav = [...marketTools, ...researchTools] as const
@@ -282,6 +289,64 @@ const rotationFreshness = computed(() => {
   if (!rotationAsOf.value) return 'DATE UNKNOWN'
   const suffix = rotationQuality.value === 'stale' ? ' · STALE' : ''
   return `BAR ${compactBarDate(rotationAsOf.value)}${suffix}`
+})
+
+type FearGreedBand = 'extreme-fear' | 'fear' | 'neutral' | 'greed' | 'extreme-greed' | 'missing'
+
+const fearGreed = computed(() => {
+  const payload = sentimentRes.data.value
+  const composite = payload?.composite
+  const score = composite?.score
+  const asof = payload?.generated_at ?? null
+  const rawQuality = composite?.quality
+  const quality = rawQuality === 'ok'
+    ? 'current'
+    : rawQuality === 'stale' || rawQuality === 'degraded'
+      ? 'stale'
+      : sentimentRes.loading.value && !payload
+        ? 'missing'
+        : 'missing'
+  if (score == null || !Number.isFinite(score)) {
+    return {
+      value: null as number | null,
+      label: sentimentRes.loading.value && !payload ? 'SYNC' : 'NO DATA',
+      band: 'missing' as FearGreedBand,
+      quality,
+      asofLabel: compactBarDate(asof),
+      structure: '',
+      title: sentimentRes.error.value
+        ? `Fear/greed unavailable · ${sentimentRes.error.value}`
+        : 'Desk structure composite unavailable · open Pulse',
+    }
+  }
+  const greed = Math.round((1 - Math.max(0, Math.min(1, score))) * 100)
+  const band: FearGreedBand = greed <= 20
+    ? 'extreme-fear'
+    : greed <= 40
+      ? 'fear'
+      : greed <= 60
+        ? 'neutral'
+        : greed <= 80
+          ? 'greed'
+          : 'extreme-greed'
+  const label = {
+    'extreme-fear': 'EXTREME FEAR',
+    fear: 'FEAR',
+    neutral: 'NEUTRAL',
+    greed: 'GREED',
+    'extreme-greed': 'EXTREME GREED',
+    missing: 'NO DATA',
+  }[band]
+  const structure = (composite?.label || 'MIXED').replace(/_/g, ' ')
+  return {
+    value: greed,
+    label,
+    band,
+    quality,
+    asofLabel: compactBarDate(asof),
+    structure,
+    title: `Desk fear/greed ${greed} · ${label} · structure ${structure} (vol + COT + FINRA short + options P/C). Not CNN Fear & Greed. Open Pulse.`,
+  }
 })
 
 const volAlert = computed(() => {
@@ -490,6 +555,10 @@ function openRotation(): void {
 }
 
 function openVol(): void {
+  void router.push({ name: 'sentiment' })
+}
+
+function openFearGreed(): void {
   void router.push({ name: 'sentiment' })
 }
 
@@ -712,18 +781,56 @@ function openVol(): void {
             <span class="label g-symbol">ROTATION</span>
             <span class="label g-date" :class="rotationQuality">{{ rotationFreshness }}</span>
           </span>
-          <span v-if="topRotations.in.length || topRotations.out.length" class="rot-pair">
-            <span v-if="topRotations.in[0]" class="rot-leg rot-in">
-              <span class="fig">{{ topRotations.in[0].etf }}</span>
-              <small class="fig">{{ signedPct(Number(topRotations.in[0].flow_score || 0) * 100, 1) }}</small>
+          <span v-if="topRotations.in.length || topRotations.out.length" class="rot-board">
+            <span class="rot-col rot-in">
+              <span class="rot-col-h label">IN</span>
+              <span class="rot-legs">
+                <span v-for="s in topRotations.in" :key="`in-${s.etf}`" class="rot-leg">
+                  <span class="fig">{{ s.etf }}</span>
+                  <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
+                </span>
+              </span>
             </span>
-            <span class="rot-arrow label">LEADS / LAGS</span>
-            <span v-if="topRotations.out[0]" class="rot-leg rot-out">
-              <span class="fig">{{ topRotations.out[0].etf }}</span>
-              <small class="fig">{{ signedPct(Number(topRotations.out[0].flow_score || 0) * 100, 1) }}</small>
+            <span class="rot-col rot-out">
+              <span class="rot-col-h label">OUT</span>
+              <span class="rot-legs">
+                <span v-for="s in topRotations.out" :key="`out-${s.etf}`" class="rot-leg">
+                  <span class="fig">{{ s.etf }}</span>
+                  <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
+                </span>
+              </span>
             </span>
           </span>
           <span v-else class="fig g-val">NO ROTATION DATA</span>
+        </button>
+        <button
+          type="button"
+          class="gauge gauge-btn gauge-fg"
+          :class="[`quality-${fearGreed.quality}`, `band-${fearGreed.band}`]"
+          :title="fearGreed.title"
+          @click="openFearGreed"
+        >
+          <span class="g-head">
+            <span class="label g-symbol">FEAR / GREED</span>
+            <span class="label g-date" :class="fearGreed.quality">{{ fearGreed.asofLabel }}</span>
+          </span>
+          <span class="fg-body">
+            <span class="fig g-val" :class="fearGreed.band">{{ fearGreed.value == null ? fearGreed.label : fearGreed.value }}</span>
+            <span
+              class="fg-track"
+              role="meter"
+              :aria-valuemin="0"
+              :aria-valuemax="100"
+              :aria-valuenow="fearGreed.value ?? undefined"
+              :aria-valuetext="fearGreed.label"
+              :aria-label="fearGreed.title"
+            >
+              <i class="fg-spectrum" aria-hidden="true" />
+              <i class="fg-ticks" aria-hidden="true" />
+              <span v-if="fearGreed.value != null" class="fg-thumb" :class="fearGreed.band" :style="{ left: `${fearGreed.value}%` }" />
+            </span>
+            <span class="label g-context" :class="fearGreed.band">{{ fearGreed.label }}</span>
+          </span>
         </button>
       </div>
 
@@ -1201,12 +1308,14 @@ function openVol(): void {
 .gauge {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto;
-  justify-content: center;
-  gap: 4px;
+  grid-template-rows: auto 1fr;
+  justify-content: stretch;
+  justify-items: stretch;
+  align-content: stretch;
+  gap: 3px;
   min-width: 0;
-  flex: 1 1 145px;
-  padding: 0 12px;
+  flex: 1 1 132px;
+  padding: 7px 12px;
   border-right: var(--hair) solid var(--rule);
 }
 .gauge::after {
@@ -1223,8 +1332,9 @@ function openVol(): void {
 .gauge.quality-stale::after { background: var(--warn); opacity: 0.9; }
 .gauge.quality-missing::after,
 .gauge.fault::after { background: var(--short); opacity: 0.75; }
-.gauge-vol { flex: 0 0 118px; }
-.gauge-rot { flex: 1.4 1 225px; }
+.gauge-vol { flex: 0 0 104px; }
+.gauge-rot { flex: 1.6 1 240px; }
+.gauge-fg { flex: 1.2 1 200px; }
 .gauge:last-child { border-right: none; }
 .gauge-btn {
   border: none;
@@ -1246,7 +1356,7 @@ function openVol(): void {
   min-width: 0;
 }
 .g-head { gap: 6px; }
-.g-body { gap: 7px; }
+.g-body { gap: 7px; align-self: end; }
 .gauge .label,
 .strip-search .label {
   color: var(--ink-dim);
@@ -1285,18 +1395,101 @@ function openVol(): void {
 .g-spark path { fill: none; stroke: currentColor; stroke-width: 1.35; vector-effect: non-scaling-stroke; }
 .g-spark.pos { color: var(--long); }
 .g-spark.neg { color: var(--short); }
-.rot-pair {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.rot-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px 12px;
+  min-width: 0;
+  align-self: end;
+  width: 100%;
+}
+.rot-col {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 2px;
   min-width: 0;
 }
-.rot-leg { display: flex; align-items: baseline; gap: 5px; min-width: 0; font-weight: 600; }
+.rot-col-h {
+  color: var(--ink-ghost) !important;
+  font-size: 8px !important;
+  letter-spacing: 0.08em;
+}
+.rot-legs {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.rot-leg { display: flex; align-items: baseline; gap: 4px; min-width: 0; font-weight: 600; white-space: nowrap; }
 .rot-leg small { font-size: 8px; }
 .rot-in { color: var(--long); }
 .rot-out { color: var(--short); }
-.rot-arrow { overflow: hidden; color: var(--ink-ghost) !important; font-size: 8px !important; text-overflow: ellipsis; white-space: nowrap; }
+.fg-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  align-self: end;
+  width: 100%;
+}
+.fg-track {
+  position: relative;
+  height: 7px;
+  min-width: 0;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+}
+.fg-spectrum {
+  display: block;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--short) 0 20%,
+    color-mix(in srgb, var(--short) 55%, var(--warn)) 20% 40%,
+    var(--ink-faint) 40% 60%,
+    color-mix(in srgb, var(--long) 55%, var(--warn)) 60% 80%,
+    var(--long) 80% 100%
+  );
+}
+.fg-ticks {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(var(--void-lift), var(--void-lift)) 20% 0 / 1px 100% no-repeat,
+    linear-gradient(var(--void-lift), var(--void-lift)) 40% 0 / 1px 100% no-repeat,
+    linear-gradient(var(--void-lift), var(--void-lift)) 60% 0 / 1px 100% no-repeat,
+    linear-gradient(var(--void-lift), var(--void-lift)) 80% 0 / 1px 100% no-repeat;
+  pointer-events: none;
+}
+.fg-thumb {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 2px solid var(--void-lift);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.28);
+}
+.fg-thumb.extreme-fear,
+.fg-thumb.fear { background: var(--short); }
+.fg-thumb.greed,
+.fg-thumb.extreme-greed { background: var(--long); }
+.g-val.extreme-fear,
+.g-val.fear,
+.g-context.extreme-fear,
+.g-context.fear { color: var(--short) !important; }
+.g-val.greed,
+.g-val.extreme-greed,
+.g-context.greed,
+.g-context.extreme-greed { color: var(--long) !important; }
+.g-val.neutral,
+.g-context.neutral { color: var(--ink-dim) !important; }
+.g-val.missing { color: var(--ink-ghost) !important; }
 .gauge.warm .g-val { color: var(--warn); }
 .gauge.hot .g-val { color: var(--short); }
 
@@ -1415,6 +1608,10 @@ function openVol(): void {
   letter-spacing: 0.04em;
 }
 
+@media (max-width: 1320px) {
+  .gauge-rot { flex: 1.2 1 200px; }
+  .rot-leg:nth-child(n + 2) { display: none; }
+}
 @media (max-width: 1180px) {
   .gauge-rot { display: none; }
   .strip-search { min-width: 34px; padding: 0 8px; }
@@ -1482,6 +1679,7 @@ function openVol(): void {
   .gauges { display: flex; flex: 1 1 auto; }
   .gauge-vol,
   .gauge-rot,
+  .gauge-fg,
   .gauge-mark:not(.primary-mark) { display: none; }
   .gauge-mark.primary-mark { display: grid; flex: 1 1 auto; max-width: 178px; padding: 0 9px; border-right: 0; }
   .gauge-mark.primary-mark .g-date,

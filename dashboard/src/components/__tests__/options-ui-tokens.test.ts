@@ -88,8 +88,9 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(flow).toMatch(/\.put-fill\s*\{\s*background:\s*var\(--put\)/)
     expect(flow).toMatch(/\.flow-context\.call\s*\{[^}]*--flow-tone:\s*var\(--call\)/s)
     expect(flow).toMatch(/\.flow-context\.put\s*\{[^}]*--flow-tone:\s*var\(--put\)/s)
-    expect(view).toMatch(/grid-template-columns:\s*minmax\(240px,\s*280px\)\s+minmax\(0,\s*1fr\)/)
+    expect(view).toMatch(/grid-template-columns:\s*minmax\(320px,\s*360px\)\s+minmax\(0,\s*1fr\)/)
     expect(view).toMatch(/grid-template-rows:\s*minmax\(560px,\s*62vh\)/)
+    expect(view).not.toMatch(/minmax\(240px,\s*280px\)/)
     expect(view).not.toMatch(/minmax\(260px,\s*300px\)/)
     expect(view).not.toMatch(/minmax\(250px,\s*290px\)/)
     expect(view).not.toMatch(/clamp\(430px,\s*46vh,\s*500px\)/)
@@ -98,6 +99,14 @@ describe('Options UI token gate (shipped SFCs)', () => {
     // Solid phosphor lamp — no animation keyframes
     expect(view).toMatch(/\.live-pulse\.live\s*\{[^}]*background:\s*var\(--phosphor\)/s)
     expect(view).not.toMatch(/@keyframes live-pulse/)
+  })
+
+  it('keeps the qualified tape meta on the Panel and does not leak attributes into the body', () => {
+    const view = readSrc('views/OptionsView.vue')
+    expect(view).toContain(':meta="tapePanelMeta"')
+    expect(view).toContain('const tapePanelMeta')
+    expect(view).not.toMatch(/class="tape-panel tape-panel-full"\s*>\s*:meta=/)
+    expect(view).not.toContain('class="tape-panel tape-panel-full"\n    >\n      :meta=')
   })
 
   it('recovers empty tape and expiry filters without blanking populated data', () => {
@@ -110,6 +119,19 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(view).toContain(':disabled="tapeClassCounts.calls === 0"')
     expect(view).toContain(':disabled="tapeClassCounts.puts === 0"')
     expect(view).not.toContain('else if (v === 0) preset.value = \'raw\'\n  void resource.refresh()')
+  })
+
+  it('collapses the empty Options desk to one recovery panel instead of fake-zero boxes', () => {
+    const view = readSrc('views/OptionsView.vue')
+    expect(view).toContain('const deskHasChain')
+    expect(view).toContain('v-if="deskHasChain"')
+    expect(view).toContain('chain-recovery')
+    expect(view).toContain('FETCH DELAYED CHAIN')
+    expect(view).toContain('NO CHAIN')
+    expect(view).not.toContain('CHAIN NOT LOADED')
+    expect(view).not.toContain("sub: 'Load a ticker'")
+    expect(view).toMatch(/\.kpi\s*\{[^}]*min-height:\s*48px/s)
+    expect(view).toMatch(/\.kpi-rail\s*\{[^}]*border-radius:\s*0/s)
   })
 
   it('puts the honest directional read before the structure rail', () => {

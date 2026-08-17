@@ -46,9 +46,10 @@ The shell should keep the highest-frequency jobs in a small, stable primary set:
 | **Options** | What is the positioning/structure for one underlier? |
 | **Flow** | Where is market-wide activity concentrating? |
 | **Setups** | What call or put does Flow + GEX suggest, and where is the sell? |
+| **Plays** | What is today's decision funnel? |
+| **Chain** | How does the value chain and thematic book sit? |
 
 Options URL, API, and LSE flow-router contracts: `docs/OPTIONS_ROUTE_NOTE.md`. Do not add a second options home or a Dark Pool surface.
-| **Research** | What methods, models, gates, and diagnostics support the claims? |
 
 These workspaces are the primary navigation model already represented in `App.vue`.
 
@@ -56,6 +57,7 @@ These workspaces are the primary navigation model already represented in `App.vu
 
 Specialist routes belong in one secondary system rather than competing with the primary workspaces:
 
+- Research (IC decay, quantile spread, methods)
 - Sectors
 - Pulse
 - Momentum

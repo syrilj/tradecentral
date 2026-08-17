@@ -9,6 +9,35 @@ import { num, signedPct, shortDate } from '@/format'
  * In price mode, also overlays session-style VWAP and EMA 9/21 — the levels
  * discretionary and systematic desks pin execution against.
  */
+interface TrajectoryLevel {
+  label: string
+  price: number
+  tone?: 'pos' | 'neg' | 'accent' | 'flat'
+}
+
+const CANDLE_CAP = 260
+
+function aggregateBars(series: TrajectoryBar[], cap: number): TrajectoryBar[] {
+  if (series.length <= cap) return series
+  const step = Math.ceil(series.length / cap)
+  const out: TrajectoryBar[] = []
+  for (let i = 0; i < series.length; i += step) {
+    const chunk = series.slice(i, Math.min(series.length, i + step))
+    const first = chunk[0]
+    const last = chunk[chunk.length - 1]
+    let h = first.h
+    let l = first.l
+    let vol = 0
+    for (const b of chunk) {
+      if (Number.isFinite(b.h) && b.h > h) h = b.h
+      if (Number.isFinite(b.l) && b.l > 0 && b.l < l) l = b.l
+      vol += Math.max(0, b.v || 0)
+    }
+    out.push({ ...last, o: first.o, h, l, v: vol })
+  }
+  return out
+}
+
 const props = withDefaults(
   defineProps<{
     series: TrajectoryBar[]
@@ -20,8 +49,10 @@ const props = withDefaults(
     height?: number
     showVwap?: boolean
     showEma?: boolean
+    /** Horizontal reference prices (bear / mark / base / bull). */
+    levels?: TrajectoryLevel[]
   }>(),
-  { mode: 'price', renderAs: 'candles', height: 340, showVwap: true, showEma: true },
+  { mode: 'price', renderAs: 'candles', height: 340, showVwap: true, showEma: true, levels: () => [] },
 )
 
 const W = 1000
@@ -32,16 +63,25 @@ const GAP = 16
 const priceH = computed(() => Math.max(120, props.height - DD_H - GAP - PAD.t - PAD.b))
 const totalH = computed(() => PAD.t + priceH.value + GAP + DD_H + PAD.b)
 
+const wantCandles = computed(
+  () => props.mode === 'price' && props.renderAs === 'candles' && props.series.length > 0,
+)
+
+/** Long windows aggregate OHLC so the pane does not paint 1k+ SVG candles. */
+const plotSeries = computed(() =>
+  wantCandles.value ? aggregateBars(props.series, CANDLE_CAP) : props.series,
+)
+
 const values = computed(() =>
-  props.mode === 'growth' ? props.series.map((b) => b.cum) : props.series.map((b) => b.c),
+  props.mode === 'growth' ? plotSeries.value.map((b) => b.cum) : plotSeries.value.map((b) => b.c),
 )
 
 /** Cumulative VWAP from typical price (H+L+C)/3 · volume — daily bars proxy. */
 const vwapSeries = computed(() => {
-  if (props.mode !== 'price' || !props.showVwap || !props.series.length) return null as number[] | null
+  if (props.mode !== 'price' || !props.showVwap || !plotSeries.value.length) return null as number[] | null
   let pv = 0
   let vol = 0
-  return props.series.map((b) => {
+  return plotSeries.value.map((b) => {
     const typical = (b.h + b.l + b.c) / 3
     const v = Math.max(0, b.v || 0)
     pv += typical * v
@@ -52,27 +92,25 @@ const vwapSeries = computed(() => {
 
 const ema9 = computed(() => {
   if (props.mode !== 'price' || !props.showEma) return null as number[] | null
-  const closes = props.series.map((b) => b.c)
+  const closes = plotSeries.value.map((b) => b.c)
   return closes.length ? ema(closes, 9) : null
 })
 const ema21 = computed(() => {
   if (props.mode !== 'price' || !props.showEma) return null as number[] | null
-  const closes = props.series.map((b) => b.c)
+  const closes = plotSeries.value.map((b) => b.c)
   return closes.length ? ema(closes, 21) : null
 })
 
 const x = computed(() =>
-  linearScale([0, Math.max(1, props.series.length - 1)], [PAD.l, W - PAD.r]),
+  linearScale([0, Math.max(1, plotSeries.value.length - 1)], [PAD.l, W - PAD.r]),
 )
 
-const useCandles = computed(
-  () => props.mode === 'price' && props.renderAs === 'candles' && props.series.length > 0,
-)
+const useCandles = computed(() => wantCandles.value)
 
 const yDomain = computed(() => {
   const v: number[] = []
   if (useCandles.value) {
-    for (const b of props.series) {
+    for (const b of plotSeries.value) {
       if (b.h > 0 && b.l > 0) v.push(b.h, b.l, b.o, b.c)
     }
   } else {
@@ -90,6 +128,9 @@ const yDomain = computed(() => {
     if (ema21.value) {
       for (const val of ema21.value) if (Number.isFinite(val) && val > 0) v.push(val)
     }
+    for (const level of props.levels) {
+      if (Number.isFinite(level.price) && level.price > 0) v.push(level.price)
+    }
   }
   if (!v.length) return [0, 1] as [number, number]
   const minVal = Math.min(...v)
@@ -99,6 +140,13 @@ const yDomain = computed(() => {
   const lo = Math.max(0, minVal - pad)
   const hi = maxVal + pad
   return [lo, hi] as [number, number]
+})
+
+const plottedLevels = computed(() => {
+  if (props.mode !== 'price') return [] as Array<TrajectoryLevel & { y: number }>
+  return props.levels
+    .filter((level) => Number.isFinite(level.price) && level.price > 0)
+    .map((level) => ({ ...level, y: y.value(level.price) }))
 })
 
 /** Candle geometry — body + wick for each bar. */
@@ -113,10 +161,10 @@ const candles = computed(() => {
     up: boolean
     w: number
   }[]
-  const n = props.series.length
+  const n = plotSeries.value.length
   const slot = Math.max(1, (W - PAD.l - PAD.r) / Math.max(1, n))
   const bodyW = Math.max(1.5, Math.min(10, slot * 0.68))
-  return props.series.map((b, i) => {
+  return plotSeries.value.map((b, i) => {
     const cx = x.value(i)
     const o = y.value(b.o)
     const c = y.value(b.c)
@@ -138,14 +186,14 @@ const y = computed(() =>
 )
 
 const ddTop = computed(() => PAD.t + priceH.value + GAP)
-const ddMin = computed(() => Math.min(-0.01, ...props.series.map((b) => b.dd)))
+const ddMin = computed(() => Math.min(-0.01, ...plotSeries.value.map((b) => b.dd)))
 const yDd = computed(() => linearScale([ddMin.value, 0], [ddTop.value + DD_H, ddTop.value]))
 
 const pts = computed(() =>
   values.value.map((v, i) => ({ x: x.value(i), y: y.value(v) })),
 )
 const ddPts = computed(() =>
-  props.series.map((b, i) => ({ x: x.value(i), y: yDd.value(b.dd) })),
+  plotSeries.value.map((b, i) => ({ x: x.value(i), y: yDd.value(b.dd) })),
 )
 
 const trace = computed(() => linePath(pts.value))
@@ -166,10 +214,10 @@ const ema21Path = computed(() => {
 })
 
 const lastOverlays = computed(() => {
-  if (props.mode !== 'price' || !props.series.length) return null
-  const i = props.series.length - 1
+  if (props.mode !== 'price' || !plotSeries.value.length) return null
+  const i = plotSeries.value.length - 1
   return {
-    px: props.series[i].c,
+    px: plotSeries.value[i].c,
     vwap: vwapSeries.value?.[i] ?? null,
     e9: ema9.value?.[i] ?? null,
     e21: ema21.value?.[i] ?? null,
@@ -177,7 +225,7 @@ const lastOverlays = computed(() => {
 })
 
 const yTicks = computed(() => niceTicks(yDomain.value[0], yDomain.value[1], 5))
-const xTicks = computed(() => dateTicks(props.series.map((b) => b.d), 6))
+const xTicks = computed(() => dateTicks(plotSeries.value.map((b) => b.d), 6))
 
 /* The trace is up if it finished above where it started. Colouring the whole
    line by net direction (rather than per-segment) keeps it readable at 1000+
@@ -194,14 +242,14 @@ const svg = ref<SVGSVGElement | null>(null)
 
 function onMove(e: MouseEvent): void {
   const el = svg.value
-  if (!el || !props.series.length) return
+  if (!el || !plotSeries.value.length) return
   const box = el.getBoundingClientRect()
   const px = ((e.clientX - box.left) / box.width) * W
   const i = Math.round(x.value.invert(px))
-  hover.value = Math.max(0, Math.min(props.series.length - 1, i))
+  hover.value = Math.max(0, Math.min(plotSeries.value.length - 1, i))
 }
 
-const cur = computed(() => (hover.value === null ? null : props.series[hover.value] ?? null))
+const cur = computed(() => (hover.value === null ? null : plotSeries.value[hover.value] ?? null))
 const curX = computed(() => (hover.value === null ? 0 : x.value(hover.value)))
 const curY = computed(() =>
   hover.value === null ? 0 : y.value(values.value[hover.value] ?? 0),
@@ -219,7 +267,7 @@ const flip = computed(() => curX.value > W * 0.62)
       :viewBox="`0 0 ${W} ${totalH}`"
       preserveAspectRatio="none"
       role="img"
-      :aria-label="`${symbol} ${mode} trajectory, ${series.length} bars`"
+      :aria-label="`${symbol} ${mode} trajectory, ${plotSeries.length} bars`"
       @mousemove="onMove"
       @mouseleave="hover = null"
     >
@@ -267,6 +315,14 @@ const flip = computed(() => curX.value > W * 0.62)
         <path v-if="vwapPath" class="overlay vwap" :d="vwapPath" />
         <path :d="trace" class="trace" :stroke="stroke" />
       </template>
+
+      <!-- case / mark reference levels — scale includes prices below the live print -->
+      <g v-if="plottedLevels.length" class="levels">
+        <g v-for="lv in plottedLevels" :key="lv.label" class="level" :class="lv.tone || 'flat'">
+          <line :x1="PAD.l" :x2="W - PAD.r" :y1="lv.y" :y2="lv.y" />
+          <text :x="W - PAD.r + 8" :y="lv.y + 3">{{ lv.label }}</text>
+        </g>
+      </g>
 
       <!-- y labels, right gutter -->
       <g class="ylab">
@@ -318,6 +374,9 @@ const flip = computed(() => curX.value > W * 0.62)
       <span v-if="lastOverlays.vwap != null" class="vwap-c">VWAP {{ num(lastOverlays.vwap, 2) }}</span>
       <span v-if="lastOverlays.e9 != null" class="ema9-c">EMA9 {{ num(lastOverlays.e9, 2) }}</span>
       <span v-if="lastOverlays.e21 != null" class="ema21-c">EMA21 {{ num(lastOverlays.e21, 2) }}</span>
+      <span v-for="lv in plottedLevels" :key="`leg-${lv.label}`" class="leg-lv" :class="lv.tone || 'flat'">
+        {{ lv.label }} {{ num(lv.price, 2) }}
+      </span>
     </div>
   </figure>
 </template>
@@ -377,6 +436,25 @@ const flip = computed(() => curX.value > W * 0.62)
 .vwap-c { color: var(--warn); }
 .ema9-c { color: var(--call-hi); }
 .ema21-c { color: var(--put); }
+.leg-lv.neg { color: var(--short); }
+.leg-lv.pos { color: var(--long); }
+.leg-lv.accent { color: var(--phosphor); }
+.leg-lv.flat { color: var(--ink-dim); }
+
+.level line {
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.85;
+}
+.level text {
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+.level.neg line, .level.neg text { stroke: var(--short); fill: var(--short); }
+.level.pos line, .level.pos text { stroke: var(--long); fill: var(--long); }
+.level.accent line, .level.accent text { stroke: var(--phosphor); fill: var(--phosphor); }
+.level.flat line, .level.flat text { stroke: var(--ink-dim); fill: var(--ink-dim); }
 .r-ov { font-size: 10px; }
 
 .dd {

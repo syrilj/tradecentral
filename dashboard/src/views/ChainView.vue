@@ -15,6 +15,7 @@ const router = useRouter()
 const currentTheme = ref<string>('ai_datacenter')
 const searchSymbol = ref<string>('')
 const currentDepth = ref<number>(2)
+const currentMode = ref<'dedicated' | 'intertwined'>('dedicated')
 const selectedSymbol = ref<string | null>(null)
 const drawerOpen = ref<boolean>(false)
 const forceNext = ref<boolean>(false)
@@ -26,6 +27,9 @@ watch(
   (query) => {
     if (typeof query.theme === 'string' && query.theme) {
       currentTheme.value = query.theme
+    }
+    if (typeof query.mode === 'string' && (query.mode === 'dedicated' || query.mode === 'intertwined')) {
+      currentMode.value = query.mode
     }
     if (typeof query.symbol === 'string' && query.symbol) {
       searchSymbol.value = query.symbol.toUpperCase()
@@ -50,6 +54,7 @@ const chainResource = useResource<SupplyChainPayload>(
       theme: currentTheme.value,
       symbol: searchSymbol.value || undefined,
       depth: currentDepth.value,
+      mode: currentMode.value,
       force,
     })
   },
@@ -60,6 +65,17 @@ const payload = computed(() => chainResource.data.value)
 const nodes = computed(() => payload.value?.nodes ?? [])
 const edges = computed(() => payload.value?.edges ?? [])
 const summary = computed(() => payload.value?.thematic_summary ?? null)
+const bridges = computed(() => payload.value?.thematic_bridges ?? [])
+
+// Auto-sync currentTheme if the backend auto-routes to a symbol's native theme or custom discovery
+watch(
+  () => payload.value?.query?.theme,
+  (newTheme) => {
+    if (newTheme && newTheme !== currentTheme.value) {
+      currentTheme.value = newTheme
+    }
+  },
+)
 
 const selectedNode = computed(() => {
   if (!selectedSymbol.value) return null
@@ -196,8 +212,22 @@ function toggleDepth() {
   void chainResource.refresh()
 }
 
+function setMode(mode: 'dedicated' | 'intertwined') {
+  currentMode.value = mode
+  void router.replace({ query: { ...route.query, mode } })
+  void chainResource.refresh()
+}
+
+function selectBridgeTheme(themeId: string) {
+  currentTheme.value = themeId
+  currentMode.value = 'intertwined'
+  void router.replace({ query: { ...route.query, theme: themeId, mode: 'intertwined' } })
+  void chainResource.refresh()
+}
+
 function focusQuickTicker(sym: string) {
   searchSymbol.value = sym
+  currentMode.value = 'dedicated'
   triggerSearch()
 }
 </script>
@@ -217,12 +247,34 @@ function focusQuickTicker(sym: string) {
       </div>
 
       <div class="ctrl-right">
+        <!-- View Mode Switcher -->
+        <div class="mode-toggle-group">
+          <button
+            type="button"
+            class="mode-toggle-btn"
+            :class="{ active: currentMode === 'dedicated' }"
+            @click="setMode('dedicated')"
+            title="Dedicated Company Multi-Tier Chain"
+          >
+            Dedicated Chain
+          </button>
+          <button
+            type="button"
+            class="mode-toggle-btn"
+            :class="{ active: currentMode === 'intertwined' }"
+            @click="setMode('intertwined')"
+            title="Intertwined Macro Thematic Frontier"
+          >
+            Thematic Intertwine
+          </button>
+        </div>
+
         <!-- Search -->
         <form class="search-form" @submit.prevent="triggerSearch">
           <input
             v-model="searchSymbol"
             type="text"
-            placeholder="Focus Ticker (e.g. NVDA, AAOI, MU, SMR)..."
+            placeholder="Type Any Stock (AAPL, AMD, COHR, UBER)..."
             class="sym-search-input"
           />
           <button type="submit" class="search-btn">Focus</button>
@@ -251,6 +303,24 @@ function focusQuickTicker(sym: string) {
         </button>
       </div>
     </header>
+
+    <!-- Thematic Frontier Bridges Strip -->
+    <div v-if="bridges.length" class="thematic-bridges-strip">
+      <span class="bridge-label">INTERTWINED THEMATIC FRONTIERS:</span>
+      <div class="bridge-chips">
+        <button
+          v-for="b in bridges"
+          :key="b.id"
+          type="button"
+          class="bridge-chip"
+          @click="selectBridgeTheme(b.id)"
+          :title="`Intertwine into ${b.theme_name}`"
+        >
+          <span class="bridge-name">⚡ {{ b.theme_name }}</span>
+          <span v-if="b.role" class="bridge-role">({{ b.role }})</span>
+        </button>
+      </div>
+    </div>
 
     <!-- Quick Catalyst / Focus Chips -->
     <div class="quick-focus-strip">
@@ -378,6 +448,89 @@ function focusQuickTicker(sym: string) {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.mode-toggle-group {
+  display: flex;
+  background: var(--void);
+  border: 1px solid var(--rule);
+  padding: 2px;
+  gap: 2px;
+}
+
+.mode-toggle-btn {
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  transition: all 0.15s ease;
+}
+
+.mode-toggle-btn:hover {
+  color: var(--ink);
+}
+
+.mode-toggle-btn.active {
+  background: var(--phosphor-wash);
+  color: var(--phosphor);
+  font-weight: 700;
+  border: 1px solid var(--phosphor-dim);
+}
+
+.thematic-bridges-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.85rem;
+  background: rgba(14, 165, 233, 0.08);
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  font-size: 0.68rem;
+}
+
+.bridge-label {
+  color: #38bdf8;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  font-family: var(--font-mono, monospace);
+}
+
+.bridge-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.bridge-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.65rem;
+  padding: 0.2rem 0.5rem;
+  background: var(--panel);
+  border: 1px solid rgba(14, 165, 233, 0.4);
+  color: #e0f2fe;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bridge-chip:hover {
+  background: rgba(14, 165, 233, 0.25);
+  border-color: #38bdf8;
+}
+
+.bridge-name {
+  font-weight: 600;
+}
+
+.bridge-role {
+  color: #94a3b8;
+  font-size: 0.6rem;
 }
 
 .search-form {

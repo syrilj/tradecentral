@@ -26,6 +26,24 @@ describe('application market strip contract', () => {
     expect(app).toContain('BAR ${compactBarDate(rotationAsOf.value)}')
   })
 
+  it('fills the rotation cell with in/out columns instead of a floating pair', () => {
+    expect(app).toContain('class="rot-board"')
+    expect(app).toContain('class="rot-col rot-in"')
+    expect(app).toContain('class="rot-col rot-out"')
+    expect(app).not.toContain('LEADS / LAGS')
+    expect(app).not.toContain('class="rot-pair"')
+  })
+
+  it('adds a desk fear/greed gauge from the sentiment composite, not CNN', () => {
+    expect(app).toContain('api.sentiment()')
+    expect(app).toContain('class="gauge gauge-btn gauge-fg"')
+    expect(app).toContain('FEAR / GREED')
+    expect(app).toContain('Not CNN Fear & Greed')
+    expect(app).toContain('openFearGreed')
+    expect(app).toContain('fg-spectrum')
+    expect(app).not.toContain('fg-fill')
+  })
+
   it('keeps rotation dated from the independently refreshed sector panel', () => {
     expect(app).toContain('board.sector_flow === flow')
     expect(app).toContain('sector_flow: flow')
@@ -48,10 +66,12 @@ describe('application market strip contract', () => {
   })
 
   it('gives secondary workspaces distinct icons and a keyboard-operable menu', () => {
-    for (const icon of ['sectors', 'pulse', 'momentum', 'fintel', 'evolution', 'adaptive', 'graph', 'changepoints', 'cloud']) {
+    for (const icon of ['sectors', 'pulse', 'momentum', 'fintel', 'evolution', 'adaptive', 'graph', 'changepoints', 'cloud', 'research']) {
       expect(app).toContain(`icon: '${icon}'`)
       expect(icons).toContain(`name === '${icon}'`)
     }
+    expect(app).toMatch(/const researchTools = \[[^\]]*name: 'research'/s)
+    expect(app).not.toMatch(/const primaryNav = \[[^\]]*name: 'research'/s)
     expect(app).toContain('aria-haspopup="menu"')
     expect(app).toContain('@keydown="onMoreMenuKey"')
     expect(app).toContain("document.addEventListener('pointerdown', onOutsidePointer)")

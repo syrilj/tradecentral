@@ -207,14 +207,16 @@ const deskAction = computed(() => {
 
     <section class="metric-grid">
       <div class="metric">
-        <span class="label">SIGNED NET</span>
+        <span class="label">C/P IMBALANCE</span>
         <strong class="fig" :class="premium.call >= premium.put ? 'call' : 'put'">
           {{ (premium.call - premium.put >= 0 ? '+' : '') + '$' + optCompact(premium.call - premium.put) }}
         </strong>
+        <small class="label">IDENTITY MIX</small>
       </div>
       <div class="metric">
         <span class="label">QUALIFIED</span>
         <strong class="fig">{{ tape.length }}</strong>
+        <small class="label">PRINTS</small>
       </div>
       <div class="metric">
         <span class="label">BUY / SELL SIDE</span>
@@ -224,6 +226,7 @@ const deskAction = computed(() => {
       <div class="metric">
         <span class="label">TAPE FLAGS</span>
         <strong class="fig" :class="{ warn: anomalyCount > 0 }">{{ anomalyCount }}</strong>
+        <small class="label">ANOMALIES</small>
       </div>
     </section>
 

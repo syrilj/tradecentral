@@ -177,6 +177,8 @@ watch(strikeHint, (value) => {
   }
 })
 
+const activePresetMeta = computed(() => (strategy.value !== 'custom' ? STRATEGY_PRESETS[strategy.value] : null))
+
 const strategyLabel = computed(() => {
   if (strategy.value === 'custom') return 'Custom book'
   return STRATEGY_PRESETS[strategy.value]?.label ?? 'Options Strategy'
@@ -465,6 +467,10 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
           <button type="button" class="btn-quiet" :class="{ on: strategy === 'calendar_spread' }" @click="applyPreset('calendar_spread')">Calendar Spread</button>
         </div>
       </div>
+      <div v-if="activePresetMeta" class="strategy-thesis-strip">
+        <span class="label thesis-tag">{{ activePresetMeta.category.toUpperCase() }}</span>
+        <span class="thesis-desc">{{ activePresetMeta.description }}</span>
+      </div>
     </div>
 
     <!-- Parameter Controls Grid -->
@@ -505,14 +511,14 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
               <tr v-for="leg in legs" :key="leg.id">
                 <td>
                   <div class="seg">
-                    <button type="button" class="btn-quiet" :class="{ on: leg.quantity > 0 }" @click="setSide(leg, 1)">Long</button>
-                    <button type="button" class="btn-quiet" :class="{ on: leg.quantity < 0 }" @click="setSide(leg, -1)">Short</button>
+                    <button type="button" class="btn-quiet side-long" :class="{ on: leg.quantity > 0 }" @click="setSide(leg, 1)">Long</button>
+                    <button type="button" class="btn-quiet side-short" :class="{ on: leg.quantity < 0 }" @click="setSide(leg, -1)">Short</button>
                   </div>
                 </td>
                 <td>
                   <div class="seg">
-                    <button type="button" class="btn-quiet" :class="{ on: leg.right === 'call' }" @click="setRight(leg, 'call')">Call</button>
-                    <button type="button" class="btn-quiet" :class="{ on: leg.right === 'put' }" @click="setRight(leg, 'put')">Put</button>
+                    <button type="button" class="btn-quiet right-call" :class="{ on: leg.right === 'call' }" @click="setRight(leg, 'call')">Call</button>
+                    <button type="button" class="btn-quiet right-put" :class="{ on: leg.right === 'put' }" @click="setRight(leg, 'put')">Put</button>
                   </div>
                 </td>
                 <td class="num"><input class="fig" :value="leg.strike" type="number" min="0.01" step="0.5" @input="setStrike(leg, $event)"></td>
@@ -846,12 +852,38 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
   color: var(--ink-dim);
   min-width: 90px;
   letter-spacing: var(--track-label);
+  font-weight: 700;
 }
 
 .presets-btns {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.strategy-thesis-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 6px var(--s3);
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule-hi);
+  border-left: 3px solid var(--phosphor);
+  font-size: var(--t-tiny);
+  margin-top: 2px;
+}
+
+.thesis-tag {
+  color: var(--phosphor);
+  font-weight: 700;
+  font-size: var(--t-micro);
+  letter-spacing: var(--track-label);
+  flex-shrink: 0;
+}
+
+.thesis-desc {
+  color: var(--ink-soft);
+  font-size: var(--t-tiny);
 }
 
 .calc-controls {
@@ -872,12 +904,47 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
   font-family: var(--font-data);
   font-size: var(--t-small);
   border-radius: 2px;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.calc-controls input:focus,
+.grid input:focus {
+  outline: none;
+  border-color: var(--phosphor);
 }
 
 .btn-quiet.on {
   color: var(--phosphor);
   border-color: var(--phosphor);
   background: var(--phosphor-wash);
+}
+
+.btn-quiet.side-long.on {
+  color: var(--call-hi);
+  border-color: var(--call);
+  background: var(--call-wash);
+  font-weight: 700;
+}
+
+.btn-quiet.side-short.on {
+  color: var(--put-hi);
+  border-color: var(--put);
+  background: var(--put-wash);
+  font-weight: 700;
+}
+
+.btn-quiet.right-call.on {
+  color: var(--call-hi);
+  border-color: var(--call);
+  background: var(--call-wash);
+  font-weight: 700;
+}
+
+.btn-quiet.right-put.on {
+  color: var(--put-hi);
+  border-color: var(--put);
+  background: var(--put-wash);
+  font-weight: 700;
 }
 
 .calc-desk {

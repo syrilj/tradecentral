@@ -117,7 +117,7 @@ watch(() => [route.query.setup, route.query.symbol], () => {
 .flow-view {
   display: flex;
   flex-direction: column;
-  gap: var(--s4);
+  gap: var(--s3);
   min-width: 0;
   padding-bottom: var(--s6);
 }
@@ -131,6 +131,8 @@ watch(() => [route.query.setup, route.query.symbol], () => {
   padding: var(--s4) var(--s5);
   border: var(--hair) solid var(--rule);
   border-left: 2px solid var(--phosphor-dim);
+  border-radius: var(--r-md);
+  background: var(--surface-base);
 }
 
 .flow-title {

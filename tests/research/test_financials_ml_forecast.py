@@ -272,9 +272,25 @@ def test_timeframe_factors_and_bull_bear_cases():
     bear, base, bull = cases["bear"]["price"], cases["base"]["price"], cases["bull"]["price"]
     assert bear is not None and base is not None and bull is not None
     assert bear < base < bull
+    assert bear < out["spot_used"]
     assert cases["bear"]["thesis"]
     assert cases["bull"]["thesis"]
     assert cases["base"]["price"] == out["predicted_price"]
+
+
+def test_bear_case_prints_below_live_mark_on_expansion_tape():
+    """A growth name at $71 can still miss — bear is not a cheaper bull."""
+    out = score_report_forecast(
+        _growth_report(),
+        intel={"last_price": 70.98, "current_price": 70.98, "ret_3m": 0.48, "range_position": 0.84},
+    )
+    bear = out["cases"]["bear"]["price"]
+    assert out["status"] == "ok"
+    assert out["spot_used"] == pytest.approx(70.98)
+    assert bear is not None
+    assert bear < out["spot_used"]
+    assert bear < out["predicted_price"]
+    assert out["cases"]["bull"]["price"] > out["predicted_price"]
 
 
 def test_missing_has_no_fake_case_prices():

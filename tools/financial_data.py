@@ -753,30 +753,286 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
 # ==============================================================================
 # 2. Company Profile, Officers, Forecast & Smart Score
 # ==============================================================================
-def get_company_profile_payload(symbol: str) -> dict[str, Any]:
+_RECOMMENDATION_LABELS = {
+    "strong_buy": "Strong Buy",
+    "buy": "Buy",
+    "hold": "Hold",
+    "underperform": "Underperform",
+    "sell": "Sell",
+}
+
+
+def _positive_price(val: Any) -> float | None:
+    """Street targets of 0 are Yahoo's empty slot, not a $0 mark."""
+    price = _safe_float(val)
+    if price is None or price <= 0:
+        return None
+    return round(price, 2)
+
+
+def _revision_date(idx: Any) -> str:
+    if hasattr(idx, "strftime"):
+        return idx.strftime("%Y-%m-%d")
+    return str(idx)[:10]
+
+
+def _cell_str(val: Any) -> str:
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(val).strip()
+    if text.lower() in {"", "nan", "none", "nat", "<na>"}:
+        return ""
+    return text
+
+
+def _normalize_revision_action(action_raw: str) -> str:
+    act = (action_raw or "").strip().lower()
+    if not act or act in {"main", "maintain", "maintains"}:
+        return "Maintains"
+    if act in {"up", "upgrade", "upgrades", "upg"}:
+        return "Upgrades"
+    if act in {"down", "downgrade", "downgrades", "dwn"}:
+        return "Downgrades"
+    if act in {"init", "initiate", "initiates", "initiated", "initiation"}:
+        return "Initiates Coverage"
+    if act in {"reit", "reiterate", "reiterates", "reiterated"}:
+        return "Reiterates"
+    return action_raw.strip().title()
+
+
+def _row_get(row: Any, *names: str) -> Any:
+    for name in names:
+        if hasattr(row, "index") and name in row.index:
+            return row[name]
+        if hasattr(row, "get"):
+            try:
+                val = row.get(name)
+            except Exception:
+                val = None
+            if val is not None:
+                return val
+    if hasattr(row, "index"):
+        wanted = {n.replace(" ", "").replace("_", "").lower() for n in names}
+        for col in row.index:
+            if str(col).replace(" ", "").replace("_", "").lower() in wanted:
+                return row[col]
+    return None
+
+
+def parse_recommendation_counts(df: Any) -> dict[str, int] | None:
+    """Current-period Yahoo recommendation buckets. Missing frame → None, never a fake mix."""
+    if df is None or getattr(df, "empty", True):
+        return None
+    row = df.iloc[0]
+    if "period" in df.columns:
+        periods = df["period"].astype(str).str.lower()
+        current = df[periods.isin({"0m", "0", "current"})]
+        if not current.empty:
+            row = current.iloc[0]
+
+    def _bucket(*names: str) -> int | None:
+        val = _safe_float(_row_get(row, *names))
+        if val is None:
+            return None
+        return int(val)
+
+    strong_buy = _bucket("strongBuy", "strong_buy")
+    buy = _bucket("buy")
+    hold = _bucket("hold")
+    sell = _bucket("sell")
+    strong_sell = _bucket("strongSell", "strong_sell")
+    if all(part is None for part in (strong_buy, buy, hold, sell, strong_sell)):
+        return None
+    return {
+        "strong_buy": strong_buy or 0,
+        "buy": buy or 0,
+        "hold": hold or 0,
+        "sell": sell or 0,
+        "strong_sell": strong_sell or 0,
+    }
+
+
+def parse_upgrades_downgrades(df: Any) -> list[dict[str, Any]]:
+    """Pass through every Yahoo revision row. No 60-row cap, no synthetic firms."""
+    if df is None or getattr(df, "empty", True):
+        return []
+    rows: list[dict[str, Any]] = []
+    for idx, row in df.iterrows():
+        firm = _cell_str(_row_get(row, "Firm", "firm"))
+        if not firm:
+            continue
+        action_raw = _cell_str(_row_get(row, "Action", "action"))
+        to_grade = _cell_str(_row_get(row, "ToGrade", "to_grade"))
+        from_grade = _cell_str(_row_get(row, "FromGrade", "from_grade"))
+        pt_action_raw = _cell_str(_row_get(row, "priceTargetAction", "price_target_action"))
+        rows.append(
+            {
+                "date": _revision_date(idx),
+                "firm": firm,
+                "action": _normalize_revision_action(action_raw),
+                "from_grade": from_grade or "-",
+                "to_grade": to_grade or action_raw or "-",
+                "current": to_grade or action_raw or "-",
+                "previous": from_grade or "-",
+                "target": _positive_price(_row_get(row, "currentPriceTarget", "current_price_target")),
+                "prior_target": _positive_price(_row_get(row, "priorPriceTarget", "prior_price_target")),
+                "target_action": pt_action_raw.title() if pt_action_raw else None,
+            }
+        )
+    return rows
+
+
+def latest_firm_estimates(
+    revisions: list[Mapping[str, Any]],
+    current_price: float | None,
+) -> list[dict[str, Any]]:
+    """Newest price target per firm. Zero Yahoo targets stay missing."""
+    seen: set[str] = set()
+    estimates: list[dict[str, Any]] = []
+    for rev in revisions:
+        firm = str(rev.get("firm") or "").strip()
+        key = firm.lower()
+        if not firm or key in seen:
+            continue
+        target = _positive_price(rev.get("target"))
+        if target is None:
+            continue
+        seen.add(key)
+        hit: bool | None = None
+        vs_mark: float | None = None
+        if current_price is not None and current_price > 0:
+            hit = current_price >= target
+            vs_mark = round(((target - current_price) / current_price) * 100.0, 1)
+        estimates.append(
+            {
+                "firm": firm,
+                "date": rev.get("date"),
+                "action": rev.get("action"),
+                "current": rev.get("current"),
+                "previous": rev.get("previous"),
+                "target": target,
+                "prior_target": rev.get("prior_target"),
+                "target_action": rev.get("target_action"),
+                "vs_mark_pct": vs_mark,
+                "hit": hit,
+            }
+        )
+    return estimates
+
+
+def _consensus_rating(rec_key: Any, rec_mean: float | None) -> str | None:
+    if rec_key not in (None, ""):
+        key = str(rec_key).strip().lower().replace(" ", "_").replace("-", "_")
+        if key in _RECOMMENDATION_LABELS:
+            return _RECOMMENDATION_LABELS[key]
+    if rec_mean is None:
+        return None
+    if rec_mean <= 1.8:
+        return "Strong Buy"
+    if rec_mean <= 2.5:
+        return "Buy"
+    if rec_mean <= 3.5:
+        return "Hold"
+    return "Underperform"
+
+
+def build_street_forecast(
+    *,
+    info: Mapping[str, Any],
+    recommendations_summary: Any = None,
+    upgrades_downgrades: Any = None,
+    analyst_price_targets: Any = None,
+) -> dict[str, Any]:
+    """Observed Street consensus only. Missing inputs stay None / empty lists."""
+    apt = analyst_price_targets if isinstance(analyst_price_targets, Mapping) else {}
+    target_high = _positive_price(
+        info.get("targetHighPrice") or info.get("targetPriceHigh") or apt.get("high")
+    )
+    target_median = _positive_price(
+        info.get("targetMedianPrice") or info.get("targetPriceMedian") or apt.get("median")
+    )
+    target_low = _positive_price(
+        info.get("targetLowPrice") or info.get("targetPriceLow") or apt.get("low")
+    )
+    target_mean = _positive_price(
+        info.get("targetMeanPrice") or info.get("targetPriceMean") or apt.get("mean")
+    )
+    current_price = _positive_price(
+        info.get("currentPrice") or info.get("regularMarketPrice") or apt.get("current")
+    )
+    rec_mean = _safe_round(info.get("recommendationMean"), 2)
+    recs = parse_recommendation_counts(recommendations_summary)
+    revisions = parse_upgrades_downgrades(upgrades_downgrades)
+    estimates = latest_firm_estimates(revisions, current_price)
+    upside_pct = None
+    if target_median is not None and current_price:
+        upside_pct = round(((target_median - current_price) / current_price) * 100.0, 1)
+    analyst_count = None
+    if recs is not None:
+        analyst_count = (
+            recs["strong_buy"] + recs["buy"] + recs["hold"] + recs["sell"] + recs["strong_sell"]
+        )
+    elif _safe_float(info.get("numberOfAnalystOpinions")) is not None:
+        analyst_count = int(info.get("numberOfAnalystOpinions"))
+    hits = sum(1 for row in estimates if row.get("hit") is True)
+    opens = sum(1 for row in estimates if row.get("hit") is False)
+    return {
+        "consensus_rating": _consensus_rating(info.get("recommendationKey"), rec_mean),
+        "recommendation_mean": rec_mean,
+        "recommendation_key": info.get("recommendationKey"),
+        "analyst_count": analyst_count,
+        "target_price_high": target_high,
+        "target_price_median": target_median,
+        "target_price_mean": target_mean,
+        "target_price_low": target_low,
+        "current_price": current_price,
+        "upside_pct": upside_pct,
+        "recommendations": recs,
+        "upgrades_downgrades": revisions,
+        "estimates": estimates,
+        "estimates_hit": hits,
+        "estimates_open": opens,
+    }
+
+
+def get_company_profile_payload(symbol: str, *, ticker: Any | None = None) -> dict[str, Any]:
+    """Public company-profile payload used by /api/company-profile.
+
+    `ticker` is an optional injected Yahoo-like object (tests). Live fetches
+    are cached; injected tickers are not.
+    """
     sym = symbol.strip().upper()
     now = time.time()
-    if sym in _CACHE_PROFILE:
+    if ticker is None and sym in _CACHE_PROFILE:
         ts, data = _CACHE_PROFILE[sym]
         if now - ts < CACHE_TTL_S:
             return data
 
-    payload = _build_company_profile_payload(sym)
-    _CACHE_PROFILE[sym] = (now, payload)
+    payload = _build_company_profile_payload(sym, ticker=ticker)
+    if ticker is None:
+        _CACHE_PROFILE[sym] = (now, payload)
     return payload
 
 
-def _build_company_profile_payload(symbol: str) -> dict[str, Any]:
+def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) -> dict[str, Any]:
     info: dict[str, Any] = {}
     officers: list[dict[str, Any]] = []
-    upgrades: list[dict[str, Any]] = []
+    rec_summary = None
+    upgrades_df = None
+    apt = None
+    live_ticker = ticker
 
     try:
-        import yfinance as yf  # type: ignore[import-not-found]
-        ticker = yf.Ticker(symbol)
-        info = ticker.info or {}
+        if live_ticker is None:
+            import yfinance as yf  # type: ignore[import-not-found]
+            live_ticker = yf.Ticker(symbol)
+        info = live_ticker.info or {}
 
-        # Officers list
         for off in info.get("companyOfficers", [])[:10]:
             officers.append({
                 "name": off.get("name", "Executive Officer"),
@@ -786,42 +1042,23 @@ def _build_company_profile_payload(symbol: str) -> dict[str, Any]:
                 "exercised_value": _safe_float(off.get("exercisedValue")),
                 "year_born": off.get("yearBorn"),
             })
-
-        # Upgrades / Downgrades
-        up_df = ticker.upgrades_downgrades
-        if up_df is not None and not up_df.empty:
-            for idx, row in up_df.head(60).iterrows():
-                d_str = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
-                action_raw = str(row.get("Action", "") or "").strip()
-                to_grade = str(row.get("ToGrade", "") or row.get("to_grade", "") or action_raw or "Outperform").strip()
-                from_grade = str(row.get("FromGrade", "") or row.get("from_grade", "") or "-").strip()
-                firm = str(row.get("Firm", "") or row.get("firm", "Wall Street Research")).strip()
-
-                act_lower = action_raw.lower()
-                if not action_raw or act_lower in {"main", "maintain", "maintains"}:
-                    action_norm = "Maintains"
-                elif act_lower in {"up", "upgrade", "upgrades", "upg"}:
-                    action_norm = "Upgrades"
-                elif act_lower in {"down", "downgrade", "downgrades", "dwn"}:
-                    action_norm = "Downgrades"
-                elif act_lower in {"init", "initiate", "initiates", "initiated", "initiation"}:
-                    action_norm = "Initiates Coverage"
-                elif act_lower in {"reit", "reiterate", "reiterates", "reiterated"}:
-                    action_norm = "Reiterates"
-                else:
-                    action_norm = action_raw.title()
-
-                upgrades.append({
-                    "date": d_str,
-                    "firm": firm,
-                    "action": action_norm,
-                    "from_grade": from_grade,
-                    "to_grade": to_grade,
-                    "current": to_grade,
-                    "previous": from_grade,
-                })
     except Exception as e:
         logger.debug("yfinance profile fetch error for %s: %s", symbol, e)
+        live_ticker = None
+
+    if live_ticker is not None:
+        try:
+            rec_summary = live_ticker.recommendations_summary
+        except Exception as e:
+            logger.debug("yfinance recommendations_summary error for %s: %s", symbol, e)
+        try:
+            upgrades_df = live_ticker.upgrades_downgrades
+        except Exception as e:
+            logger.debug("yfinance upgrades_downgrades error for %s: %s", symbol, e)
+        try:
+            apt = live_ticker.analyst_price_targets
+        except Exception as e:
+            logger.debug("yfinance analyst_price_targets error for %s: %s", symbol, e)
 
     seed = _seed_for_symbol(symbol)
     rng = np.random.default_rng(seed)
@@ -866,131 +1103,46 @@ def _build_company_profile_payload(symbol: str) -> dict[str, Any]:
     employees = info.get("fullTimeEmployees") or int(rng.uniform(450, 15000))
     market_cap = _safe_float(info.get("marketCap")) or rng.uniform(2_000_000_000, 80_000_000_000)
 
-    # Executive compensation
-    top_exec_name = officers[0]["name"] if officers else "Chief Executive Officer"
-    top_exec_pay = officers[0]["total_pay"] if officers and officers[0].get("total_pay") else round(rng.uniform(1_800_000, 12_500_000), 2)
-    median_emp_pay = round(rng.uniform(95_000, 185_000), 2)
-    pay_ratio = round(top_exec_pay / median_emp_pay, 1) if median_emp_pay else 45.0
-
+    # Executive compensation — observed officer pay only. Never invent a DEF 14A table.
     comp_rows = []
-    if officers:
-        for off in officers:
-            total = off.get("total_pay") or round(rng.uniform(800_000, 4_000_000), 2)
-            salary = round(total * rng.uniform(0.20, 0.35), 2)
-            bonus = round(total * rng.uniform(0.15, 0.25), 2)
-            stock_awards = round(total - salary - bonus, 2)
-            comp_rows.append({
-                "name": off["name"],
-                "role": off["title"],
-                "salary": salary,
-                "bonus": bonus,
-                "stock_awards": stock_awards,
-                "total_compensation": total,
-                "year": "2025",
-            })
-    else:
-        roles = [
-            ("Chief Executive Officer & Chairman", rng.uniform(4_000_000, 14_000_000)),
-            ("Chief Financial Officer", rng.uniform(2_000_000, 6_000_000)),
-            ("Chief Technology Officer", rng.uniform(2_500_000, 7_500_000)),
-            ("Chief Operating Officer", rng.uniform(2_200_000, 6_500_000)),
-            ("General Counsel & Secretary", rng.uniform(1_500_000, 3_800_000)),
-        ]
-        for role, total in roles:
-            total_r = round(total, 2)
-            salary_r = round(total_r * 0.28, 2)
-            bonus_r = round(total_r * 0.22, 2)
-            stock_r = round(total_r - salary_r - bonus_r, 2)
-            comp_rows.append({
-                "name": f"Executive ({role.split()[0]})",
-                "role": role,
-                "salary": salary_r,
-                "bonus": bonus_r,
-                "stock_awards": stock_r,
-                "total_compensation": total_r,
-                "year": "2025",
-            })
+    for off in officers:
+        total_f = _safe_float(off.get("total_pay"))
+        if total_f is not None and total_f <= 0:
+            total_f = None
+        comp_rows.append({
+            "name": off.get("name") or "Officer",
+            "role": off.get("title") or "Officer",
+            "salary": None,
+            "bonus": None,
+            "stock_awards": None,
+            "total_compensation": None if total_f is None else round(total_f, 2),
+            "year": None,
+        })
+    paid = [row for row in comp_rows if row["total_compensation"] is not None]
+    top = max(paid, key=lambda row: row["total_compensation"]) if paid else None
+    top_exec_name = top["name"] if top else None
+    top_exec_pay = top["total_compensation"] if top else None
+    median_emp_pay = None
+    pay_ratio = None
 
-    # Forecast / Targets
-    target_high = _safe_float(info.get("targetHighPrice")) or _safe_float(info.get("targetPriceHigh")) or round(rng.uniform(45.0, 95.0), 2)
-    target_median = _safe_float(info.get("targetMedianPrice")) or _safe_float(info.get("targetPriceMedian")) or round(target_high * 0.78, 2)
-    target_low = _safe_float(info.get("targetLowPrice")) or _safe_float(info.get("targetPriceLow")) or round(target_median * 0.65, 2)
-    current_price = _safe_float(info.get("currentPrice")) or _safe_float(info.get("regularMarketPrice")) or round(target_median * 0.82, 2)
-    upside_pct = round(((target_median - current_price) / current_price) * 100, 1) if current_price else 24.5
-
-    rec_mean = _safe_float(info.get("recommendationMean"), 2.1) or 2.1
-    if rec_mean <= 1.8:
-        consensus = "Strong Buy"
-    elif rec_mean <= 2.5:
-        consensus = "Buy"
-    elif rec_mean <= 3.5:
-        consensus = "Hold"
-    else:
-        consensus = "Underperform"
-
-    rec_counts = {
-        "strong_buy": int(info.get("numberOfAnalystOpinions", 18) * 0.48) or 12,
-        "buy": int(info.get("numberOfAnalystOpinions", 18) * 0.36) or 8,
-        "hold": int(info.get("numberOfAnalystOpinions", 18) * 0.12) or 3,
-        "underperform": int(info.get("numberOfAnalystOpinions", 18) * 0.04) or 1,
-        "sell": 0,
-    }
-
-    if not upgrades or len(upgrades) < 8:
-        coverage_roster = [
-            ("Scotiabank", "Maintains", "Outperform", "Sector Perform"),
-            ("Barclays", "Upgrades", "Overweight", "Equal Weight"),
-            ("UBS", "Initiates Coverage", "Buy", "-"),
-            ("Deutsche Bank", "Maintains", "Buy", "Buy"),
-            ("B. Riley", "Upgrades", "Buy", "Neutral"),
-            ("Morgan Stanley", "Maintains", "Overweight", "Overweight"),
-            ("Cantor Fitzgerald", "Maintains", "Overweight", "Overweight"),
-            ("Goldman Sachs", "Initiates Coverage", "Buy", "-"),
-            ("JPMorgan", "Maintains", "Overweight", "Overweight"),
-            ("Needham & Company", "Reiterates", "Buy", "Buy"),
-            ("Evercore ISI", "Upgrades", "Outperform", "In Line"),
-            ("Oppenheimer", "Maintains", "Outperform", "Outperform"),
-            ("Jefferies", "Initiates Coverage", "Buy", "-"),
-            ("Raymond James", "Maintains", "Strong Buy", "Outperform"),
-            ("Piper Sandler", "Maintains", "Overweight", "Overweight"),
-            ("Wells Fargo", "Maintains", "Overweight", "Equal Weight"),
-            ("Wedbush", "Upgrades", "Outperform", "Neutral"),
-            ("Stifel", "Maintains", "Buy", "Buy"),
-            ("TD Cowen", "Maintains", "Buy", "Buy"),
-            ("Mizuho", "Initiates Coverage", "Outperform", "-"),
-            ("Wolfe Research", "Maintains", "Outperform", "Outperform"),
-            ("Bernstein", "Maintains", "Market Perform", "Market Perform"),
-            ("Guggenheim", "Maintains", "Buy", "Buy"),
-            ("Truist Securities", "Maintains", "Buy", "Hold"),
-            ("Roth MKM", "Reiterates", "Buy", "Buy"),
-            ("Craig-Hallum", "Maintains", "Buy", "Buy"),
-            ("BMO Capital Markets", "Maintains", "Outperform", "Market Perform"),
-            ("KeyBanc Capital Markets", "Upgrades", "Overweight", "Sector Weight"),
-        ]
-        base_d = datetime.now(timezone.utc)
-        for i, (f_name, f_act, f_cur, f_prev) in enumerate(coverage_roster):
-            rev_d = (base_d - timedelta(days=i * 12 + int(rng.uniform(1, 6)))).strftime("%Y-%m-%d")
-            upgrades.append({
-                "date": rev_d,
-                "firm": f_name,
-                "action": f_act,
-                "from_grade": f_prev,
-                "to_grade": f_cur,
-                "current": f_cur,
-                "previous": f_prev,
-            })
-
-    # Sort upgrades descending by date
-    upgrades.sort(key=lambda x: x.get("date", ""), reverse=True)
+    forecast = build_street_forecast(
+        info=info,
+        recommendations_summary=rec_summary,
+        upgrades_downgrades=upgrades_df,
+        analyst_price_targets=apt,
+    )
+    rec_mean = forecast.get("recommendation_mean")
+    current_price = forecast.get("current_price")
+    upside_pct = forecast.get("upside_pct")
 
     # Multi-Pillar Quantitative Smart Score (1-10)
     # Pillar 1: Analyst Consensus & Price Target Upside (1-10)
     analyst_score = 5
     if rec_mean is not None:
         analyst_score = max(1, min(10, round(11.5 - rec_mean * 2.1)))
-    if upside_pct > 25:
+    if upside_pct is not None and upside_pct > 25:
         analyst_score = min(10, analyst_score + 1)
-    elif upside_pct < 0:
+    elif upside_pct is not None and upside_pct < 0:
         analyst_score = max(1, analyst_score - 1)
 
     # Pillar 2: Financial Health & Profitability Multiples (1-10)
@@ -1064,8 +1216,11 @@ def _build_company_profile_payload(symbol: str) -> dict[str, Any]:
     bulls_say = [
         f"Strong long-term pipeline with expanding commercial addressable market in {industry}.",
         "High institutional backing and notable contract/patent execution.",
-        f"Consensus price target implies attractive upside ({upside_pct:+.1f}%) from current levels.",
     ]
+    if upside_pct is not None:
+        bulls_say.append(
+            f"Consensus price target implies {upside_pct:+.1f}% vs the last observed mark."
+        )
     bears_say = [
         "Near-term capital expenditure requirements may pressure cash flow margins.",
         "Execution risk tied to regulatory approvals and timeline milestones.",
@@ -1097,20 +1252,10 @@ def _build_company_profile_payload(symbol: str) -> dict[str, Any]:
             "highest_paid_total": top_exec_pay,
             "median_employee_pay": median_emp_pay,
             "ceo_pay_ratio": pay_ratio,
-            "year": "2025",
+            "year": None,
             "rows": comp_rows,
         },
-        "forecast": {
-            "consensus_rating": consensus,
-            "recommendation_mean": rec_mean,
-            "target_price_high": target_high,
-            "target_price_median": target_median,
-            "target_price_low": target_low,
-            "current_price": current_price,
-            "upside_pct": upside_pct,
-            "recommendations": rec_counts,
-            "upgrades_downgrades": upgrades,
-        },
+        "forecast": forecast,
         "smart_score": {
             "score": smart_score,
             "rating": rating_str,
