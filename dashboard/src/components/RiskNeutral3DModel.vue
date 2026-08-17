@@ -86,7 +86,7 @@ function initThree() {
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.7)
   scene.add(ambientLight)
 
-  /* Match flow tokens: --call #10b981, --put #f43f5e */
+  /* Match flow tokens: --call, --put */
   const dirLight1 = new THREE.DirectionalLight(0x10b981, 1.2)
   dirLight1.position.set(5, 10, 7)
   scene.add(dirLight1)
@@ -224,7 +224,7 @@ function buildSurfaceModel() {
   }
 
   addMarkerLine(spot, 0xffffff)
-  /* Match flow call/put tokens: --call #10b981, --put #f43f5e */
+  /* Match flow call/put tokens: --call, --put */
   if (props.callWall) addMarkerLine(props.callWall, 0x10b981)
   if (props.putWall) addMarkerLine(props.putWall, 0xf43f5e)
 
@@ -374,7 +374,7 @@ onBeforeUnmount(() => {
 .risk-3d-model {
   position: relative;
   width: 100%;
-  background: #0a0b0f;
+  background: var(--void);
   border: var(--hair) solid var(--rule);
   border-radius: 3px;
   overflow: hidden;
@@ -396,7 +396,7 @@ onBeforeUnmount(() => {
   color: var(--phosphor);
   font: 700 10px var(--font-display);
   letter-spacing: 0.08em;
-  background: rgba(14, 16, 21, 0.85);
+  background: var(--panel-wash);
   padding: 3px 8px;
   border: 1px solid var(--rule-hi);
   border-radius: 2px;
@@ -404,7 +404,7 @@ onBeforeUnmount(() => {
 .hint {
   color: var(--ink-dim);
   font: 600 9px var(--font-display);
-  background: rgba(14, 16, 21, 0.85);
+  background: var(--panel-wash);
   padding: 3px 8px;
   border: 1px solid var(--rule);
   border-radius: 2px;
@@ -415,7 +415,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   font: 700 10px var(--font-display);
   color: var(--ink);
-  background: rgba(14, 16, 21, 0.92);
+  background: var(--panel-wash);
   border: 1px solid var(--phosphor-dim);
   padding: 3px 8px;
   border-radius: 2px;

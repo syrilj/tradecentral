@@ -1921,7 +1921,7 @@ function navTo(name: string): void {
 .depth-option span { color: var(--ink-ghost); margin-left: var(--s1); font-weight: 600; }
 .depth-option:hover:not(:disabled) { color: var(--ink); background: var(--panel-raise); }
 .depth-option.on { color: var(--void); background: var(--phosphor); }
-.depth-option.on span { color: rgba(10, 11, 15, 0.7); }
+.depth-option.on span { color: color-mix(in srgb, var(--void) 70%, transparent); }
 
 .scan-run {
   display: flex;

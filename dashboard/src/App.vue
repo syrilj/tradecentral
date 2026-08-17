@@ -825,7 +825,7 @@ function openFearGreed(): void {
               :aria-valuetext="fearGreed.label"
               :aria-label="fearGreed.title"
             >
-              <i class="fg-spectrum" aria-hidden="true" />
+              <span class="fg-spectrum" aria-hidden="true"><i /><i /><i /><i /><i /></span>
               <i class="fg-ticks" aria-hidden="true" />
               <span v-if="fearGreed.value != null" class="fg-thumb" :class="fearGreed.band" :style="{ left: `${fearGreed.value}%` }" />
             </span>
@@ -1093,7 +1093,6 @@ function openFearGreed(): void {
   height: 6px;
   border-radius: 50%;
   background: var(--warn);
-  box-shadow: 0 0 6px rgba(217, 164, 65, 0.6);
   animation: pulse-lamp 2s ease-in-out infinite;
 }
 
@@ -1137,7 +1136,6 @@ function openFearGreed(): void {
   height: 5px;
   border-radius: 50%;
   background: var(--phosphor);
-  box-shadow: 0 0 4px var(--phosphor);
 }
 .operator-badge {
   color: var(--ink-ghost);
@@ -1234,7 +1232,7 @@ function openFearGreed(): void {
   display: flex;
   flex-direction: column;
   padding: 4px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85);
 }
 .more-item {
   display: flex;
@@ -1289,7 +1287,7 @@ function openFearGreed(): void {
   gap: var(--s3);
   padding: 0 var(--s4);
   border-bottom: var(--hair) solid var(--rule);
-  background: rgba(13, 15, 20, 0.88);
+  background: color-mix(in srgb, var(--void-lift) 88%, transparent);
   backdrop-filter: blur(12px);
   z-index: var(--z-strip);
   min-width: 0;
@@ -1442,17 +1440,20 @@ function openFearGreed(): void {
   border: var(--hair) solid var(--rule);
 }
 .fg-spectrum {
+  display: flex;
+  height: 100%;
+  gap: 0;
+}
+.fg-spectrum i {
+  flex: 1 1 0;
   display: block;
   height: 100%;
-  background: linear-gradient(
-    90deg,
-    var(--short) 0 20%,
-    color-mix(in srgb, var(--short) 55%, var(--warn)) 20% 40%,
-    var(--ink-faint) 40% 60%,
-    color-mix(in srgb, var(--long) 55%, var(--warn)) 60% 80%,
-    var(--long) 80% 100%
-  );
 }
+.fg-spectrum i:nth-child(1) { background: var(--short); }
+.fg-spectrum i:nth-child(2) { background: color-mix(in srgb, var(--short) 55%, var(--warn)); }
+.fg-spectrum i:nth-child(3) { background: var(--ink-faint); }
+.fg-spectrum i:nth-child(4) { background: color-mix(in srgb, var(--long) 55%, var(--warn)); }
+.fg-spectrum i:nth-child(5) { background: var(--long); }
 .fg-ticks {
   position: absolute;
   inset: 0;

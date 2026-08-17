@@ -291,18 +291,25 @@ function hexToRgb(hex: string): [number, number, number] {
       parseInt(clean[2] + clean[2], 16),
     ]
   }
+  // phosphor fallback (matches tokens.css --phosphor) when no hex is supplied
   return [169, 196, 108]
 }
 
-/** Read once — the instrument runs one dark theme only (see tokens.css). */
-const themeColors = ref({ phosphor: '#a9c46c', void: '#0a0b0f' })
+/** Read once — the instrument runs one dark theme only (see tokens.css).
+ *  RGB tuples are populated from computed style at mount; the numeric
+ *  fallbacks mirror --phosphor / --void so canvas pixel math always has a
+ *  valid color even before mount (e.g. SSR). */
+const themeRgb = ref<{ phosphor: [number, number, number]; void: [number, number, number] }>({
+  phosphor: [169, 196, 108],
+  void: [8, 9, 12],
+})
 onMounted(() => {
   const cs = getComputedStyle(document.documentElement)
   const phosphor = cs.getPropertyValue('--phosphor').trim()
   const voidColor = cs.getPropertyValue('--void').trim()
-  themeColors.value = {
-    phosphor: phosphor || themeColors.value.phosphor,
-    void: voidColor || themeColors.value.void,
+  themeRgb.value = {
+    phosphor: phosphor ? hexToRgb(phosphor) : themeRgb.value.phosphor,
+    void: voidColor ? hexToRgb(voidColor) : themeRgb.value.void,
   }
 })
 
@@ -312,7 +319,7 @@ onMounted(() => {
  * typically 0 — lands at the BOTTOM of the image, matching Fig. 3: after a
  * changepoint the ridge collapses to the bottom edge, not the top.
  */
-function buildHeatmapDataUrl(rl: ChangepointRunlength, phosphorHex: string, voidHex: string): string {
+function buildHeatmapDataUrl(rl: ChangepointRunlength, phosphorRgb: [number, number, number], voidRgb: [number, number, number]): string {
   if (typeof document === 'undefined' || !rl.n_rows || !rl.n_cols) return ''
   const canvas = document.createElement('canvas')
   canvas.width = rl.n_cols
@@ -320,8 +327,8 @@ function buildHeatmapDataUrl(rl: ChangepointRunlength, phosphorHex: string, void
   const ctx = canvas.getContext('2d')
   if (!ctx) return ''
   const img = ctx.createImageData(rl.n_cols, rl.n_rows)
-  const [pr, pg, pb] = hexToRgb(phosphorHex)
-  const [vr, vg, vb] = hexToRgb(voidHex)
+  const [pr, pg, pb] = phosphorRgb
+  const [vr, vg, vb] = voidRgb
   const floor = Number.isFinite(rl.log_floor) && rl.log_floor < 0 ? rl.log_floor : -6
   for (let i = 0; i < rl.n_rows; i++) {
     const row = rl.matrix[i]
@@ -368,7 +375,7 @@ function buildHeatmapDataUrl(rl: ChangepointRunlength, phosphorHex: string, void
 const heatmap = computed(() => {
   const rl = d.value?.runlength
   if (!rl || !rl.n_rows || !rl.n_cols || !rl.dates.length) return null
-  const url = buildHeatmapDataUrl(rl, themeColors.value.phosphor, themeColors.value.void)
+  const url = buildHeatmapDataUrl(rl, themeRgb.value.phosphor, themeRgb.value.void)
   if (!url) return null
   const x0 = xOf(rl.dates[0])
   const x1 = xOf(rl.dates[rl.dates.length - 1])
@@ -807,7 +814,7 @@ const symbolInsight = computed(() => {
           <div class="fig-xlab label">{{ CHANGEPOINT_FIGURE_LABELS.x }} · {{ CHANGEPOINT_FIGURE_LABELS.heatmap }}</div>
           <div class="fig-legend label">
             <span>low P</span>
-            <i class="leg-scale" aria-hidden="true" />
+            <span class="leg-scale" aria-hidden="true"><i /><i /><i /><i /><i /></span>
             <span>high P (ridge = recent break)</span>
           </div>
         </div>
@@ -1095,11 +1102,21 @@ const symbolInsight = computed(() => {
   font-size: var(--t-tiny);
 }
 .leg-scale {
-  display: block;
+  display: inline-flex;
   width: 88px;
   height: 8px;
-  background: linear-gradient(90deg, var(--void-lift), color-mix(in srgb, var(--phosphor) 45%, var(--void)), var(--phosphor));
+  gap: 1px;
 }
+.leg-scale i {
+  flex: 1 1 0;
+  display: block;
+  height: 100%;
+}
+.leg-scale i:nth-child(1) { background: var(--void-lift); }
+.leg-scale i:nth-child(2) { background: color-mix(in srgb, var(--phosphor) 25%, var(--void)); }
+.leg-scale i:nth-child(3) { background: color-mix(in srgb, var(--phosphor) 50%, var(--void)); }
+.leg-scale i:nth-child(4) { background: color-mix(in srgb, var(--phosphor) 75%, var(--void)); }
+.leg-scale i:nth-child(5) { background: var(--phosphor); }
 .stale-board { color: var(--warn); }
 .chart { display: block; width: 100%; }
 .top-chart { height: 200px; border-bottom: var(--hair) solid var(--rule-faint); }
@@ -1110,7 +1127,7 @@ const symbolInsight = computed(() => {
 .tick-label { font-family: var(--font-data); font-size: 11px; fill: var(--ink-dim); }
 .axis-title { font-family: var(--font-data); font-size: 11px; fill: var(--ink-soft); }
 
-.vol-band-outer { fill: rgba(169, 196, 108, 0.06); stroke: rgba(169, 196, 108, 0.22); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.vol-band-outer { fill: var(--phosphor-wash); stroke: color-mix(in srgb, var(--phosphor) 22%, transparent); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .vol-band { fill: var(--phosphor-wash); stroke: var(--phosphor-dim); stroke-width: 1; vector-effect: non-scaling-stroke; }
 
 .needle { stroke-width: 1.3; vector-effect: non-scaling-stroke; }

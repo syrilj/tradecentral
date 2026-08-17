@@ -90,7 +90,7 @@ withDefaults(
   background: var(--phosphor-wash);
   padding: 1px 5px;
   border-radius: var(--r-xs);
-  border: var(--hair) solid rgba(169, 196, 108, 0.2);
+  border: var(--hair) solid color-mix(in srgb, var(--phosphor) 20%, transparent);
   letter-spacing: 0.04em;
   font-weight: 600;
 }
