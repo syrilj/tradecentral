@@ -400,7 +400,7 @@ const expandedNames = computed(() => {
 .kpi-card.held { border-color: var(--short); }
 
 .kpi-label {
-  font-size: 10px;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -421,7 +421,7 @@ const expandedNames = computed(() => {
 }
 
 .kpi-badge {
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 2px;
@@ -431,7 +431,7 @@ const expandedNames = computed(() => {
 .kpi-badge.neg { color: var(--short); background: var(--short-wash); }
 .kpi-badge.flat { color: var(--ink-dim); background: var(--rule); }
 
-.kpi-sub { font-size: 11px; color: var(--ink-dim); }
+.kpi-sub { font-size: var(--t-micro); color: var(--ink-dim); }
 .fl-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- Market Context Strip & Cards --------------------------------------- */
@@ -471,7 +471,7 @@ const expandedNames = computed(() => {
 .rot-expand {
   padding: 8px 12px 12px 14px;
   border-bottom: var(--hair) solid var(--rule);
-  background: rgba(8, 9, 12, 0.45);
+  background: var(--panel-wash);
 }
 .rot-expand-head {
   display: flex;
@@ -495,7 +495,7 @@ const expandedNames = computed(() => {
   background: var(--panel);
   color: var(--ink);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--t-micro);
 }
 .name-chip:hover { border-color: var(--phosphor-dim); color: var(--phosphor); }
 .name-chip.in { border-left: 2px solid var(--long); }
@@ -558,15 +558,15 @@ const expandedNames = computed(() => {
   justify-content: space-between;
 }
 .card-etf { font-family: var(--font-data); font-size: 1.1rem; font-weight: 600; color: var(--phosphor); }
-.card-score { font-family: var(--font-data); font-size: 11px; font-weight: 600; }
-.card-name { font-size: 11px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-score { font-family: var(--font-data); font-size: var(--t-micro); font-weight: 600; }
+.card-name { font-size: var(--t-micro); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .card-metrics {
   display: flex;
   justify-content: space-between;
   margin-top: 4px;
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
 }
 
@@ -590,7 +590,7 @@ const expandedNames = computed(() => {
   border: none;
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 600;
   padding: 3px 8px;
   border-radius: var(--r-xs);
@@ -603,7 +603,7 @@ const expandedNames = computed(() => {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-micro);
   padding: 3px 8px;
   border-radius: 2px;
   width: 140px;
@@ -649,7 +649,7 @@ const expandedNames = computed(() => {
 .note { color: var(--ink-dim); font-size: var(--t-small); }
 .note.pad { padding: var(--s5) var(--s4); }
 .note.pad-x { padding: var(--s3) var(--s4) var(--s4); }
-.note.tiny { font-size: 11px; margin-top: var(--s3); }
+.note.tiny { font-size: var(--t-micro); margin-top: var(--s3); }
 
 @media (max-width: 1200px) {
   .summary-deck { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -202,7 +202,7 @@ function nav(viewName: string) {
 }
 
 .ticker-sym {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--ink);
@@ -268,7 +268,7 @@ function nav(viewName: string) {
 }
 
 .metric-val {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--ink);
@@ -366,7 +366,7 @@ function nav(viewName: string) {
 .confidence-tag {
   margin-left: auto;
   color: var(--ink-faint);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
 }
 
 .speaker-tag {
@@ -433,6 +433,6 @@ function nav(viewName: string) {
 }
 
 .font-mono {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
 }
 </style>

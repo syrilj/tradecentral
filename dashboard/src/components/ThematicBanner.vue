@@ -109,7 +109,7 @@ const emit = defineEmits<{
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  font-family: var(--font-sans, system-ui, sans-serif);
+  font-family: var(--font-ui);
 }
 
 .banner-top {
@@ -161,7 +161,7 @@ const emit = defineEmits<{
 }
 
 .pill-count {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 0.62rem;
   opacity: 0.85;
   padding: 0.05rem 0.25rem;
@@ -189,7 +189,7 @@ const emit = defineEmits<{
 }
 
 .meta-value {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--ink);
@@ -217,7 +217,7 @@ const emit = defineEmits<{
 }
 
 .narrative-tag {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 0.62rem;
   letter-spacing: 0.08em;
   color: var(--phosphor);
@@ -269,7 +269,7 @@ const emit = defineEmits<{
 }
 
 .card-date {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 0.65rem;
   color: var(--phosphor-dim);
   font-weight: 600;
@@ -290,7 +290,7 @@ const emit = defineEmits<{
 }
 
 .ticker-chip {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 0.62rem;
   padding: 0.1rem 0.3rem;
   background: var(--panel-raise);
@@ -314,7 +314,7 @@ const emit = defineEmits<{
 }
 
 .related-label {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 0.62rem;
   letter-spacing: 0.08em;
   color: var(--ink-faint);
@@ -351,7 +351,7 @@ const emit = defineEmits<{
 }
 
 .related-shared {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-data);
   font-size: 0.62rem;
   color: var(--phosphor-dim);
 }

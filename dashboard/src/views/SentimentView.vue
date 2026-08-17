@@ -803,7 +803,7 @@ const TICKER_HELP =
 }
 .tab-count {
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: var(--t-micro);
   padding: 1px 5px;
   border: var(--hair) solid currentColor;
   border-radius: var(--r-xs);
@@ -908,7 +908,7 @@ const TICKER_HELP =
 .vol-val.neg { color: var(--short); }
 .vol-lean {
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: var(--t-micro);
   letter-spacing: 0.04em;
   white-space: normal;
   line-height: 1.3;
@@ -926,7 +926,7 @@ const TICKER_HELP =
 .lean-cell {
   max-width: 28ch;
   white-space: normal !important;
-  font-size: 10px;
+  font-size: var(--t-micro);
   line-height: 1.3;
 }
 .sym-row {

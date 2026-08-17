@@ -339,7 +339,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   z-index: var(--z-overlay);
   display: flex;
   justify-content: flex-end;
-  background: rgba(4, 5, 8, 0.68);
+  background: color-mix(in srgb, var(--void) 82%, transparent);
 }
 
 .setup-drawer {

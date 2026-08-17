@@ -230,7 +230,7 @@ function commit(): void {
   border-radius: var(--r-xl);
   padding: 0;
   background: var(--panel);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85);
   overflow: hidden;
   animation: rise var(--dur) var(--ease-out) both;
 }
@@ -282,7 +282,7 @@ function commit(): void {
 .section-head {
   padding: 4px var(--s4);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--ink-ghost);

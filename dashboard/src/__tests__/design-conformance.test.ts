@@ -60,9 +60,6 @@ const EXEMPT = new Set<string>([
   // Each entry below is genuinely non-conformant at the baseline — verified
   // with DESIGN_CONFORMANCE_DIAGNOSE=1. Conformant desk files are enforced.
   // A later feature removes its files from here once they are fixed.
-  'src/views/SectorsView.vue',
-  'src/components/SearchPalette.vue',
-  'src/components/FlowSuggestionDrawer.vue',
   'src/main.ts',
 ])
 
