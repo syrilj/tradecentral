@@ -46,6 +46,10 @@ interface Level {
   x: number
   labelX: number
   labelY: number
+  /** Content-derived badge width (px). The <rect> background pills around
+   *  each level label are sized to their text so long strike labels such as
+   *  `CALL W $1234.56` never clip or overlap an adjacent badge. */
+  badgeW: number
 }
 
 const props = withDefaults(defineProps<{
@@ -302,6 +306,35 @@ function xOfPrice(price: number): number | null {
 const lockX = computed(() => (props.focusStrike != null ? xOfPrice(props.focusStrike) : null))
 const flipX = computed(() => (props.gammaFlip != null ? xOfPrice(props.gammaFlip) : null))
 
+/**
+ * Estimate the rendered pixel width of a level badge label.
+ *
+ * The badge text is `{{ label }} ${{ strikeLabel(value) }}` rendered in
+ * `font: 700 var(--t-micro) var(--font-display)` (11px Geist display, weight
+ * 700, 0.04em tracking). Rather than ship a canvas measurer, we approximate
+ * the advance width with a per-character average: digits and capitals in a
+ * condensed technical face advance ~0.62em, narrow glyphs (space, '.', '$',
+ * '-', 'W') ~0.4em. This is deliberately a little generous so the pill never
+ * under-sizes and clips a long label such as `CALL W $1234.56`.
+ *
+ * `--t-micro` is 11px; at 0.04em tracking each char adds ~0.44px. We fold the
+ * tracking into the per-glyph em factor and add horizontal pill padding
+ * (6px each side) plus a 2px safety margin.
+ */
+function levelBadgeWidth(label: string, value: number): number {
+  const text = `${label} $${strikeLabel(value)}`
+  const em = 11
+  const padX = 12 // 6px pill padding each side
+  const safety = 2
+  let width = 0
+  for (const ch of text) {
+    const narrow = ' .$/-WI'
+    const factor = narrow.includes(ch) ? 0.42 : 0.64
+    width += factor * em
+  }
+  return Math.ceil(width + padX + safety)
+}
+
 const levels = computed<Level[]>(() => {
   const raw: { key: string; label: string; value: number | null; cls: string }[] = [
     { key: 'put', label: 'PUT W', value: props.putWall, cls: 'put' },
@@ -316,17 +349,29 @@ const levels = computed<Level[]>(() => {
 
   if (!placed.length) return []
 
-  const minGap = 56
-  const minBoundary = left + 28
-  const maxBoundary = left + plotInnerW.value - 28
+  // Content-derived badge widths — the pill sizes to its text so long strike
+  // labels (e.g. `CALL W $1234.56`) never clip. Collision separation is driven
+  // by these widths, not a fixed constant that ignores label length.
+  const badgeW = placed.map((l) => levelBadgeWidth(l.label, l.value))
+  const halfW = badgeW.map((w) => w / 2)
+  // Minimum center-to-center gap between two adjacent badges = the sum of their
+  // half-widths plus a 4px breathing gutter, so neighbours never overlap.
+  const gapBetween = (i: number, j: number) => halfW[i] + halfW[j] + 4
+
+  // Boundaries keep the full badge inside the plot interior — each edge
+  // respects the widest badge so no pill clips at the left/right frame.
+  const maxHalf = Math.max(...halfW)
+  const minBoundary = left + maxHalf
+  const maxBoundary = left + plotInnerW.value - maxHalf
 
   // 1. Initial clamp to plot interior
   const xs = placed.map((l) => Math.max(minBoundary, Math.min(maxBoundary, l.x)))
 
-  // 2. Forward pass (push right)
+  // 2. Forward pass (push right) — width-aware separation
   for (let i = 1; i < xs.length; i++) {
-    if (xs[i] < xs[i - 1] + minGap) {
-      xs[i] = xs[i - 1] + minGap
+    const need = gapBetween(i - 1, i)
+    if (xs[i] < xs[i - 1] + need) {
+      xs[i] = xs[i - 1] + need
     }
   }
 
@@ -334,8 +379,9 @@ const levels = computed<Level[]>(() => {
   if (xs[xs.length - 1] > maxBoundary) {
     xs[xs.length - 1] = maxBoundary
     for (let i = xs.length - 2; i >= 0; i--) {
-      if (xs[i] > xs[i + 1] - minGap) {
-        xs[i] = xs[i + 1] - minGap
+      const need = gapBetween(i, i + 1)
+      if (xs[i] > xs[i + 1] - need) {
+        xs[i] = xs[i + 1] - need
       }
     }
   }
@@ -344,15 +390,16 @@ const levels = computed<Level[]>(() => {
   if (xs[0] < minBoundary) {
     xs[0] = minBoundary
     for (let i = 1; i < xs.length; i++) {
-      if (xs[i] < xs[i - 1] + minGap) {
-        xs[i] = xs[i - 1] + minGap
+      const need = gapBetween(i - 1, i)
+      if (xs[i] < xs[i - 1] + need) {
+        xs[i] = xs[i - 1] + need
       }
     }
   }
 
   // 5. Detect remaining congestion for vertical tier staggering
-  const hasRemainingOverlap = xs.some((x, i) => i > 0 && Math.abs(x - xs[i - 1]) < 48)
-  const isWidthConstrained = (maxBoundary - minBoundary) < (placed.length * minGap)
+  const hasRemainingOverlap = xs.some((x, i) => i > 0 && x - xs[i - 1] < gapBetween(i - 1, i) - 2)
+  const isWidthConstrained = (maxBoundary - minBoundary) < placed.length * (maxHalf * 2 + 4)
 
   return placed.map((level, i) => {
     const labelX = Math.max(minBoundary, Math.min(maxBoundary, xs[i]))
@@ -365,6 +412,7 @@ const levels = computed<Level[]>(() => {
       ...level,
       labelX,
       labelY,
+      badgeW: badgeW[i],
     }
   })
 })
@@ -747,11 +795,12 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             :d="`M ${level.labelX} ${level.labelY + 8} L ${level.labelX} ${top - 6} L ${level.x} ${top}`"
             class="level-connector"
           />
-          <!-- Badge background pill -->
+          <!-- Badge background pill — width is derived from the label text
+               (level.badgeW) so long strike labels never clip or overlap -->
           <rect
-            :x="level.labelX - 32"
+            :x="level.labelX - level.badgeW / 2"
             :y="level.labelY - 11"
-            width="64"
+            :width="level.badgeW"
             height="18"
             rx="3"
             class="level-badge-bg"
@@ -977,7 +1026,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   padding: 0 8px;
   color: var(--ink-dim);
   border-right: var(--hair) solid var(--rule);
-  font: 600 9px var(--font-display);
+  font: 600 var(--t-micro) var(--font-display);
   letter-spacing: 0.04em;
   min-height: 24px;
   cursor: pointer;
@@ -1008,7 +1057,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   border: var(--hair) solid var(--rule-hi);
   background: var(--void);
   border-radius: var(--r-xs, 2px);
-  font: 600 8.5px var(--font-display);
+  font: 600 var(--t-micro) var(--font-display);
   letter-spacing: 0.05em;
   cursor: pointer;
   transition: all 0.12s ease;
@@ -1038,13 +1087,13 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
 .quick-title {
   color: var(--ink-ghost);
-  font: 700 8px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.06em;
 }
 
 .level-chip {
   padding: 2px 6px;
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.03em;
   cursor: pointer;
   border: var(--hair) solid var(--rule);
@@ -1066,7 +1115,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 .coverage {
   margin-left: auto;
   color: var(--ink-dim);
-  font: 500 9.5px var(--font-data);
+  font: 500 var(--t-micro) var(--font-data);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1098,7 +1147,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 .leg-dot.net {
   background: var(--ink);
   border: 1px solid var(--void);
-  box-shadow: 0 0 0 1px var(--rule-hi);
+  outline: var(--hair) solid var(--rule-hi);
 }
 
 .exposure-head {
@@ -1146,7 +1195,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
 .exposure-total .label {
   color: var(--ink-dim);
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.05em;
   flex: 0 0 auto;
   overflow: hidden;
@@ -1193,7 +1242,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 .focus-strike > .label,
 .focus-metric > .label {
   color: var(--phosphor);
-  font: 700 8px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.06em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1210,7 +1259,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
 .dist-tag {
   color: var(--ink-dim);
-  font: 500 7.5px var(--font-data);
+  font: 500 var(--t-micro) var(--font-data);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1218,14 +1267,14 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
 .focus-metric strong {
   overflow: hidden;
-  font: 700 10.5px var(--font-data);
+  font: 700 var(--t-micro) var(--font-data);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .focus-metric small {
   color: var(--ink-ghost);
-  font: 500 8px var(--font-data);
+  font: 500 var(--t-micro) var(--font-data);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1276,15 +1325,15 @@ svg {
 }
 
 .regime-zone.neg {
-  fill: rgba(244, 63, 94, 0.04);
+  fill: color-mix(in srgb, var(--put) 4%, transparent);
 }
 
 .regime-zone.pos {
-  fill: rgba(16, 185, 129, 0.04);
+  fill: color-mix(in srgb, var(--call) 4%, transparent);
 }
 
 .regime-label {
-  font: 700 8px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.08em;
   pointer-events: none;
 }
@@ -1322,7 +1371,7 @@ svg {
 
 .y-axis text, .x-axis text {
   fill: var(--ink-dim);
-  font: 600 9.5px var(--font-data);
+  font: 600 var(--t-micro) var(--font-data);
   letter-spacing: 0.02em;
 }
 
@@ -1343,7 +1392,7 @@ svg {
 
 .axis-cap {
   fill: var(--ink-dim);
-  font: 700 9px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.08em;
 }
 
@@ -1464,7 +1513,7 @@ svg {
   border: var(--hair) solid var(--phosphor-dim);
   background: var(--phosphor-wash);
   cursor: pointer;
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
 }
 
 .clear-lock:hover {
@@ -1514,7 +1563,7 @@ svg {
 .level.flip .level-badge-bg { fill: var(--warn-wash); stroke: var(--warn); }
 
 .level text {
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.04em;
   pointer-events: none;
 }
@@ -1532,7 +1581,7 @@ svg {
 
 .empty {
   fill: var(--ink-dim);
-  font: 600 11px var(--font-display);
+  font: 600 var(--t-micro) var(--font-display);
   letter-spacing: 0.08em;
 }
 
