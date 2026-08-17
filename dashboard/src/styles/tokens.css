@@ -73,13 +73,22 @@
   --short-wash: rgba(207, 95, 107, 0.12);
   --call: #10b981;
   --call-hi: #34d399;
+  --call-dim: #0f9472;
   --call-wash: rgba(16, 185, 129, 0.12);
   --put: #f43f5e;
   --put-hi: #fb7185;
+  --put-dim: #c4324c;
   --put-wash: rgba(244, 63, 94, 0.12);
   --warn: #d9a441;
   --warn-wash: rgba(217, 164, 65, 0.12);
   --halt: #cf5f6b;
+
+  /* ---- translucent panel wash ----------------------------------------------
+     A faint, one-step translucent panel overlay used for read-only legend
+     chips, meta badges, and chart annotations that need to lift off a plot
+     without introducing a second opaque surface. Kept deliberately quiet so
+     it never reads as glassmorphism or a neon scrim. */
+  --panel-wash: rgba(10, 11, 15, 0.7);
 
   /* ---- categorical ramp (graph communities only) ------------------------- */
   --cat-1: #5b95b5;

@@ -1146,7 +1146,7 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
   gap: 12px;
   font-size: 10px;
   color: var(--ink-dim);
-  background: var(--panel-wash, rgba(10, 11, 15, 0.7));
+  background: var(--panel-wash);
   padding: 2px 6px;
   border: var(--hair) solid var(--rule);
 }
