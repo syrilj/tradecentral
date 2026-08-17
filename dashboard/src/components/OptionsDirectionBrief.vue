@@ -171,9 +171,9 @@ function directionArrow(state: OptionsDirectionRead['state']): string {
   background: var(--panel);
 }
 .evidence-cell:last-child { border-right: 0; }
-.evidence-cell > span { color: var(--ink-faint); font-size: 9px; }
-.evidence-cell strong { overflow: hidden; color: var(--ink-soft); font-size: 11px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
-.evidence-cell small { overflow: hidden; color: var(--ink-ghost); font-size: 9px; line-height: 1.2; white-space: nowrap; text-overflow: ellipsis; }
+.evidence-cell > span { color: var(--ink-faint); font-size: var(--t-micro); }
+.evidence-cell strong { overflow: hidden; color: var(--ink-soft); font-size: var(--t-micro); line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+.evidence-cell small { overflow: hidden; color: var(--ink-ghost); font-size: var(--t-micro); line-height: 1.2; white-space: nowrap; text-overflow: ellipsis; }
 .evidence-cell strong.pos { color: var(--long); }
 .evidence-cell strong.neg { color: var(--short); }
 .evidence-cell.activity.call strong { color: var(--call-hi, var(--call)); }

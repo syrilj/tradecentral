@@ -262,7 +262,7 @@ const deskAction = computed(() => {
 .dominant.mixed, .dominant.neutral { color: var(--ink); }
 .conviction.bullish { color: var(--long); }
 .conviction.bearish { color: var(--short); }
-.identity-note { overflow: hidden; color: var(--ink-ghost); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
+.identity-note { overflow: hidden; color: var(--ink-ghost); font-size: var(--t-micro); white-space: nowrap; text-overflow: ellipsis; }
 
 .flow-hero {
   display: flex;
@@ -276,18 +276,18 @@ const deskAction = computed(() => {
 }
 .flow-hero-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; flex: 1 1 auto; overflow: hidden; }
 .flow-hero-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
-.eyebrow { color: var(--ink-faint); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dominant { color: var(--flow-tone); font-size: 12px; line-height: 1.15; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.feed-state { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-ghost); font-size: 9px; white-space: nowrap; }
+.eyebrow { color: var(--ink-faint); font-size: var(--t-micro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dominant { color: var(--flow-tone); font-size: var(--t-small); line-height: 1.15; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-state { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-ghost); font-size: var(--t-micro); white-space: nowrap; }
 .feed-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-ghost); }
 .feed-state.live i { background: var(--phosphor); }
 .feed-state.stale i, .feed-state.warm i { background: var(--warn); }
-.conviction { padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: 9px; white-space: nowrap; }
+.conviction { padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: var(--t-micro); white-space: nowrap; }
 .conviction.call { color: var(--call-hi); border-color: color-mix(in srgb, var(--call) 50%, var(--rule)); }
 .conviction.put { color: var(--put-hi); border-color: color-mix(in srgb, var(--put) 50%, var(--rule)); }
 
 .premium-section { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 10px; border-left: var(--hair) solid var(--rule); }
-.section-head { display: flex; justify-content: space-between; gap: var(--s2); color: var(--ink-faint); font-size: 9px; }
+.section-head { display: flex; justify-content: space-between; gap: var(--s2); color: var(--ink-faint); font-size: var(--t-micro); }
 .section-head b { color: var(--ink-soft); }
 .premium-track { display: flex; height: 7px; overflow: hidden; background: var(--rule); border: var(--hair) solid var(--rule-hi); }
 .premium-track i { height: 100%; }
@@ -295,15 +295,15 @@ const deskAction = computed(() => {
 .put-fill { background: var(--put); }
 .premium-values { display: flex; justify-content: space-between; gap: 8px; }
 .premium-side { display: flex; align-items: baseline; gap: 4px; }
-.premium-side strong { font-size: 12px; }
+.premium-side strong { font-size: var(--t-small); }
 .premium-side.call strong { color: var(--call-hi); }
 .premium-side.put strong { color: var(--put-hi); }
 
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; min-width: 0; background: var(--rule); border-left: var(--hair) solid var(--rule); }
 .metric { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 1px; padding: 6px 8px; background: var(--void-lift); }
-.metric .label { color: var(--ink-faint); font-size: 9px; }
-.metric strong { color: var(--ink-soft); font-size: 12px; }
-.metric small { color: var(--ink-ghost); font-size: 9px; }
+.metric .label { color: var(--ink-faint); font-size: var(--t-micro); }
+.metric strong { color: var(--ink-soft); font-size: var(--t-small); }
+.metric small { color: var(--ink-ghost); font-size: var(--t-micro); }
 .metric .warn { color: var(--warn); }
 
 .desk-action {
@@ -338,7 +338,7 @@ const deskAction = computed(() => {
 .action-title {
   overflow: hidden;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--t-micro);
   line-height: 1.25;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;

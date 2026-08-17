@@ -474,7 +474,7 @@ function computePressureScore(row: OptionsBoardRow): {
   left: 8px;
   color: var(--ink-dim);
   pointer-events: none;
-  font-size: 13px;
+  font-size: var(--t-small);
 }
 
 .search-input {
@@ -483,7 +483,7 @@ function computePressureScore(row: OptionsBoardRow): {
   background: var(--panel);
   border: var(--hair) solid var(--rule);
   color: var(--ink);
-  font-size: var(--t-micro, 10px);
+  font-size: var(--t-micro);
   letter-spacing: 0.04em;
   border-radius: 2px;
 }
@@ -501,7 +501,7 @@ function computePressureScore(row: OptionsBoardRow): {
   color: var(--ink-dim);
   cursor: pointer;
   padding: 2px;
-  font-size: 10px;
+  font-size: var(--t-tiny);
 }
 
 .clear-query-btn:hover {
@@ -519,7 +519,7 @@ function computePressureScore(row: OptionsBoardRow): {
   background: var(--panel);
   border: var(--hair) solid var(--rule);
   color: var(--ink-dim);
-  font-size: 9.5px;
+  font-size: var(--t-micro);
   letter-spacing: 0.04em;
   cursor: pointer;
   transition: all var(--dur-fast, 120ms);
@@ -537,7 +537,7 @@ function computePressureScore(row: OptionsBoardRow): {
 }
 
 .row-count {
-  font-size: 9.5px;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   letter-spacing: 0.04em;
 }
@@ -556,7 +556,7 @@ function computePressureScore(row: OptionsBoardRow): {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 9px;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   letter-spacing: var(--track-label);
 }
@@ -609,12 +609,12 @@ function computePressureScore(row: OptionsBoardRow): {
 }
 
 .heatmap-cell.pos {
-  background: var(--call-wash, rgba(16, 185, 129, 0.15));
+  background: var(--call-wash);
   border-color: var(--call);
 }
 
 .heatmap-cell.neg {
-  background: var(--put-wash, rgba(244, 63, 94, 0.15));
+  background: var(--put-wash);
   border-color: var(--put);
 }
 
@@ -626,13 +626,13 @@ function computePressureScore(row: OptionsBoardRow): {
 .cell-sym {
   font-family: var(--font-data);
   font-weight: 700;
-  font-size: 10px;
+  font-size: var(--t-tiny);
   color: var(--ink);
 }
 
 .cell-val {
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 600;
   color: var(--ink-dim);
 }
@@ -662,7 +662,7 @@ th.sortable.active .sort-arr {
 }
 
 .sort-arr {
-  font-size: 10px;
+  font-size: var(--t-tiny);
   margin-left: 2px;
   color: var(--phosphor);
 }
@@ -763,7 +763,7 @@ th.sortable.active .sort-arr {
 
 .iv-chip {
   display: inline-block;
-  font-size: 8.5px;
+  font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: 0.05em;
   padding: 1px 4px;
@@ -774,7 +774,7 @@ th.sortable.active .sort-arr {
 
 .em-chip {
   display: inline-block;
-  font-size: 8.5px;
+  font-size: var(--t-micro);
   font-weight: 600;
   color: var(--ink-ghost);
   letter-spacing: 0.03em;

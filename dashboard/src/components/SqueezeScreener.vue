@@ -271,27 +271,19 @@ const otherSide = computed(() => {
   min-height: 0;
   height: 100%;
   padding: var(--s4);
-  background:
-    linear-gradient(180deg, var(--void-lift) 0%, var(--void) 100%);
+  background: var(--void);
   border-radius: var(--r-sm);
   position: relative;
   overflow: hidden;
 }
 /* Side-tinted personality — a subtle vertical wash that keys the whole
-   panel to the featured direction without resorting to glow. */
+   panel to the featured direction without resorting to glow. The tint is a
+   flat translucent overlay keyed to the featured side, not a gradient. */
 .sq.bullish {
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--call-wash) 40%, var(--void-lift)) 0%,
-      var(--void) 55%,
-      var(--void) 100%);
+  background: color-mix(in srgb, var(--call-wash) 60%, var(--void));
 }
 .sq.bearish {
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--put-wash) 40%, var(--void-lift)) 0%,
-      var(--void) 55%,
-      var(--void) 100%);
+  background: color-mix(in srgb, var(--put-wash) 60%, var(--void));
 }
 /* Left accent edge — solid, not a shadow. */
 .sq.bullish::before {
@@ -299,14 +291,14 @@ const otherSide = computed(() => {
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 3px;
-  background: linear-gradient(180deg, var(--call-hi), var(--call) 60%, transparent);
+  background: var(--call);
 }
 .sq.bearish::before {
   content: '';
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 3px;
-  background: linear-gradient(180deg, var(--put-hi), var(--put) 60%, transparent);
+  background: var(--put);
 }
 
 .sq.empty {
@@ -431,8 +423,8 @@ const otherSide = computed(() => {
   border-radius: 50%;
   flex: 0 0 auto;
 }
-.side-dot.call { background: var(--call-hi); box-shadow: 0 0 0 2px color-mix(in srgb, var(--call) 25%, transparent); }
-.side-dot.put { background: var(--put-hi); box-shadow: 0 0 0 2px color-mix(in srgb, var(--put) 25%, transparent); }
+.side-dot.call { background: var(--call-hi); outline: var(--hair) solid color-mix(in srgb, var(--call) 35%, transparent); outline-offset: 2px; }
+.side-dot.put { background: var(--put-hi); outline: var(--hair) solid color-mix(in srgb, var(--put) 35%, transparent); outline-offset: 2px; }
 .bias-copy {
   display: flex;
   flex-direction: column;
@@ -582,7 +574,8 @@ const otherSide = computed(() => {
   border: 2px solid var(--panel);
   transform: translate(-50%, 0);
   pointer-events: none;
-  box-shadow: 0 0 0 1px var(--rule-hi), 0 1px 3px rgba(0,0,0,0.4);
+  outline: var(--hair) solid var(--rule-hi);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
   transition: left var(--dur) var(--ease-out);
 }
 .prob-thumb.bullish { background: var(--call-hi); }
@@ -724,10 +717,10 @@ const otherSide = computed(() => {
   border-radius: var(--r-sm);
   transition: width var(--dur) var(--ease-out);
 }
-.factor-fill.bullish { background: linear-gradient(90deg, var(--call), var(--call-hi)); }
-.factor-fill.bearish { background: linear-gradient(90deg, var(--put), var(--put-hi)); }
-.factor-fill.warn { background: linear-gradient(90deg, var(--warn), var(--warn)); }
-.factor-fill.accent { background: linear-gradient(90deg, var(--phosphor-dim), var(--phosphor)); }
+.factor-fill.bullish { background: var(--call); }
+.factor-fill.bearish { background: var(--put); }
+.factor-fill.warn { background: var(--warn); }
+.factor-fill.accent { background: var(--phosphor); }
 .factor-fill.hot { opacity: 1; }
 .factor-fill.elev { opacity: 0.92; }
 .factor-fill.mid { opacity: 0.78; }
