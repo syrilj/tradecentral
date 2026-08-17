@@ -487,13 +487,13 @@ function focusQuickTicker(sym: string) {
   gap: 0.65rem;
   flex-wrap: wrap;
   padding: 0.45rem 0.85rem;
-  background: rgba(14, 165, 233, 0.08);
-  border: 1px solid rgba(14, 165, 233, 0.3);
+  background: color-mix(in srgb, var(--cat-1) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cat-1) 30%, var(--rule));
   font-size: 0.68rem;
 }
 
 .bridge-label {
-  color: #38bdf8;
+  color: var(--cat-1);
   font-weight: 700;
   letter-spacing: 0.05em;
   font-family: var(--font-mono, monospace);
@@ -513,15 +513,15 @@ function focusQuickTicker(sym: string) {
   font-size: 0.65rem;
   padding: 0.2rem 0.5rem;
   background: var(--panel);
-  border: 1px solid rgba(14, 165, 233, 0.4);
-  color: #e0f2fe;
+  border: 1px solid color-mix(in srgb, var(--cat-1) 40%, var(--rule));
+  color: var(--ink);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .bridge-chip:hover {
-  background: rgba(14, 165, 233, 0.25);
-  border-color: #38bdf8;
+  background: color-mix(in srgb, var(--cat-1) 25%, transparent);
+  border-color: var(--cat-1);
 }
 
 .bridge-name {
@@ -529,7 +529,7 @@ function focusQuickTicker(sym: string) {
 }
 
 .bridge-role {
-  color: #94a3b8;
+  color: var(--ink-faint);
   font-size: 0.6rem;
 }
 

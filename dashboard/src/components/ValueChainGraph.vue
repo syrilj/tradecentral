@@ -317,8 +317,8 @@ function isNodeConnected(symbol: string): boolean {
             <stop offset="100%" stop-color="var(--call-hi)" stop-opacity="1" />
           </linearGradient>
           <linearGradient id="edgeGradPartner" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="#0284c7" stop-opacity="0.8" />
-            <stop offset="100%" stop-color="#38bdf8" stop-opacity="1" />
+            <stop offset="0%" stop-color="var(--cat-5)" stop-opacity="0.8" />
+            <stop offset="100%" stop-color="var(--cat-1)" stop-opacity="1" />
           </linearGradient>
           <linearGradient id="edgeGradPeer" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stop-color="var(--rule-hi)" stop-opacity="0.6" />
@@ -336,7 +336,7 @@ function isNodeConnected(symbol: string): boolean {
             markerUnits="userSpaceOnUse"
             orient="auto"
           >
-            <path d="M 0 2 L 6 5 L 0 8 z" fill="rgba(120, 140, 160, 0.45)" />
+            <path d="M 0 2 L 6 5 L 0 8 z" fill="var(--rule-hi)" />
           </marker>
           <marker
             id="arrow-supply"
@@ -372,7 +372,7 @@ function isNodeConnected(symbol: string): boolean {
             markerUnits="userSpaceOnUse"
             orient="auto"
           >
-            <path d="M 0 1.5 L 7 5 L 0 8.5 z" fill="#38bdf8" />
+            <path d="M 0 1.5 L 7 5 L 0 8.5 z" fill="var(--cat-1)" />
           </marker>
           <marker
             id="arrow-peer"
@@ -549,17 +549,14 @@ function isNodeConnected(symbol: string): boolean {
 
 .legend-dot.supply {
   background: var(--phosphor);
-  box-shadow: 0 0 6px var(--phosphor);
 }
 
 .legend-dot.demand {
   background: var(--call-hi);
-  box-shadow: 0 0 6px var(--call-hi);
 }
 
 .legend-dot.partner {
-  background: #38bdf8;
-  box-shadow: 0 0 6px #38bdf8;
+  background: var(--cat-1);
 }
 
 .legend-dot.peer {
@@ -597,7 +594,9 @@ function isNodeConnected(symbol: string): boolean {
   overflow-x: auto;
   overflow-y: hidden;
   min-width: 1020px;
-  background-image: radial-gradient(var(--grid) 1px, transparent 1px);
+  background-image:
+    linear-gradient(to right, var(--grid) var(--hair), transparent var(--hair)),
+    linear-gradient(to bottom, var(--grid) var(--hair), transparent var(--hair));
   background-size: 16px 16px;
 }
 
@@ -616,18 +615,6 @@ function isNodeConnected(symbol: string): boolean {
   animation: dashFlow 1.2s linear infinite;
 }
 
-.chain-edge.flow-supply.active {
-  filter: drop-shadow(0 0 3px rgba(34, 197, 94, 0.4));
-}
-
-.chain-edge.flow-demand.active {
-  filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.4));
-}
-
-.chain-edge.flow-partner.active {
-  filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.4));
-}
-
 @keyframes dashFlow {
   to {
     stroke-dashoffset: -9;
@@ -637,7 +624,7 @@ function isNodeConnected(symbol: string): boolean {
 .floating-edge-pill {
   position: absolute;
   transform: translate(-50%, -50%);
-  background: rgba(13, 15, 20, 0.95);
+  background: var(--panel);
   border: 1px solid var(--phosphor);
   padding: 0.25rem 0.55rem;
   border-radius: 4px;
@@ -649,7 +636,7 @@ function isNodeConnected(symbol: string): boolean {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
   white-space: nowrap;
 }
 
@@ -696,7 +683,7 @@ function isNodeConnected(symbol: string): boolean {
 .node-card.selected {
   background: var(--panel-raise);
   border-color: var(--phosphor);
-  box-shadow: 0 0 0 1px var(--phosphor);
+  outline: var(--hair) solid var(--phosphor);
 }
 
 .node-card.connected {

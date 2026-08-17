@@ -60,12 +60,9 @@ const EXEMPT = new Set<string>([
   // Each entry below is genuinely non-conformant at the baseline — verified
   // with DESIGN_CONFORMANCE_DIAGNOSE=1. Conformant desk files are enforced.
   // A later feature removes its files from here once they are fixed.
-  'src/views/MarketView.vue',
   'src/views/DeskView.vue',
-  'src/views/ChainView.vue',
   'src/views/SectorsView.vue',
   'src/views/ChangepointsView.vue',
-  'src/components/ValueChainGraph.vue',
   'src/components/RiskNeutral3DModel.vue',
   'src/components/Panel.vue',
   'src/components/SearchPalette.vue',

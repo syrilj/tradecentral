@@ -4062,15 +4062,15 @@ const finChartData = computed(() => {
 }
 
 .leg-swatch.rev { background: var(--phosphor); }
-.leg-swatch.gross { background: #5b95b5; }
-.leg-swatch.op { background: #c1955e; }
+.leg-swatch.gross { background: var(--cat-1); }
+.leg-swatch.op { background: var(--cat-2); }
 .leg-swatch.net { background: var(--long); }
 .leg-swatch.assets { background: var(--phosphor); }
 .leg-swatch.liab { background: var(--short); }
-.leg-swatch.equity { background: #5b95b5; }
+.leg-swatch.equity { background: var(--cat-1); }
 .leg-swatch.ocf { background: var(--phosphor); }
 .leg-swatch.fcf { background: var(--long); }
-.leg-swatch.capex { background: #c1955e; }
+.leg-swatch.capex { background: var(--cat-2); }
 
 .fin-bars-timeline {
   display: flex;
@@ -4109,17 +4109,17 @@ const finChartData = computed(() => {
 }
 
 .fin-bar.rev { background: var(--phosphor); }
-.fin-bar.gross { background: #5b95b5; }
-.fin-bar.op { background: #c1955e; }
+.fin-bar.gross { background: var(--cat-1); }
+.fin-bar.op { background: var(--cat-2); }
 .fin-bar.net { background: var(--long); }
 .fin-bar.op.neg, .fin-bar.net.neg { background: var(--short); }
 .fin-bar.assets { background: var(--phosphor); }
 .fin-bar.liab { background: var(--short); }
-.fin-bar.equity { background: #5b95b5; }
+.fin-bar.equity { background: var(--cat-1); }
 .fin-bar.ocf { background: var(--phosphor); }
 .fin-bar.fcf { background: var(--long); }
 .fin-bar.fcf.neg { background: var(--short); }
-.fin-bar.capex { background: #c1955e; }
+.fin-bar.capex { background: var(--cat-2); }
 
 .fin-col-lbl {
   font-size: var(--t-tiny, 11px);
@@ -4177,7 +4177,7 @@ const finChartData = computed(() => {
 .pt-gauge-range {
   position: absolute;
   height: 100%;
-  background: var(--phosphor-wash, rgba(169, 196, 108, 0.15));
+  background: var(--phosphor-wash);
   border-left: 2px solid var(--phosphor);
   border-right: 2px solid var(--phosphor);
 }
@@ -4588,8 +4588,8 @@ const finChartData = computed(() => {
   letter-spacing: 0.04em;
 }
 
-.sig-side-badge.pos { background: rgba(34, 197, 94, 0.15); color: var(--long); }
-.sig-side-badge.neg { background: rgba(239, 68, 68, 0.15); color: var(--short); }
+.sig-side-badge.pos { background: var(--long-wash); color: var(--long); }
+.sig-side-badge.neg { background: var(--short-wash); color: var(--short); }
 
 .state {
   padding: 1px 5px;
@@ -4929,8 +4929,8 @@ const finChartData = computed(() => {
   text-decoration: underline;
 }
 
-.kind.dem { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
-.kind.rep { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+.kind.dem { background: color-mix(in srgb, var(--cat-1) 20%, transparent); color: var(--cat-1); }
+.kind.rep { background: var(--short-wash); color: var(--short); }
 
 /* SEC EDGAR filing kind color-coding */
 .kind-annual { color: var(--phosphor); }
@@ -5053,18 +5053,18 @@ th.sortable:hover {
 
 /* Quick Card Top Accents */
 .quick-card.card-financials {
-  border-top: 2px solid rgba(169, 196, 108, 0.6);
+  border-top: 2px solid var(--phosphor);
 }
 
 .quick-card.card-insiders {
-  border-top: 2px solid rgba(245, 158, 11, 0.6);
+  border-top: 2px solid var(--warn);
 }
 
 .quick-card.card-forecast {
-  border-top: 2px solid rgba(56, 189, 248, 0.6);
+  border-top: 2px solid var(--cat-1);
 }
 
 .quick-card.card-gov {
-  border-top: 2px solid rgba(167, 139, 250, 0.6);
+  border-top: 2px solid var(--cat-4);
 }
 </style>
