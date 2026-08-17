@@ -66,7 +66,6 @@ const EXEMPT = new Set<string>([
   'src/views/ChainView.vue',
   'src/views/SectorsView.vue',
   'src/views/ChangepointsView.vue',
-  'src/components/FlowDashboard.vue',
   'src/components/ValueChainGraph.vue',
   'src/components/OptionsCalculator.vue',
   'src/components/OptionsConvictionBoard.vue',

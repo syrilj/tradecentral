@@ -2671,14 +2671,8 @@ function downloadTapeCsv(): void {
             <!-- Trend SVG Chart -->
             <div class="trend-chart-box">
               <svg viewBox="0 0 240 54" class="trend-svg" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="flowTrendGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#10b981" stop-opacity="0.35" />
-                    <stop offset="100%" stop-color="#10b981" stop-opacity="0.0" />
-                  </linearGradient>
-                </defs>
-                <path :d="flowTrendAreaPath" fill="url(#flowTrendGrad)" />
-                <path :d="flowTrendSvgPath" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" />
+                <path :d="flowTrendAreaPath" class="trend-area" />
+                <path :d="flowTrendSvgPath" class="trend-line" stroke-width="2" stroke-linecap="round" />
               </svg>
             </div>
           </div>
@@ -2745,7 +2739,6 @@ function downloadTapeCsv(): void {
 
           <!-- Card 4: Institutional Blocks & Lit Pool Radar -->
           <div class="sidebar-card institutional-alert-card rise">
-            <div class="alert-card-glow" aria-hidden="true" />
             <div class="alert-card-badge-line">
               <span class="institutional-badge label">INSTITUTIONAL RADAR</span>
             </div>
@@ -3143,11 +3136,11 @@ button:disabled {
   width: 44px;
   height: 44px;
   border-radius: var(--r-md);
-  background: #181c2b;
-  border: 1px solid #282e44;
-  color: #38bdf8;
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--phosphor);
   font-family: var(--font-data);
-  font-size: 13px;
+  font-size: var(--t-small);
   font-weight: 800;
   flex-shrink: 0;
 }
@@ -3166,14 +3159,14 @@ button:disabled {
 }
 
 .ticker-symbol-text {
-  color: #ffffff;
+  color: var(--ink);
   font-size: 1.35rem;
   font-weight: 850;
   letter-spacing: -0.02em;
 }
 
 .ticker-company-name {
-  color: #8b94a8;
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   font-weight: 600;
 }
@@ -3186,7 +3179,7 @@ button:disabled {
 }
 
 .ticker-quote-price {
-  color: #ffffff;
+  color: var(--ink);
   font-size: 1.05rem;
   font-weight: 800;
 }
@@ -3199,8 +3192,8 @@ button:disabled {
 .ticker-quote-delta.neg { color: var(--short); }
 
 .ticker-quote-range {
-  color: #7b849b;
-  font-size: 11px;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
 }
 
 .dominant-pulse-dot {
@@ -4407,29 +4400,34 @@ th.sortable:hover {
   color: var(--text-secondary);
 }
 .flow-badge.badge-golden-sweep {
-  color: var(--warn);
-  border-color: var(--warn);
-  background: var(--warn-wash);
+  color: var(--badge-golden);
+  border-color: var(--badge-golden-border);
+  background: var(--badge-golden-wash);
+  font-weight: 850;
 }
 .flow-badge.badge-sweep {
-  color: #a78bfa;
-  border-color: #8b5cf6;
-  background: rgba(139, 92, 246, 0.12);
+  color: var(--badge-sweep);
+  border-color: color-mix(in srgb, var(--call) 50%, var(--rule));
+  background: var(--badge-sweep-wash);
+  font-weight: 750;
 }
 .flow-badge.badge-block {
-  color: var(--call-hi);
-  border-color: var(--call);
-  background: var(--call-wash);
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put) 50%, var(--rule));
+  background: var(--badge-block-wash);
+  font-weight: 750;
 }
 .flow-badge.badge-split {
-  color: #38bdf8;
-  border-color: #0284c7;
-  background: rgba(2, 132, 199, 0.12);
+  color: var(--badge-split);
+  border-color: color-mix(in srgb, var(--cat-4) 45%, var(--rule));
+  background: var(--badge-split-wash);
+  font-weight: 750;
 }
 .flow-badge.badge-multileg {
-  color: #2dd4bf;
-  border-color: #0d9488;
-  background: rgba(13, 148, 136, 0.12);
+  color: var(--badge-multileg);
+  border-color: color-mix(in srgb, var(--cat-5) 45%, var(--rule));
+  background: var(--badge-multileg-wash);
+  font-weight: 750;
 }
 .badge-pip {
   display: inline-block;
@@ -4470,7 +4468,7 @@ th.sortable:hover {
 }
 .whale-indicator {
   display: block;
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 800;
   letter-spacing: 0.04em;
   margin-bottom: 2px;
@@ -4556,7 +4554,7 @@ th.sortable:hover {
   justify-content: space-between;
   gap: var(--s3);
   padding: var(--s3) var(--s4);
-  background: #141724;
+  background: var(--panel-hi);
   border-bottom: var(--hair) solid var(--border-strong);
   flex-wrap: wrap;
 }
@@ -4568,7 +4566,7 @@ th.sortable:hover {
 }
 
 .realtime-title-line h2 {
-  color: #ffffff;
+  color: var(--ink);
   font-size: var(--t-body);
   font-weight: 750;
   letter-spacing: -0.01em;
@@ -4580,17 +4578,16 @@ th.sortable:hover {
   height: 8px;
   border-radius: 50%;
   background: var(--call);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
   flex-shrink: 0;
 }
 
 .live-tag {
   padding: 1px 6px;
-  font-size: 10px;
+  font-size: var(--t-micro);
   font-weight: 800;
   color: var(--call);
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: var(--call-wash);
+  border: var(--hair) solid var(--call-dim);
   border-radius: 2px;
   letter-spacing: 0.06em;
 }
@@ -4613,12 +4610,12 @@ th.sortable:hover {
 }
 
 .tape-table tbody tr:hover {
-  background: #1e2336;
+  background: var(--panel-hi);
 }
 
 .tape-table tbody tr.selected {
-  background: rgba(16, 185, 129, 0.08);
-  outline: 1px solid rgba(16, 185, 129, 0.4);
+  background: var(--phosphor-wash);
+  outline: var(--hair) solid var(--phosphor-dim);
   outline-offset: -1px;
 }
 
@@ -4637,7 +4634,7 @@ th.sortable:hover {
   top: 2px;
   bottom: 2px;
   right: 0;
-  background: rgba(16, 185, 129, 0.14);
+  background: var(--call-wash);
   border-radius: 2px;
   pointer-events: none;
 }
@@ -4649,7 +4646,7 @@ th.sortable:hover {
 }
 
 .hot-pip {
-  font-size: 11px;
+  font-size: var(--t-micro);
   margin-right: 2px;
   color: var(--long);
   font-weight: 900;
@@ -4662,8 +4659,8 @@ th.sortable:hover {
   flex-direction: column;
   gap: var(--s3);
   padding: var(--s4);
-  background: #0f121d;
-  border: 1px solid #1e2337;
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
   border-radius: var(--r-md);
   overflow: hidden;
 }
@@ -4675,7 +4672,7 @@ th.sortable:hover {
 }
 
 .sidebar-card-title {
-  color: #ffffff;
+  color: var(--ink);
   font-size: var(--t-small);
   font-weight: 750;
   letter-spacing: -0.01em;
@@ -4719,8 +4716,8 @@ th.sortable:hover {
 .trend-chart-box {
   width: 100%;
   height: 54px;
-  background: #090b12;
-  border: 1px solid #181d2c;
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
   overflow: hidden;
 }
@@ -4728,6 +4725,15 @@ th.sortable:hover {
   display: block;
   width: 100%;
   height: 100%;
+}
+/* Flat-fill trend marks — no gradient, no glow (data marks are flat fills). */
+.trend-area {
+  fill: var(--call-wash);
+}
+.trend-line {
+  fill: none;
+  stroke: var(--call);
+  stroke-linecap: round;
 }
 
 /* Card 2: Distribution */
@@ -4753,7 +4759,7 @@ th.sortable:hover {
 .dist-track {
   display: flex;
   height: 8px;
-  background: #1b2030;
+  background: var(--void-lift);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -4763,7 +4769,7 @@ th.sortable:hover {
   grid-template-columns: 1fr 1fr;
   gap: var(--s2);
   padding-top: var(--s2);
-  border-top: 1px solid #181c2c;
+  border-top: var(--hair) solid var(--rule);
 }
 
 .dist-stat {
@@ -4790,8 +4796,8 @@ th.sortable:hover {
   align-items: center;
   justify-content: space-between;
   padding: 6px 8px;
-  background: #141724;
-  border: 1px solid #20263a;
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
   cursor: pointer;
   transition: background-color 0.12s ease, border-color 0.12s ease;
@@ -4800,8 +4806,8 @@ th.sortable:hover {
 
 .contract-row-btn:hover,
 .contract-row-btn.active {
-  background: #1c2236;
-  border-color: #343f5e;
+  background: var(--panel-raise);
+  border-color: var(--rule-hi);
 }
 
 .contract-left {
@@ -4811,14 +4817,14 @@ th.sortable:hover {
 }
 
 .contract-strike {
-  color: #ffffff;
+  color: var(--ink);
   font-size: var(--t-tiny);
   font-weight: 800;
 }
 
 .contract-exp {
-  color: #8b94a8;
-  font-size: 10px;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
 }
 
 .contract-right {
@@ -4828,13 +4834,13 @@ th.sortable:hover {
 }
 
 .contract-prem {
-  color: #f0f2f7;
+  color: var(--ink);
   font-size: var(--t-tiny);
   font-weight: 750;
 }
 
 .contract-type {
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 800;
   padding: 1px 4px;
   border-radius: 2px;
@@ -4842,33 +4848,28 @@ th.sortable:hover {
 
 /* Card 4: Institutional Radar Alert Banner */
 .institutional-alert-card {
-  background: linear-gradient(135deg, #121728 0%, #161b2e 100%);
-  border: 1px solid #2b3552;
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
 }
 
-.alert-card-glow {
-  position: absolute;
-  top: -20px;
-  right: -20px;
-  width: 100px;
-  height: 100px;
-  background: radial-gradient(circle, rgba(56, 189, 248, 0.25) 0%, rgba(56, 189, 248, 0) 70%);
-  pointer-events: none;
+/* Decorative glow removed — instruments are lit evenly, not haloed. */
+.alert-card-badge-line {
+  display: flex;
 }
 
 .institutional-badge {
   padding: 2px 6px;
-  font-size: 9px;
+  font-size: var(--t-micro);
   font-weight: 800;
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.12);
-  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: var(--badge-block);
+  background: var(--badge-block-wash);
+  border: var(--hair) solid var(--badge-block);
   border-radius: 2px;
   letter-spacing: 0.05em;
 }
 
 .alert-card-heading {
-  color: #ffffff;
+  color: var(--ink);
   font-size: var(--t-small);
   font-weight: 800;
   letter-spacing: -0.01em;
@@ -4876,7 +4877,7 @@ th.sortable:hover {
 }
 
 .alert-card-description {
-  color: #94a0b8;
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   line-height: 1.4;
   margin: 0;
@@ -4895,33 +4896,33 @@ th.sortable:hover {
   padding: 0 var(--s3);
   font-size: var(--t-micro);
   font-weight: 750;
-  color: #ffffff;
-  background: #2563eb;
-  border: 1px solid #3b82f6;
+  color: var(--void);
+  background: var(--phosphor);
+  border: var(--hair) solid var(--phosphor);
   border-radius: var(--r-sm);
   cursor: pointer;
   transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .alert-action-btn:hover {
-  background: #1d4ed8;
+  background: var(--phosphor-dim);
 }
 
 .alert-action-btn.alt {
-  color: #d1d5db;
-  background: #181d2d;
-  border-color: #28314a;
+  color: var(--ink-soft);
+  background: var(--surface-base);
+  border-color: var(--rule-hi);
 }
 
 .alert-action-btn.alt:hover {
-  color: #ffffff;
-  background: #22293e;
+  color: var(--ink);
+  background: var(--panel-hi);
 }
 
 /* Card 5: Inspector */
 .inspector-card {
-  background: #111420;
-  border-color: #22293c;
+  background: var(--panel);
+  border-color: var(--rule);
 }
 
 .inspector-grid {
@@ -4935,8 +4936,8 @@ th.sortable:hover {
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px;
-  background: #090c14;
-  border: 1px solid #1a2030;
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
 }
 
@@ -4951,9 +4952,9 @@ th.sortable:hover {
   padding: 0 var(--s3);
   font-size: var(--t-micro);
   font-weight: 800;
-  color: #ffffff;
+  color: var(--void);
   background: var(--long);
-  border: 1px solid var(--long);
+  border: var(--hair) solid var(--long);
   border-radius: var(--r-sm);
   cursor: pointer;
   letter-spacing: 0.04em;
@@ -4962,7 +4963,8 @@ th.sortable:hover {
 }
 
 .inspector-open-btn:hover {
-  background: #34d399;
+  background: var(--call-hi);
+  border-color: var(--call-hi);
 }
 
 .method-strip {
