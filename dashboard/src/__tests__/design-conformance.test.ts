@@ -157,9 +157,18 @@ function isStructuralInk(literal: string): boolean {
 
 /** Legitimate non-color uses of the hex token inside TS/template logic. */
 function isHexFalsePositive(src: string, index: number): boolean {
-  const before = src.slice(Math.max(0, index - 8), index)
-  // url(#id) / href="#id" / xlink:href="#id" — SVG paint-server reference.
-  if (/url\(\s*#|href="#|xlink:href="#|=\s*"#|`url\(#|:url\(#/.test(before)) return true
+  // `index` points at the '#' of a hex literal. We inspect the text preceding
+  // it to detect SVG paint-server / element-id references where '#' introduces
+  // an id (e.g. `url(#abc123)`), not a color. The slice must be wide enough to
+  // reach back past `xlink:href="` (12 chars); 16 is a safe window.
+  const before = src.slice(Math.max(0, index - 16), index)
+  // url(#id) / :url(#id) / `url(#id`  — CSS/SVG paint-server reference.
+  // href="#id" / xlink:href="#id"     — SVG element-id reference (href=" also
+  //                                    matches the tail of xlink:href=").
+  // The patterns match the prefix that precedes '#' (the '#' itself is at
+  // `index`, not in `before`), so a purely-hex id like `#fff` is correctly
+  // skipped instead of being flagged as a hardcoded color.
+  if (/(?:`|:)url\(\s*|url\(\s*|href="/.test(before)) return true
   return false
 }
 
@@ -255,8 +264,16 @@ function findUndefinedTokens(src: string, defined: Set<string>): string[] {
 
 /**
  * box-shadow glow: a shadow whose x AND y offsets are both 0 with a NONZERO
- * blur radius (the halo). Ring shadows like `box-shadow: 0 0 0 1px` (blur=0)
- * are NOT glows — they are crisp outline rings and are allowed.
+ * blur radius (the halo), e.g. `box-shadow: 0 0 8px …`.
+ *
+ * This regex ALSO flags ring shadows such as `box-shadow: 0 0 0 1px …`
+ * (blur=0, a crisp outline ring). The `0 0 [1-9]` pattern matches the second
+ * `0`, the third `0`, and the spread/next token, so a ring with a nonzero
+ * spread value is caught. Ring shadows are non-canonical desk chrome
+ * (ui-registry.md allows only: none, `0 1px 0 rgba(0,0,0,…)` shelf, or an
+ * inset selection bar) and ARE flagged here — they should be converted to
+ * `outline: var(--hair) solid var(--rule-hi)` or a `border`, not expressed
+ * as a `box-shadow: 0 0 0 Npx` ring.
  */
 const BOX_SHADOW_GLOW = /box-shadow\s*:[^;}]*(?<![0-9p])\b0\s+0\s+[1-9]/g
 const TEXT_SHADOW = /text-shadow\s*:/g

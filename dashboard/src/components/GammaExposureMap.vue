@@ -323,7 +323,12 @@ const flipX = computed(() => (props.gammaFlip != null ? xOfPrice(props.gammaFlip
  */
 function levelBadgeWidth(label: string, value: number): number {
   const text = `${label} $${strikeLabel(value)}`
-  const em = 11
+  // COUPLING: `em` MUST match the badge font-size token `--t-micro`
+  // (tokens.css: --t-micro: 0.6875rem = 11px at the default 16px root).
+  // The badge <text> is styled `font: 700 var(--t-micro) var(--font-display)`.
+  // If --t-micro changes, update this pixel value to keep the width estimate
+  // in sync (or derive it from a shared constant exporting the rem→px ratio).
+  const em = 11 // == --t-micro (0.6875rem * 16px)
   const padX = 12 // 6px pill padding each side
   const safety = 2
   let width = 0
