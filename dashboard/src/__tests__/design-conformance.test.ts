@@ -62,7 +62,6 @@ const EXEMPT = new Set<string>([
   // A later feature removes its files from here once they are fixed.
   'src/views/MarketView.vue',
   'src/views/DeskView.vue',
-  'src/views/OptionsView.vue',
   'src/views/ChainView.vue',
   'src/views/SectorsView.vue',
   'src/views/ChangepointsView.vue',

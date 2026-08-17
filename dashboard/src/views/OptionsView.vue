@@ -3175,14 +3175,14 @@ td.put { color: var(--put-hi, var(--put)); }
   border: var(--hair) solid color-mix(in srgb, var(--warn) 50%, var(--rule));
 }
 .tier-500k {
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.14);
-  border: var(--hair) solid color-mix(in srgb, #f59e0b 60%, var(--rule));
+  color: var(--badge-golden);
+  background: var(--badge-golden-wash);
+  border: var(--hair) solid var(--badge-golden-border);
 }
 .tier-mega-whale {
-  color: #fbbf24;
-  background: rgba(251, 191, 36, 0.18);
-  border: var(--hair) solid color-mix(in srgb, #fbbf24 70%, var(--rule));
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid var(--warn);
   font-weight: 800;
 }
 .no-tape { min-height: 180px; display: grid; place-content: center; justify-items: center; gap: var(--s2); color: var(--ink-dim); text-align: center; padding: var(--s4); }
