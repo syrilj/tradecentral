@@ -1044,7 +1044,7 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
 .calc-error {
   color: var(--warn);
   padding: var(--s2) var(--s3);
-  background: var(--warn-wash, rgba(234, 179, 8, 0.08));
+  background: var(--warn-wash);
   border: var(--hair) solid var(--warn);
   font-size: var(--t-small);
 }
