@@ -74,11 +74,8 @@ const strikeColumns = [
 <style scoped>
 .gex-flow-visual {
   --paper: var(--ink);
-  --ink: var(--ink);
-  --rule: var(--rule);
   --blue: var(--call);
   --orange: var(--put);
-  --green: var(--phosphor);
   position: relative;
   width: 100%;
   min-height: 525px;
@@ -187,11 +184,11 @@ const strikeColumns = [
 .reference-line { position: absolute; z-index: 2; top: 45px; bottom: 33px; width: 1px; border-left: 1px dashed; }
 .reference-line span { position: absolute; width: 74px; color: var(--ink-soft); font-family: var(--font-data); font-size: 8px; font-weight: 700; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; }
 .gamma-flip { left: 47%; border-color: var(--orange); }.gamma-flip span { bottom: 3px; left: 5px; color: var(--put-hi); }
-.spot-reference { left: 62%; border-color: var(--green); }.spot-reference span { top: 36px; right: 5px; transform: translateX(-100%); color: var(--phosphor); text-align: right; }
+.spot-reference { left: 62%; border-color: var(--ink-soft); }.spot-reference span { top: 36px; right: 5px; transform: translateX(-100%); color: var(--ink-soft); text-align: right; }
 .flow-trace { position: absolute; z-index: 2; right: 18px; bottom: 16px; width: 58%; height: 150px; overflow: visible; }
 .trace-base { fill: none; stroke: var(--rule-hi); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-dasharray: 4 5; }
-.trace-call { fill: none; stroke: var(--green); stroke-width: 1.8; vector-effect: non-scaling-stroke; stroke-dasharray: 22 160; animation: gex-trace 6.8s linear infinite; }
-.flow-trace circle { fill: var(--void); stroke: var(--green); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.trace-call { fill: none; stroke: var(--ink-soft); stroke-width: 1.8; vector-effect: non-scaling-stroke; stroke-dasharray: 22 160; }
+.flow-trace circle { fill: var(--void); stroke: var(--ink-soft); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .flow-tag {
   position: absolute;
   z-index: 3;
@@ -206,7 +203,7 @@ const strikeColumns = [
   line-height: 1.25;
   text-transform: uppercase;
 }
-.flow-tag i { grid-row: span 2; width: 7px; height: 7px; margin-top: 2px; background: var(--green); }
+.flow-tag i { grid-row: span 2; width: 7px; height: 7px; margin-top: 2px; background: var(--ink-soft); }
 .flow-tag span { color: var(--ink-dim); font-size: 8px; font-weight: 500; }
 .flow-tag-call { right: 28px; top: 98px; }.flow-tag-put { left: 18px; bottom: 28px; }.flow-tag-put i { background: var(--orange); }
 .interpret-card {
@@ -218,7 +215,7 @@ const strikeColumns = [
   padding: 13px 14px;
   color: var(--ink);
   border: 1px solid var(--rule-hi);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--ink-soft);
   background: rgba(18, 20, 26, 0.94);
 }
 .interpret-card > span { color: var(--put-hi); font-family: var(--font-data); font-size: 8px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
@@ -237,10 +234,8 @@ const strikeColumns = [
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.visual-footer span { display: inline-flex; align-items: center; gap: 5px; }.visual-footer i { display: inline-block; width: 7px; height: 7px; }.legend-call { background: var(--blue); }.legend-put { background: var(--orange); }.legend-net { border: 1px solid var(--green); }
+.visual-footer span { display: inline-flex; align-items: center; gap: 5px; }.visual-footer i { display: inline-block; width: 7px; height: 7px; }.legend-call { background: var(--blue); }.legend-put { background: var(--orange); }.legend-net { border: 1px solid var(--rule-hi); }
 .visual-footer strong { margin-left: auto; color: var(--ink-dim); font-size: 8px; font-weight: 500; }
-
-@keyframes gex-trace { to { stroke-dashoffset: -182; } }
 
 @media (max-width: 620px) {
   .gex-flow-visual { min-height: 566px; padding: 18px 17px; }
@@ -254,6 +249,4 @@ const strikeColumns = [
   .interpret-card strong { font-size: 13px; }.interpret-card p { font-size: 8px; }
   .visual-footer strong { width: 100%; margin-left: 0; }
 }
-
-@media (prefers-reduced-motion: reduce) { .trace-call { animation: none; } }
 </style>
