@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import time
+from typing import Any
 
 from edge.daily_plays.adapters.flow import (
     load_live_flow_activity,
@@ -286,11 +287,12 @@ def test_symbol_flow_tape_filters_window_and_keeps_classification():
         "nvda",
         min_premium=25_000,
         since="2026-08-09",
-        until="2026-08-12T23:59:59Z",
+        until="2026-08-10",
         fetcher=fetcher,
     )
     assert seen["symbol"] == "NVDA"
     assert seen["since"] == "2026-08-09"
+    assert seen["until"] == "2026-08-10"
     assert result["feed_status"] == "live"
     assert result["print_count"] == 1
     row = result["tape"][0]
@@ -298,3 +300,28 @@ def test_symbol_flow_tape_filters_window_and_keeps_classification():
     assert row["is_sweep"] is True
     assert row["is_unusual"] is True
     assert "sweeps" in row["presets"]
+
+
+def test_symbol_flow_tape_parses_occ_symbol_for_historical_prints() -> None:
+    def fetcher(*, symbol: str, min_premium: float, limit: int, timeout: float, since: str | None, until: str | None) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "occ_print",
+                "ticker": "NVDA260821C00120000",
+                "premium": 150_000,
+                "volume": 50,
+                "ts": "2026-08-10T14:30:00Z",
+                "underlying_price": 115.0,
+            }
+        ]
+
+    result = load_symbol_flow_tape("NVDA", min_premium=10_000, fetcher=fetcher)
+    assert result["print_count"] == 1
+    row = result["tape"][0]
+    assert row["symbol"] == "NVDA"
+    assert row["right"] == "call"
+    assert row["strike"] == 120.0
+    assert row["expiry"] == "2026-08-21"
+    assert row["contracts"] == 50
+    assert row["price"] == 30.0  # 150000 / (50 * 100)
+

@@ -226,6 +226,7 @@ const historyLoading = ref(false)
 const historyError = ref<string | null>(null)
 const historyTape = ref<MarketFlowPrint[]>([])
 const historyMeta = ref('')
+const historyShowAll = ref(false)
 const topTickerCategory = ref<TopTickerCategory>('unusual_premium')
 const rightFilter = ref<RightFilter>('all')
 const dteFilter = ref<DteFilter>('all')
@@ -1770,6 +1771,51 @@ function downloadTapeCsv(): void {
     ]),
   )
 }
+
+function downloadHistoryTapeCsv(): void {
+  if (!historyTape.value.length) return
+  downloadCsv(
+    `edge-history-tape-${historySymbol.value || 'SYMBOL'}-${fileStamp()}.csv`,
+    [
+      'timestamp_utc',
+      'symbol',
+      'right',
+      'strike',
+      'expiry',
+      'dte',
+      'premium_usd',
+      'contracts',
+      'fill_price_usd',
+      'underlying_spot_usd',
+      'otm_pct',
+      'open_interest',
+      'implied_volatility',
+      'aggressor',
+      'bias',
+      'trade_class',
+      'anomaly_flags',
+    ],
+    historyTape.value.map((row) => [
+      row.timestamp,
+      row.symbol || historySymbol.value,
+      row.right,
+      row.strike,
+      row.expiry,
+      row.dte,
+      row.premium,
+      row.contracts ?? row.volume,
+      row.price,
+      row.underlying_price,
+      row.otm_pct,
+      row.open_interest,
+      row.implied_volatility,
+      aggressorLabel(row),
+      row.bias,
+      row.trade_class,
+      (row.anomaly_flags || []).join(';'),
+    ]),
+  )
+}
 </script>
 
 <template>
@@ -2500,6 +2546,23 @@ function downloadTapeCsv(): void {
                 <button type="button" class="panel-action label" :disabled="historyLoading" @click="void loadHistoryTape()">
                   {{ historyLoading ? 'LOADING…' : 'LOAD HISTORY' }}
                 </button>
+                <button
+                  v-if="historyTape.length"
+                  type="button"
+                  class="panel-action label"
+                  @click="downloadHistoryTapeCsv"
+                  title="Export historical tape to CSV"
+                >
+                  EXPORT CSV
+                </button>
+                <button
+                  v-if="historyTape.length > 40"
+                  type="button"
+                  class="panel-action label"
+                  @click="historyShowAll = !historyShowAll"
+                >
+                  {{ historyShowAll ? 'SHOW FIRST 40' : `SHOW ALL ${historyTape.length}` }}
+                </button>
                 <small v-if="historyMeta">{{ historyMeta }}</small>
                 <small v-if="historyError">{{ historyError }}</small>
               </div>
@@ -2508,17 +2571,31 @@ function downloadTapeCsv(): void {
                   <thead>
                     <tr>
                       <th class="label">Time UTC</th>
+                      <th class="label">Symbol</th>
                       <th class="label">Right</th>
-                      <th class="label">Tags</th>
+                      <th class="label num">Strike</th>
+                      <th class="label">Expiry</th>
+                      <th class="label">Class</th>
+                      <th class="label num">Price</th>
+                      <th class="label num">Contracts</th>
                       <th class="label num">Premium</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="row in historyTape.slice(0, 40)" :key="flowPrintKey(row)">
+                    <tr v-for="row in (historyShowAll ? historyTape : historyTape.slice(0, 40))" :key="flowPrintKey(row)">
                       <td class="fig">{{ shortDate(row.timestamp) }}</td>
-                      <td class="fig">{{ row.right }} {{ row.strike ?? '—' }}</td>
+                      <td class="fig bold">{{ row.symbol || historySymbol }}</td>
+                      <td class="fig">
+                        <span class="bias-chip label" :class="row.right">{{ row.right?.toUpperCase() }}</span>
+                      </td>
+                      <td class="fig num">{{ row.strike != null ? `$${row.strike}` : '—' }}</td>
+                      <td class="fig">{{ row.expiry ? shortDate(row.expiry) : '—' }}</td>
                       <td class="label">{{ (row.presets ?? []).join(' · ') || row.trade_class || '—' }}</td>
-                      <td class="fig num">{{ moneyCompact(row.premium) }}</td>
+                      <td class="fig num">{{ row.price != null ? `$${row.price.toFixed(2)}` : '—' }}</td>
+                      <td class="fig num">{{ num(row.contracts ?? row.volume, 0) }}</td>
+                      <td class="fig num" :class="[row.right, { 'whale-prem': (row.premium ?? 0) >= 100_000 }]">
+                        {{ moneyCompact(row.premium) }}
+                      </td>
                     </tr>
                   </tbody>
                 </table>

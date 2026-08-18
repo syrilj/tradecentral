@@ -96,16 +96,52 @@ const historyLoading = ref(false)
 const historyError = ref<string | null>(null)
 const historyTape = ref<import('@/api').MarketFlowPrint[]>([])
 const historyTapeMeta = ref('')
+const historyFloor = ref(0)
+const historyLimit = ref(500)
+const historyTypeFilter = ref<'all' | 'call' | 'put' | 'sweeps' | 'whales' | 'anomalies'>('all')
+const historySearchQuery = ref('')
+const historyShowAll = ref(false)
+
+function setHistoryPreset(preset: 'today' | 'yesterday' | '7d' | '30d' | 'clear'): void {
+  if (preset === 'clear') {
+    historyFrom.value = ''
+    historyTo.value = ''
+    return
+  }
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const toIso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  const todayStr = toIso(now)
+  if (preset === 'today') {
+    historyFrom.value = todayStr
+    historyTo.value = todayStr
+  } else if (preset === 'yesterday') {
+    const yest = new Date(now.getTime() - 86400000)
+    const yestStr = toIso(yest)
+    historyFrom.value = yestStr
+    historyTo.value = yestStr
+  } else if (preset === '7d') {
+    const past = new Date(now.getTime() - 7 * 86400000)
+    historyFrom.value = toIso(past)
+    historyTo.value = todayStr
+  } else if (preset === '30d') {
+    const past = new Date(now.getTime() - 30 * 86400000)
+    historyFrom.value = toIso(past)
+    historyTo.value = todayStr
+  }
+}
 
 async function loadHistoryTape(): Promise<void> {
   historyLoading.value = true
   historyError.value = null
   try {
+    const effFloor = historyFloor.value > 0 ? historyFloor.value : minPremium.value
     const payload = await api.flowTape({
       symbol: symbol.value,
       from: historyFrom.value || dateFrom.value || undefined,
       to: historyTo.value || dateTo.value || undefined,
-      minPremium: minPremium.value,
+      minPremium: effFloor,
+      limit: historyLimit.value,
     })
     historyTape.value = payload.tape ?? []
     historyTapeMeta.value = `${payload.print_count} prints · ${payload.feed_status}`
@@ -116,6 +152,158 @@ async function loadHistoryTape(): Promise<void> {
   } finally {
     historyLoading.value = false
   }
+}
+
+const filteredHistoryTape = computed(() => {
+  let list = historyTape.value
+  if (historyTypeFilter.value === 'call') {
+    list = list.filter((r) => r.right === 'call')
+  } else if (historyTypeFilter.value === 'put') {
+    list = list.filter((r) => r.right === 'put')
+  } else if (historyTypeFilter.value === 'sweeps') {
+    list = list.filter((r) => r.is_sweep || r.trade_class?.toLowerCase().includes('sweep'))
+  } else if (historyTypeFilter.value === 'whales') {
+    list = list.filter((r) => (r.premium ?? 0) >= 100_000)
+  } else if (historyTypeFilter.value === 'anomalies') {
+    list = list.filter((r) => r.is_unusual || (r.anomaly_flags && r.anomaly_flags.length > 0))
+  }
+  const q = historySearchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter((r) => {
+      const strikeStr = r.strike != null ? String(r.strike) : ''
+      const expStr = r.expiry ?? ''
+      const classStr = r.trade_class ?? ''
+      const rightStr = r.right ?? ''
+      const occStr = r.occ_symbol ?? ''
+      return (
+        strikeStr.includes(q) ||
+        expStr.toLowerCase().includes(q) ||
+        classStr.toLowerCase().includes(q) ||
+        rightStr.toLowerCase().includes(q) ||
+        occStr.toLowerCase().includes(q)
+      )
+    })
+  }
+  return list
+})
+
+const historyStats = computed(() => {
+  const list = historyTape.value
+  let callPrem = 0
+  let putPrem = 0
+  let totalPrem = 0
+  let sweepsCount = 0
+  let whalesCount = 0
+  for (const r of list) {
+    const p = r.premium ?? 0
+    totalPrem += p
+    if (r.right === 'call') callPrem += p
+    else if (r.right === 'put') putPrem += p
+    if (r.is_sweep || r.trade_class?.toLowerCase().includes('sweep')) sweepsCount++
+    if (p >= 100_000) whalesCount++
+  }
+  const callPct = totalPrem > 0 ? (callPrem / totalPrem) * 100 : 50
+  const putPct = totalPrem > 0 ? (putPrem / totalPrem) * 100 : 50
+  return {
+    totalPrints: list.length,
+    totalPrem,
+    callPrem,
+    putPrem,
+    callPct,
+    putPct,
+    sweepsCount,
+    whalesCount,
+  }
+})
+
+function downloadHistoryTapeCsv(): void {
+  if (!historyTape.value.length) return
+  const headers = [
+    'timestamp_utc',
+    'symbol',
+    'right',
+    'strike',
+    'expiry',
+    'dte',
+    'premium_usd',
+    'contracts',
+    'fill_price_usd',
+    'underlying_spot_usd',
+    'otm_pct',
+    'open_interest',
+    'implied_volatility',
+    'trade_class',
+    'trade_class_source',
+    'aggressor',
+    'bias',
+    'is_sweep',
+    'is_unusual',
+    'anomaly_flags',
+    'occ_symbol',
+  ]
+  const rows = historyTape.value.map((r) => [
+    r.timestamp,
+    r.symbol || symbol.value,
+    r.right,
+    r.strike ?? '',
+    r.expiry ?? '',
+    r.dte ?? '',
+    r.premium ?? '',
+    r.contracts ?? r.volume ?? '',
+    r.price ?? '',
+    r.underlying_price ?? '',
+    r.otm_pct ?? '',
+    r.open_interest ?? '',
+    r.implied_volatility ?? '',
+    r.trade_class ?? '',
+    r.trade_class_source ?? '',
+    r.aggressor ?? '',
+    r.bias ?? '',
+    r.is_sweep ? 'true' : 'false',
+    r.is_unusual ? 'true' : 'false',
+    (r.anomaly_flags ?? []).join(';'),
+    r.occ_symbol ?? '',
+  ])
+  const csvContent = [
+    headers.join(','),
+    ...rows.map((row) =>
+      row
+        .map((val) => {
+          const s = String(val ?? '')
+          return s.includes(',') || s.includes('"') || s.includes('\n')
+            ? `"${s.replace(/"/g, '""')}"`
+            : s
+        })
+        .join(','),
+    ),
+  ].join('\n')
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  const dateStamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  link.setAttribute('href', url)
+  link.setAttribute('download', `${symbol.value}_historical_tape_${dateStamp}.csv`)
+  link.style.visibility = 'hidden'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function tapeWhaleTier(premium: number): { label: string; class: string } {
+  if (premium >= 1_000_000) return { label: '$1M+', class: 'whale-1m' }
+  if (premium >= 500_000) return { label: '$500k+', class: 'whale-500k' }
+  if (premium >= 100_000) return { label: '$100k+', class: 'whale-100k' }
+  return { label: '—', class: 'whale-standard' }
+}
+
+function tapeClassCategory(tradeClass: string): string {
+  const c = tradeClass.toLowerCase()
+  if (c.includes('golden') || c.includes('sweep')) return 'sweep'
+  if (c.includes('block')) return 'block'
+  if (c.includes('split')) return 'split'
+  return 'single'
 }
 
 function openInsiders(): void {
@@ -1773,34 +1961,221 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
     </Panel>
 
     <Panel label="On-demand historical tape" index="05b" class="rise">
-      <div class="history-tape-bar">
-        <label><span class="label">From</span><input v-model="historyFrom" type="date"></label>
-        <label><span class="label">To</span><input v-model="historyTo" type="date"></label>
-        <button type="button" class="label raw-btn" :disabled="historyLoading" @click="void loadHistoryTape()">
-          {{ historyLoading ? 'LOADING…' : `LOAD ${symbol} TAPE` }}
+      <template #action>
+        <button
+          v-if="historyTape.length"
+          type="button"
+          class="panel-action label"
+          @click="downloadHistoryTapeCsv"
+          title="Export complete historical tape to CSV"
+        >
+          EXPORT CSV
         </button>
-        <span class="label">{{ historyTapeMeta }}</span>
-      </div>
-      <p v-if="historyError" class="note pad">{{ historyError }}</p>
-      <div v-else-if="historyTape.length" class="table-scroll">
-        <table class="tape-table">
-          <thead>
-            <tr>
-              <th class="label">Time</th>
-              <th class="label">Right</th>
-              <th class="label">Tags</th>
-              <th class="label num">Premium</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in historyTape.slice(0, 50)" :key="`${row.timestamp}-${row.strike}-${row.premium}`">
-              <td class="fig">{{ shortDate(row.timestamp) }}</td>
-              <td class="fig">{{ row.right }} {{ row.strike != null ? optUsd(row.strike) : 'N/A' }}</td>
-              <td class="label">{{ (row.presets ?? []).join(' · ') || row.trade_class || 'STANDARD' }}</td>
-              <td class="fig num">{{ optUsd(row.premium, 0) }}</td>
-            </tr>
-          </tbody>
-        </table>
+      </template>
+      <div class="history-tape-container">
+        <div class="history-tape-bar">
+          <div class="history-controls-group">
+            <label><span class="label">From</span><input v-model="historyFrom" type="date"></label>
+            <label><span class="label">To</span><input v-model="historyTo" type="date"></label>
+            <div class="history-presets-row">
+              <button type="button" class="label raw-btn" @click="setHistoryPreset('today')">TODAY</button>
+              <button type="button" class="label raw-btn" @click="setHistoryPreset('yesterday')">YEST</button>
+              <button type="button" class="label raw-btn" @click="setHistoryPreset('7d')">7D</button>
+              <button type="button" class="label raw-btn" @click="setHistoryPreset('30d')">30D</button>
+              <button type="button" class="label raw-btn" @click="setHistoryPreset('clear')">CLEAR</button>
+            </div>
+          </div>
+          <div class="history-controls-group">
+            <label>
+              <span class="label">Floor</span>
+              <select v-model.number="historyFloor">
+                <option :value="0">All ($0)</option>
+                <option :value="25000">≥ $25k</option>
+                <option :value="50000">≥ $50k</option>
+                <option :value="100000">≥ $100k Whales</option>
+                <option :value="250000">≥ $250k</option>
+                <option :value="500000">≥ $500k Tier 1</option>
+              </select>
+            </label>
+            <label>
+              <span class="label">Limit</span>
+              <select v-model.number="historyLimit">
+                <option :value="100">100 prints</option>
+                <option :value="250">250 prints</option>
+                <option :value="500">500 prints</option>
+                <option :value="1000">1,000 prints</option>
+                <option :value="2000">2,000 prints</option>
+              </select>
+            </label>
+            <button type="button" class="label scan-btn" :disabled="historyLoading" @click="void loadHistoryTape()">
+              {{ historyLoading ? 'LOADING…' : `LOAD ${symbol} TAPE` }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="historyTape.length" class="history-stats-bar">
+          <div class="h-stat-item">
+            <span class="label">LOADED:</span>
+            <span class="fig bold">{{ historyStats.totalPrints }} PRINTS</span>
+          </div>
+          <div class="h-stat-item">
+            <span class="label">TOTAL NOTIONAL:</span>
+            <span class="fig bold">{{ optUsd(historyStats.totalPrem, 0) }}</span>
+          </div>
+          <div class="h-stat-item">
+            <span class="label">CALL / PUT:</span>
+            <span class="fig call">{{ optUsd(historyStats.callPrem, 0) }} ({{ historyStats.callPct.toFixed(0) }}%)</span>
+            <span class="slash">/</span>
+            <span class="fig put">{{ optUsd(historyStats.putPrem, 0) }} ({{ historyStats.putPct.toFixed(0) }}%)</span>
+          </div>
+          <div class="h-stat-item">
+            <span class="label">SWEEPS:</span>
+            <span class="fig">{{ historyStats.sweepsCount }}</span>
+          </div>
+          <div class="h-stat-item">
+            <span class="label">WHALES (≥$100K):</span>
+            <span class="fig">{{ historyStats.whalesCount }}</span>
+          </div>
+        </div>
+
+        <div v-if="historyTape.length" class="history-filter-strip">
+          <div class="mode-seg">
+            <button
+              type="button"
+              class="seg-btn label"
+              :class="{ on: historyTypeFilter === 'all' }"
+              @click="historyTypeFilter = 'all'"
+            >
+              ALL ({{ historyTape.length }})
+            </button>
+            <button
+              type="button"
+              class="seg-btn label"
+              :class="{ on: historyTypeFilter === 'call' }"
+              @click="historyTypeFilter = 'call'"
+            >
+              CALLS
+            </button>
+            <button
+              type="button"
+              class="seg-btn label"
+              :class="{ on: historyTypeFilter === 'put' }"
+              @click="historyTypeFilter = 'put'"
+            >
+              PUTS
+            </button>
+            <button
+              type="button"
+              class="seg-btn label"
+              :class="{ on: historyTypeFilter === 'sweeps' }"
+              @click="historyTypeFilter = 'sweeps'"
+            >
+              SWEEPS ({{ historyStats.sweepsCount }})
+            </button>
+            <button
+              type="button"
+              class="seg-btn label"
+              :class="{ on: historyTypeFilter === 'whales' }"
+              @click="historyTypeFilter = 'whales'"
+            >
+              WHALES ({{ historyStats.whalesCount }})
+            </button>
+            <button
+              type="button"
+              class="seg-btn label"
+              :class="{ on: historyTypeFilter === 'anomalies' }"
+              @click="historyTypeFilter = 'anomalies'"
+            >
+              ANOMALIES
+            </button>
+          </div>
+          <div class="history-search-box">
+            <input
+              v-model="historySearchQuery"
+              type="text"
+              placeholder="Search strike, expiry, class, OCC…"
+              class="history-search-input label"
+            />
+          </div>
+        </div>
+
+        <p v-if="historyError" class="note pad">{{ historyError }}</p>
+        <div v-else-if="historyTape.length" class="table-scroll">
+          <table class="tape-table">
+            <thead>
+              <tr>
+                <th class="label">Tier</th>
+                <th class="label">Time UTC</th>
+                <th class="label">Type</th>
+                <th class="label">Class</th>
+                <th class="label">Expiry · DTE</th>
+                <th class="label num">Strike</th>
+                <th class="label num">Spot</th>
+                <th class="label num">Price</th>
+                <th class="label num">Contracts</th>
+                <th class="label num">OI · Vol/OI</th>
+                <th class="label num">Premium</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in (historyShowAll ? filteredHistoryTape : filteredHistoryTape.slice(0, 50))"
+                :key="`${row.timestamp}-${row.occ_symbol || ''}-${row.strike}-${row.premium}-${row.contracts}`"
+                :class="{ 'whale-row': (row.premium ?? 0) >= 100_000 }"
+              >
+                <td>
+                  <span class="whale-tier label" :class="tapeWhaleTier(row.premium ?? 0).class">
+                    {{ tapeWhaleTier(row.premium ?? 0).label }}
+                  </span>
+                </td>
+                <td class="fig">{{ shortDate(row.timestamp) }}</td>
+                <td>
+                  <span class="type-badge label" :class="row.right">
+                    {{ row.right ? row.right.toUpperCase() : '—' }}
+                  </span>
+                  <span v-if="row.bias" class="bias-tag label" :class="row.bias">
+                    {{ row.bias.toUpperCase() }}
+                  </span>
+                </td>
+                <td>
+                  <span class="class-chip label" :class="tapeClassCategory(row.trade_class || 'single')">
+                    {{ (row.presets ?? []).join(' · ') || row.trade_class || 'STANDARD' }}
+                  </span>
+                </td>
+                <td class="fig">
+                  {{ row.expiry ? shortDate(row.expiry) : '—' }}
+                  <span v-if="row.dte != null" class="dte-tag">({{ row.dte }}d)</span>
+                </td>
+                <td class="fig num">{{ row.strike != null ? optUsd(row.strike) : '—' }}</td>
+                <td class="fig num">{{ row.underlying_price != null ? optUsd(row.underlying_price) : '—' }}</td>
+                <td class="fig num">{{ row.price != null ? `$${row.price.toFixed(2)}` : '—' }}</td>
+                <td class="fig num">{{ row.contracts != null ? num(row.contracts, 0) : num(row.volume ?? 0, 0) }}</td>
+                <td class="fig num">
+                  <span v-if="row.open_interest != null">{{ num(row.open_interest, 0) }}</span>
+                  <span v-else>—</span>
+                  <span
+                    v-if="row.open_interest && (row.contracts || row.volume)"
+                    class="vol-oi-pill"
+                    :class="{ 'high-vol-oi': ((row.contracts || row.volume || 0) / row.open_interest) >= 1.0 }"
+                  >
+                    {{ (((row.contracts || row.volume || 0) / row.open_interest)).toFixed(1) }}x
+                  </span>
+                </td>
+                <td class="fig num bold" :class="[row.right, { 'whale-prem': (row.premium ?? 0) >= 100_000 }]">
+                  {{ optUsd(row.premium, 0) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="filteredHistoryTape.length > 50" class="tape-actions pad">
+            <button type="button" class="label raw-btn" @click="historyShowAll = !historyShowAll">
+              {{ historyShowAll ? 'SHOW FIRST 50 PRINTS' : `SHOW ALL ${filteredHistoryTape.length} PRINTS` }}
+            </button>
+            <button type="button" class="label raw-btn" @click="downloadHistoryTapeCsv">
+              EXPORT ALL {{ historyTape.length }} TO CSV
+            </button>
+          </div>
+        </div>
       </div>
     </Panel>
     </template><!-- /measured desk -->
@@ -2143,12 +2518,97 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   cursor: pointer;
 }
 .book-pin.on { color: var(--phosphor); border-color: var(--phosphor-dim); }
+.history-tape-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
 .history-tape-bar {
   display: flex;
   flex-wrap: wrap;
+  justify-content: space-between;
   gap: var(--s3);
-  align-items: end;
+  align-items: center;
   padding: var(--s3);
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule);
+}
+.history-controls-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  align-items: center;
+}
+.history-controls-group label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel);
+  padding: 2px 8px;
+  border: var(--hair) solid var(--rule-hi);
+}
+.history-controls-group input[type="date"],
+.history-controls-group select {
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  background: transparent;
+  color: var(--ink);
+  border: none;
+  min-height: 26px;
+  padding: 0 4px;
+}
+.history-presets-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.history-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  align-items: center;
+  padding: 8px var(--s3);
+  background: var(--panel-raise);
+  border: var(--hair) solid var(--rule-hi);
+  font-size: var(--t-tiny);
+}
+.h-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.h-stat-item .call { color: var(--long); font-weight: 700; }
+.h-stat-item .put { color: var(--short); font-weight: 700; }
+.history-filter-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s2);
+  padding: 4px var(--s1);
+}
+.history-search-box {
+  flex: 0 1 280px;
+  min-width: 180px;
+}
+.history-search-input {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+}
+.history-search-input:focus {
+  outline: none;
+  border-color: var(--phosphor-dim);
+}
+.dte-tag {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
 }
 .active-symbol { font-size: var(--t-fig); font-weight: 600; letter-spacing: var(--track-tight); color: var(--ink); }
 .slash { font: 300 1rem var(--font-display); color: var(--rule-hi); }

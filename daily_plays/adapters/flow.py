@@ -9,7 +9,7 @@ from threading import Thread
 from typing import Any, Callable, Mapping
 
 from ..activity_lean import describe_activity_lean
-from ..options_intelligence import _annotate_tape_anomalies, _normalize_flow_row
+from ..options_intelligence import _annotate_tape_anomalies, _normalize_flow_row, _parse_occ_symbol
 
 
 FLOW_TIMEOUT_SECONDS = 2.0
@@ -45,16 +45,16 @@ def _canonical_symbol(value: Any) -> str:
 
 
 def _alert_underlying(alert: Mapping[str, Any]) -> str:
-    """Return only an explicit underlying identifier.
-
-    The live provider has previously returned an unfiltered 500-row page for
-    multiple requested names.  A contract/OCC identifier must not be guessed
-    into an underlying here; unverifiable rows are discarded.
-    """
-    for key in ("underlying", "underlying_symbol", "root_symbol", "ticker", "symbol"):
-        value = _canonical_symbol(alert.get(key))
-        if value:
+    """Return explicit underlying identifier or extract from OCC option ticker."""
+    for key in ("underlying", "underlying_symbol", "root_symbol", "symbol", "ticker", "occ_symbol", "contract_symbol"):
+        raw = alert.get(key)
+        value = _canonical_symbol(raw)
+        if value and not any(ch.isdigit() for ch in value):
             return value
+        if raw:
+            occ = _parse_occ_symbol(raw)
+            if occ.get("symbol"):
+                return occ["symbol"]
     return ""
 
 
@@ -350,13 +350,23 @@ def normalize_flow_payload(payload: Mapping[str, Any] | None, *, asof_utc: str |
 
 
 def _timestamp_in_window(value: Any, since: str | None, until: str | None) -> bool:
-    text = str(value or "")
+    text = str(value or "").strip()
     if not text:
         return not since and not until
-    if since and text < since:
-        return False
-    if until and text > until:
-        return False
+    if since:
+        since_s = since.strip()
+        if len(since_s) == 10 and len(text) >= 10:
+            if text[:10] < since_s:
+                return False
+        elif text < since_s:
+            return False
+    if until:
+        until_s = until.strip()
+        if len(until_s) == 10 and len(text) >= 10:
+            if text[:10] > until_s:
+                return False
+        elif text > until_s:
+            return False
     return True
 
 
@@ -427,9 +437,11 @@ def load_symbol_flow_tape(
                 }
                 clauses: list[str] = []
                 if since:
-                    clauses.append(f"ts.gte.{since}")
+                    s_val = f"{since}T00:00:00Z" if len(since) == 10 and "-" in since else since
+                    clauses.append(f"ts.gte.{s_val}")
                 if until:
-                    clauses.append(f"ts.lte.{until}")
+                    u_val = f"{until}T23:59:59Z" if len(until) == 10 and "-" in until else until
+                    clauses.append(f"ts.lte.{u_val}")
                 if clauses:
                     params["and"] = f"({','.join(clauses)})"
                 response = requests.get(

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 import math
+import re
 from statistics import median
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -524,21 +525,46 @@ def _normalize_trade_class(row: Mapping[str, Any], *, volume: int, premium: floa
     return "single", "unclassified"
 
 
+_OCC_RE = re.compile(r"^([A-Za-z.]{1,6})([0-9]{2})([0-9]{2})([0-9]{2})([CPcp])([0-9]{8})$")
+
+
+def _parse_occ_symbol(value: Any) -> dict[str, Any]:
+    """Extract symbol, expiry, right, and strike from standard OCC ticker."""
+    if not value:
+        return {}
+    text = str(value).strip().upper()
+    match = _OCC_RE.match(text)
+    if not match:
+        return {}
+    sym, yy, mm, dd, cp, strike_raw = match.groups()
+    try:
+        exp = date(2000 + int(yy), int(mm), int(dd))
+        strike = int(strike_raw) / 1000.0
+        right = "call" if cp == "C" else "put"
+        return {"symbol": sym, "expiry": exp, "right": right, "strike": strike}
+    except (ValueError, OverflowError):
+        return {}
+
+
 def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = None) -> dict[str, Any] | None:
-    right = _right(_first(row, "contract_type", "option_type", "right", "type"))
+    occ_symbol = _first(row, "occ_symbol", "contract_symbol", "contractSymbol", "ticker", "option_symbol")
+    occ_info = _parse_occ_symbol(occ_symbol)
+
+    right = _right(_first(row, "contract_type", "option_type", "right", "type")) or occ_info.get("right")
     observed = _timestamp(_first(row, "ts", "timestamp", "datetime", "time", "last_trade_at", "updated_at"))
     volume = _integer(_first(row, "volume", "volume_today", "size", "contracts", "quantity")) or 0
     price = _number(_first(row, "price", "last_price", "trade_price", "fill_price", "mid"))
     premium = _number(_first(row, "premium", "total_premium", "est_premium", "notional"))
     multiplier = _integer(_first(row, "multiplier", "contract_multiplier"))
+    eff_multiplier = multiplier if multiplier is not None else 100
     estimated = False
     price_estimated = False
-    if premium is None and price is not None and volume > 0 and multiplier is not None:
-        premium = price * volume * multiplier
+    if premium is None and price is not None and volume > 0:
+        premium = price * volume * eff_multiplier
         estimated = True
-    if price is None and premium is not None and volume > 0 and multiplier is not None:
-        # Back out per-contract fill only when the contract multiplier is known.
-        price = premium / (volume * multiplier)
+    if price is None and premium is not None and volume > 0:
+        # Back out per-contract fill using multiplier (standard 100 for equity options)
+        price = premium / (volume * eff_multiplier)
         price_estimated = True
     if right is None or observed is None or premium is None or premium < 0:
         return None
@@ -565,7 +591,11 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     if underlying_price is None and fallback_spot is not None:
         underlying_price = fallback_spot
     strike = _number(row.get("strike"))
+    if strike is None:
+        strike = occ_info.get("strike")
     expiry = _expiry(_first(row, "expiry", "expiration", "expiration_date"))
+    if expiry is None:
+        expiry = occ_info.get("expiry")
     if expiry is not None and expiry < observed.date():
         return None
     dte = (expiry - observed.date()).days if expiry is not None else None
@@ -581,7 +611,7 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     # Always expose contract identity for the tape (CALL/PUT activity scan).
     activity_side = "call" if right == "call" else "put"
     trade_class, trade_class_source = _normalize_trade_class(row, volume=volume, premium=float(premium))
-    symbol = _underlying_from_row(row)
+    symbol = _underlying_from_row(row) or occ_info.get("symbol")
     return {
         "timestamp": observed,
         "symbol": symbol,
@@ -594,7 +624,7 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
         "price": round(price, 4) if price is not None else None,
         "price_estimated": price_estimated,
         "strike": strike,
-        "occ_symbol": _first(row, "occ_symbol", "contract_symbol", "contractSymbol", "ticker"),
+        "occ_symbol": occ_symbol,
         "underlying_price": round(underlying_price, 4) if underlying_price is not None else None,
         "expiry": expiry,
         "dte": dte,

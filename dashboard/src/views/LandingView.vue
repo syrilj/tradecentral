@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUnmounted } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref } from 'vue'
 import { api, type MarketClock, type Readiness, type StatusPayload } from '@/api'
 import { useResource, type Resource } from '@/composables/useResource'
-import { age, DASH, num, shortDate } from '@/format'
+import { age, DASH, num, shortDate, usd, signedPct, tone } from '@/format'
 import AppIcon from '@/components/AppIcon.vue'
 import EvidenceLayerVisual from '@/components/EvidenceLayerVisual.vue'
 import GexFlowVisual from '@/components/GexFlowVisual.vue'
@@ -68,28 +68,34 @@ const contacting = computed(() => status.loading.value && !status.data.value && 
 
 const capabilities = [
   {
-    kind: 'market',
+    kind: 'market' as const,
     icon: 'radar',
     index: '01',
     title: 'Market structure',
     copy: 'Search a broad US equity universe, compare trajectories, inspect sector rotation, and keep source freshness visible.',
     detail: 'Price · regimes · sectors · outliers',
+    stat: 'Broad universe',
+    statValue: () => universe.value,
   },
   {
-    kind: 'options',
+    kind: 'options' as const,
     icon: 'options',
     index: '02',
     title: 'Options & flow',
     copy: 'Read positioning, gamma topology, implied ranges, unusual activity, and signed-flow coverage without collapsing them into one score.',
     detail: 'GEX · flow · ranges · contract context',
+    stat: 'Gates cleared',
+    statValue: () => num(gates.value?.go, 0),
   },
   {
-    kind: 'governance',
+    kind: 'governance' as const,
     icon: 'gate',
     index: '03',
     title: 'Research governance',
     copy: 'Trace every claim back to point-in-time tests, pre-registered gates, run artifacts, and explicit shadow evidence.',
     detail: 'Methods · diagnostics · gates · ledgers',
+    stat: 'Shadow sessions',
+    statValue: () => shadow.value,
   },
 ] as const
 
@@ -98,38 +104,92 @@ const principles = [
     index: 'A',
     title: 'Missing stays missing',
     copy: 'Stale, unavailable, proxy, and degraded states are labelled—not silently converted to zero.',
+    icon: 'eye',
   },
   {
     index: 'B',
     title: 'Evidence stays typed',
     copy: 'Ordinal research evidence is never presented as calibrated probability or trade authorization.',
+    icon: 'shield',
   },
   {
     index: 'C',
     title: 'Promotion fails closed',
     copy: 'Readiness and pre-registered gates must agree before any strategy can advance beyond research.',
+    icon: 'gate',
   },
   {
     index: 'D',
     title: 'Execution stays outside',
     copy: 'The checked-in pipeline contains no broker connection, order ticket, or submission route.',
+    icon: 'lock',
   },
-]
+] as const
 
-/* ---- entrance motion ------------------------------------------------------
-   CSS-only, one pass, and fully disabled under prefers-reduced-motion.
-   The page must read instantly without JavaScript. */
+const pipelineSteps = [
+  { icon: 'database', label: 'DATA', note: 'Point-in-time capture', idx: '01' },
+  { icon: 'research', label: 'RESEARCH', note: 'IC decay · quantiles', idx: '02' },
+  { icon: 'gate', label: 'GATES', note: 'Pre-registered verdicts', idx: '03' },
+  { icon: 'session', label: 'SHADOW', note: 'Live, unscored', idx: '04' },
+  { icon: 'shield', label: 'READINESS', note: 'Fail-closed promotion', idx: '05' },
+] as const
+
+/* ---- animated hero ticker tape ----------------------------------------------
+
+   A horizontal marquee that scrolls benchmark symbols left-to-right using the
+   same TAPE marks the operator strip polls. When real tape data is present it
+   shows actual prices; otherwise it shows structural placeholders that read as
+   "SYNC" — consistent with the design system's missing-stays-missing rule. */
+const TAPE = [
+  { sym: 'SPY', label: 'S&P 500' },
+  { sym: 'QQQ', label: 'Nasdaq' },
+  { sym: 'DIA', label: 'Dow' },
+  { sym: 'XLE', label: 'Energy' },
+  { sym: 'IWM', label: 'Russell 2000' },
+  { sym: 'VIX', label: 'Volatility' },
+] as const
+
+const tapeData = ref<{ sym: string; label: string; price: number | null; chg: number | null }[]>([])
+
+async function loadTape(): Promise<void> {
+  try {
+    const payload = await api.compare(['SPY', 'QQQ', 'DIA', 'XLE'], '1m')
+    const stats = payload.stats ?? {}
+    tapeData.value = TAPE.map((t) => {
+      const s = stats[t.sym]
+      const price = typeof s?.last_price === 'number' ? s.last_price : null
+      const chg = typeof s?.chg_1d_pct === 'number' ? s.chg_1d_pct : (typeof s?.chg_window_pct === 'number' ? s.chg_window_pct : null)
+      return { sym: t.sym, label: t.label, price, chg }
+    })
+  } catch {
+    tapeData.value = TAPE.map((t) => ({ sym: t.sym, label: t.label, price: null, chg: null }))
+  }
+}
+
 onMounted(() => {
   document.body.classList.add('edge-public-mode')
+  void loadTape()
+  window.addEventListener('scroll', onScroll)
+  onScroll()
 })
-
 onUnmounted(() => {
   document.body.classList.remove('edge-public-mode')
+  window.removeEventListener('scroll', onScroll)
 })
+
+/* ---- scroll-driven progress indicator -------------------------------------- */
+const scrollProgress = ref(0)
+function onScroll(): void {
+  const el = document.documentElement
+  const max = el.scrollHeight - el.clientHeight
+  scrollProgress.value = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0
+}
 </script>
 
 <template>
   <div class="landing-page">
+    <div class="scroll-progress" :style="{ transform: `scaleX(${scrollProgress})` }" />
+
     <header class="topbar-shell">
       <div class="topbar landing-inner">
         <RouterLink class="brand" to="/" aria-label="TradeCentral home">
@@ -144,6 +204,7 @@ onUnmounted(() => {
           <a href="#product"><small>01</small>Product</a>
           <a href="#workspaces"><small>02</small>Workspaces</a>
           <a href="#method"><small>03</small>Method</a>
+          <a href="#evidence"><small>04</small>Evidence</a>
         </nav>
 
         <div class="top-actions">
@@ -157,7 +218,38 @@ onUnmounted(() => {
       </div>
     </header>
 
+    <!-- ── animated ticker tape ──────────────────────────────────────────────── -->
+    <div class="ticker-tape" aria-hidden="true">
+      <div class="ticker-track">
+        <div class="ticker-row">
+          <span v-for="(item, i) in [...tapeData, ...tapeData]" :key="`${item.sym}-${i}`" class="ticker-item">
+            <span class="ticker-sym">{{ item.sym }}</span>
+            <span class="ticker-sep">·</span>
+            <span class="ticker-price">{{ item.price != null ? usd(item.price) : 'SYNC' }}</span>
+            <span
+              v-if="item.chg != null"
+              class="ticker-chg"
+              :class="tone(item.chg)"
+            >{{ signedPct(item.chg, 2) }}</span>
+          </span>
+        </div>
+        <div class="ticker-row" aria-hidden="true">
+          <span v-for="(item, i) in [...tapeData, ...tapeData]" :key="`${item.sym}-dup-${i}`" class="ticker-item">
+            <span class="ticker-sym">{{ item.sym }}</span>
+            <span class="ticker-sep">·</span>
+            <span class="ticker-price">{{ item.price != null ? usd(item.price) : 'SYNC' }}</span>
+            <span
+              v-if="item.chg != null"
+              class="ticker-chg"
+              :class="tone(item.chg)"
+            >{{ signedPct(item.chg, 2) }}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
     <main>
+      <!-- ── HERO ───────────────────────────────────────────────────────────── -->
       <section class="hero landing-inner">
         <div class="hero-copy">
           <p class="eyebrow reveal"><span aria-hidden="true" /> US equities · options intelligence</p>
@@ -185,6 +277,14 @@ onUnmounted(() => {
           <p class="hero-kicker">The Flow workspace · structural preview</p>
           <ProductMockup />
         </div>
+
+        <!-- Animated hero trace line -->
+        <svg class="hero-trace" viewBox="0 0 1200 100" preserveAspectRatio="none" aria-hidden="true">
+          <path class="trace-path" d="M0 80 C 200 60, 300 90, 500 40 S 800 10, 1000 55 S 1150 70, 1200 20" />
+          <circle class="trace-dot" cx="0" cy="80" r="3" />
+          <circle class="trace-dot" cx="500" cy="40" r="3" />
+          <circle class="trace-dot" cx="1000" cy="55" r="3" />
+        </svg>
       </section>
 
       <section class="stats-section" aria-label="Live instrument state">
@@ -243,6 +343,10 @@ onUnmounted(() => {
             >
               <EvidenceLayerVisual :kind="capability.kind" />
               <p class="capability-copy">{{ capability.copy }}</p>
+              <div class="capability-stat">
+                <span class="stat-label">{{ capability.stat }}</span>
+                <span class="stat-val fig">{{ capability.statValue() }}</span>
+              </div>
             </Panel>
           </div>
         </div>
@@ -284,11 +388,45 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <section id="evidence" class="evidence-section">
+        <div class="landing-inner">
+          <header class="section-heading evidence-heading scroll-reveal">
+            <div>
+              <p class="section-index">EVIDENCE / 04</p>
+              <h2>The research loop.<br>Traced end to end.</h2>
+            </div>
+            <p>
+              Every signal moves through the same path: data, research, gates,
+              shadow, readiness. No shortcut, no override, no silent promotion.
+            </p>
+          </header>
+
+          <div class="pipeline scroll-reveal" aria-label="Research evidence pipeline">
+            <div
+              v-for="(step, i) in pipelineSteps"
+              :key="step.label"
+              class="pipeline-step"
+            >
+              <div class="pipeline-node">
+                <span class="pipeline-idx fig">{{ step.idx }}</span>
+                <span class="pipeline-icon"><AppIcon :name="step.icon" :size="20" /></span>
+                <strong class="pipeline-label">{{ step.label }}</strong>
+                <em class="pipeline-note">{{ step.note }}</em>
+              </div>
+              <div v-if="i < 4" class="pipeline-connector" aria-hidden="true">
+                <span class="connector-line" />
+                <span class="connector-arrow"><AppIcon name="arrow-right" :size="14" /></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="method" class="method-section">
         <div class="landing-inner">
           <header class="section-heading method-heading scroll-reveal">
             <div>
-              <p class="section-index">METHOD / 04</p>
+              <p class="section-index">METHOD / 05</p>
               <h2>Trust is a system property.</h2>
             </div>
             <p>
@@ -305,16 +443,9 @@ onUnmounted(() => {
               :label="principle.title"
               :index="principle.index"
             >
+              <div class="principle-icon"><AppIcon :name="principle.icon" :size="22" /></div>
               <p class="principle-copy">{{ principle.copy }}</p>
             </Panel>
-          </div>
-
-          <div class="method-flow scroll-reveal" aria-label="Evidence lifecycle">
-            <span><AppIcon name="database" :size="16" />DATA</span><i />
-            <span><AppIcon name="research" :size="16" />RESEARCH</span><i />
-            <span><AppIcon name="gate" :size="16" />GATES</span><i />
-            <span><AppIcon name="session" :size="16" />SHADOW</span><i />
-            <span><AppIcon name="shield" :size="16" />READINESS</span>
           </div>
         </div>
       </section>
@@ -384,6 +515,20 @@ onUnmounted(() => {
   font-family: var(--font-ui);
 }
 
+/* ---- scroll progress bar ------------------------------------------------- */
+.scroll-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--phosphor);
+  transform-origin: left;
+  transform: scaleX(0);
+  z-index: 100;
+  transition: transform 0.1s linear;
+}
+
 /* ---- entrance motion ------------------------------------------------------
    CSS-only: the hero resolves in one short pass, sections fade up as they
    enter the viewport. No library, no continuous animation, and everything
@@ -419,7 +564,7 @@ onUnmounted(() => {
   z-index: 20;
   top: 0;
   border-bottom: var(--hair) solid var(--rule);
-  background: rgba(8, 9, 12, 0.9);
+  background: rgba(8, 9, 12, 0.92);
   backdrop-filter: blur(16px);
 }
 .topbar {
@@ -490,6 +635,69 @@ onUnmounted(() => {
 .button-accent:hover { background: var(--phosphor-dim); }
 .button-quiet { color: var(--ink); border-color: var(--rule-hi); background: transparent; }
 .button-quiet:hover { color: var(--phosphor); border-color: var(--phosphor); }
+
+/* ---- ticker tape --------------------------------------------------------- */
+.ticker-tape {
+  position: relative;
+  overflow: hidden;
+  border-bottom: var(--hair) solid var(--rule);
+  background: var(--void-lift);
+  height: 34px;
+  display: flex;
+  align-items: center;
+}
+.ticker-tape::before,
+.ticker-tape::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 60px;
+  z-index: 2;
+  pointer-events: none;
+}
+.ticker-tape::before {
+  left: 0;
+  background: linear-gradient(to right, var(--void-lift), transparent);
+}
+.ticker-tape::after {
+  right: 0;
+  background: linear-gradient(to left, var(--void-lift), transparent);
+}
+.ticker-track {
+  display: flex;
+  gap: 0;
+  width: max-content;
+  animation: ticker-scroll 40s linear infinite;
+}
+.ticker-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 0 0 auto;
+}
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 20px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  border-right: var(--hair) solid var(--rule);
+}
+.ticker-sym { color: var(--ink); font-weight: 700; }
+.ticker-sep { color: var(--ink-ghost); }
+.ticker-price { color: var(--ink-soft); }
+.ticker-chg { font-weight: 600; }
+.ticker-chg.pos { color: var(--long); }
+.ticker-chg.neg { color: var(--short); }
+.ticker-chg.flat { color: var(--ink-dim); }
+
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
 
 /* ---- hero ----------------------------------------------------------------- */
 .hero {
@@ -564,6 +772,33 @@ onUnmounted(() => {
 .hero-boundary strong { color: var(--ink-soft); font-weight: 600; }
 .hero-boundary .app-icon { color: var(--phosphor); }
 
+/* ---- animated hero trace ------------------------------------------------- */
+.hero-trace {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 80px;
+  width: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+.trace-path {
+  fill: none;
+  stroke: var(--phosphor-dim);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 4 6;
+  opacity: 0.4;
+}
+.trace-dot {
+  fill: var(--void);
+  stroke: var(--phosphor);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.6;
+}
+
 /* ---- stats ----------------------------------------------------------------- */
 .stats-section {
   border-top: var(--hair) solid var(--rule);
@@ -589,7 +824,8 @@ onUnmounted(() => {
 /* ---- product / method sections -------------------------------------------- */
 .product-section,
 .workspace-section,
-.method-section { scroll-margin-top: 72px; }
+.method-section,
+.evidence-section { scroll-margin-top: 72px; }
 .product-section { padding-block: 104px; }
 .section-heading {
   display: grid;
@@ -619,6 +855,28 @@ onUnmounted(() => {
 }
 .capability-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 60px; }
 .capability-copy { margin-top: 14px; color: var(--ink-dim); font-family: var(--font-ui); font-size: 13px; line-height: 1.65; }
+.capability-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: var(--hair) solid var(--rule);
+}
+.capability-stat .stat-label {
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.capability-stat .stat-val {
+  color: var(--phosphor);
+  font-family: var(--font-data);
+  font-size: var(--t-fig);
+  font-weight: 600;
+}
 
 /* ---- flow section --------------------------------------------------------- */
 .flow-section { padding-block: 104px; border-top: var(--hair) solid var(--rule); background: var(--void-lift); }
@@ -636,32 +894,109 @@ onUnmounted(() => {
 .workspace-copy .section-index { color: var(--call); }
 .workspace-copy > p:not(.section-index) { margin-top: 22px; }
 
+/* ---- evidence pipeline --------------------------------------------------- */
+.evidence-section { padding-block: 104px; border-top: var(--hair) solid var(--rule); background: var(--void-lift); }
+.evidence-heading { align-items: center; }
+.pipeline {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 56px;
+}
+.pipeline-step {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.pipeline-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 12px;
+  width: 100%;
+  text-align: center;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--panel);
+  transition: border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.pipeline-node:hover {
+  border-color: var(--phosphor);
+  transform: translateY(-2px);
+}
+.pipeline-idx {
+  font-family: var(--font-data);
+  font-size: 8px;
+  font-weight: 600;
+  color: var(--ink-ghost);
+  letter-spacing: 0.08em;
+}
+.pipeline-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  color: var(--phosphor);
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void-lift);
+}
+.pipeline-label {
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.pipeline-note {
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.4;
+}
+.pipeline-connector {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+}
+.connector-line {
+  position: absolute;
+  inset: 0;
+  top: 50%;
+  bottom: 50%;
+  height: 1px;
+  background: var(--rule-hi);
+}
+.connector-arrow {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--ink-ghost);
+  background: var(--void-lift);
+}
+
 /* ---- method --------------------------------------------------------------- */
 .method-section { padding-block: 104px; border-top: var(--hair) solid var(--rule); background: var(--void-lift); }
 .method-heading { align-items: center; }
 .principle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 56px; }
-.principle-copy { color: var(--ink-dim); font-family: var(--font-ui); font-size: 12px; line-height: 1.6; }
-.method-flow { display: flex; align-items: center; gap: 12px; margin-top: 44px; }
-.method-flow span {
-  min-height: 40px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  color: var(--ink-soft);
+.principle-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 12px;
+  color: var(--phosphor);
   border: var(--hair) solid var(--rule-hi);
   background: var(--void-lift);
-  font-family: var(--font-data);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
 }
-.method-flow span:nth-of-type(1) .app-icon,
-.method-flow span:nth-of-type(2) .app-icon { color: var(--call); }
-.method-flow span:nth-of-type(3) .app-icon { color: var(--warn); }
-.method-flow span:nth-of-type(4) .app-icon,
-.method-flow span:nth-of-type(5) .app-icon { color: var(--phosphor); }
-.method-flow i { flex: 1; height: 1px; background: var(--rule-hi); }
+.principle-copy { color: var(--ink-dim); font-family: var(--font-ui); font-size: 12px; line-height: 1.6; }
 
 /* ---- final CTA ------------------------------------------------------------ */
 .final-cta {
@@ -671,6 +1006,17 @@ onUnmounted(() => {
   text-align: center;
   border-top: var(--hair) solid var(--rule);
   background: var(--void);
+}
+.final-cta::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse at center, #000 0%, transparent 70%);
 }
 .final-inner { position: relative; }
 .final-inner .section-index { color: var(--call); }
@@ -704,6 +1050,9 @@ onUnmounted(() => {
   .flow-copy,
   .workspace-copy { max-width: 640px; }
   .principle-grid { grid-template-columns: repeat(2, 1fr); }
+  .pipeline { flex-wrap: wrap; gap: 12px; }
+  .pipeline-step { flex: 1 1 45%; }
+  .pipeline-connector { display: none; }
 }
 
 @media (max-width: 800px) {
@@ -713,8 +1062,7 @@ onUnmounted(() => {
   .hero h1 { font-size: clamp(44px, 11vw, 68px); }
   .section-heading { grid-template-columns: 1fr; gap: 26px; }
   .capability-grid { grid-template-columns: 1fr; }
-  .method-flow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .method-flow i { display: none; }
+  .pipeline-step { flex: 1 1 100%; }
   .footer-inner { grid-template-columns: 1fr auto; }
   .footer-inner > p { display: none; }
 }
@@ -739,13 +1087,13 @@ onUnmounted(() => {
   .product-section,
   .flow-section,
   .workspace-section,
-  .method-section { padding-block: 76px; }
+  .method-section,
+  .evidence-section { padding-block: 76px; }
   .section-heading h2,
   .flow-copy h2,
   .workspace-copy h2,
   .final-inner h2 { font-size: clamp(36px, 11vw, 50px); }
   .principle-grid { grid-template-columns: 1fr; }
-  .method-flow { grid-template-columns: 1fr; }
   .final-cta { padding-block: 76px 72px; }
   .footer-inner { min-height: 104px; grid-template-columns: 1fr; padding-block: 20px; }
   .footer-inner nav { justify-self: start; }
@@ -756,5 +1104,7 @@ onUnmounted(() => {
   .scroll-reveal { animation: none; }
   .button,
   .topnav a { transition: none; }
+  .ticker-track { animation: none; }
+  .scroll-progress { transition: none; }
 }
 </style>

@@ -735,6 +735,7 @@ export interface OptionsTapeRow {
   strike: number | null
   /** Underlying stock price when trade occurred or session spot. */
   underlying_price?: number | null
+  occ_symbol?: string | null
   expiry: string | null
   dte?: number | null
   otm_pct?: number | null
