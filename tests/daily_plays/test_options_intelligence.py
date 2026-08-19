@@ -829,3 +829,132 @@ def test_median_spread_pct_is_none_without_usable_bid_ask():
         asof_utc=ASOF,
     )
     assert payload["summary"]["median_spread_pct"] is None
+
+
+def test_charm_is_delta_decay_per_day_and_identical_for_calls_and_puts_at_q0():
+    from edge.daily_plays.options_intelligence import _bs_charm_per_day
+
+    # ATM, 30 DTE, IV 0.35, r 0.045, q 0.
+    call = _bs_charm_per_day(spot=100, strike=100, years=30 / 365, iv=0.35, rate=0.045)
+    put = _bs_charm_per_day(spot=100, strike=100, years=30 / 365, iv=0.35, rate=0.045, is_call=False)
+    assert call is not None and put is not None
+    assert call == pytest.approx(put, abs=1e-12)
+    # Charm is negative for ATM options: delta decays toward 0/1 as time passes.
+    assert call < 0
+    # Units: delta per day — a sane magnitude for 30 DTE ATM.
+    assert abs(call) < 0.01
+
+
+def test_charm_skips_near_expiry_and_implausible_iv_instead_of_exploding():
+    from edge.daily_plays.options_intelligence import _bs_charm_per_day
+
+    assert _bs_charm_per_day(spot=100, strike=100, years=0.5 / 365, iv=0.35, rate=0.045) is None
+    assert _bs_charm_per_day(spot=100, strike=100, years=30 / 365, iv=0.0, rate=0.045) is None
+    assert _bs_charm_per_day(spot=100, strike=100, years=30 / 365, iv=9.0, rate=0.045) is None
+
+
+def test_charm_flow_by_strike_uses_dealer_sign_convention_and_oi():
+    # ATM strikes: charm is negative for both rights (delta decays toward 0/1),
+    # so the dealer sign convention (calls +, puts −) flips the put side.
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[_chain("call", 100), _chain("put", 100)],
+        flow_rows=[],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+    rows = {row["strike"]: row for row in result["charm_by_strike"]}
+    assert 100 in rows
+    # ATM charm < 0 → call flow negative, put flow positive (sign convention).
+    assert rows[100]["call_charm_flow"] < 0
+    assert rows[100]["put_charm_flow"] > 0
+    assert rows[100]["net_charm_flow"] == pytest.approx(
+        rows[100]["call_charm_flow"] + rows[100]["put_charm_flow"]
+    )
+    # Summary aggregates the same numbers.
+    summary = result["charm_summary"]
+    assert summary["net_charm_flow"] == pytest.approx(rows[100]["net_charm_flow"])
+    assert summary["contracts_measured"] == 2
+    assert summary["source"] == "black_scholes_charm"
+
+
+def test_charm_summary_pressure_tag_follows_dealer_hedge_convention():
+    # §5.5: net charm flow > 0 → dealers sell to stay neutral → selling pressure.
+    from edge.daily_plays.options_intelligence import _charm_map
+
+    rows = [
+        {"right": "call", "strike": 100, "dte": 30, "iv": 0.35, "open_interest": 2_000, "multiplier": 100},
+        {"right": "put", "strike": 100, "dte": 30, "iv": 0.35, "open_interest": 2_000, "multiplier": 100},
+    ]
+    _, summary, _ = _charm_map(rows, spot=100, rate=0.045)
+    # Equal OI on both sides → net ≈ 0 → balanced.
+    assert summary["pressure"] == "balanced"
+
+    rows = [
+        {"right": "call", "strike": 100, "dte": 30, "iv": 0.35, "open_interest": 2_000, "multiplier": 100},
+    ]
+    _, summary, _ = _charm_map(rows, spot=100, rate=0.045)
+    # Call-only book: net charm flow < 0 (ATM charm negative) → dealers buy.
+    assert summary["net_charm_flow"] < 0
+    assert summary["pressure"] == "buying"
+
+
+def test_pressure_gauge_readout_agrees_with_dealer_hedge_convention():
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    # §5.5: positive net charm flow → dealers sell → selling pressure.
+    # The gauge negates the charm term so it agrees with the charm KPI.
+    gauge = _pressure_gauge(
+        net_charm_flow=500.0, net_gex_m=0.0,
+        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+    )
+    assert gauge["imbalance"] == pytest.approx(-1.0)
+    assert gauge["label"] == "selling"
+
+    gauge = _pressure_gauge(
+        net_charm_flow=-500.0, net_gex_m=0.0,
+        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+    )
+    assert gauge["imbalance"] == pytest.approx(1.0)
+    assert gauge["label"] == "buying"
+
+    gauge = _pressure_gauge(
+        net_charm_flow=0.0, net_gex_m=0.0,
+        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+    )
+    assert gauge["imbalance"] == pytest.approx(0.0)
+    assert gauge["label"] == "balanced"
+
+
+def test_pressure_gauge_blends_gex_and_delta_weighted_volume():
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    # Charm flow 0, GEX 0, but delta-weighted call volume dominates → buying.
+    gauge = _pressure_gauge(
+        net_charm_flow=0.0, net_gex_m=0.0,
+        delta_weighted_call_vol=10_000.0, delta_weighted_put_vol=1_000.0,
+    )
+    assert gauge["imbalance"] > 0.25
+    assert gauge["label"] == "buying"
+    assert gauge["components"]["delta_weighted_call_vol"] == pytest.approx(10_000.0)
+
+
+def test_payload_exposes_charm_pressure_and_delta_weighted_volume():
+    result = _payload([])
+    assert "charm_by_strike" in result
+    assert "chain_by_strike" in result
+    assert "charm_summary" in result
+    assert "pressure" in result
+    assert "delta_weighted_volume" in result
+    assert result["pressure"]["label"] in {"buying", "selling", "balanced"}
+    assert result["pressure"]["components"]["net_charm_flow"] == pytest.approx(
+        result["charm_summary"]["net_charm_flow"]
+    )
+    assert result["delta_weighted_volume"]["call"] >= 0
+    assert result["delta_weighted_volume"]["put"] >= 0

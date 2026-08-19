@@ -1,4 +1,5 @@
 """Shared pytest fixtures for TradeCentral E2E multi-tier test suites."""
+
 from __future__ import annotations
 
 import io
@@ -12,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tools import api_server
+from edge.tools import api_server
 
 
 # --------------------------------------------------------------------------
@@ -31,6 +32,7 @@ API_TS = DASHBOARD_SRC / "api.ts"
 # --------------------------------------------------------------------------
 class FakeSocket:
     """In-memory socket stream for BaseHTTPRequestHandler dispatch."""
+
     def __init__(self, request_bytes: bytes):
         self.rfile = io.BytesIO(request_bytes)
         self.wfile = io.BytesIO()
@@ -65,10 +67,13 @@ class DirectResponse:
 
 class DirectApiClient:
     """Fast, socket-free in-memory client invoking ApiRequestHandler verbatim."""
+
     def get(self, path: str, headers: dict[str, str] | None = None) -> DirectResponse:
         return self._request("GET", path, headers=headers)
 
-    def post(self, path: str, body: bytes | str = b"", headers: dict[str, str] | None = None) -> DirectResponse:
+    def post(
+        self, path: str, body: bytes | str = b"", headers: dict[str, str] | None = None
+    ) -> DirectResponse:
         if isinstance(body, str):
             body = body.encode("utf-8")
         return self._request("POST", path, body=body, headers=headers)
@@ -81,7 +86,12 @@ class DirectApiClient:
     ) -> DirectResponse:
         hdrs = headers or {}
         hdr_lines = "".join(f"{k}: {v}\r\n" for k, v in hdrs.items())
-        raw = f"{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {len(body)}\r\n{hdr_lines}\r\n".encode("utf-8") + body
+        raw = (
+            f"{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {len(body)}\r\n{hdr_lines}\r\n".encode(
+                "utf-8"
+            )
+            + body
+        )
         sock = FakeSocket(raw)
         server = FakeServer()
         api_server.ApiRequestHandler(sock, ("127.0.0.1", 12345), server)  # type: ignore
@@ -121,7 +131,7 @@ def mock_daily_frame() -> pd.DataFrame:
     """Deterministic 60-bar OHLCV daily frame with realistic market movement."""
     dates = pd.bdate_range(end=pd.Timestamp.now(tz=None).date(), periods=60)
     np.random.seed(42)
-    
+
     # Geometric Brownian Motion-like price series
     returns = np.random.normal(0.0005, 0.015, size=60)
     close = 150.0 * np.cumprod(1.0 + returns)
@@ -129,7 +139,7 @@ def mock_daily_frame() -> pd.DataFrame:
     low = close * (1.0 - np.abs(np.random.normal(0.005, 0.005, size=60)))
     open_p = low + (high - low) * np.random.uniform(0.2, 0.8, size=60)
     volume = np.random.uniform(5_000_000, 25_000_000, size=60)
-    
+
     df = pd.DataFrame(
         {
             "open": open_p,

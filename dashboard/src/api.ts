@@ -804,6 +804,54 @@ export interface GexStrikeRow {
   put_oi: number
 }
 
+/** Charm flow per strike: shares/day of dealer hedge adjustment from time decay. */
+export interface CharmStrikeRow {
+  strike: number
+  call_charm_flow: number
+  put_charm_flow: number
+  net_charm_flow: number
+  call_oi: number
+  put_oi: number
+}
+
+/** Per-contract Black-Scholes diagnostics for the strike table. */
+export interface ChainStrikeRow {
+  strike: number
+  right: 'call' | 'put'
+  dte: number | null
+  iv: number | null
+  open_interest: number
+  volume: number
+  delta: number | null
+  gamma: number | null
+  charm_per_day: number | null
+  charm_flow: number
+}
+
+export interface CharmSummary {
+  net_charm_flow: number
+  call_charm_flow: number
+  put_charm_flow: number
+  abs_charm_flow: number
+  contracts_measured: number
+  contracts_skipped: number
+  pressure: 'selling' | 'buying' | 'balanced'
+  source: string
+}
+
+export interface PressureGauge {
+  imbalance: number
+  label: 'buying' | 'selling' | 'balanced'
+  components: {
+    net_charm_flow: number
+    delta_weighted_call_vol: number
+    delta_weighted_put_vol: number
+    net_gex_m: number
+  }
+  weights: { alpha: number; beta: number }
+  convention_note: string
+}
+
 export interface OptionsProbability {
   available: boolean
   method: string
@@ -1373,6 +1421,11 @@ export interface OptionsIntelligence {
   flow_series: OptionsFlowPoint[]
   flow_tape: OptionsTapeRow[]
   gex_by_strike: GexStrikeRow[]
+  charm_by_strike?: CharmStrikeRow[]
+  chain_by_strike?: ChainStrikeRow[]
+  charm_summary?: CharmSummary
+  pressure?: PressureGauge
+  delta_weighted_volume?: { call: number; put: number }
   oi_by_strike?: Array<{
     strike: number
     call_oi: number

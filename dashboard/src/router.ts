@@ -63,10 +63,16 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Options Drift', index: '05' },
   },
   {
+    path: '/drift',
+    name: 'drift',
+    component: () => import('@/views/DriftView.vue'),
+    meta: { title: 'Drift', index: '05' },
+  },
+  {
     path: '/flow',
     name: 'flow',
     component: () => import('@/views/FlowView.vue'),
-    meta: { title: 'Market Flow', index: '04' },
+    meta: { title: 'Market Flow', index: '06' },
   },
   {
     path: '/chain',

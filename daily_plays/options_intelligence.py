@@ -151,6 +151,53 @@ def _bs_gamma(*, spot: float, strike: float, years: float, iv: float, rate: floa
     return math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi) / (spot * iv * root_t)
 
 
+def _bs_d1(*, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0) -> float | None:
+    if spot <= 0 or strike <= 0 or years <= 0 or not 0.005 <= iv <= 5.0:
+        return None
+    root_t = math.sqrt(years)
+    return (math.log(spot / strike) + (rate - yield_rate + 0.5 * iv * iv) * years) / (iv * root_t)
+
+
+def _bs_delta(*, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0, is_call: bool = True) -> float | None:
+    """Black-Scholes delta (dividend-adjusted)."""
+    d1 = _bs_d1(spot=spot, strike=strike, years=years, iv=iv, rate=rate, yield_rate=yield_rate)
+    if d1 is None:
+        return None
+    eq_t = math.exp(-yield_rate * years)
+    delta = eq_t * _normal_cdf(d1)
+    return delta if is_call else delta - eq_t
+
+
+def _bs_charm_per_day(*, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0, is_call: bool = True) -> float | None:
+    """Charm = ∂Δ/∂t in delta-per-day (standard −∂Δ/∂τ convention, /365).
+
+    Charmcall = e^{-qT} [ q·N(d1) − φ(d1)·(2(r−q)T − d2·σ√T) / (2σT√T) ]
+    Charmput  = Charmcall − q·e^{-qT}
+
+    With q = 0 (single-stock approximation) charm is identical for calls and
+    puts, like gamma. Near-expiry contracts (T < 1 day) and implausible IV
+    return None so the exposure never explodes into a fake reading.
+    """
+    if spot <= 0 or strike <= 0 or years <= 0 or not 0.005 <= iv <= 5.0:
+        return None
+    if years < 1.0 / 365.0:
+        return None
+    root_t = math.sqrt(years)
+    d1 = (math.log(spot / strike) + (rate - yield_rate + 0.5 * iv * iv) * years) / (iv * root_t)
+    d2 = d1 - iv * root_t
+    eq_t = math.exp(-yield_rate * years)
+    nd1 = _normal_cdf(d1)
+    pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+    charm_year = eq_t * (
+        yield_rate * nd1
+        - pdf_d1 * (2.0 * (rate - yield_rate) * years - d2 * iv * root_t)
+        / (2.0 * iv * years * root_t)
+    )
+    if not is_call:
+        charm_year -= yield_rate * eq_t
+    return charm_year / 365.0
+
+
 def _date_bounds(filters: OptionsFilters, asof: datetime) -> tuple[datetime, datetime]:
     """Calendar window for price series / history chain selection."""
     window_days = {"1d": 1, "5d": 5, "1m": 31, "3m": 93}[filters.range]
@@ -559,12 +606,12 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     eff_multiplier = multiplier if multiplier is not None else 100
     estimated = False
     price_estimated = False
-    if premium is None and price is not None and volume > 0:
-        premium = price * volume * eff_multiplier
+    effective_mult = multiplier if multiplier is not None else (100 if occ_info else None)
+    if premium is None and price is not None and volume > 0 and effective_mult is not None:
+        premium = price * volume * effective_mult
         estimated = True
-    if price is None and premium is not None and volume > 0:
-        # Back out per-contract fill using multiplier (standard 100 for equity options)
-        price = premium / (volume * eff_multiplier)
+    if price is None and premium is not None and volume > 0 and effective_mult is not None:
+        price = premium / (volume * effective_mult)
         price_estimated = True
     if right is None or observed is None or premium is None or premium < 0:
         return None
@@ -1388,6 +1435,142 @@ def _gex_map(
     return mapped, summary, gamma_source, gex_by_expiry, price_profile
 
 
+def _charm_map(
+    rows: Sequence[Mapping[str, Any]], *, spot: float, rate: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+    """Charm flow by strike + chain-level pressure diagnostics.
+
+    Charm = ∂Δ/∂t (delta decay per day). Charm flow = charm × OI × 100, the
+    shares/day dealers must trade to stay delta-hedged purely from time decay.
+    Same dealer sign convention as GEX: calls positive, puts negative.
+
+    Heuristic (dealer-long-calls / short-puts convention):
+      · Net charm flow > 0 → dealer net delta rises over time → dealers sell
+        underlying to stay neutral → selling pressure builds.
+      · Net charm flow < 0 → dealers buy → buying pressure builds.
+
+    This is a positioning proxy, not observed flow; the payload labels it as
+    such. Contracts with no IV or T < 1 day are skipped rather than clamped,
+    so a missing input never renders as a measured zero.
+    """
+    by_strike: dict[float, dict[str, float]] = {}
+    chain_rows: list[dict[str, Any]] = []
+    charm_source = {"black_scholes": 0, "unavailable": 0}
+    for row in rows:
+        strike = _number(row.get("strike"))
+        dte = _integer(row.get("dte"))
+        iv = _number(row.get("iv"))
+        right = row.get("right")
+        if not strike or right not in {"call", "put"}:
+            charm_source["unavailable"] += 1
+            continue
+        years = max(float(dte or 0), 0.5) / 365.0
+        charm = _bs_charm_per_day(
+            spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate, is_call=(right == "call"),
+        )
+        if charm is None:
+            charm_source["unavailable"] += 1
+            continue
+        charm_source["black_scholes"] += 1
+        oi = _integer(row.get("open_interest")) or 0
+        multiplier = _integer(row.get("multiplier")) or 100
+        sign = 1.0 if right == "call" else -1.0
+        flow = sign * charm * oi * multiplier
+        cell = by_strike.setdefault(strike, {"call_flow": 0.0, "put_flow": 0.0, "call_oi": 0.0, "put_oi": 0.0})
+        cell[f"{right}_flow"] += flow
+        cell[f"{right}_oi"] += oi
+        chain_rows.append({
+            "strike": strike,
+            "right": right,
+            "dte": dte,
+            "iv": iv,
+            "open_interest": oi,
+            "volume": _integer(row.get("volume")) or 0,
+            "delta": _bs_delta(spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate, is_call=(right == "call")),
+            "gamma": _bs_gamma(spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate),
+            "charm_per_day": charm,
+            "charm_flow": flow,
+        })
+
+    mapped = []
+    for strike, value in sorted(by_strike.items()):
+        net = value["call_flow"] + value["put_flow"]
+        mapped.append({
+            "strike": strike,
+            "call_charm_flow": round(value["call_flow"], 4),
+            "put_charm_flow": round(value["put_flow"], 4),
+            "net_charm_flow": round(net, 4),
+            "call_oi": int(value["call_oi"]),
+            "put_oi": int(value["put_oi"]),
+        })
+
+    net_charm_flow = sum(row["net_charm_flow"] for row in mapped)
+    call_flow = sum(row["call_charm_flow"] for row in mapped)
+    put_flow = sum(row["put_charm_flow"] for row in mapped)
+    abs_flow = abs(call_flow) + abs(put_flow)
+    summary = {
+        "net_charm_flow": round(net_charm_flow, 4),
+        "call_charm_flow": round(call_flow, 4),
+        "put_charm_flow": round(put_flow, 4),
+        "abs_charm_flow": round(abs_flow, 4),
+        "contracts_measured": len(chain_rows),
+        "contracts_skipped": charm_source["unavailable"],
+        "pressure": (
+            "selling" if net_charm_flow > 0 else "buying" if net_charm_flow < 0 else "balanced"
+        ),
+        "source": "black_scholes_charm",
+    }
+    return mapped, summary, chain_rows
+
+
+def _pressure_gauge(
+    *, net_charm_flow: float, net_gex_m: float, delta_weighted_call_vol: float,
+    delta_weighted_put_vol: float, alpha: float = 1.0, beta: float = 0.5,
+) -> dict[str, Any]:
+    """Normalized pressure signal in [−1, +1] from charm flow, GEX, and live volume.
+
+    imbalance = (−NetCharmFlow + α·(ΔWCallVol − ΔWPutVol) + β·NetGEX)
+                / (|NetCharmFlow| + α·(ΔWCallVol + ΔWPutVol) + β·|NetGEX| + ε)
+
+    The charm-flow term is negated so the gauge agrees with the §5.5 dealer
+    hedge convention: positive net charm flow → dealers sell → selling
+    pressure, negative → dealers buy → buying pressure. (The spec's §5.7
+    formula uses the opposite sign; its own caveat marks the mapping as
+    convention-dependent, and a gauge that contradicts the charm KPI on the
+    same symbol is worse than either convention alone.)
+
+    Readout: > +0.25 buying pressure building, < −0.25 selling pressure
+    building, otherwise balanced. The GEX regime is surfaced separately
+    (positive = mean-reversion, negative = trending) because the two behave
+    very differently.
+    """
+    eps = 1e-9
+    numerator = -net_charm_flow + alpha * (delta_weighted_call_vol - delta_weighted_put_vol) + beta * net_gex_m
+    denominator = abs(net_charm_flow) + alpha * (delta_weighted_call_vol + delta_weighted_put_vol) + beta * abs(net_gex_m) + eps
+    imbalance = max(-1.0, min(1.0, numerator / denominator))
+    if imbalance > 0.25:
+        label = "buying"
+    elif imbalance < -0.25:
+        label = "selling"
+    else:
+        label = "balanced"
+    return {
+        "imbalance": round(imbalance, 6),
+        "label": label,
+        "components": {
+            "net_charm_flow": round(net_charm_flow, 4),
+            "delta_weighted_call_vol": round(delta_weighted_call_vol, 4),
+            "delta_weighted_put_vol": round(delta_weighted_put_vol, 4),
+            "net_gex_m": round(net_gex_m, 4),
+        },
+        "weights": {"alpha": alpha, "beta": beta},
+        "convention_note": (
+            "Charm-flow sign follows the dealer-long-calls/short-puts convention; "
+            "positive net charm flow maps to selling pressure. Positioning proxy, not observed flow."
+        ),
+    }
+
+
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
@@ -2193,6 +2376,28 @@ def build_options_intelligence(
     gex, gex_summary, gamma_source, gex_by_expiry, gex_price_profile = _gex_map(
         filtered_chain, spot=resolved_spot, asof=chain_asof, rate=filters.risk_free_rate,
     )
+    charm_by_strike, charm_summary, charm_chain_rows = _charm_map(
+        filtered_chain, spot=resolved_spot, rate=filters.risk_free_rate,
+    )
+    # Delta-weighted live volume (supporting context for the pressure gauge).
+    # Uses the same BS delta as charm so the gauge components share one model.
+    delta_weighted_call_vol = 0.0
+    delta_weighted_put_vol = 0.0
+    for row in charm_chain_rows:
+        delta = row.get("delta")
+        volume = float(row.get("volume") or 0.0)
+        if delta is None or volume <= 0:
+            continue
+        if row.get("right") == "call":
+            delta_weighted_call_vol += max(0.0, float(delta)) * volume
+        else:
+            delta_weighted_put_vol += abs(float(delta)) * volume
+    pressure = _pressure_gauge(
+        net_charm_flow=charm_summary["net_charm_flow"],
+        net_gex_m=gex_summary["total_gex_m"],
+        delta_weighted_call_vol=delta_weighted_call_vol,
+        delta_weighted_put_vol=delta_weighted_put_vol,
+    )
     probability = _probability_context(
         filtered_chain, spot=resolved_spot, asof=chain_asof, rate=filters.risk_free_rate,
         call_wall=gex_summary["call_wall"], put_wall=gex_summary["put_wall"],
@@ -2476,6 +2681,14 @@ def build_options_intelligence(
         "flow_series": flow_series,
         "flow_tape": tape,
         "gex_by_strike": gex,
+        "charm_by_strike": charm_by_strike,
+        "chain_by_strike": charm_chain_rows,
+        "charm_summary": charm_summary,
+        "pressure": pressure,
+        "delta_weighted_volume": {
+            "call": round(delta_weighted_call_vol, 4),
+            "put": round(delta_weighted_put_vol, 4),
+        },
         "oi_by_strike": [
             {
                 "strike": row["strike"],

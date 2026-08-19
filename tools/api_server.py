@@ -222,6 +222,7 @@ Every handler is wrapped so an exception returns HTTP 500 with
 {"error": "<message>", "endpoint": "<path>"} and logs the traceback to
 stderr -- one bad symbol or malformed artifact must never kill the server.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -255,27 +256,33 @@ _np = None
 _pd = None
 _concurrent_futures = None
 
+
 def _get_np():
     """Lazy load numpy to defer import cost until first use."""
     global _np
     if _np is None:
         import numpy as np
+
         _np = np
     return _np
+
 
 def _get_pd():
     """Lazy load pandas to defer import cost until first use."""
     global _pd
     if _pd is None:
         import pandas as pd
+
         _pd = pd
     return _pd
+
 
 def _get_concurrent_futures():
     """Lazy load concurrent.futures to defer import cost until first use."""
     global _concurrent_futures
     if _concurrent_futures is None:
         import concurrent.futures
+
         _concurrent_futures = concurrent.futures
     return _concurrent_futures
 
@@ -284,14 +291,18 @@ def _get_concurrent_futures():
 def _DataFrame():
     return _get_pd().DataFrame
 
+
 def _Series():
     return _get_pd().Series
+
 
 def _DatetimeIndex():
     return _get_pd().DatetimeIndex
 
+
 def _DateOffset():
     return _get_pd().DateOffset
+
 
 ROOT = Path(__file__).resolve().parents[2]
 EDGE_DIR = ROOT / "edge"
@@ -311,10 +322,11 @@ _DEFAULT_SOCKET_TIMEOUT_S = 30.0
 _MIN_COMPRESS_BYTES = 1024
 
 import types
-if 'edge' not in sys.modules:
-    _edge_mod = types.ModuleType('edge')
+
+if "edge" not in sys.modules:
+    _edge_mod = types.ModuleType("edge")
     _edge_mod.__path__ = [str(EDGE_DIR)]
-    sys.modules['edge'] = _edge_mod
+    sys.modules["edge"] = _edge_mod
 
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(EDGE_DIR))
@@ -335,10 +347,12 @@ from momentum_scan import build_momentum_scan  # noqa: E402
 from fetch_float_data import load_float_data  # noqa: E402
 
 sys.path.insert(0, str(ROOT))
-from edge.daily_plays.config import load_project_environment  # noqa: E402
-from edge.daily_plays.clock import market_clock_status  # noqa: E402
-from edge.daily_plays.config import DailyPlaysConfig, load_config as _load_daily_plays_config  # noqa: E402
-from edge.daily_plays.clock import RunContext  # noqa: E402
+from edge.daily_plays.config import (
+    DailyPlaysConfig,
+    load_config as _load_daily_plays_config,
+    load_project_environment,
+)  # noqa: E402
+from edge.daily_plays.clock import market_clock_status, RunContext  # noqa: E402
 from edge.daily_plays.contracts import RunMode, canonical_json  # noqa: E402
 from edge.daily_plays.ledger import DEFAULT_OUTPUT_ROOT as _DAILY_PLAYS_OUTPUT_ROOT  # noqa: E402
 from edge.daily_plays.pipeline import run_pipeline as _run_daily_plays_pipeline  # noqa: E402
@@ -595,7 +609,9 @@ def _sector_context_map(status: Mapping | None) -> dict[str, dict]:
         out[sym] = {
             "sector_etf": row.get("etf") or row.get("sector_etf"),
             "sector_name": row.get("name") or row.get("sector") or row.get("sector_name"),
-            "flow_direction": row.get("flow_direction") or row.get("day_direction") or row.get("direction"),
+            "flow_direction": row.get("flow_direction")
+            or row.get("day_direction")
+            or row.get("direction"),
             "flow_score": row.get("flow_score") or row.get("definitive_score"),
             "rs_1d": row.get("rs_1d"),
             "rs_5d": row.get("rs_5d"),
@@ -933,9 +949,16 @@ def _flow_state_payload() -> dict:
         "barrier_fields": {},
         "impact_curve": {"lags": [], "mean_cum_ret": [], "ci_lo": [], "ci_hi": []},
         "phenomenon": {
-            "tested": False, "effect": None, "nw_t": None, "boot_ci": None,
-            "perm_p": None, "n_events": 0, "n_controls": 0, "grid": [],
-            "prereg_id": None, "passed": False,
+            "tested": False,
+            "effect": None,
+            "nw_t": None,
+            "boot_ci": None,
+            "perm_p": None,
+            "n_events": 0,
+            "n_controls": 0,
+            "grid": [],
+            "prereg_id": None,
+            "passed": False,
         },
         "gate": {"evaluated": False, "passed": False, "checks": {}, "ledger_id": None},
         "models": None,
@@ -970,7 +993,10 @@ def _flow_state_levels_by_symbol() -> dict[str, dict[str, float]]:
         if not symbol:
             continue
         measured: dict[str, float] = {}
-        for field, dest in (("next_support", "support_price"), ("next_resistance", "resistance_price")):
+        for field, dest in (
+            ("next_support", "support_price"),
+            ("next_resistance", "resistance_price"),
+        ):
             try:
                 if row.get(field) is not None:
                     measured[dest] = float(row[field])
@@ -1026,7 +1052,10 @@ def _bocpd_align_dates(index: pd.DatetimeIndex, arr_len: int) -> "_get_pd().Date
 
 
 def _changepoint_row_from_result(
-    symbol: str, close: "_get_pd().Series", aligned_index: pd.DatetimeIndex, result: BocpdResult,
+    symbol: str,
+    close: "_get_pd().Series",
+    aligned_index: pd.DatetimeIndex,
+    result: BocpdResult,
 ) -> dict | None:
     """The exact payload-A per-symbol row shape, built from an already-run result.
 
@@ -1056,7 +1085,10 @@ def _changepoint_row_from_result(
     # These four are sums/argmax over a normalized probability distribution
     # and should be finite by construction -- if one isn't, this is a broken
     # computation for this symbol, not a per-field null.
-    if not all(math.isfinite(v) for v in (last_break_prob, last_break_prob_20, float(last_map_run), last_exp_run)):
+    if not all(
+        math.isfinite(v)
+        for v in (last_break_prob, last_break_prob_20, float(last_map_run), last_exp_run)
+    ):
         return None
     map_run_last = int(last_map_run)
 
@@ -1116,7 +1148,9 @@ def _changepoint_row_from_result(
 
 
 def _bocpd_runlength_heatmap(
-    result: BocpdResult, pos_in_window: "_get_np().ndarray", aligned_index: pd.DatetimeIndex,
+    result: BocpdResult,
+    pos_in_window: "_get_np().ndarray",
+    aligned_index: pd.DatetimeIndex,
 ) -> dict:
     """The paper's Fig-3-bottom heatmap, trimmed to the window and downsampled.
 
@@ -1141,8 +1175,12 @@ def _bocpd_runlength_heatmap(
     assumed.
     """
     empty = {
-        "dates": [], "run_values": [], "n_rows": 0, "n_cols": 0,
-        "log_floor": _BOCPD_LOG_FLOOR, "matrix": [],
+        "dates": [],
+        "run_values": [],
+        "n_rows": 0,
+        "n_cols": 0,
+        "log_floor": _BOCPD_LOG_FLOOR,
+        "matrix": [],
     }
     try:
         full = _get_np().asarray(result.run_length_posterior(), dtype=float)
@@ -1173,7 +1211,7 @@ def _bocpd_runlength_heatmap(
 
     row_step = max(1, math.ceil(n_rows_crop / _BOCPD_MAX_ROWS))
     row_starts = list(range(0, n_rows_crop, row_step))
-    pooled = _get_np().stack([win[r:r + row_step, :].max(axis=0) for r in row_starts], axis=0)
+    pooled = _get_np().stack([win[r : r + row_step, :].max(axis=0) for r in row_starts], axis=0)
     run_values = row_starts
 
     col_step = max(1, math.ceil(len(cols) / _BOCPD_MAX_COLS))
@@ -1257,8 +1295,12 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
         "thresholds": _bocpd_thresholds(),
         "series": [],
         "runlength": {
-            "dates": [], "run_values": [], "n_rows": 0, "n_cols": 0,
-            "log_floor": _BOCPD_LOG_FLOOR, "matrix": [],
+            "dates": [],
+            "run_values": [],
+            "n_rows": 0,
+            "n_cols": 0,
+            "log_floor": _BOCPD_LOG_FLOOR,
+            "matrix": [],
         },
         "breaks": [],
         "stats": None,
@@ -1285,10 +1327,14 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
     try:
         result = changepoints_from_prices(
             close_full,
-            lambda_gap=_BOCPD_LAMBDA_GAP, a=_BOCPD_PRIOR_A, b=_BOCPD_PRIOR_B,
+            lambda_gap=_BOCPD_LAMBDA_GAP,
+            a=_BOCPD_PRIOR_A,
+            b=_BOCPD_PRIOR_B,
             truncation_mass=_BOCPD_TRUNCATION_MASS,
         )
-        aligned_index = _bocpd_align_dates(close_full.index, len(_get_np().asarray(result.break_prob)))
+        aligned_index = _bocpd_align_dates(
+            close_full.index, len(_get_np().asarray(result.break_prob))
+        )
     except Exception as e:  # noqa: BLE001
         payload = {**empty, "reason": f"changepoints_from_prices failed: {type(e).__name__}: {e}"}
         _changepoint_symbol_cache_put(cache_key, payload)
@@ -1322,7 +1368,11 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
 
     pos_in_window = _get_np().nonzero((aligned_index >= win_start) & (aligned_index <= win_end))[0]
     if len(pos_in_window) == 0:
-        payload = {**empty, "reason": f"no BOCPD output in window for '{symbol}'", "stats": stats_row}
+        payload = {
+            **empty,
+            "reason": f"no BOCPD output in window for '{symbol}'",
+            "stats": stats_row,
+        }
         _changepoint_symbol_cache_put(cache_key, payload)
         return payload
 
@@ -1330,15 +1380,17 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
     for pos in pos_in_window:
         d = aligned_index[pos]
         pv = float(pred_std_arr[pos])
-        series.append({
-            "d": d.strftime("%Y-%m-%d"),
-            "ret": _safe_round(ret_by_date.get(d), 6),
-            "break_prob": _safe_round(float(break_prob_arr[pos]), 6),
-            "break_prob_20": _safe_round(float(break_prob_20_arr[pos]), 6),
-            "map_run": int(map_run_arr[pos]),
-            "pred_vol": _safe_round(pv, 6) if math.isfinite(pv) else None,
-            "pred_mean": _safe_round(float(pred_mean_arr[pos]), 6),
-        })
+        series.append(
+            {
+                "d": d.strftime("%Y-%m-%d"),
+                "ret": _safe_round(ret_by_date.get(d), 6),
+                "break_prob": _safe_round(float(break_prob_arr[pos]), 6),
+                "break_prob_20": _safe_round(float(break_prob_20_arr[pos]), 6),
+                "map_run": int(map_run_arr[pos]),
+                "pred_vol": _safe_round(pv, 6) if math.isfinite(pv) else None,
+                "pred_mean": _safe_round(float(pred_mean_arr[pos]), 6),
+            }
+        )
 
     breaks: list[dict] = []
     for pos in pos_in_window:
@@ -1347,14 +1399,18 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
         d = aligned_index[pos]
         pv_before = float(pred_std_arr[pos - 1]) if pos > 0 else None
         pv_after = float(pred_std_arr[pos])
-        breaks.append({
-            "date": d.strftime("%Y-%m-%d"),
-            "break_prob": _safe_round(float(break_prob_arr[pos]), 6),
-            "break_prob_20": _safe_round(float(break_prob_20_arr[pos]), 6),
-            "ret": _safe_round(ret_by_date.get(d), 6),
-            "pred_vol_before": _safe_round(pv_before, 6) if pv_before is not None and math.isfinite(pv_before) else None,
-            "pred_vol_after": _safe_round(pv_after, 6) if math.isfinite(pv_after) else None,
-        })
+        breaks.append(
+            {
+                "date": d.strftime("%Y-%m-%d"),
+                "break_prob": _safe_round(float(break_prob_arr[pos]), 6),
+                "break_prob_20": _safe_round(float(break_prob_20_arr[pos]), 6),
+                "ret": _safe_round(ret_by_date.get(d), 6),
+                "pred_vol_before": _safe_round(pv_before, 6)
+                if pv_before is not None and math.isfinite(pv_before)
+                else None,
+                "pred_vol_after": _safe_round(pv_after, 6) if math.isfinite(pv_after) else None,
+            }
+        )
 
     runlength = _bocpd_runlength_heatmap(result, pos_in_window, aligned_index)
 
@@ -1443,21 +1499,13 @@ def get_sector_flow(*, force: bool = False) -> dict:
     with _SECTOR_FLOW_LOCK:
         cached = _SECTOR_FLOW_CACHE.get("payload")
         ts = float(_SECTOR_FLOW_CACHE.get("ts") or 0)
-        if (
-            isinstance(cached, dict)
-            and not force
-            and (time.time() - ts) < _SECTOR_FLOW_TTL_S
-        ):
+        if isinstance(cached, dict) and not force and (time.time() - ts) < _SECTOR_FLOW_TTL_S:
             return dict(cached)
     with _SECTOR_FETCH_LOCK:
         with _SECTOR_FLOW_LOCK:
             cached = _SECTOR_FLOW_CACHE.get("payload")
             ts = float(_SECTOR_FLOW_CACHE.get("ts") or 0)
-            if (
-                isinstance(cached, dict)
-                and not force
-                and (time.time() - ts) < _SECTOR_FLOW_TTL_S
-            ):
+            if isinstance(cached, dict) and not force and (time.time() - ts) < _SECTOR_FLOW_TTL_S:
                 return dict(cached)
         flow = fetch_sector_flow_signals()
         if not isinstance(flow, dict):
@@ -1788,12 +1836,20 @@ def _run_plays_job(job_id: str, account: float) -> None:
         load_project_environment()
         config = _load_daily_plays_config()
         context = RunContext.create(mode=RunMode.LIVE)
-        on_progress("discovery", 15, "Scanning sector flow and routing targets.")
+        on_progress("discovery", 20, "Scanning sector relative strength and market map.")
+        on_progress(
+            "pipeline",
+            50,
+            "Fusing candidates, validating option structures, and authorizing plays.",
+        )
         result = _run_daily_plays_pipeline(
             context=context,
             account=account,
             config=config,
             output_root=str(_DAILY_PLAYS_OUTPUT_ROOT),
+        )
+        on_progress(
+            "options_gex", 85, "Validating GEX structures, strike walls, and contract sizing."
         )
         plays = [row for row in (result.get("plays") or []) if isinstance(row, Mapping)]
         status = str(result.get("status") or ("COMPLETE" if plays else "NO_PLAY"))
@@ -1914,6 +1970,8 @@ def _latest_plays_payload() -> dict[str, Any]:
 
     plays = _read("plays.json")
     decisions = _read("decisions.json")
+    candidates = _read("candidates.json")
+    option_snapshots = _read("option_snapshots.json")
     discovery = _read("discovery.json")
     flow_activity = _read("flow_activity.json")
     research_board = _read("research_board.json")
@@ -1921,9 +1979,19 @@ def _latest_plays_payload() -> dict[str, Any]:
     if not isinstance(decisions, list):
         decisions = []
     if not isinstance(plays, list):
-        plays = [row for row in decisions if isinstance(row, Mapping) and row.get("state") == "ENTER"]
-    watchlist = [row for row in decisions if isinstance(row, Mapping) and row.get("state") == "WATCH"]
-    rejections = [row for row in decisions if isinstance(row, Mapping) and row.get("state") == "ABSTAIN"]
+        plays = [
+            row for row in decisions if isinstance(row, Mapping) and row.get("state") == "ENTER"
+        ]
+    if not isinstance(candidates, list):
+        candidates = []
+    if not isinstance(option_snapshots, list):
+        option_snapshots = []
+    watchlist = [
+        row for row in decisions if isinstance(row, Mapping) and row.get("state") == "WATCH"
+    ]
+    rejections = [
+        row for row in decisions if isinstance(row, Mapping) and row.get("state") == "ABSTAIN"
+    ]
 
     discovery_map = discovery if isinstance(discovery, Mapping) else {}
     flow_map = flow_activity if isinstance(flow_activity, Mapping) else {}
@@ -1931,21 +1999,48 @@ def _latest_plays_payload() -> dict[str, Any]:
 
     def _setup_ok(row: Mapping) -> bool:
         internal = row.get("evidence") if isinstance(row.get("evidence"), Mapping) else {}
-        model = internal.get("internal_model") if isinstance(internal, Mapping) else {}
+        model = internal.get("internal_model") if isinstance(internal, Mapping) else None
+        if not isinstance(model, Mapping):
+            return False
         return bool(model.get("setup_ok")) and str(row.get("side") or "neutral") != "neutral"
 
     # Reconstruct the funnel counts the pipeline reports in-memory but does not
-    # persist as a standalone artifact. Chain request/snapshot counts are not
-    # recoverable from the ledger, so they stay null rather than being guessed.
+    # persist as a standalone artifact. Chain request counts are not
+    # recoverable from the ledger, so they stay null; chain_snapshots is the
+    # count of persisted option snapshot records.
+    warnings = [str(item) for item in (manifest.get("warnings") or []) if item]
+
+    def _warning_symbol(warning: str) -> str | None:
+        for prefix in (
+            "unsupported_promoted_symbol:",
+            "promoted_model_unavailable:",
+            "internal_model_unavailable:",
+        ):
+            if warning.startswith(prefix):
+                symbol = warning[len(prefix) :].split(":", 1)[0].upper()
+                return symbol or None
+        return None
+
+    unavailable_model_symbols: list[str] = []
+    seen_syms: set[str] = set()
+    for warning in warnings:
+        sym = _warning_symbol(warning)
+        if sym and sym not in seen_syms:
+            seen_syms.add(sym)
+            unavailable_model_symbols.append(sym)
+
     scan_scope = {
         "sector_books_scored": discovery_map.get("sector_books_scored", 0),
         "targeted_count": discovery_map.get("targeted_count", 0),
         "model_covered_count": discovery_map.get("model_covered_count", 0),
         "model_domain_supported": len(discovery_map.get("model_covered_symbols") or []),
         "successfully_scanned_candidates": len(decisions),
-        "directional_setups": sum(1 for row in decisions if isinstance(row, Mapping) and _setup_ok(row)),
+        "directional_setups": sum(
+            1 for row in decisions if isinstance(row, Mapping) and _setup_ok(row)
+        ),
         "chain_requests": None,
-        "chain_snapshots": None,
+        "chain_snapshots": len(option_snapshots),
+        "unavailable_model_symbols": unavailable_model_symbols,
         "flow_activity_requested": int(coverage.get("requested") or 0),
         "flow_activity_observed": int(coverage.get("with_activity") or 0),
     }
@@ -1966,18 +2061,33 @@ def _latest_plays_payload() -> dict[str, Any]:
 
     warnings = [str(item) for item in (manifest.get("warnings") or []) if item]
     advisory_prefixes = (
-        "kronos_", "flow_", "sector_flow_", "research_models_",
-        "directional_research_", "promoted_model_manifest_advisory:",
+        "kronos_",
+        "flow_",
+        "sector_flow_",
+        "research_models_",
+        "directional_research_",
+        "promoted_model_manifest_advisory:",
     )
     advisory_evidence_warnings = [
-        warning for warning in warnings
-        if warning.startswith(advisory_prefixes)
+        warning for warning in warnings if warning.startswith(advisory_prefixes)
     ]
     execution_health_warnings = [
-        warning for warning in warnings
+        warning
+        for warning in warnings
         if warning not in advisory_evidence_warnings
         and not warning.startswith("unsupported_promoted_symbol:")
     ]
+
+    # When the pipeline found no actionable plays, reconstruct the honest
+    # fallback blockers the pipeline would have reported: if there were no
+    # candidates at all, it is "no_successfully_scanned_model_candidates";
+    # if candidates existed but none were actionable, it is
+    # "no_live_validated_actionable_plays".
+    if not blockers and not plays:
+        if not decisions:
+            blockers.append("no_successfully_scanned_model_candidates")
+        else:
+            blockers.append("no_live_validated_actionable_plays")
 
     return {
         "available": True,
@@ -1990,9 +2100,12 @@ def _latest_plays_payload() -> dict[str, Any]:
         "config_hash": manifest.get("config_hash"),
         "warnings": warnings,
         "status": "COMPLETE" if plays else "NO_PLAY",
-        "market_map": discovery_map.get("market_map") if isinstance(discovery_map.get("market_map"), Mapping) else {},
+        "market_map": discovery_map.get("market_map")
+        if isinstance(discovery_map.get("market_map"), Mapping)
+        else {},
         "scan_scope": scan_scope,
         "flow_activity": flow_map,
+        "candidates": candidates,
         "plays": plays,
         "watchlist": watchlist,
         "rejections": rejections,
@@ -2090,6 +2203,7 @@ def _get_symbol_meta(symbol: str) -> dict:
         if path.is_file():
             try:
                 import pyarrow.parquet as pq
+
                 pf = pq.ParquetFile(path)
                 num_rows = int(pf.metadata.num_rows)
                 first_date = None
@@ -2413,9 +2527,14 @@ def _window_stats(win_close: "_get_pd().Series") -> dict:
     series. Sharpe/calmar/ann_* are null (never Inf/NaN) when the denominator
     is zero or the window is too short to annualize meaningfully."""
     out = {
-        "ann_return_pct": None, "ann_vol_pct": None, "sharpe": None,
-        "max_drawdown_pct": None, "calmar": None,
-        "best_day_pct": None, "worst_day_pct": None, "pct_days_up": None,
+        "ann_return_pct": None,
+        "ann_vol_pct": None,
+        "sharpe": None,
+        "max_drawdown_pct": None,
+        "calmar": None,
+        "best_day_pct": None,
+        "worst_day_pct": None,
+        "pct_days_up": None,
     }
     win_close = win_close.dropna()
     if len(win_close) < 2:
@@ -2478,9 +2597,9 @@ def _atr_adv(df_full: pd.DataFrame):
     close = df_full["close"].astype(float)
     volume = df_full["volume"].astype(float)
     prev_close = close.shift(1)
-    tr = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(
+        axis=1
+    )
     atr20 = tr.rolling(20).mean().iloc[-1] if len(tr) else None
     last_close = close.iloc[-1] if len(close) else None
     atr_pct = None
@@ -2510,7 +2629,9 @@ def _compute_factors(df_full: pd.DataFrame) -> dict:
 
     # 20-day mean dollar volume
     dollar_vol = (close * volume).rolling(20).mean()
-    last_dollar_vol = float(dollar_vol.iloc[-1]) if len(dollar_vol) and not pd.isna(dollar_vol.iloc[-1]) else 0.0
+    last_dollar_vol = (
+        float(dollar_vol.iloc[-1]) if len(dollar_vol) and not pd.isna(dollar_vol.iloc[-1]) else 0.0
+    )
     # Positive log10 dollar volume score for intuitive UI display (e.g. 9.18 for $1.5B ADV)
     liq_score = math.log10(max(1.0, last_dollar_vol)) if last_dollar_vol > 0 else 0.0
 
@@ -2552,7 +2673,9 @@ def _build_series(win: pd.DataFrame) -> list[dict]:
     o_arr = win["open"].to_numpy(dtype=float) if "open" in win.columns else c_arr
     h_arr = win["high"].to_numpy(dtype=float) if "high" in win.columns else c_arr
     l_arr = win["low"].to_numpy(dtype=float) if "low" in win.columns else c_arr
-    v_arr = win["volume"].to_numpy(dtype=float) if "volume" in win.columns else np.zeros(n, dtype=float)
+    v_arr = (
+        win["volume"].to_numpy(dtype=float) if "volume" in win.columns else np.zeros(n, dtype=float)
+    )
 
     # Vectorized percentage returns: ret[0] = None, ret[1:] = (c[1:] / c[:-1]) - 1.0
     ret_arr = np.empty(n, dtype=object)
@@ -2704,15 +2827,17 @@ def _trajectory_payload(
         # build). Do NOT pass this symbol's last bar as the cross-section asof:
         # staggered data ends would re-cut the panel and disagree with deep ranks.
         qlib_ctx = _trajectory_qlib_context(symbol)
-        payload.update({
-            "qlib": qlib_ctx,
-            "qlib_score": qlib_ctx.get("qlib_score"),
-            "qlib_rank": qlib_ctx.get("qlib_rank"),
-            "qlib_score_kind": qlib_ctx.get("score_kind") or QLIB_SCORE_KIND,
-            "qlib_source": qlib_ctx.get("source") or QLIB_SOURCE_ID,
-            "qlib_asof": qlib_ctx.get("asof"),
-            "qlib_quality": qlib_ctx.get("quality"),
-        })
+        payload.update(
+            {
+                "qlib": qlib_ctx,
+                "qlib_score": qlib_ctx.get("qlib_score"),
+                "qlib_rank": qlib_ctx.get("qlib_rank"),
+                "qlib_score_kind": qlib_ctx.get("score_kind") or QLIB_SCORE_KIND,
+                "qlib_source": qlib_ctx.get("source") or QLIB_SOURCE_ID,
+                "qlib_asof": qlib_ctx.get("asof"),
+                "qlib_quality": qlib_ctx.get("quality"),
+            }
+        )
     return payload, 200
 
 
@@ -2773,8 +2898,10 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
         windowed[sym] = win["close"].astype(float)
 
     if not windowed:
-        return {"error": "none of the requested symbols have data in this window",
-                "endpoint": "/api/compare"}, 404
+        return {
+            "error": "none of the requested symbols have data in this window",
+            "endpoint": "/api/compare",
+        }, 404
 
     # Common window = intersection of trading dates across requested symbols,
     # forward/backward-filled for small date boundary mismatches so comparison is robust.
@@ -2783,8 +2910,10 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
     if joint.empty:
         joint = raw_df.dropna(how="all").ffill().bfill()
     if joint.empty:
-        return {"error": "no overlapping trading days among requested symbols",
-                "endpoint": "/api/compare"}, 404
+        return {
+            "error": "no overlapping trading days among requested symbols",
+            "endpoint": "/api/compare",
+        }, 404
 
     rebased = joint / joint.iloc[0]
     rets = joint.pct_change().dropna(how="all")
@@ -2795,8 +2924,7 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
     for sym in joint.columns:
         s = rebased[sym]
         series_out[sym] = [
-            {"d": idx.strftime("%Y-%m-%d"), "cum": _safe_round(v, 6)}
-            for idx, v in s.items()
+            {"d": idx.strftime("%Y-%m-%d"), "cum": _safe_round(v, 6)} for idx, v in s.items()
         ]
         # Price/change/freshness come from the symbol's own observed closes,
         # not the forward-filled comparison matrix. Otherwise an older QQQ
@@ -2824,14 +2952,14 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
         }
 
     correlation_out = {
-        a: {b: _safe_round(corr.loc[a, b], 4) for b in corr.columns}
-        for a in corr.index
+        a: {b: _safe_round(corr.loc[a, b], 4) for b in corr.columns} for a in corr.index
     }
 
     return {
         "window": window,
         "asof": max((row.get("asof") or "" for row in stats_out.values()), default="") or None,
-        "oldest_asof": min((row.get("asof") or "" for row in stats_out.values()), default="") or None,
+        "oldest_asof": min((row.get("asof") or "" for row in stats_out.values()), default="")
+        or None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "series": series_out,
         "stats": stats_out,
@@ -2840,11 +2968,13 @@ def _compare_payload(symbols: list[str], window: str) -> tuple[dict, int]:
 
 
 def _options_price_series(
-    symbol: str, selected_range: str, *, date_from: str | None = None, date_to: str | None = None,
+    symbol: str,
+    selected_range: str,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> tuple[list[dict], float | None]:
-    price_window = {"1d": "1m", "5d": "1m", "1m": "3m", "3m": "6m"}.get(
-        selected_range, "3m"
-    )
+    price_window = {"1d": "1m", "5d": "1m", "1m": "3m", "3m": "6m"}.get(selected_range, "3m")
     # Options needs only OHLCV. Calling the full trajectory endpoint here used
     # to cold-build the 576-name qlib cross-section before a single ticker's
     # squeeze could render. Read the already cached symbol frame directly and
@@ -2900,12 +3030,22 @@ def _symbol_quote(symbol: str) -> dict:
         if frame is None and path.is_file():
             try:
                 import pyarrow.parquet as pq
+
                 pf = pq.ParquetFile(path)
                 num_rgs = pf.metadata.num_row_groups
                 if num_rgs > 0:
-                    last_rg = pf.read_row_group(num_rgs - 1, columns=[c for c in ["close", "Date", "date"] if c in pf.schema_arrow.names])
+                    last_rg = pf.read_row_group(
+                        num_rgs - 1,
+                        columns=[
+                            c for c in ["close", "Date", "date"] if c in pf.schema_arrow.names
+                        ],
+                    )
                     tail_df = _normalize_ohlcv_df(last_rg.to_pandas())
-                    if tail_df is not None and not getattr(tail_df, "empty", True) and "close" in tail_df.columns:
+                    if (
+                        tail_df is not None
+                        and not getattr(tail_df, "empty", True)
+                        and "close" in tail_df.columns
+                    ):
                         closes = tail_df["close"].astype(float).dropna()
                         if len(closes):
                             local_last = _safe_round(float(closes.iloc[-1]), 4)
@@ -3097,8 +3237,10 @@ def _spot_from_flow_rows(flow_rows: Sequence[Mapping[str, Any]]) -> tuple[float 
         if best_price is None:
             best_price = _safe_round(price, 4)
             best_ts = observed
-            best_asof = observed.isoformat() if observed is not None else (
-                str(raw_ts) if raw_ts is not None else None
+            best_asof = (
+                observed.isoformat()
+                if observed is not None
+                else (str(raw_ts) if raw_ts is not None else None)
             )
             continue
         # Prefer a timestamped print over an untimestamped one; among
@@ -3199,7 +3341,10 @@ def _option_chain_dates(symbol: str, *, limit: int = 93) -> list[str]:
 
 
 def _historical_option_rows(
-    symbol: str, *, asof: str | None = None, all_days: bool = False,
+    symbol: str,
+    *,
+    asof: str | None = None,
+    all_days: bool = False,
 ) -> tuple[list[dict], str | None, list[str]]:
     """Load cached option-chain parquet rows.
 
@@ -3223,7 +3368,9 @@ def _historical_option_rows(
 
 
 def _fetch_live_option_inputs(
-    symbol: str, *, filters: OptionsFilters,
+    symbol: str,
+    *,
+    filters: OptionsFilters,
 ) -> tuple[list[dict], list[dict], float | None, str, list[str], str | None]:
     warnings: list[str] = []
     request_clock = datetime.now(timezone.utc)
@@ -3249,9 +3396,15 @@ def _fetch_live_option_inputs(
         fetch_floor = 0.0
         if float(filters.min_premium) > 0:
             fetch_floor = min(float(filters.min_premium), 1_000.0)
-        return list(fetch_lse_options_flow(
-            symbol, min_premium=fetch_floor, limit=500, timeout=12,
-        ) or [])
+        return list(
+            fetch_lse_options_flow(
+                symbol,
+                min_premium=fetch_floor,
+                limit=500,
+                timeout=12,
+            )
+            or []
+        )
 
     # Chain, tape, and equity last are independent network reads. Overlap them
     # so live Options latency is bounded by the slowest provider call rather
@@ -3336,22 +3489,24 @@ def _fetch_live_option_inputs(
                 except (TypeError, ValueError):
                     bid = ask = None
                 if (
-                    bid is not None and ask is not None
-                    and math.isfinite(bid) and math.isfinite(ask) and ask >= bid >= 0
+                    bid is not None
+                    and ask is not None
+                    and math.isfinite(bid)
+                    and math.isfinite(ask)
+                    and ask >= bid >= 0
                     and ask > 0
                 ):
                     row["bid"] = bid
                     row["ask"] = ask
                     row["quote_live"] = False
                     row["quote_source"] = "yfinance_delayed_exact_occ"
-                    row["quote_asof_utc"] = (
-                        cached.get("captured_utc") or cached.get("asof_date")
-                    )
+                    row["quote_asof_utc"] = cached.get("captured_utc") or cached.get("asof_date")
                     delayed_quote_matches += 1
         if not live_oi_available:
             open_interest_source = (
                 f"cached_chain_exact_occ:{latest_label or 'unknown'}"
-                if oi_matches else "unavailable"
+                if oi_matches
+                else "unavailable"
             )
         if delayed_quote_matches:
             warnings.append(
@@ -3380,8 +3535,7 @@ def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
         frame = _capture_option_oi(symbol, asof=asof, max_dte=max_dte)
     except Exception as exc:  # noqa: BLE001 - provider gaps are per-symbol, not fatal
         return {
-            "error": f"No options data from the provider for {symbol}: "
-                     f"{type(exc).__name__}: {exc}",
+            "error": f"No options data from the provider for {symbol}: {type(exc).__name__}: {exc}",
             "endpoint": "/api/options/backfill_oi",
             "symbol": symbol,
         }, 404
@@ -3406,7 +3560,10 @@ def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
 
 
 def _ensure_delayed_chain_snapshot(
-    symbol: str, *, max_dte: int = 60, max_age_seconds: float = 15 * 60.0,
+    symbol: str,
+    *,
+    max_dte: int = 60,
+    max_age_seconds: float = 15 * 60.0,
 ) -> tuple[bool, str | None]:
     """Refresh the delayed exact-contract reference for a user-selected name."""
     today = datetime.now(timezone.utc).date().isoformat()
@@ -3438,15 +3595,19 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
     min_dte = _safe_int(query.get("min_dte", ["0"])[0], 0, 0, 730)
     max_dte = _safe_int(query.get("max_dte", ["60"])[0], 60, 0, 730)
     if max_dte < min_dte:
-        return {"error": "max_dte must be greater than or equal to min_dte",
-                "endpoint": "/api/options"}, 400
+        return {
+            "error": "max_dte must be greater than or equal to min_dte",
+            "endpoint": "/api/options",
+        }, 400
     selected_expiry = str(query.get("expiry", ["nearest"])[0] or "nearest").lower()
     if selected_expiry not in {"nearest", "all"}:
         try:
             datetime.fromisoformat(selected_expiry)
         except ValueError:
-            return {"error": "expiry must be nearest, all, or YYYY-MM-DD",
-                    "endpoint": "/api/options"}, 400
+            return {
+                "error": "expiry must be nearest, all, or YYYY-MM-DD",
+                "endpoint": "/api/options",
+            }, 400
     filters = OptionsFilters(
         range=selected_range,
         min_premium=q_float("min_premium", 50_000.0, 0, 100_000_000),
@@ -3471,7 +3632,10 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
         return cached[1], 200
 
     price_series, price_spot = _options_price_series(
-        symbol, selected_range, date_from=filters.date_from, date_to=filters.date_to,
+        symbol,
+        selected_range,
+        date_from=filters.date_from,
+        date_to=filters.date_to,
     )
     price_asof = str(price_series[-1].get("t")) if price_series else None
     warnings: list[str] = []
@@ -3502,7 +3666,8 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
                 live_warnings,
                 live_spot_source,
             ) = _fetch_live_option_inputs(
-                symbol, filters=filters,
+                symbol,
+                filters=filters,
             )
             warnings.extend(live_warnings)
         except Exception as exc:  # noqa: BLE001 - fall back visibly, never silently
@@ -3532,7 +3697,9 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
                     equity_asof = None
             if live_spot_source and not live_spot_source.startswith("local_daily_close"):
                 price_series = _augment_price_series_with_live(
-                    price_series, live_spot, equity_asof,
+                    price_series,
+                    live_spot,
+                    equity_asof,
                 )
 
     if mode == "history" or not chain_rows:
@@ -3540,7 +3707,9 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
         # auto-load the last good chain day so History is never an empty shell.
         requested_asof = filters.date_to
         chain_rows, latest_label, available_dates = _historical_option_rows(
-            symbol, asof=requested_asof, all_days=False,
+            symbol,
+            asof=requested_asof,
+            all_days=False,
         )
         history_chain_rows, _, _ = _historical_option_rows(symbol, all_days=True)
         history_meta = {
@@ -3558,14 +3727,18 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
             # a wall of fake-zero boxes.
             capture_dte = min(max(int(filters.max_dte or 60), 60), 180)
             delayed_ok, delayed_err = _ensure_delayed_chain_snapshot(
-                symbol, max_dte=capture_dte,
+                symbol,
+                max_dte=capture_dte,
             )
             if delayed_ok:
                 chain_rows, latest_label, available_dates = _historical_option_rows(
-                    symbol, asof=requested_asof, all_days=False,
+                    symbol,
+                    asof=requested_asof,
+                    all_days=False,
                 )
                 history_chain_rows, _, _ = _historical_option_rows(
-                    symbol, all_days=True,
+                    symbol,
+                    all_days=True,
                 )
                 history_meta = {
                     "available_dates": available_dates,
@@ -3591,11 +3764,11 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
         flow_source = "unavailable"
         open_interest_source = chain_source
         if mode == "live":
-            warnings.append("Showing the latest dated chain because the live chain was unavailable.")
-        elif history_meta["auto_selected"] and latest_label:
             warnings.append(
-                f"History auto-loaded the last good chain day ({latest_label})."
+                "Showing the latest dated chain because the live chain was unavailable."
             )
+        elif history_meta["auto_selected"] and latest_label:
+            warnings.append(f"History auto-loaded the last good chain day ({latest_label}).")
         elif latest_label and requested_asof and requested_asof != latest_label:
             warnings.append(
                 f"Requested chain day {requested_asof} was unavailable; loaded {latest_label}."
@@ -3603,7 +3776,8 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
 
     if not history_chain_rows:
         history_chain_rows, hist_label, available_dates = _historical_option_rows(
-            symbol, all_days=True,
+            symbol,
+            all_days=True,
         )
         if available_dates and not history_meta["available_dates"]:
             history_meta = {
@@ -3649,10 +3823,11 @@ def _options_payload(symbol: str, query: dict) -> tuple[dict, int]:
     """Coalesce identical cold Options requests from watchers/manual refreshes."""
     request_key = (
         symbol,
-        tuple(sorted(
-            (str(key), tuple(str(value) for value in values))
-            for key, values in query.items()
-        )),
+        tuple(
+            sorted(
+                (str(key), tuple(str(value) for value in values)) for key, values in query.items()
+            )
+        ),
     )
     with _OPTIONS_LOCK:
         build_lock = _OPTIONS_BUILD_LOCKS.setdefault(request_key, threading.Lock())
@@ -3711,7 +3886,8 @@ def _options_board_row(candidate) -> dict:
             warnings,
             live_spot_source,
         ) = _fetch_live_option_inputs(
-            symbol, filters=filters,
+            symbol,
+            filters=filters,
         )
         chain_source = "lse_live"
         mode_resolved = "live"
@@ -3721,7 +3897,9 @@ def _options_board_row(candidate) -> dict:
             chain_rows, label, _ = _historical_option_rows(symbol, all_days=False)
             if not chain_rows:
                 return summarize_board_row(
-                    candidate, None, price_asof=price_asof,
+                    candidate,
+                    None,
+                    price_asof=price_asof,
                     error=f"No options chain is available for {symbol}.",
                 )
             chain_source = f"cached_chain:{label or 'unknown'}"
@@ -3741,8 +3919,11 @@ def _options_board_row(candidate) -> dict:
                 price_asof=price_asof,
                 warnings=warnings,
             )
-        if mode_resolved == "live" and live_spot is not None and live_spot_source and (
-            not live_spot_source.startswith("local_daily_close")
+        if (
+            mode_resolved == "live"
+            and live_spot is not None
+            and live_spot_source
+            and (not live_spot_source.startswith("local_daily_close"))
         ):
             asof_hint = None
             if ":" in live_spot_source:
@@ -3750,7 +3931,9 @@ def _options_board_row(candidate) -> dict:
                 if asof_hint == "unknown":
                     asof_hint = None
             price_series = _augment_price_series_with_live(
-                price_series, live_spot, asof_hint,
+                price_series,
+                live_spot,
+                asof_hint,
             )
             if price_series:
                 price_asof = str(price_series[-1].get("t"))
@@ -3774,12 +3957,19 @@ def _options_board_row(candidate) -> dict:
         return summarize_board_row(candidate, intel, price_asof=price_asof)
     except Exception as exc:  # noqa: BLE001 - one bad symbol must not empty the board
         return summarize_board_row(
-            candidate, None, price_asof=price_asof, error=f"{type(exc).__name__}: {exc}",
+            candidate,
+            None,
+            price_asof=price_asof,
+            error=f"{type(exc).__name__}: {exc}",
         )
 
 
 def _options_board_payload_impl(
-    *, limit: int, depth: str, require_live_flow: bool, force: bool,
+    *,
+    limit: int,
+    depth: str,
+    require_live_flow: bool,
+    force: bool,
 ) -> dict:
     cache_key = (limit, depth, require_live_flow)
     if not force:
@@ -3802,7 +3992,9 @@ def _options_board_payload_impl(
     # the Desk's explicit action (/api/trigger_scan) and can take minutes.
     status = get_dashboard_data(scan_depth=depth)
     candidates, considered = select_board_candidates(
-        status=status, limit=limit, require_live_flow=require_live_flow,
+        status=status,
+        limit=limit,
+        require_live_flow=require_live_flow,
     )
     warnings: list[str] = []
     if not candidates:
@@ -3821,12 +4013,14 @@ def _options_board_payload_impl(
     # coverage is visible rather than quietly trimmed.
     # Measurable structure first, then conviction. A name whose GEX could not be
     # measured must never outrank one that was actually observed.
-    rows.sort(key=lambda r: (
-        not r.get("available"),
-        not r.get("gex_measurable"),
-        -abs(float(r.get("squeeze_score") or 0.0)),
-        int(r.get("rank") or 10**6),
-    ))
+    rows.sort(
+        key=lambda r: (
+            not r.get("available"),
+            not r.get("gex_measurable"),
+            -abs(float(r.get("squeeze_score") or 0.0)),
+            int(r.get("rank") or 10**6),
+        )
+    )
 
     scan = status.get("activity_scan") if isinstance(status.get("activity_scan"), dict) else {}
     payload = _options_board_wire(
@@ -3871,7 +4065,11 @@ def _options_board_payload_impl(
 
 
 def _options_board_payload(
-    *, limit: int, depth: str, require_live_flow: bool, force: bool,
+    *,
+    limit: int,
+    depth: str,
+    require_live_flow: bool,
+    force: bool,
 ) -> dict:
     """Return one board build per cache key, even under concurrent requests.
 
@@ -3899,8 +4097,11 @@ def _options_board_payload(
 
 
 def _observed_flow_contract_review(
-    print_row: Mapping[str, Any], *, fallback_spot: float | None = None,
-    max_dte: int = 60, max_moneyness: float = 0.25,
+    print_row: Mapping[str, Any],
+    *,
+    fallback_spot: float | None = None,
+    max_dte: int = 60,
+    max_moneyness: float = 0.25,
 ) -> tuple[bool, int | None, float | None, list[str]]:
     """Validate an observed print before it can become a contract focus.
 
@@ -3935,9 +4136,7 @@ def _observed_flow_contract_review(
             expiry_date = date.fromisoformat(expiry_raw[:10])
             observed_raw = str(print_row.get("timestamp") or "").strip()
             try:
-                observed_date = datetime.fromisoformat(
-                    observed_raw.replace("Z", "+00:00")
-                ).date()
+                observed_date = datetime.fromisoformat(observed_raw.replace("Z", "+00:00")).date()
             except (TypeError, ValueError):
                 observed_date = datetime.now(timezone.utc).date()
             dte = (expiry_date - observed_date).days
@@ -3950,8 +4149,12 @@ def _observed_flow_contract_review(
 
     moneyness: float | None = None
     if (
-        strike is not None and math.isfinite(strike) and strike > 0
-        and spot is not None and math.isfinite(spot) and spot > 0
+        strike is not None
+        and math.isfinite(strike)
+        and strike > 0
+        and spot is not None
+        and math.isfinite(spot)
+        and spot > 0
     ):
         moneyness = abs(strike / spot - 1.0)
         if moneyness > max_moneyness:
@@ -3996,7 +4199,9 @@ def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = 
         observed = str(print_row.get("timestamp") or "")
         previous = latest_spot_observation.get(sym)
         if (
-            sym and math.isfinite(spot) and spot > 0
+            sym
+            and math.isfinite(spot)
+            and spot > 0
             and (previous is None or observed >= previous[0])
         ):
             latest_spot_observation[sym] = (observed, spot)
@@ -4028,40 +4233,48 @@ def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = 
             # strike, or planning debit.
             rank = (1.0 if has_price else 0.0) * 1_000_000_000_000.0 + premium
             if key not in focus_by_right or rank > focus_by_right[key][0]:
-                focus_by_right[key] = (rank, {
-                    "right": right,
-                    "occ_symbol": print_row.get("occ_symbol") or print_row.get("contract_symbol"),
-                    "strike": print_row.get("strike"),
-                    "expiry": print_row.get("expiry"),
-                    "dte": reviewed_dte,
-                    "underlying_price": (
-                        print_row.get("underlying_price")
-                        or (latest_spot_observation.get(sym) or ("", None))[1]
-                    ),
-                    "otm_pct": moneyness,
-                    "price": print_row.get("price"),
-                    "price_estimated": bool(print_row.get("price_estimated")),
-                    "premium": premium,
-                    "contracts": print_row.get("contracts") or print_row.get("volume"),
-                    "timestamp": print_row.get("timestamp"),
-                    "contract_multiplier": print_row.get("contract_multiplier") or 100,
-                })
+                focus_by_right[key] = (
+                    rank,
+                    {
+                        "right": right,
+                        "occ_symbol": print_row.get("occ_symbol")
+                        or print_row.get("contract_symbol"),
+                        "strike": print_row.get("strike"),
+                        "expiry": print_row.get("expiry"),
+                        "dte": reviewed_dte,
+                        "underlying_price": (
+                            print_row.get("underlying_price")
+                            or (latest_spot_observation.get(sym) or ("", None))[1]
+                        ),
+                        "otm_pct": moneyness,
+                        "price": print_row.get("price"),
+                        "price_estimated": bool(print_row.get("price_estimated")),
+                        "premium": premium,
+                        "contracts": print_row.get("contracts") or print_row.get("volume"),
+                        "timestamp": print_row.get("timestamp"),
+                        "contract_multiplier": print_row.get("contract_multiplier") or 100,
+                    },
+                )
     latest_spot = {symbol: value for symbol, (_, value) in latest_spot_observation.items()}
     payload["rows"] = [
-        ({
-            **row,
-            **({"spot": latest_spot[sym]} if sym in latest_spot else {}),
-            "flow_focus": {
-                right: focus_by_right[(sym, right)][1]
-                for right in ("call", "put")
-                if (sym, right) in focus_by_right
-            },
-            "flow_focus_rejections": {
-                right: focus_rejections[(sym, right)]
-                for right in ("call", "put")
-                if (sym, right) in focus_rejections
-            },
-        } if isinstance(row, dict) else row)
+        (
+            {
+                **row,
+                **({"spot": latest_spot[sym]} if sym in latest_spot else {}),
+                "flow_focus": {
+                    right: focus_by_right[(sym, right)][1]
+                    for right in ("call", "put")
+                    if (sym, right) in focus_by_right
+                },
+                "flow_focus_rejections": {
+                    right: focus_rejections[(sym, right)]
+                    for right in ("call", "put")
+                    if (sym, right) in focus_rejections
+                },
+            }
+            if isinstance(row, dict)
+            else row
+        )
         for row in (payload.get("rows") or [])
         for sym in (str(row.get("symbol") or "").upper() if isinstance(row, dict) else "",)
     ]
@@ -4148,7 +4361,9 @@ def _load_suggestion_stability_locked() -> None:
         symbol, right = str(raw_key).split("|", 1)
         try:
             _CONTRACT_STABILITY_STATE[(symbol, right)] = (
-                str(raw["identity"]), int(raw["count"]), float(raw["seen"]),
+                str(raw["identity"]),
+                int(raw["count"]),
+                float(raw["seen"]),
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -4157,7 +4372,9 @@ def _load_suggestion_stability_locked() -> None:
             continue
         try:
             _DIRECTION_STABILITY_STATE[str(symbol)] = (
-                str(raw["right"]), int(raw["count"]), float(raw["seen"]),
+                str(raw["right"]),
+                int(raw["count"]),
+                float(raw["seen"]),
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -4193,7 +4410,11 @@ def _rank_suggestion_rows(payload: dict) -> dict:
         if not isinstance(row, dict):
             continue
         suggestion = row.get("suggestion") if isinstance(row.get("suggestion"), dict) else {}
-        plan = suggestion.get("contract_plan") if isinstance(suggestion.get("contract_plan"), dict) else None
+        plan = (
+            suggestion.get("contract_plan")
+            if isinstance(suggestion.get("contract_plan"), dict)
+            else None
+        )
         right = str(suggestion.get("right") or "").lower()
         tier = str(suggestion.get("setup_tier") or "").lower()
         score = 0
@@ -4231,18 +4452,25 @@ def _rank_suggestion_rows(payload: dict) -> dict:
         suggestion["review_score"] = min(100, score)
         suggestion["review_reasons"] = reasons
         suggestion["review_label"] = (
-            "READY" if tier == "ready"
-            else "PAPER ACTION" if suggestion.get("paper_actionable")
-            else "STRONG PAPER" if score >= 70
-            else "PAPER" if score >= 45
-            else "NEW / CHURNING" if right in {"call", "put"}
+            "READY"
+            if tier == "ready"
+            else "PAPER ACTION"
+            if suggestion.get("paper_actionable")
+            else "STRONG PAPER"
+            if score >= 70
+            else "PAPER"
+            if score >= 45
+            else "NEW / CHURNING"
+            if right in {"call", "put"}
             else "WATCH"
         )
-    rows.sort(key=lambda row: (
-        -int(((row.get("suggestion") or {}).get("review_score") or 0)),
-        -float(row.get("composite_score") or -10_000),
-        str(row.get("symbol") or ""),
-    ))
+    rows.sort(
+        key=lambda row: (
+            -int(((row.get("suggestion") or {}).get("review_score") or 0)),
+            -float(row.get("composite_score") or -10_000),
+            str(row.get("symbol") or ""),
+        )
+    )
     for rank, row in enumerate(rows, start=1):
         suggestion = row.get("suggestion") if isinstance(row.get("suggestion"), dict) else None
         if suggestion is not None:
@@ -4275,7 +4503,8 @@ def _stabilize_contract_plans(payload: dict) -> dict:
                 )
                 direction_required = (
                     _DIRECTION_STABILITY_REQUIRED
-                    if suggestion.get("evidence_kind") == "activity_lean" else 2
+                    if suggestion.get("evidence_kind") == "activity_lean"
+                    else 2
                 )
                 direction_count = (
                     min(direction_required, previous_direction[1] + 1)
@@ -4285,7 +4514,9 @@ def _stabilize_contract_plans(payload: dict) -> dict:
                     else 1
                 )
                 _DIRECTION_STABILITY_STATE[symbol] = (
-                    suggested_right, direction_count, now,
+                    suggested_right,
+                    direction_count,
+                    now,
                 )
                 direction_stable = direction_count >= direction_required
                 suggestion["direction_observations"] = direction_count
@@ -4300,7 +4531,11 @@ def _stabilize_contract_plans(payload: dict) -> dict:
                     warnings = list(suggestion.get("warnings") or [])
                     warnings.append("Suggested right changed during the stability window.")
                     suggestion["warnings"] = list(dict.fromkeys(warnings))
-            plan = suggestion.get("contract_plan") if isinstance(suggestion.get("contract_plan"), dict) else None
+            plan = (
+                suggestion.get("contract_plan")
+                if isinstance(suggestion.get("contract_plan"), dict)
+                else None
+            )
             if not plan or plan.get("kind") != "chain_selected_contract":
                 continue
             right = str(plan.get("right") or "").lower()
@@ -4311,7 +4546,9 @@ def _stabilize_contract_plans(payload: dict) -> dict:
             previous = _CONTRACT_STABILITY_STATE.get(key)
             count = (
                 previous[1] + 1
-                if previous and previous[0] == identity and now - previous[2] <= _CONTRACT_STABILITY_MAX_GAP_S
+                if previous
+                and previous[0] == identity
+                and now - previous[2] <= _CONTRACT_STABILITY_MAX_GAP_S
                 else 1
             )
             count = min(_CONTRACT_STABILITY_REQUIRED, count)
@@ -4347,7 +4584,9 @@ def _stabilize_contract_plans(payload: dict) -> dict:
             observed_day = str(plan.get("observed_at") or "")[:10]
             same_session_reference = bool(
                 plan.get("quote_reference_only")
-                and asof_day and observed_day and asof_day == observed_day
+                and asof_day
+                and observed_day
+                and asof_day == observed_day
             )
             paper_checks = {
                 "stable CALL/PUT direction": direction_stable,
@@ -4355,7 +4594,9 @@ def _stabilize_contract_plans(payload: dict) -> dict:
                 "fresh or same-session chain reference": bool(
                     (row.get("freshness") or {}).get("pass") or same_session_reference
                 ),
-                "complete GEX target and invalidation": bool(suggestion.get("risk_levels_complete")),
+                "complete GEX target and invalidation": bool(
+                    suggestion.get("risk_levels_complete")
+                ),
                 "two-sided live or delayed reference quote": bool(
                     plan.get("quote_complete") or plan.get("quote_reference_only")
                 ),
@@ -4391,13 +4632,15 @@ def _stabilize_contract_plans(payload: dict) -> dict:
                 plan["sizing_eligible"] = False
                 plan["sizing_debit"] = None
         stale_keys = [
-            key for key, (_, _, seen) in _CONTRACT_STABILITY_STATE.items()
+            key
+            for key, (_, _, seen) in _CONTRACT_STABILITY_STATE.items()
             if now - seen > _CONTRACT_STABILITY_MAX_GAP_S * 2
         ]
         for key in stale_keys:
             _CONTRACT_STABILITY_STATE.pop(key, None)
         stale_directions = [
-            symbol for symbol, (_, _, seen) in _DIRECTION_STABILITY_STATE.items()
+            symbol
+            for symbol, (_, _, seen) in _DIRECTION_STABILITY_STATE.items()
             if now - seen > _CONTRACT_STABILITY_MAX_GAP_S * 2
         ]
         for symbol in stale_directions:
@@ -4405,18 +4648,23 @@ def _stabilize_contract_plans(payload: dict) -> dict:
         _persist_suggestion_stability_locked()
     coverage = payload.get("coverage") if isinstance(payload.get("coverage"), dict) else None
     if coverage is not None:
-        coverage["live_ready"] = sum(bool(row.get("live_ready")) for row in rows if isinstance(row, dict))
+        coverage["live_ready"] = sum(
+            bool(row.get("live_ready")) for row in rows if isinstance(row, dict)
+        )
         coverage["direction_stable"] = sum(
             bool((row.get("suggestion") or {}).get("direction_stable"))
-            for row in rows if isinstance(row, dict)
+            for row in rows
+            if isinstance(row, dict)
         )
         coverage["contract_stable"] = sum(
             bool(((row.get("suggestion") or {}).get("contract_plan") or {}).get("stable"))
-            for row in rows if isinstance(row, dict)
+            for row in rows
+            if isinstance(row, dict)
         )
         coverage["paper_actionable"] = sum(
             bool((row.get("suggestion") or {}).get("paper_actionable"))
-            for row in rows if isinstance(row, dict)
+            for row in rows
+            if isinstance(row, dict)
         )
     return _rank_suggestion_rows(payload)
 
@@ -4425,21 +4673,26 @@ def _live_opportunities_payload(*, force: bool = False) -> dict:
     global _LIVE_OPPORTUNITIES_CACHE, _LIVE_OPPORTUNITIES_CACHE_TS
     now = time.time()
     if (
-        not force and _LIVE_OPPORTUNITIES_CACHE is not None
+        not force
+        and _LIVE_OPPORTUNITIES_CACHE is not None
         and (now - _LIVE_OPPORTUNITIES_CACHE_TS) < _LIVE_OPPORTUNITIES_TTL_S
     ):
         return _LIVE_OPPORTUNITIES_CACHE
     with _LIVE_OPPORTUNITIES_LOCK:
         now = time.time()
         if (
-            not force and _LIVE_OPPORTUNITIES_CACHE is not None
+            not force
+            and _LIVE_OPPORTUNITIES_CACHE is not None
             and (now - _LIVE_OPPORTUNITIES_CACHE_TS) < _LIVE_OPPORTUNITIES_TTL_S
         ):
             return _LIVE_OPPORTUNITIES_CACHE
         # Passive polling stays cache-friendly. Only an explicit force request
         # cascades to vendors, matching the dashboard's "PULL LIVE DATA" action.
         board = _options_board_payload(
-            limit=25, depth=_ACTIVE_SCAN_DEPTH, require_live_flow=False, force=force,
+            limit=25,
+            depth=_ACTIVE_SCAN_DEPTH,
+            require_live_flow=False,
+            force=force,
         )
         flow = _unusual_flow_payload(limit=40, min_premium=25_000.0, force=force)
         board_cache = board.get("cache") if isinstance(board.get("cache"), dict) else {}
@@ -4489,15 +4742,20 @@ def _flow_suggestion_payload_impl(symbol: str, *, force: bool = False) -> dict:
     """
     status = get_dashboard_data(scan_depth=_ACTIVE_SCAN_DEPTH)
     flow_payload = _unusual_flow_payload(
-        limit=80, min_premium=25_000.0, force=force,
+        limit=80,
+        min_premium=25_000.0,
+        force=force,
     )
     flow_rows = [
-        row for row in (flow_payload.get("rows") or [])
+        row
+        for row in (flow_payload.get("rows") or [])
         if isinstance(row, dict) and str(row.get("symbol") or "").upper() == symbol
     ]
 
     candidates, _ = select_board_candidates(
-        status=status, limit=500, require_live_flow=False,
+        status=status,
+        limit=500,
+        require_live_flow=False,
     )
     candidate = next((item for item in candidates if item.symbol == symbol), None)
     if candidate is None:
@@ -4515,14 +4773,12 @@ def _flow_suggestion_payload_impl(symbol: str, *, force: bool = False) -> dict:
     delayed_snapshot_ok, delayed_snapshot_error = _ensure_delayed_chain_snapshot(symbol)
     board_row = _options_board_row(candidate)
     calibrated_rows = [
-        row for row in (status.get("directional_signals") or [])
+        row
+        for row in (status.get("directional_signals") or [])
         if isinstance(row, dict) and str(row.get("symbol") or "").upper() == symbol
     ]
     qlib_panel = peek_shared_qlib_panel()
-    qlib_rows = [
-        row for row in qlib_rows_from_panel(qlib_panel)
-        if row.get("symbol") == symbol
-    ]
+    qlib_rows = [row for row in qlib_rows_from_panel(qlib_panel) if row.get("symbol") == symbol]
     flow_cache = flow_payload.get("cache") if isinstance(flow_payload.get("cache"), dict) else {}
     payload = build_live_opportunities(
         board_rows=_attach_flow_state_levels([board_row]),
@@ -4684,9 +4940,24 @@ def _search_symbols(q: str, limit: int) -> list[dict]:
     if not q_clean:
         # Empty query: liquid majors first, then alpha-sorted remainder.
         majors = [
-            s for s in (
-                "SPY", "QQQ", "IWM", "DIA", "AAPL", "MSFT", "NVDA", "AMZN",
-                "META", "GOOGL", "TSLA", "AMD", "XLF", "XLK", "XLE", "GLD",
+            s
+            for s in (
+                "SPY",
+                "QQQ",
+                "IWM",
+                "DIA",
+                "AAPL",
+                "MSFT",
+                "NVDA",
+                "AMZN",
+                "META",
+                "GOOGL",
+                "TSLA",
+                "AMD",
+                "XLF",
+                "XLK",
+                "XLE",
+                "GLD",
             )
             if s in SYMBOL_INDEX
         ]
@@ -4708,25 +4979,35 @@ def _search_symbols(q: str, limit: int) -> list[dict]:
     for sym in chosen:
         tier = SYMBOL_INDEX[sym]
         meta = _get_symbol_meta(sym)
-        out.append({
-            "symbol": sym,
-            "kind": "symbol",
-            "tier": tier,
-            "n_bars": meta["n_bars"],
-            "first_date": meta["first_date"],
-            "last_date": meta["last_date"],
-        })
+        out.append(
+            {
+                "symbol": sym,
+                "kind": "symbol",
+                "tier": tier,
+                "n_bars": meta["n_bars"],
+                "first_date": meta["first_date"],
+                "last_date": meta["last_date"],
+            }
+        )
 
     # Promote exact typed ticker even when it is not in the local catalog.
-    if q_clean and _SYMBOL_RE.match(q_clean) and not q_clean.endswith("_") and not any(r["symbol"] == q_clean for r in out):
-        out.insert(0, {
-            "symbol": q_clean,
-            "kind": "symbol",
-            "tier": "live",
-            "n_bars": 0,
-            "first_date": "",
-            "last_date": "",
-        })
+    if (
+        q_clean
+        and _SYMBOL_RE.match(q_clean)
+        and not q_clean.endswith("_")
+        and not any(r["symbol"] == q_clean for r in out)
+    ):
+        out.insert(
+            0,
+            {
+                "symbol": q_clean,
+                "kind": "symbol",
+                "tier": "live",
+                "n_bars": 0,
+                "first_date": "",
+                "last_date": "",
+            },
+        )
         out = out[:limit]
     return out
 
@@ -4750,11 +5031,17 @@ def _file_updated_iso(path: Path):
         return None
 
 
-def _load_json_gate(gate_id: str, name: str, path: Path, metric_keys: list[str],
-                     check_key: str = "gate_checks") -> dict:
+def _load_json_gate(
+    gate_id: str, name: str, path: Path, metric_keys: list[str], check_key: str = "gate_checks"
+) -> dict:
     entry = {
-        "id": gate_id, "name": name, "verdict": "UNKNOWN",
-        "source_file": _relpath(path), "metrics": {}, "checks": {}, "updated": None,
+        "id": gate_id,
+        "name": name,
+        "verdict": "UNKNOWN",
+        "source_file": _relpath(path),
+        "metrics": {},
+        "checks": {},
+        "updated": None,
     }
     if not path.exists():
         entry["error"] = "artifact not found"
@@ -4781,9 +5068,13 @@ def _factor_probe_gate() -> dict:
     exactly as instructed -- never fabricated, never guessed from the number tables."""
     path = DOCS_DIR / "FACTOR_PROBE_RESULT.md"
     entry = {
-        "id": "factor_probe", "name": "Factor Probe (rev1/rev5/mom12_1/lowvol/liq)",
-        "verdict": "UNKNOWN", "source_file": _relpath(path), "metrics": {},
-        "checks": {}, "updated": None,
+        "id": "factor_probe",
+        "name": "Factor Probe (rev1/rev5/mom12_1/lowvol/liq)",
+        "verdict": "UNKNOWN",
+        "source_file": _relpath(path),
+        "metrics": {},
+        "checks": {},
+        "updated": None,
     }
     if not path.exists():
         entry["error"] = "doc not found"
@@ -4828,11 +5119,19 @@ def _load_smallcap_price_data() -> dict[str, pd.DataFrame]:
 def _momentum_scan_payload(*, force: bool = False) -> dict:
     global _MOMENTUM_SCAN_CACHE, _MOMENTUM_SCAN_CACHE_TS
     now = time.time()
-    if not force and _MOMENTUM_SCAN_CACHE is not None and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S:
+    if (
+        not force
+        and _MOMENTUM_SCAN_CACHE is not None
+        and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S
+    ):
         return _MOMENTUM_SCAN_CACHE
     with _MOMENTUM_SCAN_LOCK:
         now = time.time()
-        if not force and _MOMENTUM_SCAN_CACHE is not None and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S:
+        if (
+            not force
+            and _MOMENTUM_SCAN_CACHE is not None
+            and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S
+        ):
             return _MOMENTUM_SCAN_CACHE
         price_data = _load_smallcap_price_data()
         float_data = load_float_data()
@@ -4840,7 +5139,9 @@ def _momentum_scan_payload(*, force: bool = False) -> dict:
         manifest_path = DATA_SMALLCAP_DIR / "FETCH_MANIFEST_SMALLCAP.json"
         if manifest_path.exists():
             try:
-                expected = json.loads(manifest_path.read_text()).get("expected_universe_size", expected)
+                expected = json.loads(manifest_path.read_text()).get(
+                    "expected_universe_size", expected
+                )
             except Exception:
                 pass
         payload = build_momentum_scan(price_data, float_data, expected_universe_size=expected)
@@ -4852,34 +5153,70 @@ def _momentum_scan_payload(*, force: bool = False) -> dict:
 def _gates_payload() -> dict:
     gates = [
         _load_json_gate(
-            "pead_factor_hybrid", "Hybrid PEAD + Factor Engine (Risk Scaled)",
+            "pead_factor_hybrid",
+            "Hybrid PEAD + Factor Engine (Risk Scaled)",
             RUNS_DIR / "pead_factor_hybrid" / "results.json",
-            ["mean_rank_ic", "rank_icir", "annual_turnover", "cost_drag_pct",
-             "gross_annual_return_pct", "net_annual_return_pct", "sharpe_ratio",
-             "max_drawdown_pct", "calibrated_prob_mean", "universe_size"],
+            [
+                "mean_rank_ic",
+                "rank_icir",
+                "annual_turnover",
+                "cost_drag_pct",
+                "gross_annual_return_pct",
+                "net_annual_return_pct",
+                "sharpe_ratio",
+                "max_drawdown_pct",
+                "calibrated_prob_mean",
+                "universe_size",
+            ],
         ),
         _load_json_gate(
-            "pead_catalyst", "PEAD Catalyst Model",
+            "pead_catalyst",
+            "PEAD Catalyst Model",
             RUNS_DIR / "pead_catalyst" / "results.json",
-            ["mean_rank_ic", "rank_icir", "annual_turnover", "cost_drag_pct",
-             "gross_annual_return_pct", "net_annual_return_pct", "sharpe_ratio",
-             "max_drawdown_pct", "calibrated_prob_mean", "universe_size"],
+            [
+                "mean_rank_ic",
+                "rank_icir",
+                "annual_turnover",
+                "cost_drag_pct",
+                "gross_annual_return_pct",
+                "net_annual_return_pct",
+                "sharpe_ratio",
+                "max_drawdown_pct",
+                "calibrated_prob_mean",
+                "universe_size",
+            ],
         ),
         _load_json_gate(
-            "gex_model", "GEX Model",
+            "gex_model",
+            "GEX Model",
             RUNS_DIR / "gex_model" / "results.json",
-            ["mean_rank_ic", "rank_icir", "net_annual_return_pct", "sharpe_ratio",
-             "max_drawdown_pct", "n_signals_evaluated"],
+            [
+                "mean_rank_ic",
+                "rank_icir",
+                "net_annual_return_pct",
+                "sharpe_ratio",
+                "max_drawdown_pct",
+                "n_signals_evaluated",
+            ],
         ),
         _load_json_gate(
-            "finra_factor", "FINRA Short Volume Factor",
+            "finra_factor",
+            "FINRA Short Volume Factor",
             RUNS_DIR / "finra_factor" / "results.json",
-            ["mean_rank_ic", "icir", "total_annual_turnover", "cost_drag",
-             "gross_annual_return", "net_annual_return", "sharpe_ratio"],
+            [
+                "mean_rank_ic",
+                "icir",
+                "total_annual_turnover",
+                "cost_drag",
+                "gross_annual_return",
+                "net_annual_return",
+                "sharpe_ratio",
+            ],
         ),
         _factor_probe_gate(),
         _load_json_gate(
-            "v90_wide_ic", "V90 Wide IC (negative control)",
+            "v90_wide_ic",
+            "V90 Wide IC (negative control)",
             RUNS_DIR / "v90_wide_ic.json",
             ["n_symbols", "n_bars", "n_rows", "horizon_bars", "reports", "note"],
         ),
@@ -4951,7 +5288,11 @@ def _readiness_payload() -> dict:
 
 class _ContractStr(str):
     def __eq__(self, other):
-        if super().__eq__(other) or other in ("specific-chain-contract-v4", "daily-plays-v1", "flow-rule-v1"):
+        if super().__eq__(other) or other in (
+            "specific-chain-contract-v4",
+            "daily-plays-v1",
+            "flow-rule-v1",
+        ):
             return True
         return False
 
@@ -5046,7 +5387,7 @@ def _market_clock_payload() -> dict:
     d = market_clock_status(datetime.now(timezone.utc)).to_dict()
     session_val = d.get("market_session")
     d["session"] = session_val
-    d["is_regular_open"] = (session_val == "regular")
+    d["is_regular_open"] = session_val == "regular"
     d["source"] = d.get("calendar_source", "exchange_calendars")
     return d
 
@@ -5153,10 +5494,17 @@ def _sanitize(obj):
 
 def _dumps(payload) -> bytes:
     try:
-        return json.dumps(payload, default=_default_json_handler, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        return json.dumps(
+            payload, default=_default_json_handler, allow_nan=False, ensure_ascii=False
+        ).encode("utf-8")
     except (TypeError, ValueError):
         try:
-            return json.dumps(_sanitize(payload), default=_default_json_handler, allow_nan=False, ensure_ascii=False).encode("utf-8")
+            return json.dumps(
+                _sanitize(payload),
+                default=_default_json_handler,
+                allow_nan=False,
+                ensure_ascii=False,
+            ).encode("utf-8")
         except Exception:
             safe = json.dumps({"error": "response was not JSON-serializable"})
             return safe.encode("utf-8")
@@ -5304,7 +5652,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _route(self):
         parsed = urlparse(self.path)
-        path = parsed.path.rstrip('/') or '/'
+        path = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
         try:
             if path.startswith("/api/"):
@@ -5357,11 +5705,13 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     elif s == "lse_equity_candles":
                         r_copy["source"] = "lse_candles"
                     api_rows.append(r_copy)
-                self._send_json({
-                    "asof": payload.get("asof"),
-                    "rows": api_rows,
-                    "count": len(api_rows),
-                })
+                self._send_json(
+                    {
+                        "asof": payload.get("asof"),
+                        "rows": api_rows,
+                        "count": len(api_rows),
+                    }
+                )
 
             elif path == "/api/leaderboard":
                 data = get_dashboard_data()
@@ -5395,7 +5745,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 )
 
             elif path == "/api/scan_status":
-                job_id = (query.get("job_id", [None])[0] or None)
+                job_id = query.get("job_id", [None])[0] or None
                 payload, status = _scan_status_payload(job_id)
                 self._send_json(payload, status=status)
 
@@ -5411,10 +5761,14 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
                 window = query.get("window", [DEFAULT_WINDOW])[0]
                 include_qlib = str(query.get("include_qlib", ["1"])[0]).lower() not in {
-                    "0", "false", "no",
+                    "0",
+                    "false",
+                    "no",
                 }
                 payload, status = _trajectory_payload(
-                    sym_or_err, window, include_qlib=include_qlib,
+                    sym_or_err,
+                    window,
+                    include_qlib=include_qlib,
                 )
                 self._send_json(payload, status=status)
 
@@ -5433,16 +5787,20 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/api/options/board":
                 limit = _safe_int(query.get("limit", ["25"])[0], default=25, lo=1, hi=60)
                 depth = _scan_depth(query.get("depth", [None])[0] or _ACTIVE_SCAN_DEPTH)
-                require_live_flow = str(
-                    query.get("require_live_flow", ["0"])[0]
-                ).lower() in {"1", "true", "yes"}
+                require_live_flow = str(query.get("require_live_flow", ["0"])[0]).lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                }
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
-                self._send_json(_options_board_payload(
-                    limit=limit,
-                    depth=depth,
-                    require_live_flow=require_live_flow,
-                    force=force,
-                ))
+                self._send_json(
+                    _options_board_payload(
+                        limit=limit,
+                        depth=depth,
+                        require_live_flow=require_live_flow,
+                        force=force,
+                    )
+                )
 
             elif path == "/api/options/backfill_oi":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
@@ -5470,8 +5828,9 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     if sym_or_err not in syms:
                         syms.append(sym_or_err)
                 if not syms:
-                    self._send_json({"error": "symbols query param is required", "endpoint": path},
-                                     status=400)
+                    self._send_json(
+                        {"error": "symbols query param is required", "endpoint": path}, status=400
+                    )
                     return
                 syms = syms[:8]
                 window = query.get("window", [DEFAULT_WINDOW])[0]
@@ -5510,7 +5869,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 )
 
             elif path == "/api/plays/status":
-                job_id = (query.get("job_id", [None])[0] or None)
+                job_id = query.get("job_id", [None])[0] or None
                 payload, status = _plays_status_payload(job_id)
                 self._send_json(payload, status=status)
 
@@ -5558,7 +5917,9 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     min_premium = 25_000.0
                 min_premium = max(0.0, min(min_premium, 5_000_000.0))
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
-                self._send_json(_unusual_flow_payload(limit=limit, min_premium=min_premium, force=force))
+                self._send_json(
+                    _unusual_flow_payload(limit=limit, min_premium=min_premium, force=force)
+                )
 
             elif path in {"/api/options/opportunities", "/api/options/suggest"}:
                 limit = _safe_int(query.get("limit", [None])[0], default=0, lo=1, hi=500)
@@ -5577,7 +5938,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(payload)
 
             elif path == "/api/ga":
-                run_id = (query.get("run_id", [None])[0] or None)
+                run_id = query.get("run_id", [None])[0] or None
                 if run_id is not None:
                     run_id = str(run_id).strip() or None
                     if run_id and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", run_id):
@@ -5760,9 +6121,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 limit = _safe_int(query.get("limit", ["25"])[0], default=25, lo=1, hi=100)
                 country = (query.get("country", ["US"])[0] or "US").strip().upper() or None
                 try:
-                    self._send_json(
-                        fintel_search_securities(q, country=country, limit=limit)
-                    )
+                    self._send_json(fintel_search_securities(q, country=country, limit=limit))
                 except FintelAuthError as e:
                     self._send_json(
                         {
@@ -5782,6 +6141,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
                 period = query.get("period", ["quarterly"])[0]
                 from tools.financial_data import get_financials_payload
+
                 self._send_json(get_financials_payload(sym_or_err, period=period))
 
             elif path == "/api/company-profile":
@@ -5790,6 +6150,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 from tools.financial_data import get_company_profile_payload
+
                 self._send_json(get_company_profile_payload(sym_or_err))
 
             elif path == "/api/insiders":
@@ -5798,6 +6159,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 from tools.financial_data import get_insiders_payload
+
                 self._send_json(get_insiders_payload(sym_or_err))
 
             elif path == "/api/government":
@@ -5806,6 +6168,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 from tools.financial_data import get_government_payload
+
                 self._send_json(get_government_payload(sym_or_err))
 
             elif path == "/api/ownership":
@@ -5814,6 +6177,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 from tools.financial_data import get_ownership_payload
+
                 self._send_json(get_ownership_payload(sym_or_err))
 
             elif path == "/api/supply-chain":
@@ -5832,12 +6196,18 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 except (ValueError, TypeError):
                     depth = 2
                 mode = query.get("mode", ["dedicated"])[0]
-                force = query.get("force", ["0"])[0] in ("1", "true", "yes") or query.get("force_refresh", ["0"])[0] in ("1", "true", "yes")
+                force = query.get("force", ["0"])[0] in ("1", "true", "yes") or query.get(
+                    "force_refresh", ["0"]
+                )[0] in ("1", "true", "yes")
                 try:
                     from supply_chain import build_supply_chain_payload
                 except ImportError:
                     from edge.tools.supply_chain import build_supply_chain_payload
-                self._send_json(build_supply_chain_payload(symbol=sym, theme=theme, depth=depth, mode=mode, force_refresh=force))
+                self._send_json(
+                    build_supply_chain_payload(
+                        symbol=sym, theme=theme, depth=depth, mode=mode, force_refresh=force
+                    )
+                )
 
             elif path == "/api/supply-chain/themes":
                 try:
@@ -5940,7 +6310,9 @@ def main():
         default=_env_int("PORT", PORT, 1, 65535),
         help="Port to listen on (default PORT or 8787)",
     )
-    parser.add_argument("--no-browser", action="store_true", help="Do not open browser automatically")
+    parser.add_argument(
+        "--no-browser", action="store_true", help="Do not open browser automatically"
+    )
     args = parser.parse_args()
 
     host = args.host
@@ -5978,7 +6350,9 @@ def main():
     threading.Thread(target=_warm_status_cache, daemon=True, name="status-warm").start()
 
     if not args.no_browser and _is_loopback_host(host):
-        threading.Thread(target=lambda: (time.sleep(0.5), webbrowser.open(url)), daemon=True).start()
+        threading.Thread(
+            target=lambda: (time.sleep(0.5), webbrowser.open(url)), daemon=True
+        ).start()
 
     try:
         server.serve_forever()
