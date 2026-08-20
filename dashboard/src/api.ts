@@ -9,9 +9,8 @@
 
 const BASE = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 const configuredTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000)
-const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
-  ? configuredTimeoutMs
-  : 30_000
+const REQUEST_TIMEOUT_MS =
+  Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 30_000
 
 type AuthTokenProvider = () => Promise<string | null>
 let authTokenProvider: AuthTokenProvider | null = null
@@ -223,21 +222,26 @@ export interface ActivityFlagRow {
   average_price?: number | null
   /** Latest underlying price carried from the provider tape when observed. */
   spot?: number | null
-  flow_focus?: Partial<Record<'call' | 'put', {
-    right: 'call' | 'put'
-    occ_symbol?: string | null
-    strike: number | null
-    expiry: string | null
-    dte?: number | null
-    underlying_price?: number | null
-    otm_pct?: number | null
-    price: number | null
-    price_estimated?: boolean
-    premium: number | null
-    contracts: number | null
-    timestamp: string | null
-    contract_multiplier?: number | null
-  }>>
+  flow_focus?: Partial<
+    Record<
+      'call' | 'put',
+      {
+        right: 'call' | 'put'
+        occ_symbol?: string | null
+        strike: number | null
+        expiry: string | null
+        dte?: number | null
+        underlying_price?: number | null
+        otm_pct?: number | null
+        price: number | null
+        price_estimated?: boolean
+        premium: number | null
+        contracts: number | null
+        timestamp: string | null
+        contract_multiplier?: number | null
+      }
+    >
+  >
   flow_focus_rejections?: Partial<Record<'call' | 'put', string[]>>
   average_dte?: number | null
   signed_print_count?: number
@@ -672,11 +676,7 @@ export interface MarketClock {
   next_regular_open_utc: string | null
   next_transition_utc: string | null
   next_transition:
-    | 'premarket_opens'
-    | 'regular_opens'
-    | 'regular_closes'
-    | 'after_hours_closes'
-    | null
+    'premarket_opens' | 'regular_opens' | 'regular_closes' | 'after_hours_closes' | null
   calendar_source: string
   warning: string | null
 }
@@ -758,7 +758,9 @@ export interface OptionsTapeRow {
   /** Why this print was flagged. Empty when nothing unusual. */
   why?: string[]
   premium_estimated: boolean
-  anomaly_flags: ('premium_outlier' | 'volume_outlier' | 'repeat_cluster' | 'sweep_burst' | string)[]
+  anomaly_flags: (
+    'premium_outlier' | 'volume_outlier' | 'repeat_cluster' | 'sweep_burst' | string
+  )[]
   anomaly_score: number
   premium_percentile: number
   is_unusual?: boolean
@@ -828,13 +830,25 @@ export interface ChainStrikeRow {
   charm_flow: number
 }
 
+/** Why a contract could not be charmed. Keys are omitted when the count is 0. */
+export interface CharmSkippedReasons {
+  malformed_row?: number
+  missing_dte?: number
+  expiring_within_one_day?: number
+  missing_or_implausible_iv?: number
+}
+
 export interface CharmSummary {
   net_charm_flow: number
   call_charm_flow: number
   put_charm_flow: number
+  /** Gross magnitude: sum of per-strike |flow|, NOT |sum of flows|. */
   abs_charm_flow: number
+  /** Contracts that produced a charm value. measured + skipped === chain size. */
   contracts_measured: number
   contracts_skipped: number
+  /** Breakdown of `contracts_skipped` so the UI can explain an empty chart. */
+  skipped_reasons: CharmSkippedReasons
   pressure: 'selling' | 'buying' | 'balanced'
   source: string
 }
@@ -847,6 +861,16 @@ export interface PressureGauge {
     delta_weighted_call_vol: number
     delta_weighted_put_vol: number
     net_gex_m: number
+  }
+  /**
+   * Per-channel net/gross ratio in [-1, 1] that produced `imbalance`.
+   * `null` = that channel had no gross magnitude and abstained from the blend
+   * (it did NOT vote "balanced"). Render null as "no data", never as 0.
+   */
+  channels: {
+    charm: number | null
+    volume: number | null
+    gex: number | null
   }
   weights: { alpha: number; beta: number }
   convention_note: string
@@ -950,10 +974,7 @@ export interface OptionsSqueeze {
 
 /** Why a symbol earned an expensive chain request. Ordinal unless noted. */
 export type BoardSelectionBasis =
-  | 'pead_ordinal'
-  | 'live_options_flow'
-  | 'activity_ordinal'
-  | 'directional_model'
+  'pead_ordinal' | 'live_options_flow' | 'activity_ordinal' | 'directional_model'
 
 export interface OptionsBoardRow {
   symbol: string
@@ -1115,11 +1136,7 @@ export interface LiveOpportunityPlaybook {
 }
 
 export type SetupLevelSource =
-  | 'resistance/support'
-  | 'options GEX'
-  | 'positions'
-  | 'technical analysis'
-  | string
+  'resistance/support' | 'options GEX' | 'positions' | 'technical analysis' | string
 
 export interface SetupLevelMark {
   price: number
@@ -1331,8 +1348,15 @@ export interface LiveOpportunities {
   warnings?: string[]
   caveats?: string[]
   sources?: {
-    board?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof_utc?: string | null; scan_asof?: string | null }
-    flow?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof?: string | null }
+    board?: {
+      cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }
+      asof_utc?: string | null
+      scan_asof?: string | null
+    }
+    flow?: {
+      cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }
+      asof?: string | null
+    }
     qlib?: { published?: boolean; asof?: string | null; source?: string | null; n_symbols?: number }
     scan_depth?: string
     symbol_specific?: boolean
@@ -1447,6 +1471,7 @@ export interface OptionsIntelligence {
   gex_history: GexHistoryPoint[]
   anomalies: { count: number; method: string }
   probability: OptionsProbability
+  spot_source?: string | null
   warnings: string[]
   caveats: string[]
 }
@@ -1893,7 +1918,7 @@ export interface MomentumScanPayload {
    the Model/EV panel renders permanently locked below that. */
 
 export type FlowStateName =
-  | 'NORMAL' | 'PRESSURE' | 'SHOCK' | 'TEST' | 'CASCADE' | 'ABSORB' | 'EXHAUSTION' | 'FADE'
+  'NORMAL' | 'PRESSURE' | 'SHOCK' | 'TEST' | 'CASCADE' | 'ABSORB' | 'EXHAUSTION' | 'FADE'
 
 export interface FlowStateRow {
   symbol: string
@@ -2058,7 +2083,11 @@ export const api = {
   quotes: (symbols: string[]) =>
     req<QuotesPayload>(
       `/api/quotes?symbols=${encodeURIComponent(
-        symbols.map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 40).join(','),
+        symbols
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean)
+          .slice(0, 40)
+          .join(','),
       )}`,
     ),
   leaderboard: () => req<{ asof: string; leaderboard: LeaderboardRow[] }>('/api/leaderboard'),
@@ -2089,11 +2118,7 @@ export const api = {
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ).then(normalizeSearch),
 
-  trajectory: (
-    symbol: string,
-    window: TrajWindow = '1y',
-    opts?: { includeQlib?: boolean },
-  ) =>
+  trajectory: (symbol: string, window: TrajWindow = '1y', opts?: { includeQlib?: boolean }) =>
     req<Trajectory>(
       `/api/trajectory?symbol=${encodeURIComponent(symbol)}&window=${window}${opts?.includeQlib === false ? '&include_qlib=0' : ''}`,
     ),
@@ -2269,9 +2294,7 @@ export const api = {
 
   /** Genetic evolution lab (research-only artifacts under runs/ga/). */
   ga: (runId?: string) =>
-    req<GaPayload>(
-      runId ? `/api/ga?run_id=${encodeURIComponent(runId)}` : '/api/ga',
-    ),
+    req<GaPayload>(runId ? `/api/ga?run_id=${encodeURIComponent(runId)}` : '/api/ga'),
 
   /** Repo knowledge graph. `maxNodes` caps what the browser has to lay out. */
   graph: (maxNodes = 400) => req<GraphPayload>(`/api/graph?max_nodes=${maxNodes}`),
@@ -2304,10 +2327,15 @@ export const api = {
   fintelStatus: () => req<FintelStatusPayload>('/api/fintel/status'),
 
   /** Polled Fintel market boards (squeeze / SI / calendars). */
-  fintelStream: (opts?: { squeezeLimit?: number; shortInterestLimit?: number; force?: boolean }) => {
+  fintelStream: (opts?: {
+    squeezeLimit?: number
+    shortInterestLimit?: number
+    force?: boolean
+  }) => {
     const q = new URLSearchParams()
     if (opts?.squeezeLimit != null) q.set('squeeze_limit', String(opts.squeezeLimit))
-    if (opts?.shortInterestLimit != null) q.set('short_interest_limit', String(opts.shortInterestLimit))
+    if (opts?.shortInterestLimit != null)
+      q.set('short_interest_limit', String(opts.shortInterestLimit))
     if (opts?.force) q.set('force', '1')
     const qs = q.toString()
     return req<FintelStreamPayload>(`/api/fintel/stream${qs ? `?${qs}` : ''}`)
@@ -2335,15 +2363,10 @@ export const api = {
     req<Record<string, unknown>>(`/api/analyze?symbol=${encodeURIComponent(symbol)}`),
 
   triggerScan: (depth: ScanDepth = 'quick') =>
-    req<ScanJobPayload>(
-      `/api/trigger_scan?depth=${depth}`,
-      { method: 'POST' },
-    ),
+    req<ScanJobPayload>(`/api/trigger_scan?depth=${depth}`, { method: 'POST' }),
 
   scanStatus: (jobId?: string) =>
-    req<ScanJobPayload>(
-      `/api/scan_status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
-    ),
+    req<ScanJobPayload>(`/api/scan_status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`),
 
   plays: () => req<PlaysPayload>('/api/plays'),
 
@@ -2354,15 +2377,11 @@ export const api = {
     ),
 
   playsStatus: (jobId?: string) =>
-    req<PlaysJobPayload>(
-      `/api/plays/status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
-    ),
+    req<PlaysJobPayload>(`/api/plays/status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`),
 
   /** QuiverQuant-style stock financials & intelligence endpoints */
   financials: (symbol: string, period: 'quarterly' | 'annual' = 'quarterly') =>
-    req<FinancialsPayload>(
-      `/api/financials?symbol=${encodeURIComponent(symbol)}&period=${period}`,
-    ),
+    req<FinancialsPayload>(`/api/financials?symbol=${encodeURIComponent(symbol)}&period=${period}`),
 
   companyProfile: (symbol: string) =>
     req<CompanyProfilePayload>(`/api/company-profile?symbol=${encodeURIComponent(symbol)}`),
@@ -2377,7 +2396,13 @@ export const api = {
     req<OwnershipPayload>(`/api/ownership?symbol=${encodeURIComponent(symbol)}`),
 
   /** Supply chain & thematic beneficiary propagation engine */
-  supplyChain: (opts?: { symbol?: string; theme?: string; depth?: number; mode?: 'dedicated' | 'intertwined'; force?: boolean }) => {
+  supplyChain: (opts?: {
+    symbol?: string
+    theme?: string
+    depth?: number
+    mode?: 'dedicated' | 'intertwined'
+    force?: boolean
+  }) => {
     const q = new URLSearchParams()
     if (opts?.symbol) q.set('symbol', opts.symbol.trim().toUpperCase())
     if (opts?.theme) q.set('theme', opts.theme)
@@ -2388,8 +2413,7 @@ export const api = {
     return req<SupplyChainPayload>(`/api/supply-chain${qs ? `?${qs}` : ''}`)
   },
 
-  supplyChainThemes: () =>
-    req<{ themes: SupplyChainThemeSummary[] }>('/api/supply-chain/themes'),
+  supplyChainThemes: () => req<{ themes: SupplyChainThemeSummary[] }>('/api/supply-chain/themes'),
 }
 
 /* ---------------------------------------------------------------- fintel ----
@@ -2870,11 +2894,7 @@ export interface OwnershipPayload {
    and quant-fundamental beneficiary elasticity models. Inspired by OpenPlanter. */
 
 export type SupplyTier =
-  | 'mega_driver'
-  | 'tier1_supplier'
-  | 'tier2_supplier'
-  | 'horizontal_enabler'
-  | 'downstream_customer'
+  'mega_driver' | 'tier1_supplier' | 'tier2_supplier' | 'horizontal_enabler' | 'downstream_customer'
 
 export type RelationshipType =
   | 'supplies_to'

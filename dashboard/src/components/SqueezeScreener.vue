@@ -6,7 +6,7 @@
  */
 import { computed } from 'vue'
 import type { OptionsSqueeze, SqueezeFactor } from '@/api'
-import { optUsd } from '@/format'
+import { optUsd, DASH } from '@/format'
 import {
   calculateFeaturedSetup,
   calculateRingOffset,
@@ -109,7 +109,7 @@ const otherSide = computed(() => {
 </script>
 
 <template>
-  <div v-if="squeeze" class="sq" :class="featured.side">
+  <div v-if="squeeze && featured.setup" class="sq" :class="featured.side">
     <section class="hero">
       <div class="ring-block">
         <div class="ring-wrap">
@@ -186,12 +186,12 @@ const otherSide = computed(() => {
         <div class="kl-cell">
           <span class="label">{{ featuredWall.label || 'WALL' }}</span>
           <strong class="fig" :class="featured.side === 'bullish' ? 'call' : 'put'">
-            {{ featuredWall.level != null ? optUsd(featuredWall.level) : '$0.00' }}
+            {{ featuredWall.level != null ? optUsd(featuredWall.level) : DASH }}
           </strong>
         </div>
         <div class="kl-cell">
           <span class="label">FLIP</span>
-          <strong class="fig accent">{{ levels?.gamma_flip != null ? optUsd(levels.gamma_flip) : '$0.00' }}</strong>
+          <strong class="fig accent">{{ levels?.gamma_flip != null ? optUsd(levels.gamma_flip) : DASH }}</strong>
         </div>
         <div class="kl-cell">
           <span class="label">SPOT</span>
@@ -247,6 +247,11 @@ const otherSide = computed(() => {
         <i :class="otherSide.side" :style="{ width: `${calculateTrackWidthPct(otherSide.setup.score, 100)}%` }" />
       </div>
     </div>
+  </div>
+
+  <div v-else-if="squeeze" class="sq empty label">
+    <strong>Structure unmeasured</strong>
+    <span>Chain data present, but neither bullish nor bearish structure could be scored.</span>
   </div>
 
   <div v-else class="sq empty label">

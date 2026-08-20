@@ -304,14 +304,27 @@ class YFinanceOptionsAdapter:
             import yfinance as yf  # type: ignore[import-not-found]
 
             ticker = yf.Ticker(symbol)
+            spot: float | None = None
+            try:
+                spot = _float(ticker.fast_info.get("last_price"))
+            except Exception:
+                pass
+            if spot is None or spot <= 0:
+                try:
+                    hist = ticker.history(period="1d")
+                    if not hist.empty and "Close" in hist.columns:
+                        spot = _float(hist["Close"].iloc[-1])
+                except Exception:
+                    pass
+
             contracts: list[dict[str, Any]] = []
             for expiry in ticker.options or []:
                 chain = ticker.option_chain(expiry)
                 for right, frame in (("call", chain.calls), ("put", chain.puts)):
                     for row in frame.to_dict("records"):
-                        row.update({"expiry": expiry, "right": right})
+                        row.update({"expiry": expiry, "right": right, "spot": spot})
                         contracts.append(row)
-            raw = {"contracts": contracts}
+            raw = {"underlying": {"symbol": symbol.upper(), "price": spot}, "contracts": contracts}
         return normalize_snapshot(
             raw, symbol=symbol, provider="yfinance", degraded=True, asof_utc=asof_utc
         )

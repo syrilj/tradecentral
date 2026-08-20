@@ -143,12 +143,22 @@ def _normal_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
-def _bs_gamma(*, spot: float, strike: float, years: float, iv: float, rate: float) -> float | None:
+def _bs_gamma(
+    *, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0,
+) -> float | None:
+    """Black-Scholes gamma (dividend-adjusted).
+
+    Γ = e^{-qT}·φ(d1) / (S·σ·√T). The dividend terms were previously dropped
+    here while ``_bs_d1`` / ``_bs_delta`` carried them, so a non-zero yield made
+    delta and gamma disagree on the same contract. q = 0 for single names today,
+    but the drift is a live trap for index/ETF chains.
+    """
     if spot <= 0 or strike <= 0 or years <= 0 or not 0.005 <= iv <= 5.0:
         return None
     root_t = math.sqrt(years)
-    d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * years) / (iv * root_t)
-    return math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi) / (spot * iv * root_t)
+    d1 = (math.log(spot / strike) + (rate - yield_rate + 0.5 * iv * iv) * years) / (iv * root_t)
+    pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+    return math.exp(-yield_rate * years) * pdf_d1 / (spot * iv * root_t)
 
 
 def _bs_d1(*, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0) -> float | None:
@@ -1450,12 +1460,18 @@ def _charm_map(
       · Net charm flow < 0 → dealers buy → buying pressure builds.
 
     This is a positioning proxy, not observed flow; the payload labels it as
-    such. Contracts with no IV or T < 1 day are skipped rather than clamped,
-    so a missing input never renders as a measured zero.
+    such. All valid chain contracts are preserved in chain_rows with Black-Scholes
+    or provider Greeks so the strike table remains complete.
     """
     by_strike: dict[float, dict[str, float]] = {}
     chain_rows: list[dict[str, Any]] = []
     charm_source = {"black_scholes": 0, "unavailable": 0}
+    # Why each contract could not be charmed — surfaced so the UI can say
+    # "12 contracts expiring today" instead of a blank chart.
+    skipped: dict[str, int] = {
+        "malformed_row": 0, "missing_dte": 0, "expiring_within_one_day": 0,
+        "missing_or_implausible_iv": 0,
+    }
     for row in rows:
         strike = _number(row.get("strike"))
         dte = _integer(row.get("dte"))
@@ -1463,31 +1479,61 @@ def _charm_map(
         right = row.get("right")
         if not strike or right not in {"call", "put"}:
             charm_source["unavailable"] += 1
+            skipped["malformed_row"] += 1
             continue
-        years = max(float(dte or 0), 0.5) / 365.0
-        charm = _bs_charm_per_day(
-            spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate, is_call=(right == "call"),
-        )
-        if charm is None:
-            charm_source["unavailable"] += 1
-            continue
-        charm_source["black_scholes"] += 1
+        # Display greeks (delta/gamma) are bounded, so a 1-day floor keeps the
+        # strike table complete. Charm is NOT bounded that way: at T→0 it scales
+        # like τ^-3/2, so a contract with an unknown or same-day expiry priced as
+        # 1DTE carried ~60x the weight of a real 30DTE contract and dominated the
+        # chain total. Charm therefore uses the honest tenor and declines to
+        # answer below the model's documented one-day validity floor.
+        greek_years = max(float(dte or 0), 1.0) / 365.0
+        charm_years = (float(dte) / 365.0) if dte is not None else None
+        if charm_years is None:
+            charm = None
+            skipped["missing_dte"] += 1
+        elif charm_years < 1.0 / 365.0:
+            charm = None
+            skipped["expiring_within_one_day"] += 1
+        else:
+            charm = _bs_charm_per_day(
+                spot=spot, strike=strike, years=charm_years, iv=iv or 0, rate=rate,
+                is_call=(right == "call"),
+            )
+            if charm is None:
+                skipped["missing_or_implausible_iv"] += 1
         oi = _integer(row.get("open_interest")) or 0
+        vol = _integer(row.get("volume")) or 0
         multiplier = _integer(row.get("multiplier")) or 100
         sign = 1.0 if right == "call" else -1.0
-        flow = sign * charm * oi * multiplier
+
+        # Calculate Delta and Gamma with BS or provider fallback
+        bs_delta_val = _bs_delta(spot=spot, strike=strike, years=greek_years, iv=iv or 0, rate=rate, is_call=(right == "call")) if (iv and iv > 0) else None
+        delta_val = bs_delta_val if bs_delta_val is not None else _number(row.get("delta"))
+
+        bs_gamma_val = _bs_gamma(spot=spot, strike=strike, years=greek_years, iv=iv or 0, rate=rate) if (iv and iv > 0) else None
+        gamma_val = bs_gamma_val if bs_gamma_val is not None else _number(row.get("gamma"))
+
+        if charm is not None:
+            charm_source["black_scholes"] += 1
+            flow = sign * charm * oi * multiplier
+        else:
+            charm_source["unavailable"] += 1
+            flow = 0.0
+
         cell = by_strike.setdefault(strike, {"call_flow": 0.0, "put_flow": 0.0, "call_oi": 0.0, "put_oi": 0.0})
         cell[f"{right}_flow"] += flow
         cell[f"{right}_oi"] += oi
+
         chain_rows.append({
             "strike": strike,
             "right": right,
             "dte": dte,
             "iv": iv,
             "open_interest": oi,
-            "volume": _integer(row.get("volume")) or 0,
-            "delta": _bs_delta(spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate, is_call=(right == "call")),
-            "gamma": _bs_gamma(spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate),
+            "volume": vol,
+            "delta": delta_val,
+            "gamma": gamma_val,
             "charm_per_day": charm,
             "charm_flow": flow,
         })
@@ -1507,14 +1553,23 @@ def _charm_map(
     net_charm_flow = sum(row["net_charm_flow"] for row in mapped)
     call_flow = sum(row["call_charm_flow"] for row in mapped)
     put_flow = sum(row["put_charm_flow"] for row in mapped)
-    abs_flow = abs(call_flow) + abs(put_flow)
+    # Gross magnitude must sum the per-strike absolutes. Taking |Σcalls| + |Σputs|
+    # let opposite-signed strikes (charm flips sign either side of spot) cancel
+    # first, understating gross flow by ~80% on a symmetric chain and making this
+    # useless as a normalizer for the pressure gauge.
+    abs_flow = sum(
+        abs(row["call_charm_flow"]) + abs(row["put_charm_flow"]) for row in mapped
+    )
     summary = {
         "net_charm_flow": round(net_charm_flow, 4),
         "call_charm_flow": round(call_flow, 4),
         "put_charm_flow": round(put_flow, 4),
         "abs_charm_flow": round(abs_flow, 4),
-        "contracts_measured": len(chain_rows),
+        # Contracts that actually produced a charm value; measured + skipped now
+        # reconciles to the chain size instead of double counting.
+        "contracts_measured": charm_source["black_scholes"],
         "contracts_skipped": charm_source["unavailable"],
+        "skipped_reasons": {key: value for key, value in skipped.items() if value},
         "pressure": (
             "selling" if net_charm_flow > 0 else "buying" if net_charm_flow < 0 else "balanced"
         ),
@@ -1525,12 +1580,29 @@ def _charm_map(
 
 def _pressure_gauge(
     *, net_charm_flow: float, net_gex_m: float, delta_weighted_call_vol: float,
-    delta_weighted_put_vol: float, alpha: float = 1.0, beta: float = 0.5,
+    delta_weighted_put_vol: float, abs_charm_flow: float | None = None,
+    abs_gex_m: float | None = None, alpha: float = 1.0, beta: float = 0.5,
 ) -> dict[str, Any]:
     """Normalized pressure signal in [−1, +1] from charm flow, GEX, and live volume.
 
-    imbalance = (−NetCharmFlow + α·(ΔWCallVol − ΔWPutVol) + β·NetGEX)
-                / (|NetCharmFlow| + α·(ΔWCallVol + ΔWPutVol) + β·|NetGEX| + ε)
+    Each channel is first reduced to its own net/gross ratio in [−1, +1], then
+    the ratios are blended by weight:
+
+        charm  = −NetCharmFlow / GrossCharmFlow          (shares/day ÷ shares/day)
+        volume = (ΔWCall − ΔWPut) / (ΔWCall + ΔWPut)     (contracts ÷ contracts)
+        gex    = NetGEX / GrossGEX                       ($M ÷ $M)
+        imbalance = (charm + α·volume + β·gex) / (1 + α + β)   ← active channels only
+
+    Normalizing *inside* each channel is what makes the blend real. The previous
+    form summed the three raw quantities directly, but they carry different
+    units and magnitudes — charm flow is shares/day (1e5–1e7), GEX is dollar
+    millions (1e1–1e2), delta-weighted volume is contracts (1e3–1e5). The charm
+    term swamped the rest: on a realistic liquid name the GEX term supplied
+    ~0.0% of the denominator, and even a $5,000M GEX moved the gauge only from
+    −1.000 to −0.980. The "three-factor blend" was in practice the sign of
+    net charm flow. Ratios put all three on one scale so α and β mean what they
+    claim, and a channel with no gross magnitude abstains rather than voting
+    "balanced".
 
     The charm-flow term is negated so the gauge agrees with the §5.5 dealer
     hedge convention: positive net charm flow → dealers sell → selling
@@ -1545,9 +1617,33 @@ def _pressure_gauge(
     very differently.
     """
     eps = 1e-9
-    numerator = -net_charm_flow + alpha * (delta_weighted_call_vol - delta_weighted_put_vol) + beta * net_gex_m
-    denominator = abs(net_charm_flow) + alpha * (delta_weighted_call_vol + delta_weighted_put_vol) + beta * abs(net_gex_m) + eps
-    imbalance = max(-1.0, min(1.0, numerator / denominator))
+    gross_charm = abs(abs_charm_flow) if abs_charm_flow is not None else abs(net_charm_flow)
+    gross_gex = abs(abs_gex_m) if abs_gex_m is not None else abs(net_gex_m)
+    gross_vol = delta_weighted_call_vol + delta_weighted_put_vol
+
+    def _ratio(net: float, gross: float) -> float | None:
+        """Signed share of a channel's gross magnitude, or None when it has none."""
+        if gross <= eps:
+            return None
+        return max(-1.0, min(1.0, net / gross))
+
+    channels: list[tuple[float, float]] = []  # (weight, ratio)
+    charm_ratio = _ratio(-net_charm_flow, gross_charm)
+    if charm_ratio is not None:
+        channels.append((1.0, charm_ratio))
+    vol_ratio = _ratio(delta_weighted_call_vol - delta_weighted_put_vol, gross_vol)
+    if vol_ratio is not None:
+        channels.append((alpha, vol_ratio))
+    gex_ratio = _ratio(net_gex_m, gross_gex)
+    if gex_ratio is not None:
+        channels.append((beta, gex_ratio))
+
+    weight_total = sum(weight for weight, _ in channels)
+    imbalance = (
+        sum(weight * ratio for weight, ratio in channels) / weight_total
+        if weight_total > eps else 0.0
+    )
+    imbalance = max(-1.0, min(1.0, imbalance))
     if imbalance > 0.25:
         label = "buying"
     elif imbalance < -0.25:
@@ -1562,6 +1658,13 @@ def _pressure_gauge(
             "delta_weighted_call_vol": round(delta_weighted_call_vol, 4),
             "delta_weighted_put_vol": round(delta_weighted_put_vol, 4),
             "net_gex_m": round(net_gex_m, 4),
+        },
+        # Per-channel contribution, so the UI can show WHY the gauge reads the
+        # way it does instead of presenting one opaque number.
+        "channels": {
+            "charm": None if charm_ratio is None else round(charm_ratio, 6),
+            "volume": None if vol_ratio is None else round(vol_ratio, 6),
+            "gex": None if gex_ratio is None else round(gex_ratio, 6),
         },
         "weights": {"alpha": alpha, "beta": beta},
         "convention_note": (
@@ -2307,11 +2410,12 @@ def build_options_intelligence(
         }
 
     chain_asof = chain_observed or now
+    eval_asof = now if (mode_requested == "live" and mode_resolved == "live") else chain_asof
     contract_focus = _contract_focus(
         latest_rows,
         # Contract expiry is selected against the current session in live
         # mode, even when the provider's quote timestamp is delayed.
-        asof=now if mode_requested == "live" else chain_asof,
+        asof=eval_asof,
         spot=resolved_spot,
     )
     filtered_chain, chain_rejected, chain_context = _filter_chain(
@@ -2319,7 +2423,7 @@ def build_options_intelligence(
         asof=chain_asof,
         spot=resolved_spot,
         filters=filters,
-        selection_date=now.date() if mode_requested == "live" else chain_asof.date(),
+        selection_date=eval_asof.date(),
     )
     spread_samples = [row["spread_pct"] for row in filtered_chain if row["spread_pct"] is not None]
     median_spread_pct = median(spread_samples) if spread_samples else None
@@ -2397,6 +2501,10 @@ def build_options_intelligence(
         net_gex_m=gex_summary["total_gex_m"],
         delta_weighted_call_vol=delta_weighted_call_vol,
         delta_weighted_put_vol=delta_weighted_put_vol,
+        # Gross magnitudes normalize each channel onto a common [-1, 1] scale;
+        # without them the charm term's raw units swamp GEX and volume entirely.
+        abs_charm_flow=charm_summary["abs_charm_flow"],
+        abs_gex_m=gex_summary.get("abs_gex_m"),
     )
     probability = _probability_context(
         filtered_chain, spot=resolved_spot, asof=chain_asof, rate=filters.risk_free_rate,

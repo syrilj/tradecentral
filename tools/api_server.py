@@ -3304,6 +3304,59 @@ def _resolve_live_options_spot(
     return None, None
 
 
+def _refresh_history_spot(
+    symbol: str,
+    *,
+    snapshot_spot: float | None,
+    warnings: list[str],
+) -> tuple[float | None, str | None]:
+    """Best-effort live spot for history/history_fallback mode.
+
+    A dated chain snapshot freezes the underlying spot at capture time. When
+    that snapshot is days old and the live chain is unavailable, the embedded
+    spot becomes structurally wrong — every Greek, wall, and the chart marker
+    are computed against a stale price. This fetches a fresh spot from the
+    same priority sources as the live path (LSE equity candles → yfinance
+    last price → local daily close) so a stale snapshot's spot is overridden
+    when a fresher mark is available.
+
+    Returns ``(spot, source)`` where ``source`` is a ``spot_source`` label.
+    When no fresher source beats the snapshot, returns ``(snapshot_spot,
+    "cached_chain_spot")`` so callers can still label the origin honestly.
+    """
+    equity_spot, equity_asof = _fetch_lse_equity_spot(symbol)
+    if equity_spot is not None and math.isfinite(equity_spot) and equity_spot > 0:
+        return equity_spot, f"lse_equity_candles:{equity_asof or 'unknown'}"
+
+    # yfinance last price — delayed but still fresher than a multi-day-old
+    # snapshot embedded spot for names outside the LSE equity universe.
+    try:
+        import yfinance as yf  # type: ignore[import-not-found]
+
+        ticker = yf.Ticker(symbol)
+        yf_spot: float | None = None
+        try:
+            yf_spot = _safe_round(float(ticker.fast_info.get("last_price")), 4)
+        except Exception:  # noqa: BLE001 - fast_info is best-effort
+            pass
+        if yf_spot is None or yf_spot <= 0:
+            hist = ticker.history(period="1d")
+            if hist is not None and not hist.empty and "Close" in hist.columns:
+                yf_spot = _safe_round(float(hist["Close"].iloc[-1]), 4)
+        if yf_spot is not None and math.isfinite(yf_spot) and yf_spot > 0:
+            warnings.append(
+                "Spot refreshed from delayed yfinance last price; "
+                "chain structure is from a dated snapshot."
+            )
+            return yf_spot, "yfinance_delayed_last_price"
+    except Exception:  # noqa: BLE001 - yfinance is a soft dependency
+        pass
+
+    if snapshot_spot is not None and snapshot_spot > 0:
+        return snapshot_spot, "cached_chain_spot"
+    return None, None
+
+
 def _cached_option_chain_rows(path: Path) -> list[dict[str, Any]]:
     """Decode one immutable chain snapshot once per (mtime, size)."""
     try:
@@ -3787,6 +3840,29 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
                 "auto_selected": False,
             }
 
+    # History mode: the chain snapshot's embedded spot is frozen at capture
+    # time. Attempt to refresh it from a live source so the chart marker and
+    # every Greek are not computed against a days-old price. When no fresher
+    # source is available, fall back to the snapshot spot honestly labelled.
+    history_spot: float | None = None
+    history_spot_source: str | None = None
+    if mode_resolved != "live":
+        snapshot_spot = next(
+            (
+                float(row.get("spot"))
+                for row in chain_rows
+                if row.get("spot") is not None
+                and isinstance(row.get("spot"), (int, float))
+                and float(row.get("spot")) > 0
+            ),
+            None,
+        )
+        history_spot, history_spot_source = _refresh_history_spot(
+            symbol,
+            snapshot_spot=snapshot_spot,
+            warnings=warnings,
+        )
+
     payload = build_options_intelligence(
         symbol=symbol,
         chain_rows=chain_rows,
@@ -3796,7 +3872,12 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
         # latest daily close. Mixing observation clocks distorts every Greek.
         # Live mode prefers timestamped equity last (LSE candles / tape) over
         # multi-day-stale local parquet closes.
-        spot=live_spot if mode_resolved == "live" else None,
+        # History mode: prefer a refreshed live spot over the stale snapshot
+        # median; fall back to the snapshot spot when no live source is found.
+        spot=(
+            live_spot if mode_resolved == "live"
+            else history_spot
+        ),
         filters=filters,
         mode_requested=mode,
         mode_resolved=mode_resolved,
@@ -3811,6 +3892,8 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
         payload["history"] = history_meta
         if mode_resolved == "live" and live_spot_source:
             payload["spot_source"] = live_spot_source
+        elif mode_resolved != "live" and history_spot_source:
+            payload["spot_source"] = history_spot_source
     with _OPTIONS_LOCK:
         _OPTIONS_CACHE[cache_key] = (time.time(), payload)
         if len(_OPTIONS_CACHE) > 128:

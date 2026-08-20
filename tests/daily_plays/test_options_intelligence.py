@@ -958,3 +958,188 @@ def test_payload_exposes_charm_pressure_and_delta_weighted_volume():
     )
     assert result["delta_weighted_volume"]["call"] >= 0
     assert result["delta_weighted_volume"]["put"] >= 0
+
+
+# --- charm / pressure-gauge math audit regressions ---------------------------
+
+
+def _charm_row(right: str, strike: float, *, oi: int = 2_000, dte: int | None = 30,
+               iv: float = 0.35) -> dict:
+    return {
+        "right": right, "strike": strike, "open_interest": oi, "volume": 0,
+        "iv": iv, "dte": dte, "multiplier": 100,
+    }
+
+
+def test_charm_map_skips_contracts_with_unknown_expiry_instead_of_pricing_them_as_1dte():
+    """Missing DTE must not be silently floored to 1 day.
+
+    Charm scales like tau^-3/2, so a stray unknown-expiry contract priced as
+    1DTE carried ~60x the weight of a real 30DTE contract and dominated the
+    chain total. Unknown tenor is unmeasurable, not maximally urgent.
+    """
+    from edge.daily_plays.options_intelligence import _charm_map
+
+    _, summary, chain = _charm_map([_charm_row("call", 97, dte=None)], spot=100, rate=0.045)
+    assert summary["contracts_measured"] == 0
+    assert summary["skipped_reasons"] == {"missing_dte": 1}
+    assert chain[0]["charm_per_day"] is None
+    assert chain[0]["charm_flow"] == 0.0
+
+
+def test_charm_map_honors_the_documented_one_day_validity_floor():
+    """The T < 1 day guard in _bs_charm_per_day must be reachable from _charm_map.
+
+    _charm_map used to floor years at exactly 1/365 before calling, so the guard
+    could never fire and 0DTE contracts were charmed as if they had a full day.
+    """
+    from edge.daily_plays.options_intelligence import _charm_map
+
+    _, summary, chain = _charm_map([_charm_row("call", 97, dte=0)], spot=100, rate=0.045)
+    assert summary["contracts_measured"] == 0
+    assert summary["skipped_reasons"] == {"expiring_within_one_day": 1}
+    assert chain[0]["charm_per_day"] is None
+
+    # 1DTE is still inside the model's validity range and must be measured.
+    _, summary_1dte, _ = _charm_map([_charm_row("call", 97, dte=1)], spot=100, rate=0.045)
+    assert summary_1dte["contracts_measured"] == 1
+    assert summary_1dte["skipped_reasons"] == {}
+
+
+def test_charm_map_counters_reconcile_to_the_chain_size():
+    """measured + skipped must equal the chain, with no double counting."""
+    from edge.daily_plays.options_intelligence import _charm_map
+
+    rows = [_charm_row("call", k) for k in (95, 100, 105)] + [_charm_row("call", 97, dte=None)]
+    _, summary, chain = _charm_map(rows, spot=100, rate=0.045)
+    assert summary["contracts_measured"] == 3
+    assert summary["contracts_skipped"] == 1
+    assert summary["contracts_measured"] + summary["contracts_skipped"] == len(chain)
+
+
+def test_abs_charm_flow_is_gross_magnitude_not_net_of_opposing_strikes():
+    """Charm flips sign either side of spot, so |sum| cancels and understates gross.
+
+    On a symmetric chain the old |sum(calls)| + |sum(puts)| form reported ~21% of
+    the true gross magnitude, which made it useless as a pressure-gauge normalizer.
+    """
+    from edge.daily_plays.options_intelligence import _charm_map
+
+    rows = [_charm_row("call", k) for k in (90, 95, 100, 105, 110)] + \
+           [_charm_row("put", k) for k in (90, 95, 100, 105, 110)]
+    mapped, summary, _ = _charm_map(rows, spot=100, rate=0.045)
+
+    expected = sum(abs(r["call_charm_flow"]) + abs(r["put_charm_flow"]) for r in mapped)
+    assert summary["abs_charm_flow"] == pytest.approx(expected)
+    # Strikes genuinely straddle spot, so this test would be vacuous otherwise.
+    assert any(r["call_charm_flow"] > 0 for r in mapped)
+    assert any(r["call_charm_flow"] < 0 for r in mapped)
+    assert summary["abs_charm_flow"] > abs(summary["net_charm_flow"])
+
+
+def test_pressure_gauge_gex_channel_is_not_drowned_by_charm_flow_units():
+    """GEX ($M) must still move the gauge against charm flow (shares/day).
+
+    The old additive form summed raw quantities across incompatible units; on a
+    realistic name the GEX term supplied ~0% of the denominator and even a
+    $5,000M GEX moved the reading only from -1.000 to -0.980.
+    """
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    def gauge(net_gex_m: float) -> float:
+        return _pressure_gauge(
+            net_charm_flow=250_000.0, abs_charm_flow=900_000.0,
+            net_gex_m=net_gex_m, abs_gex_m=150.0,
+            delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+        )["imbalance"]
+
+    swing = gauge(150.0) - gauge(-150.0)
+    assert swing > 0.5, f"GEX barely moves the gauge (swing={swing})"
+    assert gauge(150.0) > gauge(0.0) > gauge(-150.0)
+
+
+def test_pressure_gauge_channels_abstain_when_they_have_no_gross_magnitude():
+    """A channel with no data must not vote 'balanced' and dilute the others."""
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    gauge = _pressure_gauge(
+        net_charm_flow=250_000.0, abs_charm_flow=900_000.0,
+        net_gex_m=0.0, abs_gex_m=0.0,
+        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+    )
+    assert gauge["channels"]["gex"] is None
+    assert gauge["channels"]["volume"] is None
+    # Pure charm read: -250k/900k, undiluted by the two silent channels.
+    assert gauge["channels"]["charm"] == pytest.approx(-250_000.0 / 900_000.0)
+    assert gauge["imbalance"] == pytest.approx(-250_000.0 / 900_000.0)
+
+
+def test_pressure_gauge_stays_bounded_and_blends_all_three_channels():
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    gauge = _pressure_gauge(
+        net_charm_flow=-900_000.0, abs_charm_flow=900_000.0,
+        net_gex_m=150.0, abs_gex_m=150.0,
+        delta_weighted_call_vol=90_000.0, delta_weighted_put_vol=0.0,
+    )
+    # Every channel maxed bullish -> saturates at exactly +1, never beyond.
+    assert gauge["imbalance"] == pytest.approx(1.0)
+    assert gauge["label"] == "buying"
+    assert gauge["channels"] == {"charm": 1.0, "volume": 1.0, "gex": 1.0}
+
+
+def test_bs_gamma_matches_bs_delta_on_dividend_handling():
+    """Gamma dropped the yield terms that d1/delta carried, so they disagreed."""
+    import math
+    from edge.daily_plays.options_intelligence import _bs_gamma, _bs_delta
+
+    kwargs = dict(spot=100, strike=105, years=30 / 365, iv=0.35, rate=0.045)
+    q = 0.03
+    # Finite-difference gamma from the dividend-adjusted delta.
+    h = 0.01
+    up = _bs_delta(**{**kwargs, "spot": 100 + h}, yield_rate=q)
+    down = _bs_delta(**{**kwargs, "spot": 100 - h}, yield_rate=q)
+    numeric = (up - down) / (2 * h)
+    assert _bs_gamma(**kwargs, yield_rate=q) == pytest.approx(numeric, rel=1e-4)
+
+    # q = 0 must be unchanged from the previous behaviour.
+    assert _bs_gamma(**kwargs) == pytest.approx(_bs_gamma(**kwargs, yield_rate=0.0))
+    assert not math.isclose(_bs_gamma(**kwargs), _bs_gamma(**kwargs, yield_rate=q))
+
+
+def test_a_thin_same_day_strike_cannot_invert_the_whole_chains_charm_sign():
+    """The regression this audit exists for.
+
+    Charm scales like tau^-3/2, so flooring same-day contracts at 1 day let a
+    single 0DTE strike with 25x LESS open interest flip the chain's net charm
+    flow from -1,444 sh/d (dealers buying) to +162 sh/d (dealers selling) —
+    a full sign inversion of the headline signal that drives the directional
+    narrative and the trade recommendations on the drift tab.
+    """
+    from edge.daily_plays.options_intelligence import _charm_map
+
+    book = [_charm_row("call", k, oi=5_000, dte=30) for k in (95, 97, 100, 103, 105)]
+    stray = [_charm_row("call", 97, oi=200, dte=0)]
+
+    _, real, _ = _charm_map(book, spot=100, rate=0.045)
+    _, mixed, _ = _charm_map(book + stray, spot=100, rate=0.045)
+
+    assert real["net_charm_flow"] < 0, "fixture must be a dealer-buying book"
+    # The stray same-day strike is excluded, so it cannot move the aggregate.
+    assert mixed["net_charm_flow"] == pytest.approx(real["net_charm_flow"])
+    assert mixed["net_charm_flow"] < 0
+    assert mixed["skipped_reasons"] == {"expiring_within_one_day": 1}
+
+
+def test_expiration_day_chain_reports_zero_measured_rather_than_fabricating_flow():
+    """A wholly 0DTE chain must say 'not measurable', not print inflated numbers."""
+    from edge.daily_plays.options_intelligence import _charm_map
+
+    rows = [_charm_row("call", k, oi=5_000, dte=0) for k in (95, 100, 105)]
+    mapped, summary, _ = _charm_map(rows, spot=100, rate=0.045)
+
+    assert summary["contracts_measured"] == 0
+    assert summary["skipped_reasons"] == {"expiring_within_one_day": 3}
+    assert summary["net_charm_flow"] == 0.0
+    assert summary["abs_charm_flow"] == 0.0
+    assert all(row["net_charm_flow"] == 0.0 for row in mapped)
