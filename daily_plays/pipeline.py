@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 import os
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .adapters.flow import load_live_flow_activity, load_live_forward_flow
@@ -31,7 +32,8 @@ from .contracts import (
     RunMode,
 )
 from .fusion import entry_authorization_failures, rank_candidates
-from .ledger import persist_run
+from .ledger import DEFAULT_OUTPUT_ROOT, persist_run
+from .pullback_flow_engine import persist_pullback_plays_run, run_pullback_flow_engine
 from .options_validation import (
     OptionsPolicy,
     select_directional_contract,
@@ -554,6 +556,36 @@ def run_pipeline(
         for reason in (decision.get("confidence") or {}).get("reasons", [])
     )
     decision_blockers = list(decision_reasons)
+    # The pullback flow engine is a last-resort discovery path, used only when
+    # the main pipeline produced zero candidates at all (not merely when none
+    # reached ENTER).  If the pipeline scanned candidates but they all
+    # abstained/watched, those decisions must stand — they carry validated
+    # evidence and failed_checks that an operator needs to see.
+    # The fallback is gated on persist=True so isolated test runs (which use
+    # persist=False) never trigger an engine scan against real repo data.
+    # When the pipeline runs against an explicit output_root (tests, replay),
+    # the engine scans that same tree so it does not leak real repo data
+    # into an isolated run.
+    if not actionable_plays and not internals and persist:
+        engine_root = (
+            Path(output_root).resolve() if output_root else Path(__file__).resolve().parents[1]
+        )
+        try:
+            pb_res = run_pullback_flow_engine(
+                account=account,
+                context=context,
+                config=config,
+                root_dir=engine_root,
+            )
+            if pb_res.get("plays"):
+                if persist:
+                    persist_pullback_plays_run(
+                        pb_res, output_root=output_root or DEFAULT_OUTPUT_ROOT
+                    )
+                return pb_res
+        except Exception as exc:
+            warnings.append(f"pullback_flow_engine_unavailable:{type(exc).__name__}:{exc}")
+
     if not actionable_plays and not decision_blockers:
         decision_blockers.append(
             "no_successfully_scanned_model_candidates"

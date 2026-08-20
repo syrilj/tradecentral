@@ -45,6 +45,12 @@ withDefaults(defineProps<{
     <template v-else-if="name === 'flow'">
       <path d="M3 12h3l2.2-6 4 12 2.4-7 1.7 4H21" />
     </template>
+    <template v-else-if="name === 'drift'">
+      <path d="M3 12h18" />
+      <path d="M6 12V6.5M9 12V8M12 12V5M15 12V8.5M18 12V7" />
+      <path d="M6 12v5.5M9 12v4M12 12v7M15 12v3.5M18 12v5" />
+      <path d="M3 14c4 1 5-3 9-1s5 1 9-1" />
+    </template>
     <template v-else-if="name === 'research'">
       <path d="M9 3h6" />
       <path d="M10 3v6.5L4.6 18a2.2 2.2 0 0 0 1.9 3.3h11a2.2 2.2 0 0 0 1.9-3.3L14 9.5V3" />

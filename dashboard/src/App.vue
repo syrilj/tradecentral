@@ -145,9 +145,10 @@ const primaryNav = [
   { name: 'plays', idx: '02', title: 'Plays', hint: 'Today\'s decision funnel', icon: 'radar' },
   { name: 'market', idx: '03', title: 'Market', hint: 'Symbol research', icon: 'market' },
   { name: 'options', idx: '04', title: 'Options', hint: 'One underlier', icon: 'options' },
-  { name: 'flow', idx: '05', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
-  { name: 'chain', idx: '06', title: 'Chain', hint: 'Value chain & growth', icon: 'chain' },
-  { name: 'suggest', idx: '07', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
+  { name: 'drift', idx: '05', title: 'Drift', hint: 'Buying vs selling pressure', icon: 'drift' },
+  { name: 'flow', idx: '06', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
+  { name: 'chain', idx: '07', title: 'Chain', hint: 'Value chain & growth', icon: 'chain' },
+  { name: 'suggest', idx: '08', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
 ] as const
 
 const marketTools = [
@@ -541,7 +542,7 @@ function openSymbol(sym: string): void {
     return
   }
   /* Always land on Market for symbol research when not already on a symbol workspace. */
-  const symbolViews = new Set(['market', 'options', 'changepoints', 'sentiment', 'momentum', 'fintel'])
+  const symbolViews = new Set(['market', 'options', 'drift', 'changepoints', 'sentiment', 'momentum', 'fintel'])
   const targetRouteName = symbolViews.has(currentName) ? currentName : 'market'
   void router.push({ name: targetRouteName, query: { symbol: clean } })
 }

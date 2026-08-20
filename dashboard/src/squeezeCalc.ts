@@ -2,7 +2,12 @@ import type { SqueezeSetup } from '@/api'
 import { usd } from '@/format'
 
 export const RING_RADIUS = 42
-export const RING_CIRCUMFERENCE = 263.89
+/**
+ * Derived from RING_RADIUS (2πr) rather than hardcoded, so the stroke-dasharray
+ * math can never drift out of sync with the SVG's `r` attribute if the radius
+ * is ever changed in SqueezeScreener.vue without updating a separate literal.
+ */
+export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
 
 export type TakeawayType = 'pos' | 'neg' | 'warn' | 'info'
 
@@ -145,7 +150,8 @@ export function buildTakeaways(options: {
 
   const lines: TakeawayItem[] = []
   if (wallLevel != null) {
-    const pctTxt = wallPct == null ? '' : ` (${wallPct >= 0 ? '+' : ''}${(wallPct * 100).toFixed(1)}%)`
+    const pctTxt =
+      wallPct == null ? '' : ` (${wallPct >= 0 ? '+' : ''}${(wallPct * 100).toFixed(1)}%)`
     lines.push({
       line: `${wallLabel || (side === 'bullish' ? 'Call Wall' : 'Put Wall')} at ${usd(wallLevel)}${pctTxt}.`,
       icon: side === 'bullish' ? '↑' : '↓',
