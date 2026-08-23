@@ -17,15 +17,21 @@ import { DASH, age, num, pctFrac, shortDate, signedPct, usd } from '@/format'
 /**
  * Plays of the day.
  *
- * This is the operator surface for the full daily-plays decision funnel:
- * market map -> routed targets -> model domain -> directional setups -> live
- * option-chain validation -> ENTER/WATCH/ABSTAIN. The pipeline is fail-closed
- * and normally returns NO_PLAY in live mode, so the whole funnel stays visible
- * instead of fabricating actionable tickets. Decision support only; no orders.
+ * This is the operator surface for the daily-plays decision funnel: market
+ * map -> routed targets -> model domain -> directional setups -> live
+ * option-chain validation -> ENTER/WATCH/ABSTAIN. When the calibrated-model
+ * path produces no actionable ticket, the pullback technical-screen engine
+ * contributes its own policy-gated, honestly-labelled tickets so the desk
+ * has real candidates with exact contracts. Every ticket carries its setup
+ * evidence (chart structure + options flow) and quote provenance. Decision
+ * support only; never places or routes an order.
  */
 
 const router = useRouter()
 const sharedMarketClock = inject<Resource<MarketClock> | null>('marketClock', null)
+
+/** Poll cadence while the tab is visible: fresh enough for intraday use. */
+const REFRESH_INTERVAL_MS = 60_000
 
 const accountInput = ref('10000')
 const running = ref(false)
@@ -33,7 +39,7 @@ const runMsg = ref<string | null>(null)
 const runJob = ref<PlaysJob | null>(null)
 let pollToken = 0
 
-const feed = useResource<PlaysPayload>(() => api.plays(), { intervalMs: 0 })
+const feed = useResource<PlaysPayload>(() => api.plays(), { intervalMs: REFRESH_INTERVAL_MS })
 
 const payload = computed(() => feed.data.value)
 const available = computed(() => payload.value?.available === true)
@@ -82,7 +88,14 @@ const funnel = computed(() => {
     { label: 'Routed targets', value: s.targeted_count, sub: 'flow targets' },
     { label: 'Model domain', value: s.model_domain_supported, sub: 'supported symbols' },
     { label: 'Scanned', value: s.successfully_scanned_candidates, sub: 'candidates' },
-    { label: 'Directional', value: s.directional_setups, sub: 'setups' },
+    {
+      label: 'Directional',
+      value: s.directional_setups,
+      sub:
+        sleeveCounts.value.bounce || sleeveCounts.value.breakdown
+          ? `${sleeveCounts.value.bounce} bounce · ${sleeveCounts.value.breakdown} brk`
+          : 'setups',
+    },
     { label: 'Chains', value: s.chain_requests, sub: 'requested' },
     { label: 'Snapshots', value: s.chain_snapshots, sub: 'validated' },
   ]
@@ -166,14 +179,6 @@ function sideClass(value: string | null | undefined): string {
   return side === 'long' ? 'pos' : side === 'short' ? 'neg' : 'flat'
 }
 
-function confidenceLabel(decision: PlaysDecision): string {
-  const c = decision.confidence
-  if (c?.calibrated_probability != null && Number.isFinite(c.calibrated_probability)) {
-    return pctFrac(c.calibrated_probability, 1)
-  }
-  return DASH
-}
-
 function confidenceKind(decision: PlaysDecision): string {
   return String(decision.confidence?.confidence_kind ?? 'unavailable').replaceAll('_', ' ')
 }
@@ -242,6 +247,89 @@ function researchHorizon(row: Record<string, unknown>): string {
   const horizon = Number(row.horizon_days)
   return Number.isFinite(horizon) && horizon > 0 ? `H${horizon}` : DASH
 }
+
+/* ---- scanner-evidence helpers (pullback engine runs) -------------------- */
+
+const isEngineRun = computed(() => payload.value?.engine === 'pullback_flow_engine')
+
+const sleeveCounts = computed(() => {
+  const s = scanScope.value
+  return {
+    bounce: Number(s?.bounce_setups ?? 0),
+    breakdown: Number(s?.breakdown_setups ?? 0),
+  }
+})
+
+interface PlayEvidence {
+  setupKind: string
+  pullback: number | null
+  rsi: number | null
+  pcrVolume: number | null
+  callWall: number | null
+  putWall: number | null
+  maxPain: number | null
+  target1: number | null
+  supportStop: number | null
+  targetExpiry: string | null
+  atmIv: number | null
+}
+
+function evidenceOf(play: PlaysDecision): PlayEvidence {
+  const ev = play.evidence ?? {}
+  const read = (key: string): number | null => {
+    const v = ev[key]
+    return typeof v === 'number' && Number.isFinite(v) ? v : null
+  }
+  return {
+    setupKind: String(ev.setup_kind ?? '—'),
+    pullback: read('pullback_20d_pct'),
+    rsi: read('rsi_14'),
+    pcrVolume: read('pcr_volume'),
+    callWall: read('call_wall'),
+    putWall: read('put_wall'),
+    maxPain: read('max_pain'),
+    target1: read('target_1'),
+    supportStop: read('support_stop'),
+    targetExpiry: typeof ev.target_expiry === 'string' ? ev.target_expiry : null,
+    atmIv: read('atm_iv'),
+  }
+}
+
+function strategyLabel(strategy: string): string {
+  if (strategy === 'long_call') return 'LONG CALL · BOUNCE'
+  if (strategy === 'long_put') return 'LONG PUT · BREAKDOWN'
+  return strategy.replaceAll('_', ' ').toUpperCase()
+}
+
+function legGreeksLabel(play: PlaysDecision): string {
+  const leg = play.legs[0]
+  if (!leg) return DASH
+  const parts: string[] = []
+  if (leg.delta != null) parts.push(`Δ ${num(leg.delta, 2)}`)
+  if (leg.theta != null) parts.push(`θ ${num(leg.theta, 2)}/d`)
+  if (leg.charm != null) parts.push(`charm ${leg.charm.toFixed(4)}/d`)
+  return parts.length ? parts.join(' · ') : DASH
+}
+
+function legQuoteAgeLabel(play: PlaysDecision): string {
+  const leg = play.legs[0]
+  if (!leg?.quote_asof_utc) return 'no capture stamp'
+  return `${age(leg.quote_asof_utc)} old`
+}
+
+function chainFreshnessLabel(play: PlaysDecision): string {
+  const f = play.freshness ?? {}
+  const chainDate = typeof f.chain_date === 'string' ? f.chain_date.replace('date=', '') : null
+  if (!chainDate) return 'no chain'
+  const stale = f.chain_snapshot_stale === true
+  return stale ? `chain ${shortDate(chainDate)} · STALE` : `chain ${shortDate(chainDate)}`
+}
+
+/** True when the run's tickets came from the technical-screen engine. */
+function isEngineTicket(play: PlaysDecision): boolean {
+  const p = play.provenance ?? {}
+  return String(p.engine ?? '').includes('Pullback')
+}
 </script>
 
 <template>
@@ -252,8 +340,11 @@ function researchHorizon(row: Record<string, unknown>): string {
         <h1>Plays of the Day</h1>
         <p>
           The full pipeline: sector rotation routes the scan, the frozen model domain scores
-          directional setups, and live option-chain validation gates every ticket. Fail-closed —
-          a NO PLAY result is the honest outcome, not an empty screen.
+          directional setups, and live option-chain validation gates every ticket. When the
+          calibrated-model path has no actionable ticket, the technical-screen engine contributes
+          chart-plus-flow candidates with exact contracts from the latest chain snapshots. Every
+          ticket shows its evidence, quote age, and failure reasons. Fail-closed — a NO PLAY
+          result is the honest outcome, not an empty screen.
         </p>
       </div>
       <div class="scope-stack">
@@ -261,8 +352,12 @@ function researchHorizon(row: Record<string, unknown>): string {
           {{ planningMode ? 'MARKET CLOSED · PLANNING' : 'LIVE ENTRY MONITOR' }}
         </span>
         <span class="scope-chip label">SHADOW ONLY · NO ORDERS</span>
-        <span class="scope-chip label" :class="available ? 'live' : ''">
+        <span class="scope-chip label" :class="{ live: available }">
           {{ available ? `RUN ${payload?.run_id?.slice(0, 15)}` : 'NO RUN PERSISTED' }}
+        </span>
+        <span v-if="isEngineRun" class="scope-chip engine label">
+          ENGINE · {{ String(payload?.engine ?? '').toUpperCase() }} v{{ payload?.engine_version ?? '?' }}
+          · 60s AUTO-REFRESH
         </span>
       </div>
     </header>
@@ -432,15 +527,62 @@ function researchHorizon(row: Record<string, unknown>): string {
             <div class="play-head">
               <span class="fig sym-lg">{{ play.symbol }}</span>
               <span class="side-pill" :class="sideClass(play.side)">{{ sideWord(play.side) }}</span>
-              <span class="strategy label">{{ play.strategy.replaceAll('_', ' ') }}</span>
+              <span class="strategy label">{{ strategyLabel(play.strategy) }}</span>
               <span class="state label enter">ENTER</span>
               <span class="rank label">RANK {{ play.rank }}</span>
             </div>
             <div class="play-readouts">
-              <Readout label="Calibrated" :value="confidenceLabel(play)" :sub="confidenceKind(play)" :tone="sideClass(play.side) === 'pos' ? 'pos' : sideClass(play.side) === 'neg' ? 'neg' : 'flat'" />
+              <Readout
+                label="Contract"
+                :value="play.legs[0]?.occ_symbol ?? DASH"
+                :sub="`${legQuoteAgeLabel(play)} · ${legGreeksLabel(play)}`"
+                tone="flat"
+              />
               <Readout label="Max loss" :value="maxLossLabel(play)" sub="defined risk" tone="flat" />
-              <Readout label="Contracts" :value="num(play.risk?.contracts, 0)" sub="sized" tone="flat" />
-              <Readout label="Underlying ref" :value="usd(play.entry?.underlying_reference, 2)" :sub="`quote ${age(play.entry?.quote_asof_utc)} old`" tone="flat" />
+              <Readout
+                label="Reward / Risk"
+                :value="play.risk?.reward_risk_reference != null ? `${num(play.risk.reward_risk_reference, 2)}x` : DASH"
+                sub="structure targets"
+                :tone="(play.risk?.reward_risk_reference ?? 0) >= 1.5 ? 'pos' : 'flat'"
+              />
+              <Readout
+                label="Chain"
+                :value="chainFreshnessLabel(play)"
+                :sub="evidenceOf(play).targetExpiry ? `expiry ${shortDate(evidenceOf(play).targetExpiry)}` : 'expiry unmeasured'"
+                tone="flat"
+              />
+            </div>
+            <div v-if="isEngineTicket(play)" class="levels-row">
+              <div class="level-cell">
+                <span class="label level-key">SPOT</span>
+                <span class="fig">{{ usd(play.entry?.underlying_reference, 2) }}</span>
+              </div>
+              <div class="level-cell">
+                <span class="label level-key">TARGET 1</span>
+                <span class="fig pos">{{ usd(evidenceOf(play).target1, 2) }}</span>
+              </div>
+              <div class="level-cell">
+                <span class="label level-key">STOP</span>
+                <span class="fig neg">{{ usd(evidenceOf(play).supportStop, 2) }}</span>
+              </div>
+              <div class="level-cell">
+                <span class="label level-key">CALL WALL</span>
+                <span class="fig">{{ evidenceOf(play).callWall != null ? usd(evidenceOf(play).callWall, 2) : DASH }}</span>
+              </div>
+              <div class="level-cell">
+                <span class="label level-key">PUT WALL</span>
+                <span class="fig">{{ evidenceOf(play).putWall != null ? usd(evidenceOf(play).putWall, 2) : DASH }}</span>
+              </div>
+              <div class="level-cell">
+                <span class="label level-key">MAX PAIN</span>
+                <span class="fig">{{ evidenceOf(play).maxPain != null ? usd(evidenceOf(play).maxPain, 2) : DASH }}</span>
+              </div>
+              <div class="level-cell">
+                <span class="label level-key">PCR VOL</span>
+                <span class="fig" :class="(evidenceOf(play).pcrVolume ?? 1) < 0.65 ? 'pos' : (evidenceOf(play).pcrVolume ?? 1) > 1.0 ? 'neg' : ''">
+                  {{ evidenceOf(play).pcrVolume != null ? num(evidenceOf(play).pcrVolume, 2) : DASH }}
+                </span>
+              </div>
             </div>
             <div class="legs">
               <span class="label legs-label">TICKET</span>
@@ -483,8 +625,8 @@ function researchHorizon(row: Record<string, unknown>): string {
               <tr>
                 <th class="label col-sym">Symbol</th>
                 <th class="label col-side">Side</th>
-                <th class="label col-strategy">Strategy</th>
-                <th class="label num col-edge">Calibrated</th>
+                <th class="label col-strategy">Setup</th>
+                <th class="label num col-rr">R/R</th>
                 <th class="label col-kind">Confidence kind</th>
                 <th class="label col-grade">Grade</th>
                 <th class="label col-reasons">Why not ENTER</th>
@@ -495,8 +637,8 @@ function researchHorizon(row: Record<string, unknown>): string {
               <tr v-for="row in watchlist" :key="row.play_id" class="decision-row" @click="openSymbol(row.symbol)">
                 <td class="fig sym col-sym">{{ row.symbol }}</td>
                 <td class="col-side"><span class="side-pill" :class="sideClass(row.side)">{{ sideWord(row.side) }}</span></td>
-                <td class="label col-strategy">{{ row.strategy.replaceAll('_', ' ') }}</td>
-                <td class="fig num col-edge">{{ confidenceLabel(row) }}</td>
+                <td class="label col-strategy">{{ strategyLabel(row.strategy) }}</td>
+                <td class="fig num col-rr">{{ row.risk?.reward_risk_reference != null ? `${num(row.risk.reward_risk_reference, 2)}x` : DASH }}</td>
                 <td class="label col-kind">{{ confidenceKind(row) }}</td>
                 <td class="fig col-grade">{{ row.confidence?.evidence_grade ?? DASH }}</td>
                 <td class="label col-reasons">{{ reasonList(row).slice(0, 3).join(' · ') || DASH }}</td>
@@ -687,6 +829,12 @@ function researchHorizon(row: Record<string, unknown>): string {
   color: var(--call-hi);
   border-color: var(--call);
   background: var(--call-wash);
+}
+
+.scope-chip.engine {
+  color: var(--ink-dim);
+  border-color: var(--rule-hi);
+  background: var(--void-lift);
 }
 
 /* Run console */
@@ -939,6 +1087,26 @@ function researchHorizon(row: Record<string, unknown>): string {
   gap: var(--s3);
 }
 
+/* Structure levels row (engine tickets) */
+.levels-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+.level-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s2);
+  border: var(--hair) solid var(--rule-faint);
+  border-radius: var(--r-xs);
+  background: var(--void-lift);
+}
+
+.level-key { color: var(--ink-faint); font-size: var(--t-micro); }
+.level-cell .fig { font-size: var(--t-small); }
+
 .legs {
   display: flex;
   flex-direction: column;
@@ -1062,6 +1230,19 @@ function researchHorizon(row: Record<string, unknown>): string {
   font-size: var(--t-tiny);
   line-height: 1.6;
 }
+/* Each blocker is a full sentence; .label would otherwise clip it to one line. */
+.blocker-list li {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+/* Failed-check lists are joined sentences — wrap them inside the table cell. */
+.col-reasons {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.4;
+}
 
 .note { margin: 0; color: var(--ink-dim); font-size: var(--t-tiny); }
 .note.pad { padding: var(--s3); }
@@ -1074,6 +1255,7 @@ function researchHorizon(row: Record<string, unknown>): string {
   .summary-deck { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .funnel { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .play-readouts { grid-template-columns: 1fr 1fr; }
+  .levels-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (max-width: 780px) {
@@ -1085,5 +1267,6 @@ function researchHorizon(row: Record<string, unknown>): string {
   .blocker-grid { grid-template-columns: 1fr; }
   .summary-deck { grid-template-columns: 1fr 1fr; }
   .funnel { grid-template-columns: 1fr 1fr; }
+  .levels-row { grid-template-columns: 1fr 1fr; }
 }
 </style>

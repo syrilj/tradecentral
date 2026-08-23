@@ -24,6 +24,28 @@ export default defineConfig(({ mode }) => {
       outDir: '../runs/dashboard_dist',
       emptyOutDir: true,
       chunkSizeWarningLimit: 900,
+      target: 'es2022',
+      cssCodeSplit: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('three')) {
+                return 'vendor-three'
+              }
+              if (id.includes('gsap')) {
+                return 'vendor-gsap'
+              }
+              if (id.includes('@clerk')) {
+                return 'vendor-clerk'
+              }
+              if (id.includes('vue') || id.includes('vue-router')) {
+                return 'vendor-vue'
+              }
+            }
+          },
+        },
+      },
     },
     server: {
       port: 5178,

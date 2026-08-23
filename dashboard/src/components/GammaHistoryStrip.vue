@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { GexHistoryPoint } from '@/api'
-import { num, shortDate } from '@/format'
+import { num, optSignedGex, shortDate } from '@/format'
 
 /**
  * Compact multi-day GEX wall / spot / net strip.
@@ -107,7 +107,7 @@ const barW = computed(() => {
       </div>
       <div class="history-facts">
         <span class="label">N <b class="fig">{{ ordered.length }}</b></span>
-        <span class="label">NET <b class="fig" :class="activePoint && activePoint.total_gex_m >= 0 ? 'call' : 'put'">{{ activePoint ? `${activePoint.total_gex_m >= 0 ? '+' : ''}$${num(activePoint.total_gex_m, 1)}M` : '—' }}</b></span>
+        <span class="label">NET <b class="fig" :class="activePoint && activePoint.total_gex_m >= 0 ? 'call' : 'put'">{{ activePoint ? optSignedGex(activePoint.total_gex_m, 1) : '—' }}</b></span>
         <span class="label">AS OF <b class="fig">{{ shortDate(activePoint?.t) }}</b></span>
         <span v-if="hoverIdx != null && activePoint" class="history-probe label">
           SPOT ${{ num(activePoint.spot) }} · CW ${{ num(activePoint.call_wall) }} · PW ${{ num(activePoint.put_wall) }}
@@ -150,7 +150,7 @@ const barW = computed(() => {
             @mouseenter="hoverIdx = index"
             @mouseleave="hoverIdx = null"
           >
-            <title>{{ shortDate(point.t) }} · net GEX {{ point.total_gex_m >= 0 ? '+' : '' }}${{ num(point.total_gex_m, 2) }}M · spot ${{ num(point.spot) }}</title>
+            <title>{{ shortDate(point.t) }} · net GEX {{ optSignedGex(point.total_gex_m, 2) }} · spot ${{ num(point.spot) }}</title>
           </rect>
         </g>
 

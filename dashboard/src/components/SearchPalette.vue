@@ -227,11 +227,11 @@ function commit(): void {
   max-height: 66vh;
   display: flex;
   flex-direction: column;
-  border: var(--hair) solid var(--rule-hi);
+  border: var(--hair) solid var(--glass-border-hi);
   border-radius: var(--r-xl);
   padding: 0;
   background: var(--panel);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), var(--glass-specular);
   overflow: hidden;
   animation: rise var(--dur) var(--ease-out) both;
 }

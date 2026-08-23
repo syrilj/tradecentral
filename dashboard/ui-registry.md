@@ -42,9 +42,14 @@ Landing, auth, and marketing `*Visual` pieces are a **separate paper system**. D
 - Data marks are flat fills.
 - Do not use phantom tokens (`--font-mono`, `--radius-sm`, `--space-*`, `--dur-normal`). Use `--font-data`, `2px`, `--s*`, `--dur`.
 
-### Out of desk baseline — marketing / paper
+### Out of desk baseline — marketing / public dark
 
-These surfaces keep the offset-print paper system. Do not imprint them onto desk tokens, and do not “fix” their shadows, cream stock, or ink mixes to match this file:
+These public surfaces run their own dark scheme: a near-black blue-tinted
+void (`#05070b`), one mint accent (`#2fe6a7`), luminous line-art, and soft
+black elevation shadows. They keep the desk token *vocabulary* (remapped in
+scope, see `LandingView.vue`) but are exempt from desk rules — glow, gradients,
+and rounded pills are allowed here. Do not imprint desk tokens onto them, and
+do not "fix" their glows or dark washes to match this file:
 
 - `src/views/LandingView.vue`
 - `src/views/AuthView.vue`
@@ -126,24 +131,22 @@ Owns GO / NO-GO / UNKNOWN / RUNNING only. Do not reuse for generic tags. Lamp is
 ### App shell (rail + strip)
 
 File: `src/App.vue`
-Last updated: 2026-08-16
+Last updated: 2026-08-23
 
 | Property | Class |
 | ---------------- | --------------- |
-| Background | canvas `var(--void)`; rail / foot `var(--void-lift)`; strip `linear-gradient(90deg, color-mix(in srgb, var(--phosphor) 4%, transparent), transparent 24%)` over `var(--void-lift)` |
-| Border | `var(--hair) solid var(--rule)` (rail right, strip bottom, foot top) |
-| Border radius | `0` |
+| Background | canvas `var(--void)`; rail / strip `var(--glass-base)` / `var(--glass-surface)` with `--chrome-optics-*`; foot `var(--void-lift)` |
+| Border | `var(--hair) solid var(--glass-border)` |
+| Border radius | chrome capsule `var(--r-capsule)` on `.nav-item`; content stays `--r-content` |
 | Text — primary | `var(--ink)` |
 | Text — secondary | `var(--ink-dim)`; ghost meta `var(--ink-ghost)` |
-| Spacing | rail `var(--rail-w)` 80px; strip `var(--strip-h)` 60px; stage pad `var(--s5)` |
+| Spacing | expanded rail 236px; collapsed 72px; strip 60px; rail header 36px; nav item min-height 40px (44px collapsed); account row 44px |
 | Hover state | nav / gauge `var(--panel-hi)`; text `var(--ink)` |
-| Shadow | more-panel shelf `0 1px 0 rgba(0,0,0,0.4)` |
-| Accent usage | `.nav-item.on` `--phosphor` + `--phosphor-wash` + 3px inner phosphor bar |
+| Shadow | glass specular on active item; more-panel `var(--glass-shadow-md)` |
+| Accent usage | `.nav-item.on` phosphor icon + 3px leading phosphor capsule |
 
 **Pattern notes:**
-One navigation system. Active state is phosphor, not a filled neon rail. Signed colors appear only on change figures (`--long` / `--short`). Skip-link is the only shell primary fill (`--phosphor` on `--void` text). `.strip-search` and `.more-search` are quiet `--ink-dim` controls; hover is `--phosphor` text on `--phosphor-wash`.
-
-Strip gauges are a 2-row grid (`auto 1fr`) so the header pins top and the value row sits on the baseline — do not `justify-content: center` or the cell floats. Rotation is an IN/OUT board (`.rot-board`), not a centered pair. Fear/greed is a full-width spectrum (left fear / right greed) with a thumb — never a fill-from-left bar that makes fear look empty. Label it as desk structure, never CNN. Missing composite stays `NO DATA`, never a fake 50. Research lives under Tools, not the primary rail.
+Two-layer model: Liquid Glass only on rail, strip, Tools menu, drawers. Content panels stay opaque `--panel`. Persistent rail is five operator destinations in use-case order: Flow, Options, Desk, Chain, Market. No ordinal indexes — those were not a sequence. Plays, Drift, Absorption, Live Stack, Setups, Market Analytics, and Research Lab live in Tools (Apple More) grouped Desk / Market / Research. Mobile is a 6-destination tab bar: Flow, Options, Desk, Chain, Market, Tools — icon over 10px label, 64px + safe-area. Account is a compact square-avatar row in the rail foot plus a strip action; Clerk avatars stay 2px radius, not a circle. Search is the trailing chrome control (`⌘K`). Hit targets on chrome stay 44px via the toggle `::after` expansion. Live Stack index is `LS` in Tools. Options positioning uses a linear signed squeeze meter (`sq-meter`), not a circular dial.
 
 ---
 

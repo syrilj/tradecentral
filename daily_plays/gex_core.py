@@ -258,7 +258,7 @@ def directional_squeeze_scores(
     put_imbalance: float | None = None,
     momentum: float,
     fuel_scale: float = 40.0,
-    mom_ref: float = 0.01,
+    mom_ref: float = 0.03,
     flow_weight: float = 0.5,
 ) -> dict[str, float]:
     """
@@ -275,6 +275,10 @@ def directional_squeeze_scores(
 
         bullish = fuel_ui · conv_bull              ∈ [0, 1)
         bearish = fuel_ui · conv_bear              ∈ [0, 1)
+
+    ``mom_ref`` is the |return| at which the momentum gate saturates. It must stay
+    above the typical 5-session move or the gate pins at 1.0 for every liquid name
+    and momentum collapses into a bare sign flag carrying a fixed (1 − w) points.
 
     Fuel stays *multiplicative*: no short dealer gamma ⇒ no squeeze, either way.
     Direction is *additive* across flow and momentum. The previous form
@@ -334,7 +338,7 @@ def compute_theory_squeeze(
     urgency_c: float = 0.05,
     score_scale: float = 40.0,
     fuel_scale: float = 40.0,
-    mom_ref: float = 0.01,
+    mom_ref: float = 0.03,
     flow_weight: float = 0.5,
 ) -> dict[str, Any]:
     """
@@ -432,6 +436,23 @@ def compute_theory_squeeze(
 # ---------------------------------------------------------------------------
 # Legacy structure score (wall proximity UI — kept for factor boards)
 # ---------------------------------------------------------------------------
+
+# True output range of each ``squeeze_components`` / ``structure_components`` term.
+# Consumers that render these as weighted meters must normalise by these values:
+# the raw caps differ per factor (30 for wall proximity, 15 for concentration,
+# 10 for asymmetry...), so clamping a raw point value against a display max
+# silently makes some meters unfillable and others saturate early.
+STRUCTURE_COMPONENT_RANGES: dict[str, float] = {
+    "regime_score": 20.0,
+    "call_prox_score": 30.0,
+    "put_prox_score": 30.0,
+    "call_conc_score": 15.0,
+    "put_conc_score": 15.0,
+    "wall_asym_score": 10.0,
+    "em_score": 10.0,
+    "flip_score": 5.0,
+}
+
 
 def compute_squeeze_score(
     spot: float,
@@ -541,16 +562,20 @@ def compute_squeeze_score(
         "flip_score": flip_score,
     }
 
-    if near_net < 0 and direction != 0:
+    # Dampening is a property of the *gamma regime* (sign of near-spot GEX), not of
+    # whether the wall structure happens to net to zero. Folding direction == 0 into
+    # this branch mislabelled deeply short-gamma books as long-gamma whenever their
+    # bullish and bearish structure cancelled exactly.
+    if near_net < 0:
         negative_fuel = min(1.0, abs(near_net) / max(1.0, abs(net_dealer)))
-        regime_score = 20.0 * direction * negative_fuel
         scale = negative_fuel
         dampened = False
     else:
         negative_fuel = 0.0
-        regime_score = 0.0
         scale = 0.12
         dampened = True
+    # direction == 0 already zeroes this; no need to special-case it above.
+    regime_score = 20.0 * direction * negative_fuel
 
     scored_call_prox = call_prox_score * scale
     scored_put_prox = put_prox_score * scale

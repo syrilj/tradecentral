@@ -8,6 +8,7 @@ import {
   optCompact,
   optUsd,
   optGex,
+  DASH,
 } from '@/format'
 import {
   calculateFeaturedSetup,
@@ -277,131 +278,111 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
   /* ==========================================================================
      3. EXHAUSTIVE FORMATTING & CLEAN NUMERIC FALLBACK STRESS TABLE
      ========================================================================== */
-  describe('3. Exhaustive Formatter & Em-Dash Elimination Matrix', () => {
-    const edgeInputs: unknown[] = [
+  describe('3. Exhaustive Formatter Missing-Data Matrix', () => {
+    // Anything here is "no measurement", not "a measurement of zero". JS would
+    // coerce most of them to 0 (Number('') === 0, Number([]) === 0), which is
+    // exactly why they are enumerated: a zero that means "missing" misreads as
+    // flat gamma / zero spot on a trading surface.
+    const missingInputs: unknown[] = [
       null,
       undefined,
       NaN,
       Infinity,
       -Infinity,
-      0,
-      -0,
       '',
       '   ',
       'invalid_string',
       {},
       [],
-      1234.5678,
-      -42.1,
     ]
 
-    it('guarantees optNum never returns em-dash or NaN string across all edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optNum(val, 2)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
-        expect(typeof out).toBe('string')
-        expect(out.length).toBeGreaterThanOrEqual(1)
+    it('optNum returns DASH for every missing input and formats real numbers', () => {
+      for (const val of missingInputs) {
+        expect(optNum(val, 2)).toBe(DASH)
       }
-      expect(optNum(null)).toBe('0.00')
-      expect(optNum(undefined)).toBe('0.00')
-      expect(optNum(NaN)).toBe('0.00')
       expect(optNum(0)).toBe('0.00')
       expect(optNum(-0)).toBe('-0.00')
       expect(optNum(1234.5678)).toBe('1,234.57')
+      expect(optNum(-42.1, 1)).toBe('-42.1')
     })
 
-    it('guarantees optPct never returns em-dash across all edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optPct(val, 2)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
-        expect(out.endsWith('%')).toBe(true)
+    it('optPct returns DASH for every missing input and formats real percentages', () => {
+      for (const val of missingInputs) {
+        expect(optPct(val, 2)).toBe(DASH)
       }
-      expect(optPct(null)).toBe('0.00%')
-      expect(optPct(undefined)).toBe('0.00%')
-      expect(optPct(NaN)).toBe('0.00%')
       expect(optPct(12.5)).toBe('12.50%')
+      expect(optPct(0)).toBe('0.00%')
     })
 
-    it('guarantees optPctFrac never returns em-dash across all edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optPctFrac(val, 2)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
-        expect(out.endsWith('%')).toBe(true)
+    it('optPctFrac returns DASH for every missing input and converts real fractions', () => {
+      for (const val of missingInputs) {
+        expect(optPctFrac(val, 2)).toBe(DASH)
       }
-      expect(optPctFrac(null)).toBe('0.00%')
       expect(optPctFrac(0.125)).toBe('12.50%')
+      expect(optPctFrac(0)).toBe('0.00%')
     })
 
-    it('guarantees optSignedPct never returns em-dash across all edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optSignedPct(val, 2)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
-        expect(out.endsWith('%')).toBe(true)
+    it('optSignedPct returns DASH for every missing input and keeps an explicit sign', () => {
+      for (const val of missingInputs) {
+        expect(optSignedPct(val, 2)).toBe(DASH)
       }
-      expect(optSignedPct(null)).toBe('+0.00%')
       expect(optSignedPct(5.5)).toBe('+5.50%')
       expect(optSignedPct(-3.2)).toBe('-3.20%')
     })
 
-    it('guarantees optSigned never returns em-dash across all edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optSigned(val, 2)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
+    it('optSigned returns DASH for every missing input and keeps an explicit sign', () => {
+      for (const val of missingInputs) {
+        expect(optSigned(val, 2)).toBe(DASH)
       }
-      expect(optSigned(null)).toBe('+0.00')
       expect(optSigned(10)).toBe('+10.00')
       expect(optSigned(-10)).toBe('-10.00')
     })
 
-    it('guarantees optCompact never returns em-dash across all edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optCompact(val, 1)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
+    it('optCompact returns DASH for every missing input and abbreviates real magnitudes', () => {
+      for (const val of missingInputs) {
+        expect(optCompact(val, 1)).toBe(DASH)
       }
-      expect(optCompact(null)).toBe('0')
       expect(optCompact(1_500_000)).toBe('1.5M')
       expect(optCompact(25_000)).toBe('25.0K')
     })
 
-    it('guarantees optUsd never returns em-dash across all edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optUsd(val, 2)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
-        expect(out.startsWith('$')).toBe(true)
+    it('optUsd returns DASH for every missing input and formats real currency', () => {
+      for (const val of missingInputs) {
+        expect(optUsd(val, 2)).toBe(DASH)
       }
-      expect(optUsd(null)).toBe('$0.00')
       expect(optUsd(100)).toBe('$100.00')
+      expect(optUsd(0)).toBe('$0.00')
     })
 
-    it('guarantees optGex formats properly across millions, billions, negative values and edge inputs', () => {
-      for (const val of edgeInputs) {
-        const out = optGex(val, 1)
-        expect(out).not.toContain('—')
-        expect(out).not.toContain('--')
-        expect(out).not.toContain('NaN')
+    it('optGex returns DASH for every missing input and scales real M/B values', () => {
+      for (const val of missingInputs) {
+        expect(optGex(val, 1)).toBe(DASH)
       }
-      expect(optGex(null)).toBe('$0.0M')
-      expect(optGex(undefined)).toBe('$0.0M')
-      expect(optGex(NaN)).toBe('$0.0M')
       expect(optGex(0)).toBe('$0.0M')
       expect(optGex(12.4)).toBe('$12.4M')
       expect(optGex(-5.2)).toBe('-$5.2M')
       expect(optGex(2500)).toBe('$2.5B')
       expect(optGex(-1800)).toBe('-$1.8B')
+    })
+
+    it('never emits a NaN string for any input', () => {
+      const all = [...missingInputs, 0, -0, 1234.5678, -42.1]
+      for (const val of all) {
+        for (const out of [
+          optNum(val, 2),
+          optPct(val, 2),
+          optPctFrac(val, 2),
+          optSignedPct(val, 2),
+          optSigned(val, 2),
+          optCompact(val, 1),
+          optUsd(val, 2),
+          optGex(val, 1),
+        ]) {
+          expect(typeof out).toBe('string')
+          expect(out).not.toContain('NaN')
+          expect(out.length).toBeGreaterThanOrEqual(1)
+        }
+      }
     })
   })
 

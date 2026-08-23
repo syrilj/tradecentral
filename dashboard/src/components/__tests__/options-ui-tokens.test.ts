@@ -87,9 +87,11 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(flow).toMatch(/\.call-fill\s*\{\s*background:\s*var\(--call\)/)
     expect(flow).toMatch(/\.put-fill\s*\{\s*background:\s*var\(--put\)/)
     expect(flow).toMatch(/\.flow-context\.call\s*\{[^}]*--flow-tone:\s*var\(--call\)/s)
-    expect(flow).toMatch(/\.flow-context\.put\s*\{[^}]*--flow-tone:\s*var\(--put\)/s)
-    expect(view).toMatch(/grid-template-columns:\s*minmax\(320px,\s*360px\)\s+minmax\(0,\s*1fr\)/)
-    expect(view).toMatch(/grid-template-rows:\s*minmax\(560px,\s*62vh\)/)
+    // The gamma map owns the workbench; the squeeze board keeps a 320px floor
+    // so it stays a readable peer rather than collapsing to a strip.
+    expect(view).toMatch(/grid-template-columns:\s*minmax\(0,\s*2\.4fr\)\s+minmax\(320px,\s*1fr\)/)
+    expect(view).toMatch(/grid-template-rows:\s*minmax\(660px,\s*74vh\)/)
+    expect(view).toMatch(/\.workbench \.gex-full\s*\{[^}]*min-height:\s*660px/s)
     expect(view).not.toMatch(/minmax\(240px,\s*280px\)/)
     expect(view).not.toMatch(/minmax\(260px,\s*300px\)/)
     expect(view).not.toMatch(/minmax\(250px,\s*290px\)/)

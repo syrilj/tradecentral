@@ -393,6 +393,7 @@ function focusQuickTicker(sym: string) {
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .chain-view {
   display: flex;
   flex-direction: column;

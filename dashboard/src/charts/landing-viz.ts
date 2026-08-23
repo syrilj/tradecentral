@@ -1,0 +1,335 @@
+/**
+ * Interactive model geometry for the public landing page.
+ *
+ * Pure arithmetic — no DOM, no I/O. Every figure on the page is computed from
+ * a named quantitative model (Black-Scholes, geometric Brownian motion,
+ * lognormal risk-neutral density), never hand-picked decorative shapes.
+ * Parameters are structural anatomy only; live values appear after sign-in.
+ *
+ * Companion to landing-math.ts: that module serves the static hero diagram,
+ * this one serves the interactive workbenches (live Monte Carlo, Greeks lab).
+ */
+
+import { linearScale } from './scale'
+import { smoothPath, areaPath, type Pt } from './path'
+
+/* ── Deterministic PRNG (reproducible anatomy, same family as landing-math) ── */
+
+/** Mulberry32 — small, fast, deterministic. */
+export function mulberry32(seed: number): () => number {
+  let a = seed | 0
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** Box-Muller transform: two uniforms → one standard normal. */
+function boxMuller(rand: () => number): number {
+  let u = 0
+  let v = 0
+  while (u === 0) u = rand()
+  while (v === 0) v = rand()
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
+}
+
+/* ── Geometric Brownian Motion ────────────────────────────────────────────── */
+
+export interface PathBundle {
+  /** One polyline per simulated path; coordinates already mapped to the box. */
+  lines: { pts: Pt[] }[]
+  terminals: number[]
+}
+
+/**
+ * Simulate `nPaths` GBM paths and map them into an SVG box.
+ * Exact log-Euler discretisation keeps every path strictly positive.
+ */
+export function simulatePaths(
+  S0: number,
+  mu: number,
+  sigma: number,
+  T: number,
+  steps: number,
+  nPaths: number,
+  seed: number,
+  box: { x: number; y: number; w: number; h: number },
+): PathBundle {
+  void mu // reserved for future drift-display variants; paths use log-space directly
+  const dt = T / steps
+  const drift = (mu - 0.5 * sigma * sigma) * dt
+  const diffusion = sigma * Math.sqrt(dt)
+  const rand = mulberry32(seed)
+
+  // First pass: raw log-paths, tracking the envelope for scaling.
+  const logPaths: number[][] = []
+  let lo = Infinity
+  let hi = -Infinity
+  for (let p = 0; p < nPaths; p++) {
+    const row: number[] = [0]
+    for (let i = 1; i <= steps; i++) {
+      row.push(row[i - 1] + drift + diffusion * boxMuller(rand))
+    }
+    for (const v of row) {
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+    logPaths.push(row)
+  }
+
+  const pad = (hi - lo) * 0.04 || 1e-6
+  const yScale = linearScale([lo - pad, hi + pad], [box.y + box.h, box.y])
+  const xScale = linearScale([0, steps], [box.x, box.x + box.w])
+
+  const lines = logPaths.map((row) => ({
+    pts: row.map((v, i) => ({ x: xScale(i), y: yScale(v) })),
+  }))
+  const terminals = logPaths.map((row) => S0 * Math.exp(row[row.length - 1]))
+  return { lines, terminals }
+}
+
+/* ── Terminal distribution: empirical histogram + theoretical density ──────── */
+
+export interface DistributionFigure {
+  histogramPath: string
+  bars: { d: string; countFrac: number }[]
+  densityLine: string
+  densityArea: string
+  medianX: number
+  p1LowX: number
+  p1HighX: number
+}
+
+/**
+ * Bin MC terminal prices and overlay the closed-form lognormal density.
+ * Both are drawn in the SAME box so model-vs-simulation agreement is visible.
+ */
+export function terminalDistribution(
+  S0: number,
+  mu: number,
+  sigma: number,
+  T: number,
+  r: number,
+  q: number,
+  terminals: number[],
+  nBins: number,
+  box: { x: number; y: number; w: number; h: number },
+): DistributionFigure {
+  void mu // the density is risk-neutral (r − q); physical drift reserved for future variants
+  const sigT = sigma * Math.sqrt(T)
+  const muLog = Math.log(S0) + (r - q - 0.5 * sigma * sigma) * T
+
+  // Histogram domain spans both samples AND ±3σ of the theory curve.
+  const tMin = terminals.length ? Math.min(...terminals) : S0 * 0.6
+  const tMax = terminals.length ? Math.max(...terminals) : S0 * 1.6
+  const domainLo = Math.min(tMin, S0 * Math.exp(-3 * sigT))
+  const domainHi = Math.max(tMax, S0 * Math.exp(3 * sigT))
+  const xScale = linearScale([domainLo, domainHi], [box.x, box.x + box.w])
+
+  const binW = (domainHi - domainLo) / nBins || 1
+  const counts = new Array<number>(nBins).fill(0)
+  for (const t of terminals) {
+    const idx = Math.min(Math.max(Math.floor((t - domainLo) / binW), 0), nBins - 1)
+    counts[idx]++
+  }
+  const maxCount = Math.max(...counts, 1)
+
+  // Theory density sampled over the same domain.
+  const nPts = 120
+  const pdf: number[] = []
+  let maxPdf = 0
+  for (let i = 0; i < nPts; i++) {
+    const x = domainLo + ((domainHi - domainLo) * i) / (nPts - 1)
+    const z = (Math.log(x) - muLog) / sigT
+    const p = (1 / (x * sigT * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * z * z)
+    pdf.push(p)
+    if (p > maxPdf) maxPdf = p
+  }
+
+  const baseY = box.y + box.h
+  const histTop = box.y + box.h * 0.62 // histogram occupies lower band
+  const densTop = box.y // density uses full height
+
+  // Bars, normalised to the histogram band.
+  const bars = counts.map((c, i) => {
+    const frac = c / maxCount
+    const cx = xScale(domainLo + binW * (i + 0.5))
+    const bw = Math.max(xScale(domainLo + binW) - xScale(domainLo) - 1.5, 1)
+    const h = frac * (baseY - histTop)
+    return { d: `M${cx - bw / 2},${baseY}v${-h}h${bw}v${h}z`, countFrac: frac }
+  })
+
+  // Density curve scaled to full height.
+  const densPts: Pt[] = pdf.map((p, i) => {
+    const x = domainLo + ((domainHi - domainLo) * i) / (nPts - 1)
+    return { x: xScale(x), y: densTop + (1 - p / maxPdf) * (baseY - densTop) }
+  })
+  const median = Math.exp(muLog)
+  return {
+    histogramPath: bars.map((b) => b.d).join(''),
+    bars,
+    densityLine: smoothPath(densPts),
+    densityArea: areaPath(densPts, baseY),
+    medianX: xScale(median),
+    p1LowX: xScale(median / Math.exp(sigT)),
+    p1HighX: xScale(median * Math.exp(sigT)),
+  }
+}
+
+/* ── Black-Scholes Greeks across a strike grid ─────────────────────────────── */
+
+export type GreekKind = 'value' | 'delta' | 'gamma' | 'vega' | 'theta'
+
+export interface GreekCurve {
+  call: Pt[]
+  put: Pt[]
+  /** Strike axis ticks in price space. */
+  strikes: number[]
+}
+
+/** φ(z) standard normal pdf. */
+export function normPdf(z: number): number {
+  return Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI)
+}
+
+/** Abramowitz & Stegun 7.1.26 error function (|ε| ≤ 1.5e-7). */
+export function erf(x: number): number {
+  const s = x < 0 ? -1 : 1
+  const ax = Math.abs(x)
+  const p = 0.3275911
+  const a1 = 0.254829592
+  const a2 = -0.284496736
+  const a3 = 1.421413741
+  const a4 = -1.453152027
+  const a5 = 1.061405429
+  const t = 1 / (1 + p * ax)
+  const poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+  return s * (1 - poly * Math.exp(-ax * ax))
+}
+
+/**
+ * Standard normal CDF: Φ(z) = ½·[1 + erf(z/√2)].
+ * Verified against tabulated values: Φ(0)=0.5, Φ(1.96)≈0.975, Φ(10)≈1.
+ */
+export function normCdf(z: number): number {
+  return 0.5 * (1 + erf(z / Math.SQRT2))
+}
+
+export interface BSInputs {
+  S: number
+  K: number
+  T: number
+  sigma: number
+  r: number
+  q: number
+}
+
+/** d₁ = (ln(S/K) + (r − q + σ²/2)·T) / σ√T. */
+export function bsD1(p: BSInputs): number {
+  const s = p.sigma * Math.sqrt(p.T)
+  if (s <= 0) return 0
+  return (Math.log(p.S / p.K) + (p.r - p.q + 0.5 * p.sigma * p.sigma) * p.T) / s
+}
+
+/** Black-Scholes call price. */
+export function bsCall(p: BSInputs): number {
+  return (
+    p.S * Math.exp(-p.q * p.T) * normCdf(bsD1(p)) -
+    p.K * Math.exp(-p.r * p.T) * normCdf(bsD1(p) - p.sigma * Math.sqrt(p.T))
+  )
+}
+
+/** Black-Scholes put price. */
+export function bsPutPrice(p: BSInputs): number {
+  return (
+    p.K * Math.exp(-p.r * p.T) * normCdf(-(bsD1(p) - p.sigma * Math.sqrt(p.T))) -
+    p.S * Math.exp(-p.q * p.T) * normCdf(-bsD1(p))
+  )
+}
+
+/** BS gamma: Γ = φ(d₁)/(S·σ·√T·e^{−qT}). */
+export function bsGamma(p: BSInputs): number {
+  const s = p.sigma * Math.sqrt(p.T)
+  if (s <= 0) return 0
+  return normPdf(bsD1(p)) / (p.S * s * Math.exp(-p.q * p.T))
+}
+
+/** BS vega per 1 vol point: ν = S·φ(d₁)·√T·e^{−qT}/100. */
+export function bsVega(p: BSInputs): number {
+  return (p.S * normPdf(bsD1(p)) * Math.sqrt(p.T) * Math.exp(-p.q * p.T)) / 100
+}
+
+/** Per-day theta (calendar-day): Θ_day/365. Call theta by default. */
+export function bsThetaDay(p: BSInputs, kind: 'call' | 'put'): number {
+  const s = p.sigma * Math.sqrt(p.T)
+  if (s <= 0) return 0
+  const nd1 = normPdf(bsD1(p))
+  const rTT = p.r * p.K * Math.exp(-p.r * p.T)
+  const qTS = p.q * p.S * Math.exp(-p.q * p.T)
+  const common = -(p.S * nd1 * p.sigma * Math.exp(-p.q * p.T)) / (2 * Math.sqrt(p.T))
+  if (kind === 'call') {
+    return (common - qTS * normCdf(bsD1(p)) + rTT * normCdf(bsD1(p) - s)) / 365
+  }
+  return (common + qTS * normCdf(-bsD1(p)) - rTT * normCdf(s - bsD1(p))) / 365
+}
+
+/**
+ * Evaluate any supported Greek for call & put legs across a strike grid,
+ * with values normalised to [0,1] over the grid for shared-axis plotting.
+ */
+export function greekCurves(
+  greek: GreekKind,
+  S: number,
+  T: number,
+  sigma: number,
+  r: number,
+  q: number,
+  kLow: number,
+  kHigh: number,
+  n: number,
+): GreekCurve {
+  const evalK = (K: number, kind: 'call' | 'put'): number => {
+    switch (greek) {
+      case 'value':
+        return kind === 'call'
+          ? bsCall({ S, K, T, sigma, r, q })
+          : bsPutPrice({ S, K, T, sigma, r, q })
+      case 'delta': {
+        const d = bsD1({ S, K, T, sigma, r, q })
+        const disc = Math.exp(-q * T)
+        return kind === 'call' ? disc * normCdf(d) : -disc * normCdf(-d)
+      }
+      case 'gamma':
+        return bsGamma({ S, K, T, sigma, r, q })
+      case 'vega':
+        return bsVega({ S, K, T, sigma, r, q })
+      case 'theta':
+        return bsThetaDay({ S, K, T, sigma, r, q }, kind)
+    }
+  }
+
+  const callRaw: number[] = []
+  const putRaw: number[] = []
+  const strikes: number[] = []
+  for (let i = 0; i < n; i++) {
+    const K = kLow + ((kHigh - kLow) * i) / (n - 1)
+    strikes.push(K)
+    callRaw.push(evalK(K, 'call'))
+    putRaw.push(evalK(K, 'put'))
+  }
+
+  // Shared symmetric normalisation keeps call/put visually comparable.
+  let maxAbs = 0
+  for (const v of [...callRaw, ...putRaw]) maxAbs = Math.max(maxAbs, Math.abs(v))
+  maxAbs = maxAbs || 1
+
+  const toPoints = (raw: number[]): Pt[] =>
+    raw.map((v, i) => ({
+      x: linearScale([strikes[0], strikes[strikes.length - 1]], [0, 100])(i / (n - 1)),
+      y: v / maxAbs, // [-1, 1]
+    }))
+
+  return { call: toPoints(callRaw), put: toPoints(putRaw), strikes }
+}

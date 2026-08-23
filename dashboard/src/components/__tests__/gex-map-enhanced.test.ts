@@ -55,4 +55,29 @@ describe('Enhanced GEX Map Component Verification', () => {
     expect(gexSrc).not.toContain('drop-shadow')
     expect(gexSrc).not.toContain('filter:')
   })
+
+  it('omits level markers when spot or wall strikes are zero or non-positive', async () => {
+    const { createSSRApp, h } = await import('vue')
+    const { renderToString } = await import('vue/server-renderer')
+    const GammaExposureMap = (await import('../GammaExposureMap.vue')).default
+
+    const app = createSSRApp({
+      render: () =>
+        h(GammaExposureMap, {
+          rows: [
+            { strike: 100, call_gex_m: 5, put_gex_m: -2, net_gex_m: 3, call_oi: 500, put_oi: 200 },
+            { strike: 110, call_gex_m: 8, put_gex_m: -1, net_gex_m: 7, call_oi: 800, put_oi: 100 },
+          ],
+          spot: 0, // Zero spot
+          callWall: null,
+          putWall: 0, // Zero put wall
+          gammaFlip: -10, // Negative flip
+        }),
+    })
+
+    const html = await renderToString(app)
+    expect(html).not.toContain('SPOT $0')
+    expect(html).not.toContain('PUT W $0')
+    expect(html).not.toContain('FLIP $-10')
+  })
 })

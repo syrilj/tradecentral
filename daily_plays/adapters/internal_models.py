@@ -193,7 +193,14 @@ def _frame(candles: Any) -> Any:
             and not df.index.isna().any()
         ):
             if all(np.issubdtype(df[col].dtype, np.number) for col in required):
-                return df if list(df.columns) == list(required) else df.loc[:, required]
+                canonical = df if list(df.columns) == list(required) else df.loc[:, required]
+                # Cheap on the common well-formed case: only pay for dropna's
+                # copy when a NaN actually reached the required columns, so
+                # degraded input still fails closed instead of reaching the
+                # model as a plausible-looking number (never a silent zero).
+                if not canonical.isna().any().any():
+                    return canonical
+                return canonical.dropna()
 
     if not isinstance(df.index, pd.DatetimeIndex):
         timestamp = next((name for name in ("timestamp", "date", "Date") if name in df), None)

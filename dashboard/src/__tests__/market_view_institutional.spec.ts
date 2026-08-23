@@ -52,7 +52,15 @@ import type {
 
 const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const marketViewPath = join(srcRoot, 'views', 'MarketView.vue')
-const marketViewSource = readFileSync(marketViewPath, 'utf8')
+// MarketView plus the cards it delegates to — the forecast highlight lives in
+// ModelForecastCard.vue so both tabs render an identical, in-sync surface.
+const marketViewSource = [
+  readFileSync(marketViewPath, 'utf8'),
+  readFileSync(
+    marketViewPath.replace(/views[\\/]MarketView\.vue$/, 'components/ModelForecastCard.vue'),
+    'utf8',
+  ),
+].join('\n')
 const routerPath = join(srcRoot, 'router.ts')
 const routerSource = readFileSync(routerPath, 'utf8')
 const financialsDisplayPath = join(srcRoot, 'financialsDisplay.ts')

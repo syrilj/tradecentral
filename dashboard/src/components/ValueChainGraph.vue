@@ -593,7 +593,6 @@ function isNodeConnected(symbol: string): boolean {
   position: relative;
   overflow-x: auto;
   overflow-y: hidden;
-  min-width: 1020px;
   background-image:
     linear-gradient(to right, var(--grid) var(--hair), transparent var(--hair)),
     linear-gradient(to bottom, var(--grid) var(--hair), transparent var(--hair));

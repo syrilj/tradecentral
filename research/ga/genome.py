@@ -75,8 +75,11 @@ class Genes:
         if not (CS_BLEND_MIN <= float(self.cs_blend) <= CS_BLEND_MAX):
             raise ValueError("cs_blend out of bounds")
         if float(self.exit_z) > float(self.entry_z) and self.signal_family == "mean_reversion":
-            # exit must be tighter than entry for MR; still allow equality edge
-            pass
+            # Exit must be tighter than entry for MR (equality is allowed): an exit band
+            # wider than the entry band can never close a position it opened. `mutate_genes`
+            # and `crossover` already clamp this, but `from_mapping` does not go through
+            # them, so a persisted or hand-built genome could otherwise smuggle it in.
+            raise ValueError("exit_z must be <= entry_z for mean_reversion")
 
     def as_dict(self) -> dict[str, Any]:
         return {

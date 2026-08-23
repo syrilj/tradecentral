@@ -381,6 +381,7 @@ const meta = computed(() => {
               :value="strikeHeadline(suggestion)"
               :sub="suggestion.strike_source ? levelSourceLabel(suggestion.strike_source) : (suggestion.contract_plan?.strike == null ? 'not supplied' : 'positions')"
               size="lg"
+              wrap
             />
             <Readout
               label="Supports"
@@ -388,6 +389,7 @@ const meta = computed(() => {
               :sub="suggestion.supports?.length ? 'Watch these supports' : 'not supplied'"
               tone="flat"
               size="lg"
+              wrap
             />
             <Readout
               label="Invalidation"
@@ -401,6 +403,7 @@ const meta = computed(() => {
               :sub="suggestion.take_profit_zones?.length ? 'Labeled zones, not a blend' : 'not supplied'"
               :tone="rightTone(suggestion.right)"
               size="lg"
+              wrap
             />
           </div>
 
@@ -805,7 +808,9 @@ const meta = computed(() => {
 .contract-numbers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: var(--hair) solid var(--rule); }
 .contract-numbers span { padding: var(--s2); color: var(--ink-soft); font-family: var(--font-data); border-right: var(--hair) solid var(--rule); }
 .contract-numbers span:last-child { border-right: 0; }
-.contract-numbers i { display: block; margin-bottom: 4px; font-style: normal; }
+/* Quote captions ("Delayed midpoint") are wider than a quarter cell — wrap
+   rather than inherit the .label ellipsis and lose the "delayed" qualifier. */
+.contract-numbers i { display: block; overflow: visible; margin-bottom: 4px; font-style: normal; line-height: 1.3; text-overflow: clip; white-space: normal; }
 
 .blockers {
   margin: 0;

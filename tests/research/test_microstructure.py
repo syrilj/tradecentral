@@ -66,6 +66,24 @@ def test_relative_volume():
     assert rvol.iloc[-1] == pytest.approx(5.0, abs=1e-2)  # 5x relative volume
 
 
+def test_rolling_features_reject_an_out_of_order_index():
+    """`.rolling()` walks positional order, so an unsorted index silently mixes
+    future bars into a "trailing" median. That must raise, not return a number."""
+    ordered = pd.bdate_range("2024-01-01", periods=10)
+    shuffled = ordered[[9, 0, 1, 2, 3, 4, 5, 6, 7, 8]]
+    vol = pd.Series([100.0] * 9 + [500.0], index=shuffled)
+    spread = pd.Series([0.01] * 9 + [0.05], index=shuffled)
+
+    with pytest.raises(ValueError, match="ascending index"):
+        compute_relative_volume(vol, window=5)
+    with pytest.raises(ValueError, match="ascending index"):
+        compute_liquidity_shock(spread, vol, window=5)
+
+    # Sorted input is accepted, so the guard is not simply rejecting everything.
+    compute_relative_volume(vol.sort_index(), window=5)
+    compute_liquidity_shock(spread.sort_index(), vol.sort_index(), window=5)
+
+
 def test_short_term_price_impact():
     flow = np.array([1.0, -1.0, 0.0, 0.0, 0.0, 0.0])
     close = np.array([100.0, 100.0, 105.0, 95.0, 100.0, 100.0])

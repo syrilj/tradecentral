@@ -1,0 +1,41 @@
+# Dependencies for running `tests/` (not `eval/`, see requirements-eval.txt)
+# in CI against a fresh checkout: no data/, no runs/, no provider
+# credentials, no network access assumed.
+#
+# Pinned to match requirements-vertex.txt (the frozen research environment)
+# wherever a package appears there, so behavior measured here matches the
+# environment GATE_XS* results were produced under. Packages vertex doesn't
+# need (this is a much smaller, test-only surface, not a training one) are
+# pinned to the versions this file was measured against.
+
+# --- shared with requirements-eval.txt; pinned identically ---
+numpy==1.26.4
+pandas==2.3.3
+pytest==8.4.1
+
+# --- pinned to match requirements-vertex.txt ---
+scipy==1.15.3
+scikit-learn==1.7.2
+pyarrow==24.0.0
+# cvxpy is imported at module load time by edge/research/optimizer.py and
+# (transitively) edge/tools/xs5_pit_optimizer.py; without it collection of
+# tests/research/test_optimizer.py and tests/research/test_xs5_runner.py
+# aborts entirely (ModuleNotFoundError during collection, not a normal test
+# failure). Installs from prebuilt wheels in a few seconds -- no compiler
+# needed -- so pulling it in is cheaper than it looks from the file size of
+# requirements-vertex.txt.
+cvxpy==1.7.5
+
+# --- not in requirements-vertex.txt; pinned to the versions this file was verified against ---
+requests==2.32.3
+yfinance==0.2.66
+# edge/research/challengers.py lazy-imports xgboost and fails closed
+# (RuntimeError) when it's absent -- by design, so a missing xgboost never
+# masquerades as a passing test. Several tests exercise the real
+# CPU-XGBoost path and need the package actually importable.
+xgboost==3.2.0
+# daily_plays/config.py's load_project_environment() silently no-ops
+# (bare `except ImportError: return`) when python-dotenv isn't installed,
+# which made tests/daily_plays/test_environment.py fail for the wrong
+# reason (dependency missing, not the .env-loading logic being broken).
+python-dotenv==1.2.3

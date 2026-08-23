@@ -86,3 +86,33 @@ def test_live_and_delayed_miss_returns_structured_404(monkeypatch):
     assert "ZZZZ" in payload["error"]
     assert payload["reason"] == "live_empty_and_no_local_snapshot"
     assert "no expiries" in (payload.get("delayed_snapshot_error") or "")
+
+
+def test_provider_note_carries_the_reason_not_just_the_exception_class():
+    """`Live chain unavailable: RuntimeError` is not a diagnosis.
+
+    An uncovered ticker, an expired key, and a dead network all raise from the
+    same catch site. Keeping only `type(exc).__name__` rendered all three
+    identically in the dashboard warning list, so the operator could not tell a
+    provider coverage gap from a broken credential.
+    """
+    note = api_server._provider_note(RuntimeError("LSE options chain unavailable or empty"))
+    assert note == "RuntimeError: LSE options chain unavailable or empty"
+
+    # Whitespace is collapsed so a multi-line provider traceback stays one line.
+    assert api_server._provider_note(ValueError("bad\n  request\ttext")) == (
+        "ValueError: bad request text"
+    )
+
+    # An empty message degrades to the class name rather than a dangling colon.
+    assert api_server._provider_note(RuntimeError()) == "RuntimeError"
+
+    # Warnings render in the UI, so an echoed credential must not ride along.
+    redacted = api_server._provider_note(RuntimeError("GET /chain?api_key=abc123secret failed"))
+    assert "abc123secret" not in redacted
+    assert "***" in redacted
+
+    # Long provider dumps are bounded.
+    long_note = api_server._provider_note(RuntimeError("x" * 500))
+    assert len(long_note) <= 220
+    assert long_note.endswith("…")

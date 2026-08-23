@@ -1,58 +1,85 @@
-# Project: Options Flow & Squeeze Screener Overhaul
+# Project: TradeCentral Dashboard Visual Redesign & Layout Overhaul
 
 ## Architecture
-- Frontend: Vue 3 + TypeScript + Vite + Pinia (`dashboard/src/`)
-- Styling: High-contrast dark theme token architecture (`src/styles/tokens.css`, `src/styles/theme.css`)
-- Test Framework: Vitest (`npm test` / `vitest run`) + Vue TSC (`vue-tsc --noEmit`)
-- Backend API Integration: Python FastAPI/Flask endpoints (`tools/api_server.py`, `daily_plays/`) consumed via `src/api.ts` and `src/composables/useResource.ts`
+TradeCentral is a high-performance Vue 3 + TypeScript quantitative market research and decision-support workstation for US equities and options.
+- **Frontend Stack**: Vue 3 (Composition API), Vite 6, TypeScript (`vue-tsc`), Vitest v3, `@clerk/vue`, Geist & Geist Mono fonts, GSAP, Three.js.
+- **Styling Paradigm**: Custom CSS Custom Properties (`src/styles/tokens.css`, `src/styles/base.css`), Scoped CSS, Strict Design Conformance (`design-conformance.test.ts`).
+- **Core Layout Architecture**: `src/App.vue` (top instrument strip `.strip`, collapsible sidebar rail `.rail`, stage `.stage`, footer `.foot`).
+- **Component Ecosystem**: Reusable UI components in `src/components/`, views in `src/views/`, composables in `src/composables/`, routes in `src/router.ts`.
 
 ## Feature Inventory
-| # | Feature | Description | Milestone | Status |
+| # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| 1 | High-Contrast Token System & Token Alignment | Upgrade `--call` (Emerald `#10b981`/`#34d399`) and `--put` (Crimson `#f43f5e`/`#fb7185`) in `tokens.css`; align `options-ui-tokens.test.ts` and `gex-map-enhanced.test.ts` | M1 | DONE |
-| 2 | Squeeze Screener Calculation & Setup Fixes | Fix featured tie-breaking (`signedScore`), negative score SVG ring offset (`Math.abs`), near-spot GEX formatting (`-$X.XM`), factor track clamping, takeaway polarity | M2 | DONE |
-| 3 | Options Flow & Conviction Board Data Pipeline Fixes | Fix C/P ratio zero-division on empty tape, pressure score normalization, moneyness null guard, and flow order taxonomy in `OptionsView.vue`, `OptionsConvictionBoard.vue`, `OptionsFlowContext.vue` | M3 | DONE |
-| 4 | Em-Dash Elimination & Clean Numeric Fallbacks | Eradicate all placeholder em-dashes ("—" / "--") across Options and Squeeze views, replacing with clean numeric fallbacks ($0.00, 0.00%, 0, styled N/A badges) | M4 | DONE |
-| 5 | High-Impact Graphics, Gauges & Tooltip Enhancements | Crisp SVG borders, smooth hover tooltips/crosshairs, cubic-bezier transition curves, 3D gradient sync across `GammaExposureMap.vue`, `OptionsDriftChart.vue`, `ProbabilityDensityChart.vue`, `RiskNeutral3DModel.vue`, `SqueezeScreener.vue` | M5 | DONE |
-| 6 | E2E Testing, Adversarial Verification & Full Test Pass | Comprehensive test suite pass (100% pass across all 45 test files / 661 tests), zero TypeScript compilation errors, forensic audit | M6 | DONE |
+| 1 | Glassmorphism Design Tokens | Add `--glass-*` tokens (surfaces, multi-layer frosted borders, subtle specular highlights, blurs, shadows) compliant with `design-conformance.test.ts`. | M1 | ORIGINAL_REQUEST §R4 |
+| 2 | Aceternity UI Utility Classes | Add `.glass-panel`, `.glass-card`, `.glass-chip`, `.btn-glass`, `.input-glass` to `base.css` with responsive hover states and micro-interactions. | M1 | ORIGINAL_REQUEST §R4 |
+| 3 | Core UI Primitives Upgrade | Upgrade `Panel.vue`, `SearchPalette.vue`, `HelpTip.vue`, and `VerdictChip.vue` to leverage modern glassmorphic tokens. | M1 | ORIGINAL_REQUEST §R4 |
+| 4 | Frosted Top Navigation Bar | Sleek top bar (`.strip`) with frosted glass backdrop (`backdrop-filter: blur`), active market tape tickers (SPY/QQQ/DIA/XLE with sparklines), VIX context, Sector Rotation board, Fear/Greed gauge, session clock, and search trigger. | M2 | ORIGINAL_REQUEST §R1 |
+| 5 | Collapsible Side Navigation | Intuitive collapsible side rail (`.rail`) with smooth expanding/collapsing transitions, categorized tool groups (Core Desk, Market Analytics, Research Lab), glowing active route indicators, and tooltips. | M2 | ORIGINAL_REQUEST §R1 |
+| 6 | Preferences Composable | Create `src/composables/usePreferences.ts` managing density (`compact`/`comfortable`), accent theme, audio cues, and `localStorage` persistence. | M3 | ORIGINAL_REQUEST §R2 |
+| 7 | Operator Profile Drawer / Modal | Create `src/components/ProfileDrawer.vue` displaying authenticated operator info (Clerk), session telemetry, layout density toggles, theme preferences, and sign-out actions. | M3 | ORIGINAL_REQUEST §R2 |
+| 8 | Dual Profile Triggers | Connect Profile Drawer to both top-right header trigger in `.strip` and side navigation in `.rail`. | M3 | ORIGINAL_REQUEST §R2 |
+| 9 | Options Chain Multi-tiered Strike Grid | Redesign `views/OptionsView.vue` and `views/DriftView.vue` with dense, readable multi-tiered strike tables, call/put side-by-side grids, and clear visual hierarchy for bid/ask, volume, and open interest. | M4 | ORIGINAL_REQUEST §R3 |
+| 10 | Charm & Greeks Positioning Analytics | Revamp Black-Scholes charm $\partial\Delta/\partial t$ and Greeks positioning into interactive glassmorphic cards, smooth hover effects, clear heatmaps/sparklines, and streamlined strike/expiration controls. | M4 | ORIGINAL_REQUEST §R3 |
+| 11 | Supply Chain & Options Calculator Polish | Enhance `views/ChainView.vue`, `views/CalculatorView.vue`, and `components/OptionsCalculator.vue` with frosted glass aesthetics, risk-reward bounds, and payoff diagrams. | M4 | ORIGINAL_REQUEST §R3 |
+| 12 | End-to-End Build & Test Verification | Run full Vitest suite (all test files, 0 regressions) and verify `npm run build` (`vue-tsc --noEmit && vite build`) completes with 0 errors. | M5 | ORIGINAL_REQUEST §Acceptance Criteria |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Design System & Token Upgrades | `src/styles/tokens.css`, `src/components/__tests__/options-ui-tokens.test.ts`, `src/components/__tests__/gex-map-enhanced.test.ts` | none | DONE |
-| M2 | Squeeze Screener Calculation Fixes | `src/components/SqueezeScreener.vue`, `src/__tests__/squeeze-screener-calc.test.ts` | M1 | DONE |
-| M3 | Options Flow & Conviction Board Overhaul | `src/views/OptionsView.vue`, `src/components/OptionsConvictionBoard.vue`, `src/components/OptionsDirectionBrief.vue`, `src/components/OptionsFlowContext.vue`, `src/flowDisplay.ts` | M1 | DONE |
-| M4 | Em-Dash Elimination & Numeric Fallbacks | `src/format.ts`, `src/flowDisplay.ts`, `src/views/OptionsView.vue`, `src/components/SqueezeScreener.vue`, `src/components/OptionsConvictionBoard.vue`, `src/components/OptionsDirectionBrief.vue`, `src/components/OptionsFlowContext.vue`, `src/views/FintelView.vue` | M2, M3 | DONE |
-| M5 | High-Impact Graphics & Charts Polish | `src/components/GammaExposureMap.vue`, `src/components/OptionsDriftChart.vue`, `src/components/ProbabilityDensityChart.vue`, `src/components/RiskNeutral3DModel.vue`, `src/components/GammaHistoryStrip.vue` | M1 | DONE |
-| M6 | E2E & Full Test Pass Verification | Full dashboard test suites + TypeScript build + Forensic Audit | M1, M2, M3, M4, M5 | DONE |
+| 1 | Glassmorphism & Aceternity Design System | `tokens.css`, `base.css`, `Panel.vue`, `SearchPalette.vue`, `VerdictChip.vue`, `HelpTip.vue` | None | DONE |
+| 2 | Unified Navigation Shell & Top Bar | `App.vue`, Top Bar (`.strip`), Collapsible Side Nav (`.rail`), tool groupings, session clock, market tickers | M1 | DONE |
+| 3 | Seamless Profile & Account Flow | `usePreferences.ts`, `ProfileDrawer.vue`, Header & Side Nav Profile triggers, density & preference controls | M1, M2 | DONE |
+| 4 | Options Chain & Charm / Greeks Positioning | `views/OptionsView.vue`, `views/DriftView.vue`, `views/ChainView.vue`, `components/OptionsCalculator.vue`, analytics cards | M1 | IN_PROGRESS |
+| 5 | Comprehensive Verification & Test Hardening | Vitest regression test suite, E2E test validation, design conformance check, production build check | M1, M2, M3, M4 | PLANNED |
 
 ## Interface Contracts
-### `src/styles/tokens.css` ↔ Vue Components
-- `--call`: `#10b981` (High-contrast emerald green for Call contracts & Bullish structures)
-- `--call-hi`: `#34d399` (High-contrast bright emerald for highlights)
-- `--call-wash`: `rgba(16, 185, 129, 0.12)` (Translucent emerald wash for fills/tails)
-- `--put`: `#f43f5e` (High-contrast crimson red for Put contracts & Bearish structures)
-- `--put-hi`: `#fb7185` (High-contrast bright crimson for highlights)
-- `--put-wash`: `rgba(244, 63, 94, 0.12)` (Translucent crimson wash for fills/tails)
+### Design System ↔ UI Components
+- Semantic CSS variables in `src/styles/tokens.css` (Implemented & Verified):
+  - `--glass-base`: `rgba(18, 20, 26, 0.65)`
+  - `--glass-surface`: `rgba(18, 20, 26, 0.82)`
+  - `--glass-surface-hi`: `rgba(24, 27, 34, 0.88)`
+  - `--glass-overlay`: `rgba(8, 9, 12, 0.85)`
+  - `--glass-border`: `rgba(255, 255, 255, 0.08)`
+  - `--glass-border-hi`: `rgba(255, 255, 255, 0.16)`
+  - `--glass-specular`: `inset 0 1px 0 rgba(255, 255, 255, 0.10)`
+  - `--glass-shadow-sm`: `0 2px 8px rgba(0, 0, 0, 0.28)`
+  - `--glass-shadow-lg`: `0 16px 48px rgba(0, 0, 0, 0.85)`
+  - `--glass-blur-sm`: `blur(8px)`
+  - `--glass-blur-md`: `blur(16px)`
+  - `--glass-blur-lg`: `blur(24px)`
+- Global utility classes in `src/styles/base.css` (Implemented & Verified):
+  - `.glass-panel`, `.glass-card`, `.glass-chip`, `.btn-glass`, `.input-glass`
 
-### `src/format.ts` / Options Display Formatting
-- Currency: `optUsd(val, fallback = '$0.00')` -> outputs `$X.XX` or `$0.00`
-- Percentage: `optPct(val, fallback = '0.00%')` -> outputs `X.XX%` or `0.00%`
-- Signed GEX: `signedGex(val, fallback = '$0.0M')` -> outputs `+$X.XM`, `-$X.XM`, or `$0.0M`
-- Counts / Integers: `optNum(val, fallback = '0')` -> outputs `X` or `0`
-- Missing status: `<span class="badge-na">N/A</span>`
+### Preferences Composable ↔ Shell & Profile Drawer
+- `src/composables/usePreferences.ts`:
+  ```ts
+  export type DensityMode = 'compact' | 'comfortable';
+  export interface UserPreferences {
+    density: DensityMode;
+    accent: string;
+    soundEnabled: boolean;
+    streamUpdates: boolean;
+  }
+  export function usePreferences(): {
+    preferences: Ref<UserPreferences>;
+    setDensity: (mode: DensityMode) => void;
+    toggleSound: () => void;
+    toggleStream: () => void;
+  };
+  ```
+
+### Profile Drawer Component Interface
+- `src/components/ProfileDrawer.vue`:
+  - Props: `modelValue: boolean`, `userEmail?: string`, `telemetry?: WorkstationTelemetry`
+  - Emits: `update:modelValue`, `signOut`, `updatePreferences`
 
 ## Code Layout
-- `dashboard/src/styles/tokens.css`: Core design system variables
-- `dashboard/src/squeezeCalc.ts`: Pure algorithmic calculations for squeeze setups, rings, and takeaways
-- `dashboard/src/components/SqueezeScreener.vue`: Squeeze gauge, setup, factors, levels, takeaways
-- `dashboard/src/views/OptionsView.vue`: Master options flow, strike chain, KPI rail, stalker cards
-- `dashboard/src/components/OptionsConvictionBoard.vue`: Conviction pressure meter & rankings table
-- `dashboard/src/components/OptionsDirectionBrief.vue`: Directional read headline, score track, evidence
-- `dashboard/src/components/OptionsFlowContext.vue`: Tape contract mix, desk action triage
-- `dashboard/src/components/GammaExposureMap.vue`: Interactive dual-bar GEX chart & level markers
-- `dashboard/src/components/OptionsDriftChart.vue`: Underlying close + premium activity dual-pane chart
-- `dashboard/src/components/ProbabilityDensityChart.vue`: 2D lognormal probability density curve
-- `dashboard/src/components/RiskNeutral3DModel.vue`: Three.js 3D volatility surface
-- `dashboard/src/format.ts` & `dashboard/src/flowDisplay.ts`: Formatting and flow calculation helpers
-- `dashboard/src/__tests__/`: Automated test suites (45 suites, 661 tests)
+- `dashboard/src/styles/tokens.css`: Design system tokens and semantic color definitions.
+- `dashboard/src/styles/base.css`: Global base styles and reusable glassmorphism utility classes.
+- `dashboard/src/composables/usePreferences.ts`: Workstation preference management.
+- `dashboard/src/components/ProfileDrawer.vue`: Operator profile, density toggle, and preferences drawer.
+- `dashboard/src/App.vue`: Top navigation strip, collapsible side rail, route groupings, command palette.
+- `dashboard/src/views/OptionsView.vue`: Options drift workspace, qualified flow tape, GEX strike map.
+- `dashboard/src/views/DriftView.vue`: Charm $\partial\Delta/\partial t$ analytics, 3-factor breakdown cards, side-by-side Greeks strike table.
+- `dashboard/src/views/ChainView.vue`: Thematic supply chain & value cascade graph.
+- `dashboard/src/components/OptionsCalculator.vue`: Options pricing and Greeks sensitivity matrix.

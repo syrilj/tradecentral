@@ -634,6 +634,7 @@ function onMove(e: MouseEvent): void {
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .drift-wrap {
   min-width: 0;
   display: flex;

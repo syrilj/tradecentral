@@ -3,11 +3,14 @@
 Covers the DTE-window alignment between expiry selection and leg validation,
 honest confidence provenance (no fabricated model endorsement), fail-closed
 leg handling, risk sizing against the preregistered policy cap, and the
-persist artifacts contract.
+persist artifacts contract.  v3.3 additions: two-sided setup sleeves, capture-
+time quote honesty, chain-freshness gating, liquidity-aware expiry/leg
+selection, Black-Scholes Greeks from cached IV, and the execution-honest
+ENTER downgrade.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -16,9 +19,13 @@ import pandas as pd
 from edge.daily_plays.clock import RunContext
 from edge.daily_plays.config import DailyPlaysConfig
 from edge.daily_plays.pullback_flow_engine import (
+    _bs_greeks_for_leg,
+    _chain_capture_time,
     analyze_options_gex_fast,
     calculate_technical_profile,
     persist_pullback_plays_run,
+    PULLBACK_FLOW_ENGINE_NAME,
+    PULLBACK_FLOW_ENGINE_VERSION,
     run_pullback_flow_engine,
 )
 
@@ -317,3 +324,208 @@ def test_persist_writes_canonical_artifacts():
         assert (run_dir / "flow_activity.json").is_file()
         desk = Path(tmp) / "desk_board_latest.json"
         assert desk.is_file()
+
+
+def test_persist_manifest_records_engine_provenance():
+    """The persisted manifest carries engine identity so /api/plays can badge it."""
+    import json
+    import tempfile
+
+    payload = {
+        "run_id": "testrun-eng",
+        "status": "COMPLETE",
+        "plays": [],
+        "watchlist": [],
+        "rejections": [],
+    }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = persist_pullback_plays_run(payload, output_root=tmp)
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        assert manifest["engine"] == PULLBACK_FLOW_ENGINE_NAME
+        assert manifest["engine_version"] == PULLBACK_FLOW_ENGINE_VERSION
+
+
+# --------------------------------------------------------------------------
+# v3.3: capture-time quote honesty, Greeks, freshness, two-sided sleeves,
+# liquidity-aware selection, and the execution-honest ENTER downgrade.
+# --------------------------------------------------------------------------
+def test_chain_capture_time_comes_from_snapshot_not_clock():
+    chain = _option_chain(SPOT, dte=35)
+    captured = datetime.now(timezone.utc) - timedelta(hours=9)
+    chain["captured_utc"] = captured.isoformat()
+    stamp = _chain_capture_time(chain)
+    assert stamp is not None
+    # Within a minute of the injected capture stamp, NOT the current time.
+    assert abs((stamp - captured).total_seconds()) < 60
+
+
+def test_leg_quotes_carry_capture_time_and_measured_greeks():
+    chain = _option_chain(SPOT, dte=35)
+    captured = datetime.now(timezone.utc) - timedelta(hours=2)
+    chain["captured_utc"] = captured.isoformat()
+    res = analyze_options_gex_fast(
+        chain, SPOT, dte_min=30, dte_max=60, asof_date=date.today()
+    )
+    leg = res["best_call_leg"]
+    assert leg is not None
+    quote_stamp = datetime.fromisoformat(leg["quote_asof_utc"].replace("Z", "+00:00"))
+    assert abs((quote_stamp - captured).total_seconds()) < 60
+    # Delta is a measured BS value in a sane range for near-ATM, not a default.
+    assert leg["delta"] is not None and 0.05 <= leg["delta"] <= 0.95
+    assert leg["theta"] is not None and leg["theta"] < 0  # time decay is real
+
+
+def test_bs_greeks_absent_without_plausible_iv():
+    greeks = _bs_greeks_for_leg(spot_price=SPOT, strike=100.0, dte=45, right="call", iv=None)
+    assert greeks == {"delta": None, "gamma": None, "theta": None, "charm": None}
+    wild = _bs_greeks_for_leg(spot_price=SPOT, strike=100.0, dte=45, right="call", iv=99.0)
+    assert wild["delta"] is None
+
+
+def test_expiry_picker_prefers_liquid_deeper_expiry():
+    """A wide nearest expiry routes to a liquid deeper one inside the window."""
+    today = date.today()
+    near = (today + timedelta(days=34)).isoformat()
+    deep = (today + timedelta(days=55)).isoformat()
+    rows = []
+    for expiry, spread_mult in ((near, 6.0), (deep, 1.0)):
+        for i in range(-3, 4):
+            strike = round(SPOT * (1 + i * 0.03), 2)
+            mid = max(0.5, SPOT * 0.04 - abs(i) * 0.3)
+            rows.append({
+                "symbol": "TEST", "right": "C", "strike": strike, "expiry": expiry,
+                "dte": (datetime.fromisoformat(expiry).date() - today).days,
+                "bid": round(mid * (1 - 0.02 * spread_mult), 2),
+                "ask": round(mid * (1 + 0.02 * spread_mult), 2),
+                "volume": 2000, "openInterest": 900, "impliedVolatility": 0.45,
+            })
+    chain = pd.DataFrame(rows)
+    res = analyze_options_gex_fast(chain, SPOT, dte_min=30, dte_max=60, asof_date=today)
+    assert res["target_exp"] == deep
+    assert res["best_call_leg"]["spread_pct"] <= 0.10
+
+
+def test_leg_picker_prefers_liquid_contract_over_nearest_strike():
+    """The nearest strike is illiquid; a slightly further one passes policy."""
+    today = date.today()
+    expiry = (today + timedelta(days=40)).isoformat()
+    rows = []
+    for i, (oi, vol) in enumerate([(10, 5), (4000, 800)]):
+        strike = round(SPOT * (1.01 + i * 0.02), 2)
+        mid = max(0.5, SPOT * 0.04)
+        rows.append({
+            "symbol": "TEST", "right": "C", "strike": strike, "expiry": expiry, "dte": 40,
+            "bid": round(mid * 0.98, 2), "ask": round(mid * 1.02, 2),
+            "volume": vol, "openInterest": oi, "impliedVolatility": 0.45,
+        })
+    chain = pd.DataFrame(rows)
+    res = analyze_options_gex_fast(
+        chain, SPOT, dte_min=30, dte_max=60, asof_date=today,
+        min_open_interest=500, min_volume=50,
+    )
+    leg = res["best_call_leg"]
+    assert leg["open_interest"] >= 500 and leg["volume"] >= 50
+
+
+def _seed_two_sided_repo(root: Path, *, stale: bool = False) -> None:
+    """One bouncing symbol and one breaking-down symbol with liquid chains."""
+    data_1d = root / "data" / "1d"
+    data_1d.mkdir(parents=True, exist_ok=True)
+
+    dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=80)
+    # BOUNCE: steady uptrend then a controlled pullback to a neutral RSI.
+    up = 100 * np.cumprod(1 + np.full(80, 0.004))
+    up[-8:] = up[-9] * (1 - np.linspace(0.001, 0.06, 8))
+    bounce = pd.DataFrame({
+        "open": up, "high": up * 1.01, "low": up * 0.99,
+        "close": up, "volume": np.full(80, 5e6),
+    }, index=dates)
+    bounce.to_parquet(data_1d / "BOUNCE.parquet")
+
+    # BREAKDOWN: strong run-up then a five-session fade beneath the EMA.
+    hot = 100 * np.cumprod(1 + np.full(80, 0.006))
+    hot[-6:] = hot[-7] * (1 - np.linspace(0.004, 0.05, 6))
+    breakdown = pd.DataFrame({
+        "open": hot, "high": hot * 1.01, "low": hot * 0.99,
+        "close": hot, "volume": np.full(80, 5e6),
+    }, index=dates)
+    breakdown.to_parquet(data_1d / "BRKDWN.parquet")
+
+    day = date.today() - timedelta(days=12 if stale else 0)
+    chain_dir = root / "data" / "option_chains" / f"date={day.isoformat()}"
+    chain_dir.mkdir(parents=True, exist_ok=True)
+    captured = datetime.now(timezone.utc).isoformat()
+    for sym in ("BOUNCE", "BRKDWN"):
+        spot = float((bounce if sym == "BOUNCE" else breakdown)["close"].iloc[-1])
+        frames = []
+        for tag in ("C", "P"):
+            for i in (-4, -3, -2, 2, 3, 4):
+                strike = round(spot * (1 + i * 0.02), 2)
+                mid = max(0.5, spot * 0.03)
+                expiry = date.today() + timedelta(days=45)
+                frames.append({
+                    "asof_date": day.isoformat(), "captured_utc": captured, "symbol": sym,
+                    "spot": spot, "right": tag, "expiry": expiry.isoformat(),
+                    "dte": 45, "strike": strike,
+                    "bid": round(mid * 0.97, 2), "ask": round(mid * 1.03, 2),
+                    "lastPrice": mid, "volume": 3000, "openInterest": 6000,
+                    "impliedVolatility": 0.5, "inTheMoney": False,
+                    "contractSymbol": f"{sym}{expiry.strftime('%y%m%d')}{tag}{int(strike*1000):08d}",
+                    "lastTradeDate": captured,
+                })
+        pd.DataFrame(frames).to_parquet(chain_dir / f"{sym}.parquet")
+
+
+def test_engine_produces_enter_tickets_with_honest_quotes():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _seed_two_sided_repo(root)
+        result = run_pullback_flow_engine(
+            account=250000.0, context=_ctx(), config=_config(), root_dir=root
+        )
+    decisions = [*result["plays"], *result["watchlist"], *result["rejections"]]
+    symbols = {d["symbol"] for d in decisions}
+    assert {"BOUNCE", "BRKDWN"} <= symbols
+    for decision in result["plays"]:
+        assert decision["state"] == "ENTER"
+        assert decision["confidence"]["failed_checks"] == []
+        leg = decision["legs"][0]
+        assert leg["bid"] > 0 and leg["ask"] >= leg["bid"]
+        assert leg["quote_asof_utc"]  # snapshot capture time, present
+        assert leg["delta"] is not None
+    strategies = {d["strategy"] for d in decisions}
+    assert any(s == "long_call" for s in strategies)
+
+
+def test_stale_chain_blocks_enter_but_keeps_watch_visibility():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _seed_two_sided_repo(root, stale=True)
+        result = run_pullback_flow_engine(
+            account=250000.0, context=_ctx(), config=_config(), root_dir=root
+        )
+    assert result["plays"] == []
+    watched = [d for d in result["watchlist"] if d["freshness"]["chain_snapshot_stale"]]
+    assert watched, "stale-chain setups must remain visible on the watchlist"
+
+
+def test_enter_slots_with_failed_gates_are_downgraded_to_watch():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # Small account: every contract breaches the 0.5% budget -> no ENTER.
+        _seed_two_sided_repo(root)
+        result = run_pullback_flow_engine(
+            account=1000.0, context=_ctx(), config=_config(), root_dir=root
+        )
+    assert result["plays"] == []
+    demoted = [
+        d for d in result["watchlist"] if d["provenance"].get("enter_downgraded_to_watch")
+    ]
+    assert demoted, "budget-blocked ENTER slots must be demoted, not silently dropped"

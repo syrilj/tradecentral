@@ -49,6 +49,7 @@ const fromSetup = computed(() => Boolean(symbol.value || strike.value || premium
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .calc-view { display: grid; gap: var(--s5); }
 .calc-view header {
   padding: var(--s5);

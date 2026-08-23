@@ -26,9 +26,6 @@ import {
   formatStatementCell,
   formatPeriodHeader,
   formatSourceLabel,
-  formatGearingUp,
-  formatModelForecastScore,
-  formatModelPredictedPrice,
   forecastRatingTone,
   getDerivedRatio,
   getGrowthTone,
@@ -40,6 +37,7 @@ import {
 } from '@/financialsDisplay'
 import { presentSecFilings } from '@/insiderDisplay'
 import { sparkline } from '@/charts'
+import ModelForecastCard from '@/components/ModelForecastCard.vue'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import TrajectoryChart from '@/components/TrajectoryChart.vue'
@@ -91,7 +89,7 @@ export type MarketTab =
   | 'news'
   | 'compare'
 
-const activeTab = ref<MarketTab>(((route.query.tab as MarketTab) || 'overview'))
+const activeTab = ref<MarketTab>((route.query.tab as MarketTab) || 'overview')
 
 // Watch route queries
 watch(
@@ -137,49 +135,64 @@ const cmpErr = ref<string | null>(null)
 // Rich Stock Intelligence Resources
 const financialsRes = useResource<FinancialsPayload>(
   () => api.financials(symbol.value, finPeriod.value),
-  { intervalMs: 0 },
+  {
+    intervalMs: 0,
+    enabled: () => activeTab.value === 'financials' || activeTab.value === 'forecast',
+  },
 )
 
-const profileRes = useResource<CompanyProfilePayload>(
-  () => api.companyProfile(symbol.value),
-  { intervalMs: 0 },
-)
+const profileRes = useResource<CompanyProfilePayload>(() => api.companyProfile(symbol.value), {
+  intervalMs: 0,
+})
 
-const insidersRes = useResource<InsidersIntelligencePayload>(
-  () => api.insiders(symbol.value),
-  { intervalMs: 0 },
-)
+const insidersRes = useResource<InsidersIntelligencePayload>(() => api.insiders(symbol.value), {
+  intervalMs: 0,
+  enabled: () => activeTab.value === 'insiders' || activeTab.value === 'news',
+})
 
-const governmentRes = useResource<GovernmentPayload>(
-  () => api.government(symbol.value),
-  { intervalMs: 0 },
-)
+const governmentRes = useResource<GovernmentPayload>(() => api.government(symbol.value), {
+  intervalMs: 0,
+  enabled: () => activeTab.value === 'government',
+})
 
-const ownershipRes = useResource<OwnershipPayload>(
-  () => api.ownership(symbol.value),
-  { intervalMs: 0 },
-)
+const ownershipRes = useResource<OwnershipPayload>(() => api.ownership(symbol.value), {
+  intervalMs: 0,
+  enabled: () =>
+    activeTab.value === 'institutions' ||
+    activeTab.value === 'ownership' ||
+    activeTab.value === 'compensation',
+})
 
-const sentimentRes = useResource<SentimentPayload>(
-  () => api.sentiment(symbol.value),
-  { intervalMs: 0 },
-)
+const sentimentRes = useResource<SentimentPayload>(() => api.sentiment(symbol.value), {
+  intervalMs: 0,
+})
 
-const isGlobalLoading = computed(
-  () => trajBusy.value || profileRes.loading.value,
-)
+const isGlobalLoading = computed(() => trajBusy.value || profileRes.loading.value)
+
+function refreshActiveTabResource(opts?: { clear?: boolean }): void {
+  const tab = activeTab.value
+  if (tab === 'financials' || tab === 'forecast') {
+    if (opts?.clear || !financialsRes.data.value) void financialsRes.refresh(opts)
+  } else if (tab === 'insiders' || tab === 'news') {
+    if (opts?.clear || !insidersRes.data.value) void insidersRes.refresh(opts)
+  } else if (tab === 'government') {
+    if (opts?.clear || !governmentRes.data.value) void governmentRes.refresh(opts)
+  } else if (tab === 'institutions' || tab === 'ownership' || tab === 'compensation') {
+    if (opts?.clear || !ownershipRes.data.value) void ownershipRes.refresh(opts)
+  }
+}
+
+watch(activeTab, () => {
+  refreshActiveTabResource()
+})
 
 function reloadAllSymbolData(): void {
   traj.value = null
   trajBusy.value = true
   trajErr.value = null
   void loadTrajectory()
-  void financialsRes.refresh({ clear: true })
   void profileRes.refresh({ clear: true })
-  void insidersRes.refresh({ clear: true })
-  void governmentRes.refresh({ clear: true })
-  void ownershipRes.refresh({ clear: true })
-  void sentimentRes.refresh({ clear: true })
+  refreshActiveTabResource({ clear: true })
 }
 
 // Watch symbol and route changes
@@ -192,7 +205,9 @@ watch(
         symbol.value = s
         q.value = s
         const rest = basket.value.filter((b) => b !== s && b !== 'SPY')
-        basket.value = [...new Set(s === 'SPY' ? ['SPY', 'QQQ', ...rest] : [s, 'SPY', ...rest])].slice(0, 8)
+        basket.value = [
+          ...new Set(s === 'SPY' ? ['SPY', 'QQQ', ...rest] : [s, 'SPY', ...rest]),
+        ].slice(0, 8)
         void loadCompare()
         reloadAllSymbolData()
       }
@@ -215,7 +230,11 @@ watch(
 )
 
 function cleanTicker(term: string): string {
-  return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  return term
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
 }
 
 const runSearch = debounce(async (term: string) => {
@@ -306,13 +325,19 @@ function onSearchKey(e: KeyboardEvent): void {
   }
   if (e.key === 'ArrowDown' && hits.value.length) {
     e.preventDefault()
-    const idx = Math.max(0, hits.value.findIndex((h) => h.symbol === symbol.value))
+    const idx = Math.max(
+      0,
+      hits.value.findIndex((h) => h.symbol === symbol.value),
+    )
     const next = hits.value[Math.min(hits.value.length - 1, idx + 1)]
     if (next) select(next.symbol)
   }
   if (e.key === 'ArrowUp' && hits.value.length) {
     e.preventDefault()
-    const idx = Math.max(0, hits.value.findIndex((h) => h.symbol === symbol.value))
+    const idx = Math.max(
+      0,
+      hits.value.findIndex((h) => h.symbol === symbol.value),
+    )
     const prev = hits.value[Math.max(0, idx - 1)]
     if (prev) select(prev.symbol)
   }
@@ -360,8 +385,20 @@ const companyName = computed(() => {
   return tickerCompanyName(symbol.value, fromProfile || fromHit)
 })
 const identity = computed(() => tickerIdentity(symbol.value, companyName.value))
-const searchOpen = computed(() => Boolean(q.value.trim()) && (hits.value.length > 0 || searching.value))
+const searchOpen = computed(
+  () => Boolean(q.value.trim()) && (hits.value.length > 0 || searching.value),
+)
 const finData = computed(() => financialsRes.data.value)
+// Revenue Breakdown provenance: filing form + date, shown in both F4 panel headers.
+const breakdownSourceMeta = computed(() => {
+  const bd = finData.value?.revenue_breakdown
+  if (!bd?.filing_form) return 'SEC XBRL'
+  return `${bd.filing_form} FILED ${bd.filing_date ? shortDate(bd.filing_date) : DASH}`
+})
+/** Growth tone with sign-aware thresholds (percent units, e.g. -3.2 or 142.5). */
+function growthTone(v: number | null | undefined): 'pos' | 'neg' | 'flat' {
+  return getGrowthTone(v)
+}
 const modelForecast = computed(() =>
   presentModelForecast(finData.value?.model_forecast ?? profile.value?.model_forecast),
 )
@@ -375,7 +412,11 @@ const modelPredictionVsMark = computed(() =>
 )
 
 const liveMark = computed(
-  () => s.value?.last_price ?? modelForecast.value.spotUsed ?? profile.value?.forecast?.current_price ?? null,
+  () =>
+    s.value?.last_price ??
+    modelForecast.value.spotUsed ??
+    profile.value?.forecast?.current_price ??
+    null,
 )
 
 const caseRange = computed(() =>
@@ -495,16 +536,30 @@ function matchRevisionFilter(action: string | undefined, filter: string): boolea
   if (filter === 'all') return true
   const act = (action || '').toLowerCase().trim()
   if (filter === 'upgrade') {
-    return act.includes('upgrade') || act.includes('outperform') || act.includes('buy') || act === 'up'
+    return (
+      act.includes('upgrade') || act.includes('outperform') || act.includes('buy') || act === 'up'
+    )
   }
   if (filter === 'initiate') {
     return act.includes('initiat') || act.includes('coverage') || act === 'init'
   }
   if (filter === 'maintain') {
-    return act.includes('maintain') || act.includes('reiterat') || act.includes('hold') || act.includes('neutral') || act === 'main' || act === 'reit'
+    return (
+      act.includes('maintain') ||
+      act.includes('reiterat') ||
+      act.includes('hold') ||
+      act.includes('neutral') ||
+      act === 'main' ||
+      act === 'reit'
+    )
   }
   if (filter === 'downgrade') {
-    return act.includes('downgrade') || act.includes('underperform') || act.includes('sell') || act === 'down'
+    return (
+      act.includes('downgrade') ||
+      act.includes('underperform') ||
+      act.includes('sell') ||
+      act === 'down'
+    )
   }
   return true
 }
@@ -528,7 +583,10 @@ const filteredRevisions = computed(() => {
     if (forecastSearchQuery.value) {
       const qLower = forecastSearchQuery.value.toLowerCase().trim()
       const matchFirm = (rev.firm || '').toLowerCase().includes(qLower)
-      const matchGrade = (rev.current || '').toLowerCase().includes(qLower) || (rev.to_grade || '').toLowerCase().includes(qLower) || (rev.previous || '').toLowerCase().includes(qLower)
+      const matchGrade =
+        (rev.current || '').toLowerCase().includes(qLower) ||
+        (rev.to_grade || '').toLowerCase().includes(qLower) ||
+        (rev.previous || '').toLowerCase().includes(qLower)
       const matchAct = (rev.action || '').toLowerCase().includes(qLower)
       if (!matchFirm && !matchGrade && !matchAct) return false
     }
@@ -592,7 +650,9 @@ const ownershipInstitutionsMeta = computed(() =>
 )
 
 const institutionPctScale = computed(() => tableMaxPctOut(filteredInstitutions.value))
-const ownershipInstitutionPctScale = computed(() => tableMaxPctOut(ownData.value?.top_institutions || []))
+const ownershipInstitutionPctScale = computed(() =>
+  tableMaxPctOut(ownData.value?.top_institutions || []),
+)
 const fundPctScale = computed(() => tableMaxPctOut(ownData.value?.top_funds || []))
 
 const institutionKpis = computed(() => {
@@ -641,7 +701,12 @@ const cmpSparks = computed(() => {
   if (!cmp.value) return out
   for (const [sym, rows] of Object.entries(cmp.value.series)) {
     if (rows && rows.length > 0) {
-      out[sym] = sparkline(rows.map((r) => r.cum), 120, 22, 2).d
+      out[sym] = sparkline(
+        rows.map((r) => r.cum),
+        120,
+        22,
+        2,
+      ).d
     }
   }
   return out
@@ -717,13 +782,19 @@ const finChartData = computed(() => {
   const periodsDesc = finData.value.periods
   const periodsAsc = [...periodsDesc].reverse()
   const ascIndices = periodsAsc.map((p) => periodsDesc.indexOf(p))
-  const formattedPeriods = periodsAsc.map((p) => formatPeriodHeader(p, finPeriod.value === 'quarterly'))
+  const formattedPeriods = periodsAsc.map((p) =>
+    formatPeriodHeader(p, finPeriod.value === 'quarterly'),
+  )
 
   const getRowValues = (table?: StatementTable, pattern?: RegExp) => {
     if (!table?.rows?.length) return periodsAsc.map(() => null)
-    const row = pattern ? table.rows.find((r) => pattern.test(r.key || r.label) && !r.is_header) : table.rows[0]
+    const row = pattern
+      ? table.rows.find((r) => pattern.test(r.key || r.label) && !r.is_header)
+      : table.rows[0]
     if (!row?.values) return periodsAsc.map(() => null)
-    return ascIndices.map((idx) => (row.values[idx] != null && Number.isFinite(row.values[idx]) ? row.values[idx] : null))
+    return ascIndices.map((idx) =>
+      row.values[idx] != null && Number.isFinite(row.values[idx]) ? row.values[idx] : null,
+    )
   }
 
   const revVals = getRowValues(finData.value.income_statement, /revenue|sales/i)
@@ -790,8 +861,12 @@ const finChartData = computed(() => {
             <div class="ticker-title-row">
               <h1 class="company-name lab">{{ identity.label }}</h1>
               <span v-if="profile?.about?.sector" class="ticker-meta-dot">·</span>
-              <span v-if="profile?.about?.sector" class="ticker-sec-tag label">{{ profile.about.sector }}</span>
-              <span v-if="profile?.about?.industry" class="ticker-ind-tag label dim">/ {{ profile.about.industry }}</span>
+              <span v-if="profile?.about?.sector" class="ticker-sec-tag label">{{
+                profile.about.sector
+              }}</span>
+              <span v-if="profile?.about?.industry" class="ticker-ind-tag label dim"
+                >/ {{ profile.about.industry }}</span
+              >
             </div>
             <div class="ticker-sub-row">
               <span class="ticker-exchange label">USD · Real Time Mark</span>
@@ -821,7 +896,12 @@ const finChartData = computed(() => {
             </div>
           </div>
           <div class="ticker-actions">
-            <button type="button" class="btn-action pin-btn label" :class="{ on: onBook }" @click="toggleBook">
+            <button
+              type="button"
+              class="btn-action pin-btn label"
+              :class="{ on: onBook }"
+              @click="toggleBook"
+            >
               {{ onBook ? 'PINNED' : 'PIN TO BOOK' }}
             </button>
             <RouterLink :to="{ name: 'options', query: { symbol } }" class="btn-action label">
@@ -870,7 +950,10 @@ const finChartData = computed(() => {
             >
               <strong class="drop-sym fig">{{ h.symbol }}</strong>
               <span class="drop-tier label dim">
-                {{ tickerCompanyName(h.symbol, h.name) || (h.n_bars ? `${h.n_bars} bars` : 'live / uncached') }}
+                {{
+                  tickerCompanyName(h.symbol, h.name) ||
+                  (h.n_bars ? `${h.n_bars} bars` : 'live / uncached')
+                }}
               </span>
             </button>
           </div>
@@ -880,7 +963,11 @@ const finChartData = computed(() => {
       <!-- Real-Time Syncing Loading Indicator Strip -->
       <div v-if="isGlobalLoading" class="ticker-sync-strip label">
         <span class="sync-dot fresh" />
-        <span class="sync-text">SYNCHRONIZING REAL-TIME QUOTES & INTELLIGENCE FOR <strong class="fig">{{ symbol }}</strong>…</span>
+        <span class="sync-text"
+          >SYNCHRONIZING REAL-TIME QUOTES & INTELLIGENCE FOR
+          <strong class="fig">{{ symbol }}</strong
+          >…</span
+        >
       </div>
 
       <!-- ── Zero-Emoji Institutional Primary Tab Navigation ──────────────── -->
@@ -917,16 +1004,26 @@ const finChartData = computed(() => {
     <!-- ===================================================================== -->
     <section v-if="activeTab === 'overview'" class="tab-content overview-layout">
       <!-- Trajectory Chart & Stats Strip -->
-      <Panel :label="`${identity.label} trajectory`" index="01" :meta="traj ? `${traj.n_bars} bars · ${formatSourceLabel(traj.source)}` : ''" class="overview-chart-panel">
+      <Panel
+        :label="`${identity.label} trajectory`"
+        index="01"
+        :meta="traj ? `${traj.n_bars} bars · ${formatSourceLabel(traj.source)}` : ''"
+        class="overview-chart-panel"
+      >
         <template #action>
           <div class="switches">
-            <button type="button" class="mkt-refresh-btn label" :disabled="trajBusy" @click="loadTrajectory">
+            <button
+              type="button"
+              class="mkt-refresh-btn label"
+              :disabled="trajBusy"
+              @click="loadTrajectory"
+            >
               <span class="refresh-icon" :class="{ spinning: trajBusy }">↻</span>
               {{ trajBusy ? 'REFRESHING…' : 'REFRESH MARK' }}
             </button>
             <div class="seg">
               <button
-                v-for="m in (['price', 'growth'] as const)"
+                v-for="m in ['price', 'growth'] as const"
                 :key="m"
                 class="seg-b label"
                 :class="{ on: mode === m }"
@@ -936,8 +1033,20 @@ const finChartData = computed(() => {
               </button>
             </div>
             <div v-if="mode === 'price'" class="seg">
-              <button class="seg-b label" :class="{ on: chartStyle === 'candles' }" @click="chartStyle = 'candles'">candles</button>
-              <button class="seg-b label" :class="{ on: chartStyle === 'line' }" @click="chartStyle = 'line'">line</button>
+              <button
+                class="seg-b label"
+                :class="{ on: chartStyle === 'candles' }"
+                @click="chartStyle = 'candles'"
+              >
+                candles
+              </button>
+              <button
+                class="seg-b label"
+                :class="{ on: chartStyle === 'line' }"
+                @click="chartStyle = 'line'"
+              >
+                line
+              </button>
             </div>
             <div class="seg">
               <button
@@ -960,9 +1069,14 @@ const finChartData = computed(() => {
             {{ dataAudit.isLive ? 'LIVE MARK' : dataAudit.isFresh ? 'DATA AS OF' : 'STALE AS OF' }}
             {{ shortDate(dataAudit.lastDate) }}
           </span>
-          <span class="audit-item dim">{{ dataAudit.nBars }} bars ({{ shortDate(dataAudit.firstDate) }} → {{ shortDate(dataAudit.barDate) }})</span>
+          <span class="audit-item dim"
+            >{{ dataAudit.nBars }} bars ({{ shortDate(dataAudit.firstDate) }} →
+            {{ shortDate(dataAudit.barDate) }})</span
+          >
           <span class="audit-item source-badge">{{ formatSourceLabel(dataAudit.source) }}</span>
-          <span v-if="dataAudit.advUsd" class="audit-item dim">ADV: {{ compact(dataAudit.advUsd) }}</span>
+          <span v-if="dataAudit.advUsd" class="audit-item dim"
+            >ADV: {{ compact(dataAudit.advUsd) }}</span
+          >
         </div>
 
         <p v-if="trajErr" class="err">{{ trajErr }}</p>
@@ -970,12 +1084,42 @@ const finChartData = computed(() => {
 
         <template v-else-if="traj">
           <div class="overview-readouts">
-            <Readout label="1D" :value="signedPct(s?.chg_1d_pct)" :tone="tone(s?.chg_1d_pct)" size="sm" />
-            <Readout label="5D" :value="signedPct(s?.chg_5d_pct)" :tone="tone(s?.chg_5d_pct)" size="sm" />
-            <Readout label="1M" :value="signedPct(s?.chg_1m_pct)" :tone="tone(s?.chg_1m_pct)" size="sm" />
-            <Readout label="3M" :value="signedPct(s?.chg_3m_pct)" :tone="tone(s?.chg_3m_pct)" size="sm" />
-            <Readout label="YTD" :value="signedPct(s?.chg_ytd_pct)" :tone="tone(s?.chg_ytd_pct)" size="sm" />
-            <Readout label="Window" :value="signedPct(s?.chg_window_pct)" :tone="tone(s?.chg_window_pct)" size="sm" />
+            <Readout
+              label="1D"
+              :value="signedPct(s?.chg_1d_pct)"
+              :tone="tone(s?.chg_1d_pct)"
+              size="sm"
+            />
+            <Readout
+              label="5D"
+              :value="signedPct(s?.chg_5d_pct)"
+              :tone="tone(s?.chg_5d_pct)"
+              size="sm"
+            />
+            <Readout
+              label="1M"
+              :value="signedPct(s?.chg_1m_pct)"
+              :tone="tone(s?.chg_1m_pct)"
+              size="sm"
+            />
+            <Readout
+              label="3M"
+              :value="signedPct(s?.chg_3m_pct)"
+              :tone="tone(s?.chg_3m_pct)"
+              size="sm"
+            />
+            <Readout
+              label="YTD"
+              :value="signedPct(s?.chg_ytd_pct)"
+              :tone="tone(s?.chg_ytd_pct)"
+              size="sm"
+            />
+            <Readout
+              label="Window"
+              :value="signedPct(s?.chg_window_pct)"
+              :tone="tone(s?.chg_window_pct)"
+              size="sm"
+            />
           </div>
 
           <TrajectoryChart
@@ -988,22 +1132,47 @@ const finChartData = computed(() => {
           />
 
           <div class="stats-grid">
-            <Readout label="Ann. return" :value="pct(s?.ann_return_pct)" :tone="tone(s?.ann_return_pct)" size="sm" />
+            <Readout
+              label="Ann. return"
+              :value="pct(s?.ann_return_pct)"
+              :tone="tone(s?.ann_return_pct)"
+              size="sm"
+            />
             <Readout label="Ann. vol" :value="pct(s?.ann_vol_pct)" size="sm" />
-            <Readout label="Sharpe" :value="s?.sharpe == null ? DASH : num(s.sharpe, 2)" :tone="tone(s?.sharpe)" size="sm" />
+            <Readout
+              label="Sharpe"
+              :value="s?.sharpe == null ? DASH : num(s.sharpe, 2)"
+              :tone="tone(s?.sharpe)"
+              size="sm"
+            />
             <Readout label="Max DD" :value="pct(s?.max_drawdown_pct)" tone="neg" size="sm" />
-            <Readout label="Calmar" :value="s?.calmar == null ? DASH : num(s.calmar, 2)" size="sm" />
-            <Readout label="ATR 20" :value="s?.atr_20 != null ? num(s.atr_20) : DASH" :sub="s?.atr_pct != null ? pct(s.atr_pct, 1) : undefined" size="sm" />
+            <Readout
+              label="Calmar"
+              :value="s?.calmar == null ? DASH : num(s.calmar, 2)"
+              size="sm"
+            />
+            <Readout
+              label="ATR 20"
+              :value="s?.atr_20 != null ? num(s.atr_20) : DASH"
+              :sub="s?.atr_pct != null ? pct(s.atr_pct, 1) : undefined"
+              size="sm"
+            />
             <Readout label="ADV 20" :value="compact(s?.adv_20_usd)" sub="usd" size="sm" />
             <Readout label="Best day" :value="signedPct(s?.best_day_pct)" tone="pos" size="sm" />
             <Readout label="Worst day" :value="signedPct(s?.worst_day_pct)" tone="neg" size="sm" />
-            <Readout label="Days up" :value="s?.pct_days_up != null ? pct(s.pct_days_up, 1) : DASH" size="sm" />
+            <Readout
+              label="Days up"
+              :value="s?.pct_days_up != null ? pct(s.pct_days_up, 1) : DASH"
+              size="sm"
+            />
           </div>
         </template>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">PRICE TRAJECTORY</span>
           <h3 class="unavail-title lab">Price Data Unavailable for {{ symbol }}</h3>
-          <p class="unavail-desc">Historical bar data and trajectory could not be loaded from public market feeds.</p>
+          <p class="unavail-desc">
+            Historical bar data and trajectory could not be loaded from public market feeds.
+          </p>
           <div class="unavail-meta label dim">
             <span>Upstream Feed: <strong>yfinance / Exchange Bars</strong></span>
           </div>
@@ -1014,32 +1183,53 @@ const finChartData = computed(() => {
       <div class="overview-sidebar">
         <!-- Smart Score Card -->
         <Panel label="Stock Smart Score" index="02" :meta="profile?.smart_score?.rating || DASH">
-          <LoadingState v-if="profileRes.loading.value && !profile?.smart_score" label="Evaluating quantitative smart score…" />
+          <LoadingState
+            v-if="profileRes.loading.value && !profile?.smart_score"
+            label="Evaluating quantitative smart score…"
+          />
           <div v-else-if="profile?.smart_score" class="smart-score-card">
             <div class="score-dial">
               <div
                 class="score-circle"
                 :class="{
                   pos: (profile.smart_score.score ?? 0) >= 8,
-                  mid: (profile.smart_score.score ?? 0) >= 5 && (profile.smart_score.score ?? 0) < 8,
+                  mid:
+                    (profile.smart_score.score ?? 0) >= 5 && (profile.smart_score.score ?? 0) < 8,
                   neg: (profile.smart_score.score ?? 0) < 5,
                 }"
               >
-                <span class="score-num fig">{{ profile.smart_score.score != null ? profile.smart_score.score : DASH }}</span>
-                <span v-if="profile.smart_score.score != null" class="score-max label dim">/ 10</span>
+                <span class="score-num fig">{{
+                  profile.smart_score.score != null ? profile.smart_score.score : DASH
+                }}</span>
+                <span v-if="profile.smart_score.score != null" class="score-max label dim"
+                  >/ 10</span
+                >
               </div>
               <div class="score-desc">
                 <strong
                   class="score-rating lab"
-                  :class="(profile.smart_score.score ?? 0) >= 8 ? 'pos' : ((profile.smart_score.score ?? 0) <= 4 ? 'neg' : 'flat')"
+                  :class="
+                    (profile.smart_score.score ?? 0) >= 8
+                      ? 'pos'
+                      : (profile.smart_score.score ?? 0) <= 4
+                        ? 'neg'
+                        : 'flat'
+                  "
                 >
                   {{ profile.smart_score.rating || DASH }}
                 </strong>
-                <p class="score-note label dim">Quantitative 5-pillar synthesis: analyst consensus, fundamentals, momentum, insider, and institutional accumulation.</p>
+                <p class="score-note label dim">
+                  Quantitative 5-pillar synthesis: analyst consensus, fundamentals, momentum,
+                  insider, and institutional accumulation.
+                </p>
               </div>
             </div>
             <div v-if="profile.smart_score.components" class="score-breakdown">
-              <div v-for="(val, k) in profile.smart_score.components" :key="k" class="score-bar-row">
+              <div
+                v-for="(val, k) in profile.smart_score.components"
+                :key="k"
+                class="score-bar-row"
+              >
                 <span class="score-bar-lbl label">{{ String(k).replace(/_/g, ' ') }}</span>
                 <div class="score-bar-track">
                   <div
@@ -1048,7 +1238,9 @@ const finChartData = computed(() => {
                     :style="{ width: `${Math.min(100, Math.max(10, val * 10))}%` }"
                   />
                 </div>
-                <span class="score-bar-val fig" :class="{ pos: val >= 8, neg: val < 5 }">{{ val }}</span>
+                <span class="score-bar-val fig" :class="{ pos: val >= 8, neg: val < 5 }">{{
+                  val
+                }}</span>
               </div>
             </div>
           </div>
@@ -1062,7 +1254,10 @@ const finChartData = computed(() => {
           <div class="signal-branch-card">
             <div class="sig-title-row">
               <span class="label sig-type">{{ signalBranch.type }}</span>
-              <span class="sig-side-badge" :class="signalBranch.side.includes('LONG') ? 'pos' : 'neg'">
+              <span
+                class="sig-side-badge"
+                :class="signalBranch.side.includes('LONG') ? 'pos' : 'neg'"
+              >
                 {{ signalBranch.side }}
               </span>
               <span class="state label" :class="signalBranch.state === 'ENTER' ? 'enter' : 'watch'">
@@ -1077,7 +1272,13 @@ const finChartData = computed(() => {
                 size="sm"
               />
               <Readout label="Horizon" :value="signalBranch.horizon || DASH" size="sm" />
-              <Readout v-if="signalBranch.momentum !== undefined" label="Momentum" :value="signedPct(signalBranch.momentum, 2)" :tone="tone(signalBranch.momentum)" size="sm" />
+              <Readout
+                v-if="signalBranch.momentum !== undefined"
+                label="Momentum"
+                :value="signedPct(signalBranch.momentum, 2)"
+                :tone="tone(signalBranch.momentum)"
+                size="sm"
+              />
             </div>
           </div>
         </Panel>
@@ -1094,18 +1295,69 @@ const finChartData = computed(() => {
           <div class="card-body">
             <div class="card-kpi-row">
               <span class="kpi-l label">TTM Revenue</span>
-              <strong class="kpi-v fig">{{ formatBigUsd(finData?.income_statement?.rows?.[0]?.values?.[0] || (finData?.ratios?.market_cap ? (finData?.ratios?.enterprise_value ? finData.ratios.enterprise_value * 0.25 : null) : null)) }}</strong>
+              <strong class="kpi-v fig">{{
+                formatBigUsd(
+                  finData?.income_statement?.rows?.[0]?.values?.[0] ||
+                    (finData?.ratios?.market_cap
+                      ? finData?.ratios?.enterprise_value
+                        ? finData.ratios.enterprise_value * 0.25
+                        : null
+                      : null),
+                )
+              }}</strong>
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Gross Margin</span>
-              <strong class="kpi-v fig" :class="getGrowthTone(finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'gross_margin'))">
-                {{ (finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'gross_margin')) != null ? `${finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'gross_margin')}%` : DASH }}
+              <strong
+                class="kpi-v fig"
+                :class="
+                  getGrowthTone(
+                    finData?.ratios?.gross_margin ??
+                      getDerivedRatio(
+                        finData?.ratios,
+                        finData?.income_statement?.rows,
+                        'gross_margin',
+                      ),
+                  )
+                "
+              >
+                {{
+                  (finData?.ratios?.gross_margin ??
+                    getDerivedRatio(
+                      finData?.ratios,
+                      finData?.income_statement?.rows,
+                      'gross_margin',
+                    )) != null
+                    ? `${finData?.ratios?.gross_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'gross_margin')}%`
+                    : DASH
+                }}
               </strong>
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Net Margin</span>
-              <strong class="kpi-v fig" :class="getGrowthTone(finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'net_margin'))">
-                {{ (finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'net_margin')) != null ? `${finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'net_margin')}%` : DASH }}
+              <strong
+                class="kpi-v fig"
+                :class="
+                  getGrowthTone(
+                    finData?.ratios?.net_margin ??
+                      getDerivedRatio(
+                        finData?.ratios,
+                        finData?.income_statement?.rows,
+                        'net_margin',
+                      ),
+                  )
+                "
+              >
+                {{
+                  (finData?.ratios?.net_margin ??
+                    getDerivedRatio(
+                      finData?.ratios,
+                      finData?.income_statement?.rows,
+                      'net_margin',
+                    )) != null
+                    ? `${finData?.ratios?.net_margin ?? getDerivedRatio(finData?.ratios, finData?.income_statement?.rows, 'net_margin')}%`
+                    : DASH
+                }}
               </strong>
             </div>
           </div>
@@ -1126,12 +1378,17 @@ const finChartData = computed(() => {
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Form 4 Trades</span>
-              <strong class="kpi-v fig">{{ insData?.summary?.total_transactions != null ? `${insData.summary.total_transactions} filings` : DASH }}</strong>
+              <strong class="kpi-v fig">{{
+                insData?.summary?.total_transactions != null
+                  ? `${insData.summary.total_transactions} filings`
+                  : DASH
+              }}</strong>
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Buy vs Sell Mix</span>
               <strong v-if="insData?.summary" class="kpi-v fig pos">
-                {{ insData.summary.buy_count }} BUY <span class="dim">/ {{ insData.summary.sell_count }} SELL</span>
+                {{ insData.summary.buy_count }} BUY
+                <span class="dim">/ {{ insData.summary.sell_count }} SELL</span>
               </strong>
               <strong v-else class="kpi-v fig dim">—</strong>
             </div>
@@ -1147,7 +1404,10 @@ const finChartData = computed(() => {
           <div class="card-body">
             <div class="card-kpi-row">
               <span class="kpi-l label">Consensus</span>
-              <strong class="kpi-v lab" :class="forecastRatingTone(profile?.forecast?.consensus_rating)">
+              <strong
+                class="kpi-v lab"
+                :class="forecastRatingTone(profile?.forecast?.consensus_rating)"
+              >
                 {{ profile?.forecast?.consensus_rating || DASH }}
               </strong>
             </div>
@@ -1158,7 +1418,11 @@ const finChartData = computed(() => {
             <div class="card-kpi-row">
               <span class="kpi-l label">Implied Upside</span>
               <strong class="kpi-v fig" :class="getGrowthTone(profile?.forecast?.upside_pct)">
-                {{ profile?.forecast?.upside_pct != null ? signedPct(profile.forecast.upside_pct, 1) : DASH }}
+                {{
+                  profile?.forecast?.upside_pct != null
+                    ? signedPct(profile.forecast.upside_pct, 1)
+                    : DASH
+                }}
               </strong>
             </div>
           </div>
@@ -1173,30 +1437,48 @@ const finChartData = computed(() => {
           <div class="card-body">
             <div class="card-kpi-row">
               <span class="kpi-l label">Congress Trades</span>
-              <strong class="kpi-v fig">{{ govData?.congress ? `${govData.congress.length} disclosures` : DASH }}</strong>
+              <strong class="kpi-v fig">{{
+                govData?.congress ? `${govData.congress.length} disclosures` : DASH
+              }}</strong>
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Quarterly Lobbying</span>
-              <strong class="kpi-v fig">{{ formatBigUsd(govData?.lobbying?.estimated_quarterly_spend) }}</strong>
+              <strong class="kpi-v fig">{{
+                formatBigUsd(govData?.lobbying?.estimated_quarterly_spend)
+              }}</strong>
             </div>
             <div class="card-kpi-row">
               <span class="kpi-l label">Federal Contracts</span>
-              <strong class="kpi-v fig">{{ govData?.contracts ? `${govData.contracts.length} awards` : DASH }}</strong>
+              <strong class="kpi-v fig">{{
+                govData?.contracts ? `${govData.contracts.length} awards` : DASH
+              }}</strong>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Bulls Say vs Bears Say -->
-      <Panel label="Bull Case vs Bear Case" index="04" meta="Analytical Thesis" class="overview-full-span">
-        <div v-if="profile?.bull_bear?.bulls_say?.length || profile?.bull_bear?.bears_say?.length" class="bull-bear-grid">
+      <Panel
+        label="Bull Case vs Bear Case"
+        index="04"
+        meta="Analytical Thesis"
+        class="overview-full-span"
+      >
+        <div
+          v-if="profile?.bull_bear?.bulls_say?.length || profile?.bull_bear?.bears_say?.length"
+          class="bull-bear-grid"
+        >
           <div class="bull-box">
             <div class="thesis-header pos">
               <span class="thesis-icon">▲</span>
               <strong class="lab">BULLS SAY</strong>
             </div>
             <ul class="thesis-list">
-              <li v-for="(pt, idx) in profile?.bull_bear?.bulls_say || []" :key="idx" class="thesis-item">
+              <li
+                v-for="(pt, idx) in profile?.bull_bear?.bulls_say || []"
+                :key="idx"
+                class="thesis-item"
+              >
                 <span class="dot pos">•</span>
                 <p class="thesis-text">{{ pt }}</p>
               </li>
@@ -1208,7 +1490,11 @@ const finChartData = computed(() => {
               <strong class="lab">BEARS SAY</strong>
             </div>
             <ul class="thesis-list">
-              <li v-for="(pt, idx) in profile?.bull_bear?.bears_say || []" :key="idx" class="thesis-item">
+              <li
+                v-for="(pt, idx) in profile?.bull_bear?.bears_say || []"
+                :key="idx"
+                class="thesis-item"
+              >
                 <span class="dot neg">•</span>
                 <p class="thesis-text">{{ pt }}</p>
               </li>
@@ -1218,7 +1504,10 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">THESIS SYNTHESIS</span>
           <h3 class="unavail-title lab">Bull / Bear Thesis Analysis Pending</h3>
-          <p class="unavail-desc">Independent quantitative bull and bear thesis points are being synthesized for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            Independent quantitative bull and bear thesis points are being synthesized for
+            {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Upstream Source: <strong>Financial Consensus & SEC Disclosures</strong></span>
           </div>
@@ -1226,13 +1515,28 @@ const finChartData = computed(() => {
       </Panel>
 
       <!-- About the Company -->
-      <Panel :label="`About ${symbol}`" index="05" :meta="profile?.about?.sector || DASH" class="overview-full-span">
+      <Panel
+        :label="`About ${symbol}`"
+        index="05"
+        :meta="profile?.about?.sector || DASH"
+        class="overview-full-span"
+      >
         <div class="about-card">
-          <p class="about-desc">{{ profile?.about?.description || 'Company description unavailable from public filings.' }}</p>
+          <p class="about-desc">
+            {{
+              profile?.about?.description || 'Company description unavailable from public filings.'
+            }}
+          </p>
           <div class="about-stats-row">
             <div class="about-stat-item">
               <span class="stat-lbl label">Headquarters</span>
-              <strong class="stat-val fig">{{ profile?.about?.address || [profile?.about?.city, profile?.about?.state, profile?.about?.country].filter(Boolean).join(', ') || DASH }}</strong>
+              <strong class="stat-val fig">{{
+                profile?.about?.address ||
+                [profile?.about?.city, profile?.about?.state, profile?.about?.country]
+                  .filter(Boolean)
+                  .join(', ') ||
+                DASH
+              }}</strong>
             </div>
             <div class="about-stat-item">
               <span class="stat-lbl label">Market Cap</span>
@@ -1240,11 +1544,19 @@ const finChartData = computed(() => {
             </div>
             <div class="about-stat-item">
               <span class="stat-lbl label">Full-Time Employees</span>
-              <strong class="stat-val fig">{{ profile?.about?.employees != null ? profile.about.employees.toLocaleString() : DASH }}</strong>
+              <strong class="stat-val fig">{{
+                profile?.about?.employees != null ? profile.about.employees.toLocaleString() : DASH
+              }}</strong>
             </div>
             <div class="about-stat-item">
               <span class="stat-lbl label">Website</span>
-              <a v-if="profile?.about?.website" :href="profile.about.website" target="_blank" rel="noopener" class="stat-link label">
+              <a
+                v-if="profile?.about?.website"
+                :href="profile.about.website"
+                target="_blank"
+                rel="noopener"
+                class="stat-link label"
+              >
                 {{ profile.about.website.replace('https://', '').replace('http://', '') }}
               </a>
               <span v-else class="dim">—</span>
@@ -1258,102 +1570,13 @@ const finChartData = computed(() => {
     <!-- TAB 2: FINANCIALS                                                     -->
     <!-- ===================================================================== -->
     <section v-else-if="activeTab === 'financials'" class="tab-content financials-layout">
-      <article
+      <ModelForecastCard
         id="model-forecast-highlight"
-        class="model-forecast-highlight"
-        :class="{ focused: highlightModelForecast }"
-        data-testid="model-forecast-highlight"
-      >
-        <div class="mf-head">
-          <div>
-            <div class="mf-kicker label">Internal research model</div>
-            <h2 class="mf-title lab">What it should be</h2>
-          </div>
-          <span class="mf-timeframe label">{{ modelForecast.timeframe || DASH }}</span>
-        </div>
-        <p class="mf-note label dim">
-          Looks through future earnings and growth from the filings and live tape — not last year's run-rate.
-          Distinct from Street consensus. Research only — not an ENTER authorization.
-        </p>
-        <div class="mf-metrics">
-          <div class="mf-metric">
-            <span class="mf-lbl label">Predicted price</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.predictedPrice) }}</strong>
-            <span v-if="modelForecast.spotUsed != null" class="mf-sub label dim">
-              from live mark {{ formatModelPredictedPrice(modelForecast.spotUsed) }}
-            </span>
-            <span
-              v-if="modelPredictionVsMark.hit === true"
-              class="mf-sub label pos"
-            >Mark has reached the predicted price</span>
-            <span
-              v-else-if="modelPredictionVsMark.hit === false && modelPredictionVsMark.remainingPct != null"
-              class="mf-sub label dim"
-            >{{ signedPct(modelPredictionVsMark.remainingPct, 1) }} to predicted</span>
-          </div>
-          <div class="mf-metric">
-            <span class="mf-lbl label">Forecast score</span>
-            <strong class="mf-val fig">{{ formatModelForecastScore(modelForecast.forecastScore) }}</strong>
-          </div>
-          <div class="mf-metric">
-            <span class="mf-lbl label">Look-through growth</span>
-            <strong class="mf-val fig">{{
-              modelForecast.lookthroughGrowth != null
-                ? `${(modelForecast.lookthroughGrowth * 100).toFixed(0)}%`
-                : DASH
-            }}</strong>
-          </div>
-          <div class="mf-metric mf-metric-wide">
-            <span class="mf-lbl label">Gearing up towards</span>
-            <strong class="mf-val lab">{{ formatGearingUp(modelForecast.gearingUpTowards) }}</strong>
-          </div>
-        </div>
-        <div class="mf-cases" data-testid="model-forecast-cases">
-          <div class="mf-case bear">
-            <span class="mf-lbl label">Bear case</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bear.price) }}</strong>
-            <p class="mf-thesis">{{ modelForecast.cases.bear.thesis || DASH }}</p>
-          </div>
-          <div class="mf-case base">
-            <span class="mf-lbl label">Base · {{ modelForecast.timeframe || 'horizon' }}</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.base.price) }}</strong>
-            <p class="mf-thesis">{{ modelForecast.cases.base.thesis || DASH }}</p>
-          </div>
-          <div class="mf-case bull">
-            <span class="mf-lbl label">Bull case</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bull.price) }}</strong>
-            <p class="mf-thesis">{{ modelForecast.cases.bull.thesis || DASH }}</p>
-          </div>
-        </div>
-        <div v-if="caseRange" class="mf-range" data-testid="model-forecast-range">
-          <div class="mf-range-track">
-            <span class="mf-range-span" :style="{ left: caseRange.spanLeft, width: caseRange.spanWidth }" />
-            <span
-              v-for="m in caseRange.marks"
-              :key="m.key"
-              class="mf-range-mark"
-              :class="m.key"
-              :style="{ left: m.pct }"
-              :title="m.title"
-            />
-          </div>
-          <div class="mf-range-caption label">
-            <span v-for="m in caseRange.marks" :key="`cap-${m.key}`" class="mf-range-cap" :class="m.key">
-              {{ m.label }} {{ formatModelPredictedPrice(m.price) }}
-            </span>
-          </div>
-        </div>
-        <div class="mf-factors">
-          <span class="mf-lbl label">Factors</span>
-          <ul v-if="modelForecast.factors.length" class="mf-factor-list">
-            <li v-for="f in modelForecast.factors" :key="f.label" class="mf-factor">
-              <span class="mf-factor-name">{{ f.label }}</span>
-              <span class="mf-factor-val fig" :class="f.tone">{{ f.display }}</span>
-            </li>
-          </ul>
-          <p v-else class="mf-thesis dim">{{ DASH }}</p>
-        </div>
-      </article>
+        :forecast="modelForecast"
+        :case-range="caseRange"
+        :prediction-vs-mark="modelPredictionVsMark"
+        :focused="highlightModelForecast"
+      />
 
       <!-- Sub-tab toolbar -->
       <div class="financials-toolbar">
@@ -1378,17 +1601,44 @@ const finChartData = computed(() => {
 
         <div class="fin-controls-right">
           <div class="seg">
-            <button class="seg-b label" :class="{ on: finPeriod === 'quarterly' }" @click="finPeriod = 'quarterly'">Quarterly</button>
-            <button class="seg-b label" :class="{ on: finPeriod === 'annual' }" @click="finPeriod = 'annual'">Annual</button>
+            <button
+              class="seg-b label"
+              :class="{ on: finPeriod === 'quarterly' }"
+              @click="finPeriod = 'quarterly'"
+            >
+              Quarterly
+            </button>
+            <button
+              class="seg-b label"
+              :class="{ on: finPeriod === 'annual' }"
+              @click="finPeriod = 'annual'"
+            >
+              Annual
+            </button>
           </div>
           <div class="seg">
-            <button class="seg-b label" :class="{ on: finViewMode === 'table' }" @click="finViewMode = 'table'">Table</button>
-            <button class="seg-b label" :class="{ on: finViewMode === 'charts' }" @click="finViewMode = 'charts'">Charts</button>
+            <button
+              class="seg-b label"
+              :class="{ on: finViewMode === 'table' }"
+              @click="finViewMode = 'table'"
+            >
+              Table
+            </button>
+            <button
+              class="seg-b label"
+              :class="{ on: finViewMode === 'charts' }"
+              @click="finViewMode = 'charts'"
+            >
+              Charts
+            </button>
           </div>
         </div>
       </div>
 
-      <LoadingState v-if="financialsRes.loading.value && !finData" label="Loading financial filings…" />
+      <LoadingState
+        v-if="financialsRes.loading.value && !finData"
+        label="Loading financial filings…"
+      />
       <p v-else-if="financialsRes.error.value" class="err">{{ financialsRes.error.value }}</p>
 
       <template v-else-if="finData">
@@ -1438,7 +1688,11 @@ const finChartData = computed(() => {
             <div v-else class="institutional-unavailable-container">
               <span class="unavail-eyebrow label dim">INCOME STATEMENT</span>
               <h3 class="unavail-title lab">Income Statement Data Unavailable for {{ symbol }}</h3>
-              <p class="unavail-desc">Standardized Income Statement filings could not be parsed for {{ symbol }} ({{ finPeriod }}).</p>
+              <p class="unavail-desc">
+                Standardized Income Statement filings could not be parsed for {{ symbol }} ({{
+                  finPeriod
+                }}).
+              </p>
               <div class="unavail-meta label dim">
                 <span>Upstream Feed: <strong>SEC EDGAR 10-K / 10-Q & yfinance</strong></span>
               </div>
@@ -1484,7 +1738,9 @@ const finChartData = computed(() => {
             <div v-else class="institutional-unavailable-container">
               <span class="unavail-eyebrow label dim">BALANCE SHEET</span>
               <h3 class="unavail-title lab">Balance Sheet Data Unavailable for {{ symbol }}</h3>
-              <p class="unavail-desc">Balance Sheet filings could not be retrieved for {{ symbol }} ({{ finPeriod }}).</p>
+              <p class="unavail-desc">
+                Balance Sheet filings could not be retrieved for {{ symbol }} ({{ finPeriod }}).
+              </p>
               <div class="unavail-meta label dim">
                 <span>Upstream Feed: <strong>SEC EDGAR 10-K / 10-Q & yfinance</strong></span>
               </div>
@@ -1529,8 +1785,12 @@ const finChartData = computed(() => {
             </div>
             <div v-else class="institutional-unavailable-container">
               <span class="unavail-eyebrow label dim">CASH FLOW</span>
-              <h3 class="unavail-title lab">Cash Flow Statement Data Unavailable for {{ symbol }}</h3>
-              <p class="unavail-desc">Cash Flow filings could not be parsed for {{ symbol }} ({{ finPeriod }}).</p>
+              <h3 class="unavail-title lab">
+                Cash Flow Statement Data Unavailable for {{ symbol }}
+              </h3>
+              <p class="unavail-desc">
+                Cash Flow filings could not be parsed for {{ symbol }} ({{ finPeriod }}).
+              </p>
               <div class="unavail-meta label dim">
                 <span>Upstream Feed: <strong>SEC EDGAR 10-K / 10-Q & yfinance</strong></span>
               </div>
@@ -1539,9 +1799,17 @@ const finChartData = computed(() => {
 
           <!-- 4. Revenue Breakdown -->
           <div v-else-if="finStatement === 'breakdown'" class="breakdown-grid">
-            <Panel label="Revenue by Business Segment" index="F4a" meta="Segment Allocation">
+            <Panel
+              label="Revenue by Business Segment"
+              index="F4a"
+              :meta="breakdownSourceMeta"
+            >
               <div v-if="finData.revenue_breakdown?.by_segment?.length" class="breakdown-list">
-                <div v-for="seg in finData.revenue_breakdown.by_segment" :key="seg.segment" class="breakdown-item">
+                <div
+                  v-for="seg in finData.revenue_breakdown.by_segment"
+                  :key="seg.segment"
+                  class="breakdown-item"
+                >
                   <div class="breakdown-item-top">
                     <span class="seg-name lab">{{ seg.segment }}</span>
                     <strong class="seg-val fig">{{ formatBigUsd(seg.revenue) }}</strong>
@@ -1550,40 +1818,96 @@ const finChartData = computed(() => {
                     <div class="breakdown-progress-fill" :style="{ width: `${seg.pct || 0}%` }" />
                   </div>
                   <div class="breakdown-item-sub">
-                    <span class="label dim">{{ seg.pct != null ? `${seg.pct}%` : DASH }} of total</span>
-                    <span v-if="seg.growth_yoy" class="label pos">+{{ seg.growth_yoy }}% YoY Growth</span>
+                    <span class="label dim"
+                      >{{ seg.pct != null ? `${seg.pct}%` : DASH }} of total</span
+                    >
+                    <span v-if="seg.period_end" class="label dim"
+                      >AS OF {{ shortDate(seg.period_end) }}</span
+                    >
+                    <span
+                      v-else-if="seg.growth_yoy != null"
+                      class="label"
+                      :class="growthTone(seg.growth_yoy)"
+                      >{{ signedPct(seg.growth_yoy, 1) }} YoY</span
+                    >
                   </div>
                 </div>
               </div>
               <div v-else class="institutional-unavailable-container">
                 <span class="unavail-eyebrow label dim">SEGMENT DISCLOSURES</span>
                 <h3 class="unavail-title lab">Segment Breakdown Unavailable</h3>
-                <p class="unavail-desc">Segment disclosures are not available for {{ symbol }}.</p>
+                <p class="unavail-desc">
+                  No dimensioned segment revenue in recent {{ symbol }} filings (common for
+                  single-segment issuers).
+                </p>
                 <div class="unavail-meta label dim">
-                  <span>Source: <strong>SEC Form 10-K Notes</strong></span>
+                  <span>Source: <strong>SEC XBRL 10-K Segment Notes</strong></span>
                 </div>
               </div>
             </Panel>
 
-            <Panel label="Revenue by Geography" index="F4b" meta="Geographic Allocation">
-              <div v-if="finData.revenue_breakdown?.by_geography?.length" class="breakdown-list">
-                <div v-for="geo in finData.revenue_breakdown.by_geography" :key="geo.region" class="breakdown-item">
-                  <div class="breakdown-item-top">
-                    <span class="seg-name lab">{{ geo.region }}</span>
-                    <strong class="seg-val fig">{{ formatBigUsd(geo.revenue) }}</strong>
+            <Panel
+              label="Revenue by Geography / Product"
+              index="F4b"
+              :meta="breakdownSourceMeta"
+            >
+              <div
+                v-if="finData.revenue_breakdown?.by_geography?.length || finData.revenue_breakdown?.by_product?.length"
+                class="breakdown-list"
+              >
+                <template v-if="finData.revenue_breakdown?.by_geography?.length">
+                  <div
+                    v-for="geo in finData.revenue_breakdown.by_geography"
+                    :key="geo.region"
+                    class="breakdown-item"
+                  >
+                    <div class="breakdown-item-top">
+                      <span class="seg-name lab">{{ geo.region }}</span>
+                      <strong class="seg-val fig">{{ formatBigUsd(geo.revenue) }}</strong>
+                    </div>
+                    <div class="breakdown-progress-track">
+                      <div
+                        class="breakdown-progress-fill"
+                        :style="{ width: `${geo.pct || 0}%` }"
+                      />
+                    </div>
+                    <div class="breakdown-item-sub">
+                      <span class="label dim"
+                        >{{ geo.pct != null ? `${geo.pct}%` : DASH }} of total</span
+                      >
+                    </div>
                   </div>
-                  <div class="breakdown-progress-track">
-                    <div class="breakdown-progress-fill" :style="{ width: `${geo.pct || 0}%` }" />
+                </template>
+                <template v-else>
+                  <div
+                    v-for="prod in finData.revenue_breakdown?.by_product || []"
+                    :key="prod.segment"
+                    class="breakdown-item"
+                  >
+                    <div class="breakdown-item-top">
+                      <span class="seg-name lab">{{ prod.segment }}</span>
+                      <strong class="seg-val fig">{{ formatBigUsd(prod.revenue) }}</strong>
+                    </div>
+                    <div class="breakdown-progress-track">
+                      <div
+                        class="breakdown-progress-fill"
+                        :style="{ width: `${prod.pct || 0}%` }"
+                      />
+                    </div>
+                    <div class="breakdown-item-sub">
+                      <span class="label dim"
+                        >{{ prod.pct != null ? `${prod.pct}%` : DASH }} of total</span
+                      >
+                    </div>
                   </div>
-                  <div class="breakdown-item-sub">
-                    <span class="label dim">{{ geo.pct != null ? `${geo.pct}%` : DASH }} of total</span>
-                  </div>
-                </div>
+                </template>
               </div>
               <div v-else class="institutional-unavailable-container">
                 <span class="unavail-eyebrow label dim">GEOGRAPHY DISCLOSURES</span>
                 <h3 class="unavail-title lab">Geographic Breakdown Unavailable</h3>
-                <p class="unavail-desc">Geographical revenue reporting is not provided for {{ symbol }}.</p>
+                <p class="unavail-desc">
+                  Geographical revenue reporting is not provided for {{ symbol }}.
+                </p>
                 <div class="unavail-meta label dim">
                   <span>Source: <strong>SEC Form 10-K Notes</strong></span>
                 </div>
@@ -1592,66 +1916,103 @@ const finChartData = computed(() => {
           </div>
 
           <!-- 5. Valuation Ratios & Health -->
-          <Panel v-else-if="finStatement === 'ratios'" label="Valuation & Financial Health Multiples" index="F5" meta="Multiples">
+          <Panel
+            v-else-if="finStatement === 'ratios'"
+            label="Valuation & Financial Health Multiples"
+            index="F5"
+            meta="Multiples"
+          >
             <div class="ratios-multiples-grid">
               <div class="ratio-card">
                 <span class="ratio-label label">Trailing P/E</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.pe_trailing != null ? `${finData.ratios.pe_trailing}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.pe_trailing != null ? `${finData.ratios.pe_trailing}x` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Market Cap / Net Income</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Forward P/E</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.pe_forward != null ? `${finData.ratios.pe_forward}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.pe_forward != null ? `${finData.ratios.pe_forward}x` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">12M Forward Earnings</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Price to Sales (P/S)</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.ps_trailing != null ? `${finData.ratios.ps_trailing}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.ps_trailing != null ? `${finData.ratios.ps_trailing}x` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Market Cap / TTM Revenue</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Price to Book (P/B)</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.pb_trailing != null ? `${finData.ratios.pb_trailing}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.pb_trailing != null ? `${finData.ratios.pb_trailing}x` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Market Cap / Equity</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">EV / EBITDA</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.ev_ebitda != null ? `${finData.ratios.ev_ebitda}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.ev_ebitda != null ? `${finData.ratios.ev_ebitda}x` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Enterprise Val / EBITDA</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">EV / Revenue</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.ev_revenue != null ? `${finData.ratios.ev_revenue}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.ev_revenue != null ? `${finData.ratios.ev_revenue}x` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Enterprise Val / Sales</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Debt to Equity</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.debt_to_equity != null ? finData.ratios.debt_to_equity : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.debt_to_equity != null ? finData.ratios.debt_to_equity : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Total Debt / Total Equity</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Current Ratio</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.current_ratio != null ? finData.ratios.current_ratio : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.current_ratio != null ? finData.ratios.current_ratio : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Current Assets / Liabilities</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Return on Equity (ROE)</span>
-                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roe)">{{ finData.ratios?.roe != null ? `${finData.ratios.roe}%` : DASH }}</strong>
+                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roe)">{{
+                  finData.ratios?.roe != null ? `${finData.ratios.roe}%` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Net Income / Equity</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Return on Assets (ROA)</span>
-                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roa)">{{ finData.ratios?.roa != null ? `${finData.ratios.roa}%` : DASH }}</strong>
+                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roa)">{{
+                  finData.ratios?.roa != null ? `${finData.ratios.roa}%` : DASH
+                }}</strong>
                 <span class="ratio-desc label dim">Net Income / Total Assets</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">YoY Revenue Growth</span>
-                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.revenue_growth_yoy)">{{ finData.ratios?.revenue_growth_yoy != null ? `+${finData.ratios.revenue_growth_yoy}%` : DASH }}</strong>
+                <strong
+                  class="ratio-value fig"
+                  :class="getGrowthTone(finData.ratios?.revenue_growth_yoy)"
+                  >{{
+                    finData.ratios?.revenue_growth_yoy != null
+                      ? `+${finData.ratios.revenue_growth_yoy}%`
+                      : DASH
+                  }}</strong
+                >
                 <span class="ratio-desc label dim">Annualized Topline Change</span>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Free Cash Flow</span>
-                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.free_cash_flow)">{{ formatBigUsd(finData.ratios?.free_cash_flow) }}</strong>
+                <strong
+                  class="ratio-value fig"
+                  :class="getGrowthTone(finData.ratios?.free_cash_flow)"
+                  >{{ formatBigUsd(finData.ratios?.free_cash_flow) }}</strong
+                >
                 <span class="ratio-desc label dim">Operating Cash - CapEx</span>
               </div>
             </div>
@@ -1680,39 +2041,51 @@ const finChartData = computed(() => {
                     <div
                       v-if="finChartData.income.revenue[idx] != null"
                       class="fin-bar rev"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.income.revenue[idx]!) / finChartData.income.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.income.revenue[idx]!) / finChartData.income.maxVal) * 100)}%`,
+                      }"
                       :title="`Revenue: ${formatBigUsd(finChartData.income.revenue[idx])}`"
                     />
                     <div
                       v-if="finChartData.income.grossProfit[idx] != null"
                       class="fin-bar gross"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.income.grossProfit[idx]!) / finChartData.income.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.income.grossProfit[idx]!) / finChartData.income.maxVal) * 100)}%`,
+                      }"
                       :title="`Gross Profit: ${formatBigUsd(finChartData.income.grossProfit[idx])}`"
                     />
                     <div
                       v-if="finChartData.income.operatingIncome[idx] != null"
                       class="fin-bar op"
                       :class="finChartData.income.operatingIncome[idx]! >= 0 ? 'pos' : 'neg'"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.income.operatingIncome[idx]!) / finChartData.income.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.income.operatingIncome[idx]!) / finChartData.income.maxVal) * 100)}%`,
+                      }"
                       :title="`Operating Income: ${formatBigUsd(finChartData.income.operatingIncome[idx])}`"
                     />
                     <div
                       v-if="finChartData.income.netIncome[idx] != null"
                       class="fin-bar net"
                       :class="finChartData.income.netIncome[idx]! >= 0 ? 'pos' : 'neg'"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.income.netIncome[idx]!) / finChartData.income.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.income.netIncome[idx]!) / finChartData.income.maxVal) * 100)}%`,
+                      }"
                       :title="`Net Income: ${formatBigUsd(finChartData.income.netIncome[idx])}`"
                     />
                   </div>
                   <span class="fin-col-lbl label">{{ finChartData.formattedPeriods[idx] }}</span>
-                  <span class="fin-col-val fig">{{ formatBigUsd(finChartData.income.revenue[idx]) }}</span>
+                  <span class="fin-col-val fig">{{
+                    formatBigUsd(finChartData.income.revenue[idx])
+                  }}</span>
                 </div>
               </div>
             </div>
             <div v-else class="institutional-unavailable-container">
               <span class="unavail-eyebrow label dim">STATEMENT VISUALIZATION</span>
               <h3 class="unavail-title lab">Income Statement Chart Data Unavailable</h3>
-              <p class="unavail-desc">Multi-period chart metrics could not be rendered for {{ symbol }}.</p>
+              <p class="unavail-desc">
+                Multi-period chart metrics could not be rendered for {{ symbol }}.
+              </p>
               <div class="unavail-meta label dim">
                 <span>Upstream Source: <strong>SEC EDGAR & yfinance</strong></span>
               </div>
@@ -1730,7 +2103,9 @@ const finChartData = computed(() => {
               <div class="fin-chart-legend">
                 <span class="chart-leg-item"><i class="leg-swatch assets" /> Total Assets</span>
                 <span class="chart-leg-item"><i class="leg-swatch liab" /> Total Liabilities</span>
-                <span class="chart-leg-item"><i class="leg-swatch equity" /> Stockholders Equity</span>
+                <span class="chart-leg-item"
+                  ><i class="leg-swatch equity" /> Stockholders Equity</span
+                >
               </div>
               <div class="fin-bars-timeline">
                 <div v-for="(p, idx) in finChartData.periods" :key="p" class="fin-timeline-col">
@@ -1738,31 +2113,41 @@ const finChartData = computed(() => {
                     <div
                       v-if="finChartData.balance.assets[idx] != null"
                       class="fin-bar assets"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.balance.assets[idx]!) / finChartData.balance.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.balance.assets[idx]!) / finChartData.balance.maxVal) * 100)}%`,
+                      }"
                       :title="`Assets: ${formatBigUsd(finChartData.balance.assets[idx])}`"
                     />
                     <div
                       v-if="finChartData.balance.liabilities[idx] != null"
                       class="fin-bar liab"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.balance.liabilities[idx]!) / finChartData.balance.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.balance.liabilities[idx]!) / finChartData.balance.maxVal) * 100)}%`,
+                      }"
                       :title="`Liabilities: ${formatBigUsd(finChartData.balance.liabilities[idx])}`"
                     />
                     <div
                       v-if="finChartData.balance.equity[idx] != null"
                       class="fin-bar equity"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.balance.equity[idx]!) / finChartData.balance.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.balance.equity[idx]!) / finChartData.balance.maxVal) * 100)}%`,
+                      }"
                       :title="`Equity: ${formatBigUsd(finChartData.balance.equity[idx])}`"
                     />
                   </div>
                   <span class="fin-col-lbl label">{{ finChartData.formattedPeriods[idx] }}</span>
-                  <span class="fin-col-val fig">{{ formatBigUsd(finChartData.balance.assets[idx]) }}</span>
+                  <span class="fin-col-val fig">{{
+                    formatBigUsd(finChartData.balance.assets[idx])
+                  }}</span>
                 </div>
               </div>
             </div>
             <div v-else class="institutional-unavailable-container">
               <span class="unavail-eyebrow label dim">STATEMENT VISUALIZATION</span>
               <h3 class="unavail-title lab">Balance Sheet Chart Data Unavailable</h3>
-              <p class="unavail-desc">Balance Sheet chart metrics could not be rendered for {{ symbol }}.</p>
+              <p class="unavail-desc">
+                Balance Sheet chart metrics could not be rendered for {{ symbol }}.
+              </p>
               <div class="unavail-meta label dim">
                 <span>Upstream Source: <strong>SEC EDGAR & yfinance</strong></span>
               </div>
@@ -1780,7 +2165,9 @@ const finChartData = computed(() => {
               <div class="fin-chart-legend">
                 <span class="chart-leg-item"><i class="leg-swatch ocf" /> Operating Cash Flow</span>
                 <span class="chart-leg-item"><i class="leg-swatch fcf" /> Free Cash Flow</span>
-                <span class="chart-leg-item"><i class="leg-swatch capex" /> Capital Expenditures</span>
+                <span class="chart-leg-item"
+                  ><i class="leg-swatch capex" /> Capital Expenditures</span
+                >
               </div>
               <div class="fin-bars-timeline">
                 <div v-for="(p, idx) in finChartData.periods" :key="p" class="fin-timeline-col">
@@ -1788,32 +2175,42 @@ const finChartData = computed(() => {
                     <div
                       v-if="finChartData.cashFlow.operatingCashFlow[idx] != null"
                       class="fin-bar ocf"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.cashFlow.operatingCashFlow[idx]!) / finChartData.cashFlow.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.cashFlow.operatingCashFlow[idx]!) / finChartData.cashFlow.maxVal) * 100)}%`,
+                      }"
                       :title="`OCF: ${formatBigUsd(finChartData.cashFlow.operatingCashFlow[idx])}`"
                     />
                     <div
                       v-if="finChartData.cashFlow.freeCashFlow[idx] != null"
                       class="fin-bar fcf"
                       :class="finChartData.cashFlow.freeCashFlow[idx]! >= 0 ? 'pos' : 'neg'"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.cashFlow.freeCashFlow[idx]!) / finChartData.cashFlow.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.cashFlow.freeCashFlow[idx]!) / finChartData.cashFlow.maxVal) * 100)}%`,
+                      }"
                       :title="`FCF: ${formatBigUsd(finChartData.cashFlow.freeCashFlow[idx])}`"
                     />
                     <div
                       v-if="finChartData.cashFlow.capex[idx] != null"
                       class="fin-bar capex"
-                      :style="{ height: `${Math.max(4, (Math.abs(finChartData.cashFlow.capex[idx]!) / finChartData.cashFlow.maxVal) * 100)}%` }"
+                      :style="{
+                        height: `${Math.max(4, (Math.abs(finChartData.cashFlow.capex[idx]!) / finChartData.cashFlow.maxVal) * 100)}%`,
+                      }"
                       :title="`CapEx: ${formatBigUsd(finChartData.cashFlow.capex[idx])}`"
                     />
                   </div>
                   <span class="fin-col-lbl label">{{ finChartData.formattedPeriods[idx] }}</span>
-                  <span class="fin-col-val fig">{{ formatBigUsd(finChartData.cashFlow.operatingCashFlow[idx]) }}</span>
+                  <span class="fin-col-val fig">{{
+                    formatBigUsd(finChartData.cashFlow.operatingCashFlow[idx])
+                  }}</span>
                 </div>
               </div>
             </div>
             <div v-else class="institutional-unavailable-container">
               <span class="unavail-eyebrow label dim">STATEMENT VISUALIZATION</span>
               <h3 class="unavail-title lab">Cash Flow Chart Data Unavailable</h3>
-              <p class="unavail-desc">Cash Flow chart metrics could not be rendered for {{ symbol }}.</p>
+              <p class="unavail-desc">
+                Cash Flow chart metrics could not be rendered for {{ symbol }}.
+              </p>
               <div class="unavail-meta label dim">
                 <span>Upstream Source: <strong>SEC EDGAR & yfinance</strong></span>
               </div>
@@ -1822,9 +2219,17 @@ const finChartData = computed(() => {
 
           <!-- 4. Revenue Breakdown Charts -->
           <div v-else-if="finStatement === 'breakdown'" class="breakdown-grid">
-            <Panel label="Revenue by Business Segment" index="F4a" meta="Segment Allocation">
+            <Panel
+              label="Revenue by Business Segment"
+              index="F4a"
+              :meta="breakdownSourceMeta"
+            >
               <div v-if="finData.revenue_breakdown?.by_segment?.length" class="breakdown-list">
-                <div v-for="seg in finData.revenue_breakdown.by_segment" :key="seg.segment" class="breakdown-item">
+                <div
+                  v-for="seg in finData.revenue_breakdown.by_segment"
+                  :key="seg.segment"
+                  class="breakdown-item"
+                >
                   <div class="breakdown-item-top">
                     <span class="seg-name lab">{{ seg.segment }}</span>
                     <strong class="seg-val fig">{{ formatBigUsd(seg.revenue) }}</strong>
@@ -1833,8 +2238,12 @@ const finChartData = computed(() => {
                     <div class="breakdown-progress-fill" :style="{ width: `${seg.pct || 0}%` }" />
                   </div>
                   <div class="breakdown-item-sub">
-                    <span class="label dim">{{ seg.pct != null ? `${seg.pct}%` : DASH }} of total</span>
-                    <span v-if="seg.growth_yoy" class="label pos">+{{ seg.growth_yoy }}% YoY Growth</span>
+                    <span class="label dim"
+                      >{{ seg.pct != null ? `${seg.pct}%` : DASH }} of total</span
+                    >
+                    <span v-if="seg.growth_yoy" class="label pos"
+                      >+{{ seg.growth_yoy }}% YoY Growth</span
+                    >
                   </div>
                 </div>
               </div>
@@ -1848,25 +2257,68 @@ const finChartData = computed(() => {
               </div>
             </Panel>
 
-            <Panel label="Revenue by Geography" index="F4b" meta="Geographic Allocation">
-              <div v-if="finData.revenue_breakdown?.by_geography?.length" class="breakdown-list">
-                <div v-for="geo in finData.revenue_breakdown.by_geography" :key="geo.region" class="breakdown-item">
-                  <div class="breakdown-item-top">
-                    <span class="seg-name lab">{{ geo.region }}</span>
-                    <strong class="seg-val fig">{{ formatBigUsd(geo.revenue) }}</strong>
+            <Panel
+              label="Revenue by Geography / Product"
+              index="F4b"
+              :meta="breakdownSourceMeta"
+            >
+              <div
+                v-if="finData.revenue_breakdown?.by_geography?.length || finData.revenue_breakdown?.by_product?.length"
+                class="breakdown-list"
+              >
+                <template v-if="finData.revenue_breakdown?.by_geography?.length">
+                  <div
+                    v-for="geo in finData.revenue_breakdown.by_geography"
+                    :key="geo.region"
+                    class="breakdown-item"
+                  >
+                    <div class="breakdown-item-top">
+                      <span class="seg-name lab">{{ geo.region }}</span>
+                      <strong class="seg-val fig">{{ formatBigUsd(geo.revenue) }}</strong>
+                    </div>
+                    <div class="breakdown-progress-track">
+                      <div
+                        class="breakdown-progress-fill"
+                        :style="{ width: `${geo.pct || 0}%` }"
+                      />
+                    </div>
+                    <div class="breakdown-item-sub">
+                      <span class="label dim"
+                        >{{ geo.pct != null ? `${geo.pct}%` : DASH }} of total</span
+                      >
+                    </div>
                   </div>
-                  <div class="breakdown-progress-track">
-                    <div class="breakdown-progress-fill" :style="{ width: `${geo.pct || 0}%` }" />
+                </template>
+                <template v-else>
+                  <div
+                    v-for="prod in finData.revenue_breakdown?.by_product || []"
+                    :key="prod.segment"
+                    class="breakdown-item"
+                  >
+                    <div class="breakdown-item-top">
+                      <span class="seg-name lab">{{ prod.segment }}</span>
+                      <strong class="seg-val fig">{{ formatBigUsd(prod.revenue) }}</strong>
+                    </div>
+                    <div class="breakdown-progress-track">
+                      <div
+                        class="breakdown-progress-fill"
+                        :style="{ width: `${prod.pct || 0}%` }"
+                      />
+                    </div>
+                    <div class="breakdown-item-sub">
+                      <span class="label dim"
+                        >{{ prod.pct != null ? `${prod.pct}%` : DASH }} of total</span
+                      >
+                    </div>
                   </div>
-                  <div class="breakdown-item-sub">
-                    <span class="label dim">{{ geo.pct != null ? `${geo.pct}%` : DASH }} of total</span>
-                  </div>
-                </div>
+                </template>
               </div>
               <div v-else class="institutional-unavailable-container">
                 <span class="unavail-eyebrow label dim">GEOGRAPHY DISCLOSURES</span>
                 <h3 class="unavail-title lab">Geographic Breakdown Unavailable</h3>
-                <p class="unavail-desc">Geographical revenue reporting is not provided for {{ symbol }}.</p>
+                <p class="unavail-desc">
+                  Geographical revenue reporting is not provided for {{ symbol }}.
+                </p>
                 <div class="unavail-meta label dim">
                   <span>Source: <strong>SEC Form 10-K Notes</strong></span>
                 </div>
@@ -1875,55 +2327,90 @@ const finChartData = computed(() => {
           </div>
 
           <!-- 5. Valuation Ratios & Health -->
-          <Panel v-else-if="finStatement === 'ratios'" label="Valuation & Financial Health Multiples" index="F5" meta="Multiples">
+          <Panel
+            v-else-if="finStatement === 'ratios'"
+            label="Valuation & Financial Health Multiples"
+            index="F5"
+            meta="Multiples"
+          >
             <div class="ratios-multiples-grid">
               <div class="ratio-card">
                 <span class="ratio-label label">Trailing P/E</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.pe_trailing != null ? `${finData.ratios.pe_trailing}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.pe_trailing != null ? `${finData.ratios.pe_trailing}x` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Forward P/E</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.pe_forward != null ? `${finData.ratios.pe_forward}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.pe_forward != null ? `${finData.ratios.pe_forward}x` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Price to Sales (P/S)</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.ps_trailing != null ? `${finData.ratios.ps_trailing}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.ps_trailing != null ? `${finData.ratios.ps_trailing}x` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Price to Book (P/B)</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.pb_trailing != null ? `${finData.ratios.pb_trailing}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.pb_trailing != null ? `${finData.ratios.pb_trailing}x` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">EV / EBITDA</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.ev_ebitda != null ? `${finData.ratios.ev_ebitda}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.ev_ebitda != null ? `${finData.ratios.ev_ebitda}x` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">EV / Revenue</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.ev_revenue != null ? `${finData.ratios.ev_revenue}x` : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.ev_revenue != null ? `${finData.ratios.ev_revenue}x` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Debt to Equity</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.debt_to_equity != null ? finData.ratios.debt_to_equity : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.debt_to_equity != null ? finData.ratios.debt_to_equity : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Current Ratio</span>
-                <strong class="ratio-value fig">{{ finData.ratios?.current_ratio != null ? finData.ratios.current_ratio : DASH }}</strong>
+                <strong class="ratio-value fig">{{
+                  finData.ratios?.current_ratio != null ? finData.ratios.current_ratio : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Return on Equity (ROE)</span>
-                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roe)">{{ finData.ratios?.roe != null ? `${finData.ratios.roe}%` : DASH }}</strong>
+                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roe)">{{
+                  finData.ratios?.roe != null ? `${finData.ratios.roe}%` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Return on Assets (ROA)</span>
-                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roa)">{{ finData.ratios?.roa != null ? `${finData.ratios.roa}%` : DASH }}</strong>
+                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.roa)">{{
+                  finData.ratios?.roa != null ? `${finData.ratios.roa}%` : DASH
+                }}</strong>
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">YoY Revenue Growth</span>
-                <strong class="ratio-value fig" :class="getGrowthTone(finData.ratios?.revenue_growth_yoy)">{{ finData.ratios?.revenue_growth_yoy != null ? `+${finData.ratios.revenue_growth_yoy}%` : DASH }}</strong>
+                <strong
+                  class="ratio-value fig"
+                  :class="getGrowthTone(finData.ratios?.revenue_growth_yoy)"
+                  >{{
+                    finData.ratios?.revenue_growth_yoy != null
+                      ? `+${finData.ratios.revenue_growth_yoy}%`
+                      : DASH
+                  }}</strong
+                >
               </div>
               <div class="ratio-card">
                 <span class="ratio-label label">Free Cash Flow</span>
-                <strong class="ratio-value fig">{{ formatBigUsd(finData.ratios?.free_cash_flow) }}</strong>
+                <strong class="ratio-value fig">{{
+                  formatBigUsd(finData.ratios?.free_cash_flow)
+                }}</strong>
               </div>
             </div>
           </Panel>
@@ -1933,7 +2420,10 @@ const finChartData = computed(() => {
       <div v-else class="institutional-unavailable-container">
         <span class="unavail-eyebrow label dim">FINANCIAL DATA FEED</span>
         <h3 class="unavail-title lab">Financial Statements Unavailable for {{ symbol }}</h3>
-        <p class="unavail-desc">Multi-period SEC EDGAR filings and financial ratio computations could not be loaded for {{ symbol }}.</p>
+        <p class="unavail-desc">
+          Multi-period SEC EDGAR filings and financial ratio computations could not be loaded for
+          {{ symbol }}.
+        </p>
         <div class="unavail-meta label dim">
           <span>Upstream Source: <strong>SEC EDGAR Direct & yfinance</strong></span>
         </div>
@@ -1944,144 +2434,85 @@ const finChartData = computed(() => {
     <!-- TAB 3: FORECAST                                                       -->
     <!-- ===================================================================== -->
     <section v-else-if="activeTab === 'forecast'" class="tab-content forecast-layout">
-      <article
-        class="model-forecast-highlight"
-        :class="{ focused: highlightModelForecast }"
-        data-testid="model-forecast-highlight-forecast"
-      >
-        <div class="mf-head">
-          <div>
-            <div class="mf-kicker label">Internal research model</div>
-            <h2 class="mf-title lab">What it should be</h2>
-          </div>
-          <span class="mf-timeframe label">{{ modelForecast.timeframe || DASH }}</span>
-        </div>
-        <p class="mf-note label dim">
-          Looks through future earnings and growth from the live mark — not the Street median target.
-        </p>
-        <div class="mf-metrics">
-          <div class="mf-metric">
-            <span class="mf-lbl label">Predicted price</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.predictedPrice) }}</strong>
-            <span v-if="modelForecast.spotUsed != null" class="mf-sub label dim">
-              from live mark {{ formatModelPredictedPrice(modelForecast.spotUsed) }}
-            </span>
-            <span
-              v-if="modelPredictionVsMark.hit === true"
-              class="mf-sub label pos"
-            >Mark has reached the predicted price</span>
-            <span
-              v-else-if="modelPredictionVsMark.hit === false && modelPredictionVsMark.remainingPct != null"
-              class="mf-sub label dim"
-            >{{ signedPct(modelPredictionVsMark.remainingPct, 1) }} to predicted</span>
-          </div>
-          <div class="mf-metric">
-            <span class="mf-lbl label">Forecast score</span>
-            <strong class="mf-val fig">{{ formatModelForecastScore(modelForecast.forecastScore) }}</strong>
-          </div>
-          <div class="mf-metric">
-            <span class="mf-lbl label">Look-through growth</span>
-            <strong class="mf-val fig">{{
-              modelForecast.lookthroughGrowth != null
-                ? `${(modelForecast.lookthroughGrowth * 100).toFixed(0)}%`
-                : DASH
-            }}</strong>
-          </div>
-          <div class="mf-metric mf-metric-wide">
-            <span class="mf-lbl label">Gearing up towards</span>
-            <strong class="mf-val lab">{{ formatGearingUp(modelForecast.gearingUpTowards) }}</strong>
-          </div>
-        </div>
-        <div class="mf-cases">
-          <div class="mf-case bear">
-            <span class="mf-lbl label">Bear case</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bear.price) }}</strong>
-            <p class="mf-thesis">{{ modelForecast.cases.bear.thesis || DASH }}</p>
-          </div>
-          <div class="mf-case base">
-            <span class="mf-lbl label">Base · {{ modelForecast.timeframe || 'horizon' }}</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.base.price) }}</strong>
-            <p class="mf-thesis">{{ modelForecast.cases.base.thesis || DASH }}</p>
-          </div>
-          <div class="mf-case bull">
-            <span class="mf-lbl label">Bull case</span>
-            <strong class="mf-val fig">{{ formatModelPredictedPrice(modelForecast.cases.bull.price) }}</strong>
-            <p class="mf-thesis">{{ modelForecast.cases.bull.thesis || DASH }}</p>
-          </div>
-        </div>
-        <div v-if="caseRange" class="mf-range" data-testid="model-forecast-range-forecast">
-          <div class="mf-range-track">
-            <span class="mf-range-span" :style="{ left: caseRange.spanLeft, width: caseRange.spanWidth }" />
-            <span
-              v-for="m in caseRange.marks"
-              :key="`fc-${m.key}`"
-              class="mf-range-mark"
-              :class="m.key"
-              :style="{ left: m.pct }"
-              :title="m.title"
-            />
-          </div>
-          <div class="mf-range-caption label">
-            <span v-for="m in caseRange.marks" :key="`fcc-${m.key}`" class="mf-range-cap" :class="m.key">
-              {{ m.label }} {{ formatModelPredictedPrice(m.price) }}
-            </span>
-          </div>
-        </div>
-        <div class="mf-factors">
-          <span class="mf-lbl label">Factors</span>
-          <ul v-if="modelForecast.factors.length" class="mf-factor-list">
-            <li v-for="f in modelForecast.factors" :key="f.label" class="mf-factor">
-              <span class="mf-factor-name">{{ f.label }}</span>
-              <span class="mf-factor-val fig" :class="f.tone">{{ f.display }}</span>
-            </li>
-          </ul>
-          <p v-else class="mf-thesis dim">{{ DASH }}</p>
-        </div>
-      </article>
+      <ModelForecastCard
+        id-suffix="-forecast"
+        :forecast="modelForecast"
+        :case-range="caseRange"
+        :prediction-vs-mark="modelPredictionVsMark"
+        :focused="highlightModelForecast"
+      />
 
       <div class="forecast-top-grid">
         <!-- Ratings Breakdown -->
         <Panel
           label="Analyst Ratings Consensus"
           index="T1"
-          :meta="profile?.forecast?.analyst_count != null ? `${profile.forecast.analyst_count} RATINGS` : (profile?.forecast?.consensus_rating || DASH)"
+          :meta="
+            profile?.forecast?.analyst_count != null
+              ? `${profile.forecast.analyst_count} RATINGS`
+              : profile?.forecast?.consensus_rating || DASH
+          "
         >
-          <div v-if="profile?.forecast?.recommendations || profile?.forecast?.consensus_rating" class="forecast-rating-box">
+          <div
+            v-if="profile?.forecast?.recommendations || profile?.forecast?.consensus_rating"
+            class="forecast-rating-box"
+          >
             <div class="rating-consensus-hero">
-              <strong class="consensus-badge lab" :class="forecastRatingTone(profile.forecast.consensus_rating)">
+              <strong
+                class="consensus-badge lab"
+                :class="forecastRatingTone(profile.forecast.consensus_rating)"
+              >
                 {{ profile.forecast.consensus_rating || DASH }}
               </strong>
               <span class="consensus-sub label dim">
-                {{ profile.forecast.recommendation_mean != null ? `Score: ${profile.forecast.recommendation_mean} / 5.0 (1.0 = Max Conviction)` : 'Score: —' }}
+                {{
+                  profile.forecast.recommendation_mean != null
+                    ? `Score: ${profile.forecast.recommendation_mean} / 5.0 (1.0 = Max Conviction)`
+                    : 'Score: —'
+                }}
               </span>
             </div>
             <div v-if="profile.forecast.recommendations" class="rec-distribution-bars">
               <div class="rec-bar-item">
                 <span class="rec-lbl label pos">Strong Buy</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.strong_buy ?? DASH }}</span>
+                <span class="rec-count fig">{{
+                  profile.forecast.recommendations.strong_buy ?? DASH
+                }}</span>
               </div>
               <div class="rec-bar-item">
                 <span class="rec-lbl label pos">Buy</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.buy ?? DASH }}</span>
+                <span class="rec-count fig">{{
+                  profile.forecast.recommendations.buy ?? DASH
+                }}</span>
               </div>
               <div class="rec-bar-item">
                 <span class="rec-lbl label">Hold</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.hold ?? DASH }}</span>
+                <span class="rec-count fig">{{
+                  profile.forecast.recommendations.hold ?? DASH
+                }}</span>
               </div>
               <div class="rec-bar-item">
                 <span class="rec-lbl label neg">Sell</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.sell ?? DASH }}</span>
+                <span class="rec-count fig">{{
+                  profile.forecast.recommendations.sell ?? DASH
+                }}</span>
               </div>
               <div class="rec-bar-item">
                 <span class="rec-lbl label neg">Strong Sell</span>
-                <span class="rec-count fig">{{ profile.forecast.recommendations.strong_sell ?? profile.forecast.recommendations.underperform ?? DASH }}</span>
+                <span class="rec-count fig">{{
+                  profile.forecast.recommendations.strong_sell ??
+                  profile.forecast.recommendations.underperform ??
+                  DASH
+                }}</span>
               </div>
             </div>
           </div>
           <div v-else class="institutional-unavailable-container">
             <span class="unavail-eyebrow label dim">CONSENSUS RATINGS</span>
             <h3 class="unavail-title lab">Analyst Ratings Unavailable for {{ symbol }}</h3>
-            <p class="unavail-desc">Wall Street analyst consensus coverage is currently not available for this symbol.</p>
+            <p class="unavail-desc">
+              Wall Street analyst consensus coverage is currently not available for this symbol.
+            </p>
             <div class="unavail-meta label dim">
               <span>Source: <strong>Wall Street Consensus Aggregators</strong></span>
             </div>
@@ -2089,8 +2520,19 @@ const finChartData = computed(() => {
         </Panel>
 
         <!-- Price Target Meter -->
-        <Panel label="12-Month Price Targets" index="T2" :meta="profile?.forecast?.target_price_median != null ? `MEDIAN ${usd(profile.forecast.target_price_median)}` : DASH">
-          <div v-if="profile?.forecast?.target_price_median != null" class="price-target-meter-card">
+        <Panel
+          label="12-Month Price Targets"
+          index="T2"
+          :meta="
+            profile?.forecast?.target_price_median != null
+              ? `MEDIAN ${usd(profile.forecast.target_price_median)}`
+              : DASH
+          "
+        >
+          <div
+            v-if="profile?.forecast?.target_price_median != null"
+            class="price-target-meter-card"
+          >
             <div class="pt-values-row">
               <div class="pt-val-item">
                 <span class="pt-lbl label dim">Lowest Target</span>
@@ -2098,8 +2540,14 @@ const finChartData = computed(() => {
               </div>
               <div class="pt-val-item highlight">
                 <span class="pt-lbl label pos">Median Target</span>
-                <strong class="pt-num fig pos">{{ usd(profile.forecast.target_price_median) }}</strong>
-                <span v-if="profile.forecast.upside_pct != null" class="pt-upside label" :class="getGrowthTone(profile.forecast.upside_pct)">
+                <strong class="pt-num fig pos">{{
+                  usd(profile.forecast.target_price_median)
+                }}</strong>
+                <span
+                  v-if="profile.forecast.upside_pct != null"
+                  class="pt-upside label"
+                  :class="getGrowthTone(profile.forecast.upside_pct)"
+                >
                   {{ signedPct(profile.forecast.upside_pct, 1) }} vs mark
                 </span>
                 <span v-else class="pt-upside label dim">—</span>
@@ -2111,7 +2559,10 @@ const finChartData = computed(() => {
             </div>
             <div v-if="streetTargetScale" class="pt-gauge-track">
               <div
-                v-if="gaugeLeftPct(profile.forecast.target_price_low) && gaugeLeftPct(profile.forecast.target_price_high)"
+                v-if="
+                  gaugeLeftPct(profile.forecast.target_price_low) &&
+                  gaugeLeftPct(profile.forecast.target_price_high)
+                "
                 class="pt-gauge-range"
                 :style="{
                   left: gaugeLeftPct(profile.forecast.target_price_low)!,
@@ -2142,7 +2593,9 @@ const finChartData = computed(() => {
           <div v-else class="institutional-unavailable-container">
             <span class="unavail-eyebrow label dim">PRICE TARGETS</span>
             <h3 class="unavail-title lab">Price Target Disclosures Unavailable</h3>
-            <p class="unavail-desc">12-month forward price target models are not reported for {{ symbol }}.</p>
+            <p class="unavail-desc">
+              12-month forward price target models are not reported for {{ symbol }}.
+            </p>
             <div class="unavail-meta label dim">
               <span>Source: <strong>Consensus Equity Research</strong></span>
             </div>
@@ -2153,7 +2606,11 @@ const finChartData = computed(() => {
       <Panel
         label="Analyst Price Target Estimates"
         index="T2b"
-        :meta="streetEstimates.length ? `${profile?.forecast?.estimates_hit ?? 0} of ${streetEstimates.length} reached` : DASH"
+        :meta="
+          streetEstimates.length
+            ? `${profile?.forecast?.estimates_hit ?? 0} of ${streetEstimates.length} reached`
+            : DASH
+        "
       >
         <div v-if="streetEstimates.length" class="table-scroll-container analyst-estimates-table">
           <table class="grid">
@@ -2172,18 +2629,17 @@ const finChartData = computed(() => {
               <tr v-for="est in streetEstimates" :key="`${est.firm}-${est.date}-${est.target}`">
                 <td class="dim fig">{{ est.date || DASH }}</td>
                 <td class="lab bold">{{ est.firm }}</td>
-                <td class="fig" :class="forecastRatingTone(est.current)">{{ est.current || DASH }}</td>
+                <td class="fig" :class="forecastRatingTone(est.current)">
+                  {{ est.current || DASH }}
+                </td>
                 <td class="fig">{{ usd(est.target) }}</td>
                 <td class="dim fig">{{ usd(est.prior_target) }}</td>
                 <td class="fig" :class="getGrowthTone(est.vs_mark_pct)">
                   {{ est.vs_mark_pct != null ? signedPct(est.vs_mark_pct, 1) : DASH }}
                 </td>
                 <td>
-                  <span
-                    class="kind label"
-                    :class="est.hit === true ? 'pos' : 'dim'"
-                  >
-                    {{ est.hit === true ? 'Reached' : (est.hit === false ? 'Open' : DASH) }}
+                  <span class="kind label" :class="est.hit === true ? 'pos' : 'dim'">
+                    {{ est.hit === true ? 'Reached' : est.hit === false ? 'Open' : DASH }}
                   </span>
                 </td>
               </tr>
@@ -2193,7 +2649,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">FIRM TARGETS</span>
           <h3 class="unavail-title lab">No Individual Price Targets Reported</h3>
-          <p class="unavail-desc">Per-firm 12-month price targets were not returned for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            Per-firm 12-month price targets were not returned for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>Yahoo Finance upgrades / downgrades tape</strong></span>
           </div>
@@ -2208,19 +2666,39 @@ const finChartData = computed(() => {
       >
         <div class="insider-table-filters">
           <div class="seg">
-            <button class="seg-b label" :class="{ on: forecastActionFilter === 'all' }" @click="forecastActionFilter = 'all'">
+            <button
+              class="seg-b label"
+              :class="{ on: forecastActionFilter === 'all' }"
+              @click="forecastActionFilter = 'all'"
+            >
               All ({{ revisionsCounts.all }})
             </button>
-            <button class="seg-b label" :class="{ on: forecastActionFilter === 'upgrade' }" @click="forecastActionFilter = 'upgrade'">
+            <button
+              class="seg-b label"
+              :class="{ on: forecastActionFilter === 'upgrade' }"
+              @click="forecastActionFilter = 'upgrade'"
+            >
               Upgrades ({{ revisionsCounts.upgrade }})
             </button>
-            <button class="seg-b label" :class="{ on: forecastActionFilter === 'initiate' }" @click="forecastActionFilter = 'initiate'">
+            <button
+              class="seg-b label"
+              :class="{ on: forecastActionFilter === 'initiate' }"
+              @click="forecastActionFilter = 'initiate'"
+            >
               Initiations ({{ revisionsCounts.initiate }})
             </button>
-            <button class="seg-b label" :class="{ on: forecastActionFilter === 'maintain' }" @click="forecastActionFilter = 'maintain'">
+            <button
+              class="seg-b label"
+              :class="{ on: forecastActionFilter === 'maintain' }"
+              @click="forecastActionFilter = 'maintain'"
+            >
               Maintains ({{ revisionsCounts.maintain }})
             </button>
-            <button class="seg-b label" :class="{ on: forecastActionFilter === 'downgrade' }" @click="forecastActionFilter = 'downgrade'">
+            <button
+              class="seg-b label"
+              :class="{ on: forecastActionFilter === 'downgrade' }"
+              @click="forecastActionFilter = 'downgrade'"
+            >
               Downgrades ({{ revisionsCounts.downgrade }})
             </button>
           </div>
@@ -2252,15 +2730,29 @@ const finChartData = computed(() => {
                   <span
                     class="kind label"
                     :class="
-                      rev.action?.toLowerCase().includes('upgrade') || rev.action?.toLowerCase().includes('initiat') || rev.action?.toLowerCase() === 'up'
+                      rev.action?.toLowerCase().includes('upgrade') ||
+                      rev.action?.toLowerCase().includes('initiat') ||
+                      rev.action?.toLowerCase() === 'up'
                         ? 'pos'
-                        : (rev.action?.toLowerCase().includes('downgrade') || rev.action?.toLowerCase() === 'down' ? 'neg' : 'dim')
+                        : rev.action?.toLowerCase().includes('downgrade') ||
+                            rev.action?.toLowerCase() === 'down'
+                          ? 'neg'
+                          : 'dim'
                     "
                   >
                     {{ rev.action || DASH }}
                   </span>
                 </td>
-                <td class="fig" :class="/buy|outperform|overweight|positive/i.test(rev.current || rev.to_grade || '') ? 'pos' : (/sell|underperform|underweight/i.test(rev.current || rev.to_grade || '') ? 'neg' : 'dim')">
+                <td
+                  class="fig"
+                  :class="
+                    /buy|outperform|overweight|positive/i.test(rev.current || rev.to_grade || '')
+                      ? 'pos'
+                      : /sell|underperform|underweight/i.test(rev.current || rev.to_grade || '')
+                        ? 'neg'
+                        : 'dim'
+                  "
+                >
                   {{ rev.current || rev.to_grade || DASH }}
                 </td>
                 <td class="dim fig">{{ rev.previous || rev.from_grade || DASH }}</td>
@@ -2273,7 +2765,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">REVISIONS TAPE</span>
           <h3 class="unavail-title lab">No Analyst Ratings Match Criteria</h3>
-          <p class="unavail-desc">No rating upgrades or downgrades match the selected filter for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            No rating upgrades or downgrades match the selected filter for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>Wall Street Equity Research Coverage Ledger</strong></span>
           </div>
@@ -2295,15 +2789,21 @@ const finChartData = computed(() => {
         </div>
         <div class="kpi-card">
           <span class="kpi-lbl label">Total Purchases ($)</span>
-          <strong class="kpi-val fig pos">{{ formatBigUsd(insData?.summary?.buy_volume_usd) }}</strong>
+          <strong class="kpi-val fig pos">{{
+            formatBigUsd(insData?.summary?.buy_volume_usd)
+          }}</strong>
         </div>
         <div class="kpi-card">
           <span class="kpi-lbl label">Total Sales ($)</span>
-          <strong class="kpi-val fig neg">{{ formatBigUsd(insData?.summary?.sell_volume_usd) }}</strong>
+          <strong class="kpi-val fig neg">{{
+            formatBigUsd(insData?.summary?.sell_volume_usd)
+          }}</strong>
         </div>
         <div class="kpi-card">
           <span class="kpi-lbl label">Form 4 Filings</span>
-          <strong class="kpi-val fig">{{ insData?.summary?.total_transactions != null ? insData.summary.total_transactions : DASH }}</strong>
+          <strong class="kpi-val fig">{{
+            insData?.summary?.total_transactions != null ? insData.summary.total_transactions : DASH
+          }}</strong>
         </div>
       </div>
 
@@ -2329,7 +2829,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">QUARTERLY SENTIMENT</span>
           <h3 class="unavail-title lab">Quarterly Net Insider Data Unavailable</h3>
-          <p class="unavail-desc">Historical quarterly net insider volume breakdown is not available for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            Historical quarterly net insider volume breakdown is not available for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC Form 4 Archives</strong></span>
           </div>
@@ -2337,12 +2839,34 @@ const finChartData = computed(() => {
       </Panel>
 
       <!-- Insider Trades Table with Filters -->
-      <Panel label="SEC Form 4 Insider Trades Tape" index="I2" :meta="`${filteredTransactions.length} Transactions`">
+      <Panel
+        label="SEC Form 4 Insider Trades Tape"
+        index="I2"
+        :meta="`${filteredTransactions.length} Transactions`"
+      >
         <div class="insider-table-filters">
           <div class="seg">
-            <button class="seg-b label" :class="{ on: insiderTypeFilter === 'all' }" @click="insiderTypeFilter = 'all'">All</button>
-            <button class="seg-b label" :class="{ on: insiderTypeFilter === 'buy' }" @click="insiderTypeFilter = 'buy'">Buys Only</button>
-            <button class="seg-b label" :class="{ on: insiderTypeFilter === 'sell' }" @click="insiderTypeFilter = 'sell'">Sales Only</button>
+            <button
+              class="seg-b label"
+              :class="{ on: insiderTypeFilter === 'all' }"
+              @click="insiderTypeFilter = 'all'"
+            >
+              All
+            </button>
+            <button
+              class="seg-b label"
+              :class="{ on: insiderTypeFilter === 'buy' }"
+              @click="insiderTypeFilter = 'buy'"
+            >
+              Buys Only
+            </button>
+            <button
+              class="seg-b label"
+              :class="{ on: insiderTypeFilter === 'sell' }"
+              @click="insiderTypeFilter = 'sell'"
+            >
+              Sales Only
+            </button>
           </div>
           <input
             v-model="insiderSearchQuery"
@@ -2372,7 +2896,10 @@ const finChartData = computed(() => {
                 <td class="lab bold">{{ tx.insider_name || DASH }}</td>
                 <td class="dim">{{ tx.relationship || DASH }}</td>
                 <td>
-                  <span class="kind label" :class="tx.transaction_type === 'Purchase' ? 'pos' : 'neg'">
+                  <span
+                    class="kind label"
+                    :class="tx.transaction_type === 'Purchase' ? 'pos' : 'neg'"
+                  >
                     {{ tx.transaction_type ? tx.transaction_type.toUpperCase() : DASH }}
                   </span>
                 </td>
@@ -2381,10 +2908,15 @@ const finChartData = computed(() => {
                 <td class="fig" :class="tx.transaction_type === 'Purchase' ? 'pos' : 'neg'">
                   {{ formatBigUsd(tx.value) }}
                 </td>
-                <td class="fig dim">{{ tx.shares_held_after != null ? tx.shares_held_after.toLocaleString() : DASH }}</td>
+                <td class="fig dim">
+                  {{ tx.shares_held_after != null ? tx.shares_held_after.toLocaleString() : DASH }}
+                </td>
                 <td>
                   <a
-                    :href="tx.sec_form_url || `https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(symbol)}&forms=4`"
+                    :href="
+                      tx.sec_form_url ||
+                      `https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(symbol)}&forms=4`
+                    "
                     target="_blank"
                     rel="noopener"
                     class="label link"
@@ -2399,7 +2931,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">FORM 4 TAPE</span>
           <h3 class="unavail-title lab">No Insider Transactions Recorded</h3>
-          <p class="unavail-desc">No Form 4 open market insider transactions match the selected criteria for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            No Form 4 open market insider transactions match the selected criteria for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC EDGAR Direct XML / Form 4 Feed</strong></span>
           </div>
@@ -2407,33 +2941,88 @@ const finChartData = computed(() => {
       </Panel>
 
       <!-- Strategy Backtest Card -->
-      <Panel label="Quantitative Insider Purchases Strategy" index="I3" meta="Hypothetical Systematic Model">
+      <Panel
+        label="Quantitative Insider Purchases Strategy"
+        index="I3"
+        meta="Hypothetical Systematic Model"
+      >
         <div v-if="insData?.strategy" class="strategy-backtest-card">
           <div class="strat-hero">
             <div>
-              <h3 class="strat-title lab">{{ insData.strategy.name || 'Insider Purchases Strategy' }}</h3>
-              <p class="strat-desc label dim">{{ insData.strategy.description || 'Systematic replication of multi-officer Form 4 cluster purchases.' }}</p>
+              <h3 class="strat-title lab">
+                {{ insData.strategy.name || 'Insider Purchases Strategy' }}
+              </h3>
+              <p class="strat-desc label dim">
+                {{
+                  insData.strategy.description ||
+                  'Systematic replication of multi-officer Form 4 cluster purchases.'
+                }}
+              </p>
             </div>
             <div class="strat-cagr">
               <span class="label dim">CAGR</span>
-              <strong class="cagr-fig fig pos">{{ insData.strategy.cagr != null ? signedPct(insData.strategy.cagr) : DASH }}</strong>
+              <strong class="cagr-fig fig pos">{{
+                insData.strategy.cagr != null ? signedPct(insData.strategy.cagr) : DASH
+              }}</strong>
             </div>
           </div>
           <div class="strat-metrics-grid">
-            <Readout label="30D Return" :value="signedPct(insData.strategy.return_30d)" :tone="tone(insData.strategy.return_30d)" size="sm" />
-            <Readout label="1Y Return" :value="signedPct(insData.strategy.return_1y)" :tone="tone(insData.strategy.return_1y)" size="sm" />
-            <Readout label="Max Drawdown" :value="pct(insData.strategy.max_drawdown)" tone="neg" size="sm" />
-            <Readout label="Sharpe" :value="insData.strategy.sharpe != null ? num(insData.strategy.sharpe, 2) : DASH" tone="pos" size="sm" />
-            <Readout label="Win Rate" :value="insData.strategy.win_rate != null ? pct(insData.strategy.win_rate, 1) : DASH" tone="pos" size="sm" />
-            <Readout label="Alpha" :value="signedPct(insData.strategy.alpha)" tone="pos" size="sm" />
-            <Readout label="Beta" :value="insData.strategy.beta != null ? num(insData.strategy.beta, 2) : DASH" size="sm" />
-            <Readout label="Total Trades" :value="insData.strategy.total_trades != null ? String(insData.strategy.total_trades) : DASH" size="sm" />
+            <Readout
+              label="30D Return"
+              :value="signedPct(insData.strategy.return_30d)"
+              :tone="tone(insData.strategy.return_30d)"
+              size="sm"
+            />
+            <Readout
+              label="1Y Return"
+              :value="signedPct(insData.strategy.return_1y)"
+              :tone="tone(insData.strategy.return_1y)"
+              size="sm"
+            />
+            <Readout
+              label="Max Drawdown"
+              :value="pct(insData.strategy.max_drawdown)"
+              tone="neg"
+              size="sm"
+            />
+            <Readout
+              label="Sharpe"
+              :value="insData.strategy.sharpe != null ? num(insData.strategy.sharpe, 2) : DASH"
+              tone="pos"
+              size="sm"
+            />
+            <Readout
+              label="Win Rate"
+              :value="insData.strategy.win_rate != null ? pct(insData.strategy.win_rate, 1) : DASH"
+              tone="pos"
+              size="sm"
+            />
+            <Readout
+              label="Alpha"
+              :value="signedPct(insData.strategy.alpha)"
+              tone="pos"
+              size="sm"
+            />
+            <Readout
+              label="Beta"
+              :value="insData.strategy.beta != null ? num(insData.strategy.beta, 2) : DASH"
+              size="sm"
+            />
+            <Readout
+              label="Total Trades"
+              :value="
+                insData.strategy.total_trades != null ? String(insData.strategy.total_trades) : DASH
+              "
+              size="sm"
+            />
           </div>
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">BACKTEST MATRIX</span>
           <h3 class="unavail-title lab">Insider Model Backtest Unavailable</h3>
-          <p class="unavail-desc">Quantitative backtest metrics are not available for this symbol configuration.</p>
+          <p class="unavail-desc">
+            Quantitative backtest metrics are not available for this symbol configuration.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>Systematic Signal Engine</strong></span>
           </div>
@@ -2453,7 +3042,9 @@ const finChartData = computed(() => {
         </div>
         <div class="kpi-card">
           <span class="kpi-lbl label">Institutional Ownership</span>
-          <strong class="kpi-val fig">{{ institutionKpis.reportedInstPct != null ? `${institutionKpis.reportedInstPct}%` : DASH }}</strong>
+          <strong class="kpi-val fig">{{
+            institutionKpis.reportedInstPct != null ? `${institutionKpis.reportedInstPct}%` : DASH
+          }}</strong>
         </div>
         <div class="kpi-card">
           <span class="kpi-lbl label">Top 5 Concentration</span>
@@ -2485,7 +3076,7 @@ const finChartData = computed(() => {
             <div class="seg">
               <span class="seg-label label dim">Per Page:</span>
               <button
-                v-for="size in ([10, 25, 50, 'all'] as const)"
+                v-for="size in [10, 25, 50, 'all'] as const"
                 :key="size"
                 class="seg-b label"
                 :class="{ on: institutionPageSize === size }"
@@ -2502,22 +3093,40 @@ const finChartData = computed(() => {
             <thead>
               <tr>
                 <th class="label sortable" @click="setInstitutionSort('holder')">
-                  Institution <span class="sort-arr">{{ institutionSortField === 'holder' ? (institutionSortAsc ? '↑' : '↓') : '↕' }}</span>
+                  Institution
+                  <span class="sort-arr">{{
+                    institutionSortField === 'holder' ? (institutionSortAsc ? '↑' : '↓') : '↕'
+                  }}</span>
                 </th>
                 <th class="label sortable" @click="setInstitutionSort('shares')">
-                  Shares Held <span class="sort-arr">{{ institutionSortField === 'shares' ? (institutionSortAsc ? '↑' : '↓') : '↕' }}</span>
+                  Shares Held
+                  <span class="sort-arr">{{
+                    institutionSortField === 'shares' ? (institutionSortAsc ? '↑' : '↓') : '↕'
+                  }}</span>
                 </th>
                 <th class="label sortable" @click="setInstitutionSort('change')">
-                  Last Quarter <span class="sort-arr">{{ institutionSortField === 'change' ? (institutionSortAsc ? '↑' : '↓') : '↕' }}</span>
+                  Last Quarter
+                  <span class="sort-arr">{{
+                    institutionSortField === 'change' ? (institutionSortAsc ? '↑' : '↓') : '↕'
+                  }}</span>
                 </th>
                 <th class="label sortable" @click="setInstitutionSort('pct_out')">
-                  % Outstanding <span class="sort-arr">{{ institutionSortField === 'pct_out' ? (institutionSortAsc ? '↑' : '↓') : '↕' }}</span>
+                  % Outstanding
+                  <span class="sort-arr">{{
+                    institutionSortField === 'pct_out' ? (institutionSortAsc ? '↑' : '↓') : '↕'
+                  }}</span>
                 </th>
                 <th class="label sortable" @click="setInstitutionSort('value')">
-                  Market Value <span class="sort-arr">{{ institutionSortField === 'value' ? (institutionSortAsc ? '↑' : '↓') : '↕' }}</span>
+                  Market Value
+                  <span class="sort-arr">{{
+                    institutionSortField === 'value' ? (institutionSortAsc ? '↑' : '↓') : '↕'
+                  }}</span>
                 </th>
                 <th class="label sortable" @click="setInstitutionSort('date')">
-                  Reported Date <span class="sort-arr">{{ institutionSortField === 'date' ? (institutionSortAsc ? '↑' : '↓') : '↕' }}</span>
+                  Reported Date
+                  <span class="sort-arr">{{
+                    institutionSortField === 'date' ? (institutionSortAsc ? '↑' : '↓') : '↕'
+                  }}</span>
                 </th>
               </tr>
             </thead>
@@ -2525,7 +3134,15 @@ const finChartData = computed(() => {
               <tr v-for="(inst, idx) in paginatedInstitutions" :key="idx">
                 <td class="lab bold">
                   <div class="inst-name-cell">
-                    <span class="inst-rank fig dim">#{{ (institutionPageSize === 'all' ? 0 : (institutionPage - 1) * Number(institutionPageSize)) + idx + 1 }}</span>
+                    <span class="inst-rank fig dim"
+                      >#{{
+                        (institutionPageSize === 'all'
+                          ? 0
+                          : (institutionPage - 1) * Number(institutionPageSize)) +
+                        idx +
+                        1
+                      }}</span
+                    >
                     <span>{{ inst.holder }}</span>
                   </div>
                 </td>
@@ -2535,7 +3152,12 @@ const finChartData = computed(() => {
                   <div class="pct-cell">
                     <span>{{ inst.pct_out != null ? `${inst.pct_out}%` : DASH }}</span>
                     <div class="pct-bar-track">
-                      <div class="pct-bar-fill" :style="{ width: `${holderPctBarWidth(inst.pct_out, institutionPctScale) * 100}%` }" />
+                      <div
+                        class="pct-bar-fill"
+                        :style="{
+                          width: `${holderPctBarWidth(inst.pct_out, institutionPctScale) * 100}%`,
+                        }"
+                      />
                     </div>
                   </div>
                 </td>
@@ -2546,9 +3168,15 @@ const finChartData = computed(() => {
           </table>
 
           <!-- Pagination Bar -->
-          <div v-if="institutionPageSize !== 'all' && totalInstitutionPages > 1" class="pagination-bar">
+          <div
+            v-if="institutionPageSize !== 'all' && totalInstitutionPages > 1"
+            class="pagination-bar"
+          >
             <span class="page-info label dim">
-              Showing {{ (institutionPage - 1) * Number(institutionPageSize) + 1 }}–{{ Math.min(filteredInstitutions.length, institutionPage * Number(institutionPageSize)) }} of {{ filteredInstitutions.length }}
+              Showing {{ (institutionPage - 1) * Number(institutionPageSize) + 1 }}–{{
+                Math.min(filteredInstitutions.length, institutionPage * Number(institutionPageSize))
+              }}
+              of {{ filteredInstitutions.length }}
             </span>
             <div class="page-nav-btns">
               <button
@@ -2559,7 +3187,9 @@ const finChartData = computed(() => {
               >
                 ← Prev
               </button>
-              <span class="page-indicator fig">{{ institutionPage }} / {{ totalInstitutionPages }}</span>
+              <span class="page-indicator fig"
+                >{{ institutionPage }} / {{ totalInstitutionPages }}</span
+              >
               <button
                 type="button"
                 class="seg-b label"
@@ -2574,7 +3204,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">13F HOLDINGS</span>
           <h3 class="unavail-title lab">No Institutional Records Match Criteria</h3>
-          <p class="unavail-desc">No 13F institutional holdings matched the search filter for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            No 13F institutional holdings matched the search filter for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC EDGAR Form 13F-HR Feeds</strong></span>
           </div>
@@ -2582,7 +3214,11 @@ const finChartData = computed(() => {
       </Panel>
 
       <!-- Top Mutual Fund & ETF Holders -->
-      <Panel label="Top Mutual Fund & ETF Holders" index="O2" :meta="`${ownData?.top_funds?.length || 0} Funds`">
+      <Panel
+        label="Top Mutual Fund & ETF Holders"
+        index="O2"
+        :meta="`${ownData?.top_funds?.length || 0} Funds`"
+      >
         <div v-if="ownData?.top_funds?.length" class="table-scroll-container">
           <table class="grid">
             <thead>
@@ -2604,7 +3240,12 @@ const finChartData = computed(() => {
                   <div class="pct-cell">
                     <span>{{ fund.pct_out != null ? `${fund.pct_out}%` : DASH }}</span>
                     <div class="pct-bar-track">
-                      <div class="pct-bar-fill" :style="{ width: `${holderPctBarWidth(fund.pct_out, fundPctScale) * 100}%` }" />
+                      <div
+                        class="pct-bar-fill"
+                        :style="{
+                          width: `${holderPctBarWidth(fund.pct_out, fundPctScale) * 100}%`,
+                        }"
+                      />
                     </div>
                   </div>
                 </td>
@@ -2617,7 +3258,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">MUTUAL FUND HOLDINGS</span>
           <h3 class="unavail-title lab">Mutual Fund Holdings Unavailable</h3>
-          <p class="unavail-desc">Registered fund portfolio holdings are not reported for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            Registered fund portfolio holdings are not reported for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC EDGAR N-PORT Disclosures</strong></span>
           </div>
@@ -2630,7 +3273,11 @@ const finChartData = computed(() => {
     <!-- ===================================================================== -->
     <section v-else-if="activeTab === 'government'" class="tab-content government-layout">
       <!-- Congressional Trades -->
-      <Panel label="Congressional Trading Activity" index="G1" :meta="`${govData?.congress?.length || 0} Disclosures`">
+      <Panel
+        label="Congressional Trading Activity"
+        index="G1"
+        :meta="`${govData?.congress?.length || 0} Disclosures`"
+      >
         <div v-if="govData?.congress?.length" class="table-scroll-container">
           <table class="grid">
             <thead>
@@ -2661,7 +3308,14 @@ const finChartData = computed(() => {
                 </td>
                 <td class="fig bold">{{ c.amount_range || DASH }}</td>
                 <td>
-                  <a v-if="c.source_url" :href="c.source_url" target="_blank" rel="noopener" class="label link">STOCK Act</a>
+                  <a
+                    v-if="c.source_url"
+                    :href="c.source_url"
+                    target="_blank"
+                    rel="noopener"
+                    class="label link"
+                    >STOCK Act</a
+                  >
                   <span v-else class="dim">—</span>
                 </td>
               </tr>
@@ -2670,16 +3324,29 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">STOCK ACT DISCLOSURES</span>
-          <h3 class="unavail-title lab">No Congressional Trades Disclosed for {{ symbol }}</h3>
-          <p class="unavail-desc">No U.S. House or Senate financial disclosures found for this symbol.</p>
+          <h3 class="unavail-title lab">Congressional Disclosures Not Connected</h3>
+          <p class="unavail-desc">
+            {{
+              govData?.reason ||
+              `No U.S. House or Senate financial disclosures found for ${symbol}.`
+            }}
+          </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>House & Senate Financial Disclosures (STOCK Act)</strong></span>
+            <span>Source: <strong>Not configured</strong></span>
           </div>
         </div>
       </Panel>
 
       <!-- Corporate Lobbying -->
-      <Panel label="Corporate Lobbying Disclosures" index="G2" :meta="govData?.lobbying?.total_spend_annual != null ? `Annual Spend: ${formatBigUsd(govData.lobbying.total_spend_annual)}` : DASH">
+      <Panel
+        label="Corporate Lobbying Disclosures"
+        index="G2"
+        :meta="
+          govData?.lobbying?.total_spend_annual != null
+            ? `Annual Spend: ${formatBigUsd(govData.lobbying.total_spend_annual)}`
+            : DASH
+        "
+      >
         <div v-if="govData?.lobbying?.filings?.length" class="table-scroll-container">
           <table class="grid">
             <thead>
@@ -2702,16 +3369,22 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">LOBBYING DISCLOSURES</span>
-          <h3 class="unavail-title lab">No Corporate Lobbying Filings for {{ symbol }}</h3>
-          <p class="unavail-desc">No Lobbying Disclosure Act (LDA) filings on record with the Senate Office of Public Records.</p>
+          <h3 class="unavail-title lab">Lobbying Disclosures Not Connected</h3>
+          <p class="unavail-desc">
+            {{ govData?.reason || `No LDA filings on record for ${symbol}.` }}
+          </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>Senate LDA Database</strong></span>
+            <span>Source: <strong>Not configured</strong></span>
           </div>
         </div>
       </Panel>
 
       <!-- Federal Government Contracts -->
-      <Panel label="Federal Government Contracts & Grants" index="G3" :meta="`${govData?.contracts?.length || 0} Awards`">
+      <Panel
+        label="Federal Government Contracts & Grants"
+        index="G3"
+        :meta="`${govData?.contracts?.length || 0} Awards`"
+      >
         <div v-if="govData?.contracts?.length" class="table-scroll-container">
           <table class="grid">
             <thead>
@@ -2736,16 +3409,23 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">FEDERAL CONTRACTS</span>
-          <h3 class="unavail-title lab">No Federal Contract Awards for {{ symbol }}</h3>
-          <p class="unavail-desc">No prime agency awards or federal contract obligations recorded in the current fiscal window.</p>
+          <h3 class="unavail-title lab">Federal Contract Data Not Connected</h3>
+          <p class="unavail-desc">
+            No prime agency awards or federal contract obligations recorded in the current fiscal
+            window.
+          </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>USASpending.gov Open API</strong></span>
+            <span>Source: <strong>Not configured</strong></span>
           </div>
         </div>
       </Panel>
 
       <!-- U.S. Patent Grants -->
-      <Panel label="U.S. Patent Grants" index="G4" :meta="`${govData?.patents?.length || 0} Patents`">
+      <Panel
+        label="U.S. Patent Grants"
+        index="G4"
+        :meta="`${govData?.patents?.length || 0} Patents`"
+      >
         <div v-if="govData?.patents?.length" class="table-scroll-container">
           <table class="grid">
             <thead>
@@ -2768,10 +3448,12 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">USPTO PATENTS</span>
-          <h3 class="unavail-title lab">No USPTO Patent Grants Found for {{ symbol }}</h3>
-          <p class="unavail-desc">No patent grants found assigned to the corporate entity in the USPTO open database.</p>
+          <h3 class="unavail-title lab">USPTO Patent Data Not Connected</h3>
+          <p class="unavail-desc">
+            No patent grants found assigned to the corporate entity in the USPTO open database.
+          </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>USPTO PatentsView Database</strong></span>
+            <span>Source: <strong>Not configured</strong></span>
           </div>
         </div>
       </Panel>
@@ -2786,17 +3468,29 @@ const finChartData = computed(() => {
         <div class="comp-summary-strip">
           <div class="comp-summary-card">
             <span class="label dim">Highest Paid Executive</span>
-            <strong class="comp-stat-val lab">{{ profile?.compensation?.highest_paid_name || DASH }}</strong>
-            <span class="comp-stat-sub fig pos">{{ profile?.compensation?.highest_paid_total != null ? `${formatBigUsd(profile.compensation.highest_paid_total)} / Year` : DASH }}</span>
+            <strong class="comp-stat-val lab">{{
+              profile?.compensation?.highest_paid_name || DASH
+            }}</strong>
+            <span class="comp-stat-sub fig pos">{{
+              profile?.compensation?.highest_paid_total != null
+                ? `${formatBigUsd(profile.compensation.highest_paid_total)} / Year`
+                : DASH
+            }}</span>
           </div>
           <div class="comp-summary-card">
             <span class="label dim">Median Employee Pay</span>
-            <strong class="comp-stat-val fig">{{ formatBigUsd(profile?.compensation?.median_employee_pay) }}</strong>
+            <strong class="comp-stat-val fig">{{
+              formatBigUsd(profile?.compensation?.median_employee_pay)
+            }}</strong>
             <span class="comp-stat-sub label dim">Annual Estimated Compensation</span>
           </div>
           <div class="comp-summary-card">
             <span class="label dim">CEO Pay Ratio</span>
-            <strong class="comp-stat-val fig">{{ profile?.compensation?.ceo_pay_ratio != null ? `${profile.compensation.ceo_pay_ratio} : 1` : DASH }}</strong>
+            <strong class="comp-stat-val fig">{{
+              profile?.compensation?.ceo_pay_ratio != null
+                ? `${profile.compensation.ceo_pay_ratio} : 1`
+                : DASH
+            }}</strong>
             <span class="comp-stat-sub label dim">Ratio to Median Employee</span>
           </div>
         </div>
@@ -2828,7 +3522,10 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">PROXY DISCLOSURES</span>
           <h3 class="unavail-title lab">Executive Officer Disclosures Unavailable</h3>
-          <p class="unavail-desc">Detailed executive officer compensation data could not be parsed from DEF 14A proxy statements for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            Detailed executive officer compensation data could not be parsed from DEF 14A proxy
+            statements for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC EDGAR DEF 14A Disclosures</strong></span>
           </div>
@@ -2841,7 +3538,11 @@ const finChartData = computed(() => {
     <!-- ===================================================================== -->
     <section v-else-if="activeTab === 'ownership'" class="tab-content ownership-layout">
       <!-- Ownership Structure Breakdown -->
-      <Panel label="Ownership Structure & Float Distribution" index="W1" meta="Shareholder Registry">
+      <Panel
+        label="Ownership Structure & Float Distribution"
+        index="W1"
+        meta="Shareholder Registry"
+      >
         <div v-if="ownData?.breakdown" class="ownership-distribution-card">
           <div class="own-mix">
             <div v-for="row in ownershipMix.rows" :key="row.key" class="own-mix-row">
@@ -2857,27 +3558,86 @@ const finChartData = computed(() => {
               <strong class="own-mix-val fig">{{ row.pct != null ? `${row.pct}%` : DASH }}</strong>
             </div>
             <p class="own-mix-note label dim">
-              {{ ownershipMix.partition
-                ? 'Slices sum to outstanding.'
-                : 'Independent shares of outstanding — 13F and insider holdings can overlap, so they are not stacked to 100%.' }}
+              {{
+                ownershipMix.partition
+                  ? 'Slices sum to outstanding.'
+                  : 'Independent shares of outstanding — 13F and insider holdings can overlap, so they are not stacked to 100%.'
+              }}
             </p>
           </div>
 
           <div class="ownership-stats-grid">
-            <Readout label="Institutional Ownership" :value="ownData.breakdown.institutional_pct != null ? `${ownData.breakdown.institutional_pct}%` : DASH" size="sm" />
-            <Readout label="Insider Ownership" :value="ownData.breakdown.insider_pct != null ? `${ownData.breakdown.insider_pct}%` : DASH" size="sm" />
-            <Readout label="Retail / Public Float" :value="ownData.breakdown.retail_float_pct != null ? `${ownData.breakdown.retail_float_pct}%` : DASH" size="sm" />
-            <Readout label="Shares Outstanding" :value="compact(ownData.breakdown.shares_outstanding)" size="sm" />
-            <Readout label="Float Shares" :value="compact(ownData.breakdown.float_shares)" size="sm" />
-            <Readout label="Short % of Float" :value="ownData.short_interest?.short_pct_of_float != null ? `${ownData.short_interest.short_pct_of_float}%` : DASH" size="sm" />
-            <Readout label="Days to Cover" :value="ownData.short_interest?.days_to_cover != null ? `${ownData.short_interest.days_to_cover}d` : DASH" size="sm" />
-            <Readout label="Prior Month Short" :value="ownData.short_interest?.shares_short_prior_month != null ? compact(ownData.short_interest.shares_short_prior_month) : DASH" size="sm" />
+            <Readout
+              label="Institutional Ownership"
+              :value="
+                ownData.breakdown.institutional_pct != null
+                  ? `${ownData.breakdown.institutional_pct}%`
+                  : DASH
+              "
+              size="sm"
+            />
+            <Readout
+              label="Insider Ownership"
+              :value="
+                ownData.breakdown.insider_pct != null ? `${ownData.breakdown.insider_pct}%` : DASH
+              "
+              size="sm"
+            />
+            <Readout
+              label="Retail / Public Float"
+              :value="
+                ownData.breakdown.retail_float_pct != null
+                  ? `${ownData.breakdown.retail_float_pct}%`
+                  : DASH
+              "
+              size="sm"
+            />
+            <Readout
+              label="Shares Outstanding"
+              :value="compact(ownData.breakdown.shares_outstanding)"
+              size="sm"
+            />
+            <Readout
+              label="Float Shares"
+              :value="compact(ownData.breakdown.float_shares)"
+              size="sm"
+            />
+            <Readout
+              label="Short % of Float"
+              :value="
+                ownData.short_interest?.short_pct_of_float != null
+                  ? `${ownData.short_interest.short_pct_of_float}%`
+                  : DASH
+              "
+              size="sm"
+            />
+            <Readout
+              label="Days to Cover"
+              :value="
+                ownData.short_interest?.days_to_cover != null
+                  ? `${ownData.short_interest.days_to_cover}d`
+                  : DASH
+              "
+              size="sm"
+            />
+            <Readout
+              label="Prior Month Short"
+              :value="
+                ownData.short_interest?.shares_short_prior_month != null
+                  ? compact(ownData.short_interest.shares_short_prior_month)
+                  : DASH
+              "
+              size="sm"
+            />
           </div>
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">SHAREHOLDER REGISTRY</span>
           <h3 class="unavail-title lab">Ownership Structure Breakdown Unavailable</h3>
-          <p class="unavail-desc">Float distribution between institutional, insider, and public retail holders is not available for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            Float distribution between institutional, insider, and public retail holders is not
+            available for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>13F Filings & Exchange Float Registry</strong></span>
           </div>
@@ -2885,7 +3645,11 @@ const finChartData = computed(() => {
       </Panel>
 
       <!-- Institutional Owners in Ownership Tab -->
-      <Panel label="Top Institutional Owners (13F Filings)" index="W2" :meta="ownershipInstitutionsMeta">
+      <Panel
+        label="Top Institutional Owners (13F Filings)"
+        index="W2"
+        :meta="ownershipInstitutionsMeta"
+      >
         <div v-if="ownData?.top_institutions?.length" class="table-scroll-container">
           <table class="grid">
             <thead>
@@ -2907,7 +3671,12 @@ const finChartData = computed(() => {
                   <div class="pct-cell">
                     <span>{{ inst.pct_out != null ? `${inst.pct_out}%` : DASH }}</span>
                     <div class="pct-bar-track">
-                      <div class="pct-bar-fill" :style="{ width: `${holderPctBarWidth(inst.pct_out, ownershipInstitutionPctScale) * 100}%` }" />
+                      <div
+                        class="pct-bar-fill"
+                        :style="{
+                          width: `${holderPctBarWidth(inst.pct_out, ownershipInstitutionPctScale) * 100}%`,
+                        }"
+                      />
                     </div>
                   </div>
                 </td>
@@ -2920,7 +3689,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">13F HOLDINGS</span>
           <h3 class="unavail-title lab">Institutional Ownership Disclosures Unavailable</h3>
-          <p class="unavail-desc">13F institutional holding records could not be retrieved for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            13F institutional holding records could not be retrieved for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC EDGAR Form 13F-HR Feeds</strong></span>
           </div>
@@ -2928,7 +3699,11 @@ const finChartData = computed(() => {
       </Panel>
 
       <!-- Top Mutual Fund & ETF Holders in Ownership Tab -->
-      <Panel label="Top Mutual Fund & ETF Holders" index="W3" :meta="`${ownData?.top_funds?.length || 0} Funds`">
+      <Panel
+        label="Top Mutual Fund & ETF Holders"
+        index="W3"
+        :meta="`${ownData?.top_funds?.length || 0} Funds`"
+      >
         <div v-if="ownData?.top_funds?.length" class="table-scroll-container">
           <table class="grid">
             <thead>
@@ -2950,7 +3725,12 @@ const finChartData = computed(() => {
                   <div class="pct-cell">
                     <span>{{ fund.pct_out != null ? `${fund.pct_out}%` : DASH }}</span>
                     <div class="pct-bar-track">
-                      <div class="pct-bar-fill" :style="{ width: `${holderPctBarWidth(fund.pct_out, fundPctScale) * 100}%` }" />
+                      <div
+                        class="pct-bar-fill"
+                        :style="{
+                          width: `${holderPctBarWidth(fund.pct_out, fundPctScale) * 100}%`,
+                        }"
+                      />
                     </div>
                   </div>
                 </td>
@@ -2963,7 +3743,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">MUTUAL FUND HOLDINGS</span>
           <h3 class="unavail-title lab">Mutual Fund Holdings Unavailable</h3>
-          <p class="unavail-desc">Registered fund portfolio holdings are not reported for {{ symbol }}.</p>
+          <p class="unavail-desc">
+            Registered fund portfolio holdings are not reported for {{ symbol }}.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC EDGAR N-PORT Disclosures</strong></span>
           </div>
@@ -2976,11 +3758,17 @@ const finChartData = computed(() => {
     <!-- ===================================================================== -->
     <section v-else-if="activeTab === 'news'" class="tab-content news-layout">
       <Panel label="SEC EDGAR Official Filings" index="N1" :meta="`${secRows.length} Filings`">
-        <LoadingState v-if="sentimentRes.loading.value && !secRows.length" label="Loading EDGAR Filings…" />
+        <LoadingState
+          v-if="sentimentRes.loading.value && !secRows.length"
+          label="Loading EDGAR Filings…"
+        />
         <div v-else-if="!secRows.length" class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">EDGAR SUBMISSIONS</span>
           <h3 class="unavail-title lab">No SEC Filings in Recent Window</h3>
-          <p class="unavail-desc">No watched SEC EDGAR regulatory filings (10-K, 10-Q, 8-K) were recorded for {{ symbol }} in the observation window.</p>
+          <p class="unavail-desc">
+            No watched SEC EDGAR regulatory filings (10-K, 10-Q, 8-K) were recorded for
+            {{ symbol }} in the observation window.
+          </p>
           <div class="unavail-meta label dim">
             <span>Source: <strong>SEC EDGAR Direct Submissions Feed</strong></span>
           </div>
@@ -2998,12 +3786,23 @@ const finChartData = computed(() => {
             </thead>
             <tbody>
               <tr v-for="(row, i) in secRows" :key="`${row.form}-${row.filed}-${i}`">
-                <td><span class="kind label" :class="`kind-${row.kind ?? 'unknown'}`">{{ row.kind ? row.kind.toUpperCase() : DASH }}</span></td>
+                <td>
+                  <span class="kind label" :class="`kind-${row.kind ?? 'unknown'}`">{{
+                    row.kind ? row.kind.toUpperCase() : DASH
+                  }}</span>
+                </td>
                 <td class="fig bold">{{ row.form || DASH }}</td>
                 <td class="dim fig">{{ row.filed || DASH }}</td>
                 <td class="dim">{{ row.description || DASH }}</td>
                 <td>
-                  <a v-if="row.url" :href="row.url" target="_blank" rel="noopener" class="label link">Open SEC Filing</a>
+                  <a
+                    v-if="row.url"
+                    :href="row.url"
+                    target="_blank"
+                    rel="noopener"
+                    class="label link"
+                    >Open SEC Filing</a
+                  >
                   <span v-else class="dim">—</span>
                 </td>
               </tr>
@@ -3028,13 +3827,22 @@ const finChartData = computed(() => {
             :class="{ active: sym === symbol }"
           >
             <strong class="chip-sym fig" @click="select(sym)">{{ sym }}</strong>
-            <button type="button" class="chip-rm label" title="Remove" @click.stop="toggleBasket(sym)">×</button>
+            <button
+              type="button"
+              class="chip-rm label"
+              title="Remove"
+              @click.stop="toggleBasket(sym)"
+            >
+              ×
+            </button>
           </span>
         </div>
         <div class="basket-add-row">
           <span class="label dim">Quick Add:</span>
           <button
-            v-for="bench in ['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'NVDA'].filter((b) => !basket.includes(b))"
+            v-for="bench in ['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'NVDA'].filter(
+              (b) => !basket.includes(b),
+            )"
             :key="bench"
             type="button"
             class="btn-action label"
@@ -3060,7 +3868,12 @@ const finChartData = computed(() => {
                 <i
                   :style="{
                     width: `${f.barPct}%`,
-                    background: f.k === 'liq' ? 'var(--phosphor)' : (Number(f.v ?? 0) >= 0 ? 'var(--long)' : 'var(--short)'),
+                    background:
+                      f.k === 'liq'
+                        ? 'var(--phosphor)'
+                        : Number(f.v ?? 0) >= 0
+                          ? 'var(--long)'
+                          : 'var(--short)',
                   }"
                 />
               </span>
@@ -3068,19 +3881,41 @@ const finChartData = computed(() => {
           </ul>
         </Panel>
 
-        <Panel label="Multi-Symbol Basket Performance & Correlation" index="C2" :meta="`${basket.length} Symbols · ${win.toUpperCase()}`">
+        <Panel
+          label="Multi-Symbol Basket Performance & Correlation"
+          index="C2"
+          :meta="`${basket.length} Symbols · ${win.toUpperCase()}`"
+        >
           <div v-if="basket.length < 2" class="compare-empty-container">
             <span class="unavail-eyebrow label dim">COMPARATIVE ANALYSIS</span>
             <h3 class="unavail-title lab">Select at Least 2 Tickers to Compare</h3>
-            <p class="unavail-desc">Select at least 2 tickers to display comparative metrics, correlation matrix, and normalized price trajectories.</p>
+            <p class="unavail-desc">
+              Select at least 2 tickers to display comparative metrics, correlation matrix, and
+              normalized price trajectories.
+            </p>
             <div class="compare-quick-actions">
-              <button v-if="symbol && !basket.includes(symbol)" type="button" class="btn-action label" @click="toggleBasket(symbol)">
+              <button
+                v-if="symbol && !basket.includes(symbol)"
+                type="button"
+                class="btn-action label"
+                @click="toggleBasket(symbol)"
+              >
                 + ADD {{ symbol }}
               </button>
-              <button v-if="!basket.includes('SPY')" type="button" class="btn-action label" @click="toggleBasket('SPY')">
+              <button
+                v-if="!basket.includes('SPY')"
+                type="button"
+                class="btn-action label"
+                @click="toggleBasket('SPY')"
+              >
                 + ADD SPY
               </button>
-              <button v-if="!basket.includes('QQQ')" type="button" class="btn-action label" @click="toggleBasket('QQQ')">
+              <button
+                v-if="!basket.includes('QQQ')"
+                type="button"
+                class="btn-action label"
+                @click="toggleBasket('QQQ')"
+              >
                 + ADD QQQ
               </button>
             </div>
@@ -3090,27 +3925,44 @@ const finChartData = computed(() => {
           <template v-else-if="cmp">
             <div class="compare-perf-table">
               <div class="leg-head label">
-                <span>Symbol</span><span>Trajectory</span><span>Window Ret</span><span>Sharpe</span><span>Max DD</span><span />
+                <span>Symbol</span><span>Trajectory</span><span>Window Ret</span><span>Sharpe</span
+                ><span>Max DD</span><span />
               </div>
               <ul class="legend">
                 <li v-for="sym in cmpSyms" :key="sym" class="leg">
                   <button type="button" class="leg-sym fig" @click="select(sym)">{{ sym }}</button>
-                  <svg class="spark" viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true">
+                  <svg
+                    class="spark"
+                    viewBox="0 0 120 22"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  >
                     <path
                       v-if="cmpSparks[sym]"
                       :d="cmpSparks[sym]"
                       fill="none"
                       stroke-width="1.25"
                       vector-effect="non-scaling-stroke"
-                      :stroke="(cmp.stats[sym]?.chg_window_pct ?? 0) >= 0 ? 'var(--long)' : 'var(--short)'"
+                      :stroke="
+                        (cmp.stats[sym]?.chg_window_pct ?? 0) >= 0 ? 'var(--long)' : 'var(--short)'
+                      "
                     />
                   </svg>
                   <span class="fig leg-ret" :class="tone(cmp.stats[sym]?.chg_window_pct)">
                     {{ signedPct(cmp.stats[sym]?.chg_window_pct, 1) }}
                   </span>
-                  <span class="fig leg-sh">{{ cmp.stats[sym]?.sharpe == null ? DASH : num(cmp.stats[sym]?.sharpe, 2) }}</span>
+                  <span class="fig leg-sh">{{
+                    cmp.stats[sym]?.sharpe == null ? DASH : num(cmp.stats[sym]?.sharpe, 2)
+                  }}</span>
                   <span class="fig leg-dd neg">{{ pct(cmp.stats[sym]?.max_drawdown_pct, 0) }}</span>
-                  <button type="button" class="leg-x label" title="Remove" @click="toggleBasket(sym)">×</button>
+                  <button
+                    type="button"
+                    class="leg-x label"
+                    title="Remove"
+                    @click="toggleBasket(sym)"
+                  >
+                    ×
+                  </button>
                 </li>
               </ul>
             </div>
@@ -3150,15 +4002,21 @@ const finChartData = computed(() => {
   min-width: 0;
 }
 
-/* ---- Masthead & Header -------------------------------------------------- */
+/* ---- Masthead & Header ----------------------------------------------------
+   Content-layer hero: opaque standard material, concentric corners, one
+   specular line up top. The price figure is the largest object on the
+   surface; actions stay quiet except a single prominent pin state. */
 .ticker-masthead {
   display: flex;
   flex-direction: column;
   gap: var(--s3);
-  padding: var(--s3) var(--s4);
-  background: var(--panel);
+  padding: var(--s5) var(--s5) var(--s4);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0) 56px),
+    var(--panel);
   border: var(--hair) solid var(--rule);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-xl);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .masthead-main {
@@ -3185,10 +4043,14 @@ const finChartData = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 12px;
-  background: var(--void);
+  min-width: 52px;
+  padding: 9px 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 60%),
+    var(--void-lift);
   border: var(--hair) solid var(--rule-hi);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
+  box-shadow: var(--glass-specular-subtle);
 }
 
 .ticker-badge-sym {
@@ -3201,7 +4063,7 @@ const finChartData = computed(() => {
 .ticker-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 .ticker-title-row {
@@ -3213,8 +4075,9 @@ const finChartData = computed(() => {
 
 .company-name {
   margin: 0;
-  font-size: var(--t-base, 16px);
-  font-weight: 600;
+  font-size: var(--t-lead, 17px);
+  font-weight: 650;
+  letter-spacing: -0.015em;
   color: var(--ink);
 }
 
@@ -3265,8 +4128,13 @@ const finChartData = computed(() => {
 }
 
 @keyframes pulse-sync {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .price-hero {
@@ -3276,9 +4144,9 @@ const finChartData = computed(() => {
 }
 
 .last-price {
-  font-size: var(--t-h2, 26px);
+  font-size: var(--t-fig-lg, 34px);
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
 }
 
 .price-changes {
@@ -3287,51 +4155,104 @@ const finChartData = computed(() => {
   gap: 4px;
 }
 
+/* Signed change reads as a tinted capsule keyed off its own tone class */
 .chg-val {
+  padding: 2px 9px;
+  border-radius: var(--r-capsule);
+  border: var(--hair) solid color-mix(in srgb, currentColor 30%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
   font-size: var(--t-small, 14px);
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .ticker-actions {
   display: flex;
   align-items: center;
   gap: var(--s2);
+  flex-wrap: wrap;
 }
 
 .btn-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 10px;
-  background: var(--void);
-  border: var(--hair) solid var(--rule);
+  min-height: 30px;
+  padding: 5px 14px;
+  background: var(--glass-surface);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-specular-subtle);
   color: var(--ink-soft);
   font-size: var(--t-tiny, 11px);
   text-decoration: none;
   cursor: pointer;
-  border-radius: var(--r-sm);
-  transition: border-color var(--dur-fast), color var(--dur-fast);
+  border-radius: var(--r-capsule);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 
 .btn-action:hover {
-  border-color: var(--rule-hi);
+  border-color: var(--glass-border-hi);
+  background: var(--glass-surface-hi);
   color: var(--ink);
 }
 
-.btn-action.on, .pin-btn.on {
-  border-color: var(--phosphor);
-  color: var(--phosphor);
+.btn-action:active {
+  transform: scale(0.97);
 }
 
-/* Search input */
+/* The single prominent action of the masthead — filled accent on its
+   background (never a tinted label), monochromatic siblings around it. */
+.pin-btn {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01)),
+    var(--panel-hi);
+}
+
+.btn-action.on,
+.pin-btn.on {
+  color: var(--void);
+  border-color: var(--phosphor);
+  background: var(--phosphor);
+  font-weight: 700;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .btn-action {
+    background: var(--panel-hi);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* Search input — capsule glass field, floating chrome treatment */
 .search-input-wrap {
   display: flex;
   align-items: center;
   gap: var(--s2);
-  padding: 6px 12px;
-  background: var(--void);
-  border: var(--hair) solid var(--rule);
-  border-radius: var(--r-sm);
+  min-height: 34px;
+  padding: 4px 14px;
+  background: var(--glass-surface);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-specular-subtle);
+  border-radius: var(--r-capsule);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.search-input-wrap:focus-within {
+  border-color: var(--glass-border-hi);
+  outline: 3px solid color-mix(in srgb, var(--phosphor) 16%, transparent);
+  outline-offset: -1px;
 }
 
 .search-glyph {
@@ -3357,15 +4278,32 @@ const finChartData = computed(() => {
 
 .search-dropdown-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   right: 0;
-  background: var(--panel-hi);
-  border: var(--hair) solid var(--rule-hi);
-  border-radius: var(--r-sm);
+  background: var(--glass-overlay);
+  backdrop-filter: var(--chrome-optics-lg);
+  -webkit-backdrop-filter: var(--chrome-optics-lg);
+  border: var(--hair) solid var(--glass-border-hi);
+  border-radius: var(--r-lg);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular);
   z-index: 50;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .search-input-wrap {
+    background: var(--panel-hi);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .search-dropdown-menu {
+    background: var(--panel);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .search-drop-item {
@@ -3412,35 +4350,60 @@ const finChartData = computed(() => {
   color: var(--phosphor);
 }
 
-/* Cockpit Tabs Navigation */
+/* Cockpit Tabs Navigation — iOS segmented control: one pill track, the
+   active destination lifts as a filled capsule; chrome stays monochromatic
+   with a single accent. */
 .cockpit-tabs-nav {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--s1);
   overflow-x: auto;
-  border-top: var(--hair) solid var(--rule);
-  padding-top: var(--s2);
+  padding: var(--s1);
+  border-radius: var(--r-capsule);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  box-shadow: var(--glass-specular-subtle);
+  scrollbar-width: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .cockpit-tabs-nav {
+    background: var(--panel-hi);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+.cockpit-tabs-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .cockpit-tab-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
+  min-height: 30px;
+  padding: 5px 14px;
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-radius: var(--r-capsule);
   color: var(--ink-dim);
   cursor: pointer;
   white-space: nowrap;
   font-size: var(--t-small, 13px);
   font-weight: 500;
-  transition: color var(--dur-fast), border-color var(--dur-fast);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 
 .tab-index {
-  font-size: 11px;
-  color: var(--ink-dim);
+  font-size: 10px;
+  color: var(--ink-ghost);
   letter-spacing: 0.04em;
 }
 
@@ -3448,9 +4411,15 @@ const finChartData = computed(() => {
   color: var(--ink);
 }
 
+/* The selected segment is a raised capsule — light from above, soft drop */
 .cockpit-tab-btn.active {
   color: var(--phosphor);
-  border-bottom-color: var(--phosphor);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    var(--panel-raise);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 2px 6px rgba(0, 0, 0, 0.45);
   font-weight: 600;
 }
 
@@ -3494,22 +4463,39 @@ const finChartData = computed(() => {
   grid-column: 1 / -1;
 }
 
-/* Quick Cards */
+/* Quick Cards — content-layer standard material: concentric corners, a
+   specular top edge, and a quiet lift on hover. Color stays in the thin
+   accent rule, never in chrome. */
 .quick-card {
+  position: relative;
   padding: var(--s4);
-  background: var(--panel);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 40px),
+    var(--panel);
   border: var(--hair) solid var(--rule);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-xl);
   cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: var(--s3);
-  transition: border-color var(--dur-fast), background var(--dur-fast);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 
 .quick-card:hover {
   border-color: var(--rule-hi);
-  background: var(--panel-hi);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 40px),
+    var(--panel-hi);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  transform: translateY(-1px);
+}
+
+.quick-card:active {
+  transform: translateY(0) scale(0.995);
 }
 
 .card-head {
@@ -3520,7 +4506,8 @@ const finChartData = computed(() => {
 
 .card-title {
   font-size: var(--t-small, 13px);
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 
@@ -3588,9 +4575,15 @@ const finChartData = computed(() => {
   color: var(--ink);
 }
 
-.score-circle.pos .score-num { color: var(--phosphor); }
-.score-circle.mid .score-num { color: var(--warn); }
-.score-circle.neg .score-num { color: var(--short); }
+.score-circle.pos .score-num {
+  color: var(--phosphor);
+}
+.score-circle.mid .score-num {
+  color: var(--warn);
+}
+.score-circle.neg .score-num {
+  color: var(--short);
+}
 
 .score-max {
   font-size: 10px;
@@ -3604,7 +4597,8 @@ const finChartData = computed(() => {
 
 .score-bar-row {
   display: grid;
-  grid-template-columns: 120px 1fr 24px;
+  /* 120px cut the longest factor names ("institutional flow"). */
+  grid-template-columns: 136px 1fr 24px;
   align-items: center;
   gap: var(--s2);
   font-size: var(--t-tiny, 11px);
@@ -3624,9 +4618,15 @@ const finChartData = computed(() => {
   transition: width var(--dur-fast);
 }
 
-.score-bar-fill.pos { background: var(--phosphor); }
-.score-bar-fill.mid { background: var(--warn); }
-.score-bar-fill.neg { background: var(--short); }
+.score-bar-fill.pos {
+  background: var(--phosphor);
+}
+.score-bar-fill.mid {
+  background: var(--warn);
+}
+.score-bar-fill.neg {
+  background: var(--short);
+}
 
 /* Bull Bear Grid */
 .bull-bear-grid {
@@ -3635,7 +4635,8 @@ const finChartData = computed(() => {
   gap: var(--s4);
 }
 
-.bull-box, .bear-box {
+.bull-box,
+.bear-box {
   padding: var(--s4);
   background: var(--void);
   border: var(--hair) solid var(--rule);
@@ -3697,182 +4698,6 @@ const finChartData = computed(() => {
   border-top: var(--hair) solid var(--rule);
 }
 
-/* ---- Internal model forecast highlight ("what it should be") ------------- */
-.model-forecast-highlight {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-  padding: var(--s4);
-  margin-bottom: var(--s4);
-  background: var(--phosphor-wash);
-  border: 2px solid var(--phosphor);
-  border-radius: var(--r-sm);
-}
-
-.model-forecast-highlight.focused {
-  background: var(--phosphor-glow);
-  outline: 1px solid var(--phosphor);
-}
-
-.mf-kicker {
-  color: var(--phosphor);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: var(--t-tiny, 10px);
-}
-
-.mf-title {
-  margin: 0;
-  font-size: var(--t-fig);
-  color: var(--ink);
-}
-
-.mf-note {
-  margin: 0;
-  max-width: 72ch;
-}
-
-.mf-metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--s4);
-}
-
-.mf-lbl {
-  display: block;
-  color: var(--ink-dim);
-  margin-bottom: 4px;
-}
-
-.mf-val {
-  font-size: var(--t-display);
-  color: var(--phosphor);
-}
-
-.mf-sub {
-  display: block;
-  margin-top: 4px;
-}
-
-.mf-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--s4);
-}
-
-.mf-timeframe {
-  flex-shrink: 0;
-  padding: 4px 8px;
-  border: var(--hair) solid var(--phosphor);
-  color: var(--phosphor);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.mf-cases {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--s3);
-}
-
-.mf-case {
-  padding: var(--s3);
-  background: var(--void);
-  border: var(--hair) solid var(--rule);
-}
-
-.mf-case.bear { border-color: var(--short); }
-.mf-case.base { border-color: var(--phosphor); }
-.mf-case.bull { border-color: var(--long); }
-
-.mf-case.bear .mf-val { color: var(--short); }
-.mf-case.bull .mf-val { color: var(--long); }
-
-.mf-range {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-}
-
-.mf-range-track {
-  position: relative;
-  height: 10px;
-  background: var(--void);
-  border: var(--hair) solid var(--rule);
-}
-
-.mf-range-span {
-  position: absolute;
-  top: 0;
-  height: 100%;
-  background: color-mix(in srgb, var(--phosphor) 16%, transparent);
-}
-
-.mf-range-mark {
-  position: absolute;
-  top: -4px;
-  width: 2px;
-  height: 16px;
-  transform: translateX(-50%);
-  background: var(--ink);
-}
-
-.mf-range-mark.bear { background: var(--short); }
-.mf-range-mark.bull { background: var(--long); }
-.mf-range-mark.base { background: var(--phosphor); width: 3px; }
-.mf-range-mark.spot { background: var(--ink); width: 3px; }
-
-.mf-range-caption {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s2) var(--s4);
-  color: var(--ink-dim);
-}
-
-.mf-range-cap.bear { color: var(--short); }
-.mf-range-cap.bull { color: var(--long); }
-.mf-range-cap.base { color: var(--phosphor); }
-.mf-range-cap.spot { color: var(--ink); }
-
-.mf-thesis {
-  margin: 6px 0 0;
-  color: var(--ink-dim);
-  font-size: var(--t-tiny, 11px);
-  line-height: 1.4;
-}
-
-.mf-factors {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-}
-
-.mf-factor-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--s2) var(--s4);
-}
-
-.mf-factor {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--s3);
-  border-bottom: var(--hair) solid var(--rule-faint);
-  padding-bottom: 2px;
-}
-
-.mf-factor-name { color: var(--ink-dim); }
-.mf-factor-val.pos { color: var(--long); }
-.mf-factor-val.neg { color: var(--short); }
-
-@media (max-width: 720px) {
-  .mf-cases { grid-template-columns: 1fr; }
-}
-
 /* ---- Financials Toolbar & Grid ------------------------------------------- */
 .financials-toolbar {
   display: flex;
@@ -3930,13 +4755,15 @@ const finChartData = computed(() => {
   font-feature-settings: 'tnum' 1;
 }
 
-.financial-statement-grid th, .financial-statement-grid td {
+.financial-statement-grid th,
+.financial-statement-grid td {
   padding: 8px 12px;
   border-bottom: var(--hair) solid var(--rule);
   text-align: right;
 }
 
-.financial-statement-grid th:first-child, .financial-statement-grid td:first-child {
+.financial-statement-grid th:first-child,
+.financial-statement-grid td:first-child {
   text-align: left;
 }
 
@@ -4011,7 +4838,8 @@ const finChartData = computed(() => {
   border-radius: var(--r-sm);
 }
 
-.breakdown-item-top, .breakdown-item-sub {
+.breakdown-item-top,
+.breakdown-item-sub {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -4061,16 +4889,36 @@ const finChartData = computed(() => {
   display: inline-block;
 }
 
-.leg-swatch.rev { background: var(--phosphor); }
-.leg-swatch.gross { background: var(--cat-1); }
-.leg-swatch.op { background: var(--cat-2); }
-.leg-swatch.net { background: var(--long); }
-.leg-swatch.assets { background: var(--phosphor); }
-.leg-swatch.liab { background: var(--short); }
-.leg-swatch.equity { background: var(--cat-1); }
-.leg-swatch.ocf { background: var(--phosphor); }
-.leg-swatch.fcf { background: var(--long); }
-.leg-swatch.capex { background: var(--cat-2); }
+.leg-swatch.rev {
+  background: var(--phosphor);
+}
+.leg-swatch.gross {
+  background: var(--cat-1);
+}
+.leg-swatch.op {
+  background: var(--cat-2);
+}
+.leg-swatch.net {
+  background: var(--long);
+}
+.leg-swatch.assets {
+  background: var(--phosphor);
+}
+.leg-swatch.liab {
+  background: var(--short);
+}
+.leg-swatch.equity {
+  background: var(--cat-1);
+}
+.leg-swatch.ocf {
+  background: var(--phosphor);
+}
+.leg-swatch.fcf {
+  background: var(--long);
+}
+.leg-swatch.capex {
+  background: var(--cat-2);
+}
 
 .fin-bars-timeline {
   display: flex;
@@ -4108,18 +4956,43 @@ const finChartData = computed(() => {
   transition: height var(--dur-fast);
 }
 
-.fin-bar.rev { background: var(--phosphor); }
-.fin-bar.gross { background: var(--cat-1); }
-.fin-bar.op { background: var(--cat-2); }
-.fin-bar.net { background: var(--long); }
-.fin-bar.op.neg, .fin-bar.net.neg { background: var(--short); }
-.fin-bar.assets { background: var(--phosphor); }
-.fin-bar.liab { background: var(--short); }
-.fin-bar.equity { background: var(--cat-1); }
-.fin-bar.ocf { background: var(--phosphor); }
-.fin-bar.fcf { background: var(--long); }
-.fin-bar.fcf.neg { background: var(--short); }
-.fin-bar.capex { background: var(--cat-2); }
+.fin-bar.rev {
+  background: var(--phosphor);
+}
+.fin-bar.gross {
+  background: var(--cat-1);
+}
+.fin-bar.op {
+  background: var(--cat-2);
+}
+.fin-bar.net {
+  background: var(--long);
+}
+.fin-bar.op.neg,
+.fin-bar.net.neg {
+  background: var(--short);
+}
+.fin-bar.assets {
+  background: var(--phosphor);
+}
+.fin-bar.liab {
+  background: var(--short);
+}
+.fin-bar.equity {
+  background: var(--cat-1);
+}
+.fin-bar.ocf {
+  background: var(--phosphor);
+}
+.fin-bar.fcf {
+  background: var(--long);
+}
+.fin-bar.fcf.neg {
+  background: var(--short);
+}
+.fin-bar.capex {
+  background: var(--cat-2);
+}
 
 .fin-col-lbl {
   font-size: var(--t-tiny, 11px);
@@ -4349,8 +5222,13 @@ const finChartData = computed(() => {
   gap: var(--s3);
 }
 
-.own-mix-label { color: var(--ink-dim); }
-.own-mix-val { text-align: right; color: var(--ink); }
+.own-mix-label {
+  color: var(--ink-dim);
+}
+.own-mix-val {
+  text-align: right;
+  color: var(--ink);
+}
 
 .own-mix-track {
   height: 8px;
@@ -4358,10 +5236,18 @@ const finChartData = computed(() => {
   border: var(--hair) solid var(--rule);
 }
 
-.own-mix-fill { height: 100%; }
-.own-mix-fill.inst { background: var(--phosphor); }
-.own-mix-fill.insider { background: var(--ink-dim); }
-.own-mix-fill.retail { background: var(--rule-hi); }
+.own-mix-fill {
+  height: 100%;
+}
+.own-mix-fill.inst {
+  background: var(--phosphor);
+}
+.own-mix-fill.insider {
+  background: var(--ink-dim);
+}
+.own-mix-fill.retail {
+  background: var(--rule-hi);
+}
 
 .own-mix-note {
   margin: 0;
@@ -4429,14 +5315,21 @@ const finChartData = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
-  background: var(--void);
-  border: var(--hair) solid var(--rule);
+  min-height: 26px;
+  padding: 3px 12px;
+  background: var(--glass-surface);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-specular-subtle);
   color: var(--ink-dim);
   font-size: var(--t-micro, 10px);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-capsule);
   cursor: pointer;
-  transition: all var(--dur-fast);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
 
 .mkt-refresh-btn:hover:not(:disabled) {
@@ -4455,28 +5348,44 @@ const finChartData = computed(() => {
 }
 
 @keyframes spin {
-  100% { transform: rotate(360deg); }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .seg {
   display: inline-flex;
   align-items: center;
-  background: var(--void);
-  border: var(--hair) solid var(--rule);
-  border-radius: var(--r-sm);
-  padding: 1px;
-  gap: 1px;
+  background: var(--glass-base);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-specular-subtle);
+  border-radius: var(--r-capsule);
+  padding: 2px;
+  gap: 2px;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .seg {
+    background: var(--panel-hi);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .seg-b {
-  padding: 3px 8px;
+  padding: 3px 10px;
   font-size: var(--t-micro, 10px);
   color: var(--ink-dim);
   background: transparent;
   border: none;
-  border-radius: calc(var(--r-sm) - 1px);
+  border-radius: var(--r-capsule);
   cursor: pointer;
-  transition: all var(--dur-fast);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
   text-transform: uppercase;
 }
 
@@ -4484,9 +5393,15 @@ const finChartData = computed(() => {
   color: var(--ink);
 }
 
+/* Selected segment lifts as a filled capsule inside the track */
 .seg-b.on {
-  background: var(--panel-raise);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    var(--panel-raise);
   color: var(--phosphor);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 1px 4px rgba(0, 0, 0, 0.4);
   font-weight: 600;
 }
 
@@ -4588,8 +5503,14 @@ const finChartData = computed(() => {
   letter-spacing: 0.04em;
 }
 
-.sig-side-badge.pos { background: var(--long-wash); color: var(--long); }
-.sig-side-badge.neg { background: var(--short-wash); color: var(--short); }
+.sig-side-badge.pos {
+  background: var(--long-wash);
+  color: var(--long);
+}
+.sig-side-badge.neg {
+  background: var(--short-wash);
+  color: var(--short);
+}
 
 .state {
   padding: 1px 5px;
@@ -4597,8 +5518,14 @@ const finChartData = computed(() => {
   font-size: 9px;
 }
 
-.state.enter { background: var(--phosphor-wash); color: var(--phosphor); }
-.state.watch { background: var(--panel); color: var(--ink-dim); }
+.state.enter {
+  background: var(--phosphor-wash);
+  color: var(--phosphor);
+}
+.state.watch {
+  background: var(--panel);
+  color: var(--ink-dim);
+}
 
 .sig-metrics {
   display: grid;
@@ -4811,7 +5738,9 @@ const finChartData = computed(() => {
   display: block;
 }
 
-.leg-ret, .leg-sh, .leg-dd {
+.leg-ret,
+.leg-sh,
+.leg-dd {
   font-size: var(--t-small, 13px);
   font-variant-numeric: tabular-nums;
 }
@@ -4929,14 +5858,28 @@ const finChartData = computed(() => {
   text-decoration: underline;
 }
 
-.kind.dem { background: color-mix(in srgb, var(--cat-1) 20%, transparent); color: var(--cat-1); }
-.kind.rep { background: var(--short-wash); color: var(--short); }
+.kind.dem {
+  background: color-mix(in srgb, var(--cat-1) 20%, transparent);
+  color: var(--cat-1);
+}
+.kind.rep {
+  background: var(--short-wash);
+  color: var(--short);
+}
 
 /* SEC EDGAR filing kind color-coding */
-.kind-annual { color: var(--phosphor); }
-.kind-quarterly { color: var(--ink-dim); }
-.kind-event { color: var(--call); }
-.kind-unknown { color: var(--ink-ghost); }
+.kind-annual {
+  color: var(--phosphor);
+}
+.kind-quarterly {
+  color: var(--ink-dim);
+}
+.kind-event {
+  color: var(--call);
+}
+.kind-unknown {
+  color: var(--ink-ghost);
+}
 
 /* Institutions Toolbar, Sorting & Pagination */
 .institutions-toolbar {
@@ -5051,20 +5994,31 @@ th.sortable:hover {
   letter-spacing: 0.02em;
 }
 
-/* Quick Card Top Accents */
-.quick-card.card-financials {
-  border-top: 2px solid var(--phosphor);
+/* Quick Card Top Accents — rounded inset bars that follow the concentric
+   curve instead of square border-top strips. */
+.quick-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--r-xl);
+  right: var(--r-xl);
+  height: 2px;
+  border-radius: 0 0 var(--r-xs) var(--r-xs);
 }
 
-.quick-card.card-insiders {
-  border-top: 2px solid var(--warn);
+.quick-card.card-financials::before {
+  background: var(--phosphor);
 }
 
-.quick-card.card-forecast {
-  border-top: 2px solid var(--cat-1);
+.quick-card.card-insiders::before {
+  background: var(--warn);
 }
 
-.quick-card.card-gov {
-  border-top: 2px solid var(--cat-4);
+.quick-card.card-forecast::before {
+  background: var(--cat-1);
+}
+
+.quick-card.card-gov::before {
+  background: var(--cat-4);
 }
 </style>

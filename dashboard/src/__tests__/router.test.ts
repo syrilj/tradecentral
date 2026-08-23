@@ -34,4 +34,9 @@ describe('public entry and operator routing', () => {
     expect(routerSource).toContain("highlight: 'model-forecast'")
     expect(routerSource).toContain("tab: 'financials'")
   })
+
+  it('updates document title with active symbol from route query', () => {
+    expect(routerSource).toContain('to.query.symbol || to.query.setup')
+    expect(routerSource).toContain('document.title = sym ?')
+  })
 })

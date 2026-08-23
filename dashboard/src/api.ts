@@ -9,9 +9,8 @@
 
 const BASE = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 const configuredTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000)
-const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
-  ? configuredTimeoutMs
-  : 30_000
+const REQUEST_TIMEOUT_MS =
+  Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 30_000
 
 type AuthTokenProvider = () => Promise<string | null>
 let authTokenProvider: AuthTokenProvider | null = null
@@ -34,13 +33,28 @@ export class ApiError extends Error {
   }
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+const inFlightGetRequests = new Map<string, Promise<unknown>>()
+const memoryCache = new Map<string, { ts: number; data: unknown }>()
+
+export function clearApiCache(pathPrefix?: string): void {
+  if (!pathPrefix) {
+    memoryCache.clear()
+    return
+  }
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(pathPrefix)) {
+      memoryCache.delete(key)
+    }
+  }
+}
+
+async function executeReq<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   const controller = new AbortController()
   const forwardAbort = () => controller.abort(init?.signal?.reason)
   if (init?.signal?.aborted) forwardAbort()
   else init?.signal?.addEventListener('abort', forwardAbort, { once: true })
-  const timeout = window.setTimeout(
+  const timeout = setTimeout(
     () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
     REQUEST_TIMEOUT_MS,
   )
@@ -65,7 +79,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
       path,
     )
   } finally {
-    window.clearTimeout(timeout)
+    clearTimeout(timeout)
     init?.signal?.removeEventListener('abort', forwardAbort)
   }
   if (!res.ok) {
@@ -90,6 +104,54 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(detail, res.status, path)
   }
   return (await res.json()) as T
+}
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || 'GET').toUpperCase()
+  // Coalesce in-flight concurrent identical GET requests
+  if (method === 'GET' && !init?.signal && !init?.body) {
+    const existing = inFlightGetRequests.get(path)
+    if (existing) {
+      return existing as Promise<T>
+    }
+    const promise = executeReq<T>(path, init).finally(() => {
+      inFlightGetRequests.delete(path)
+    })
+    inFlightGetRequests.set(path, promise)
+    return promise
+  }
+  return executeReq<T>(path, init)
+}
+
+/**
+ * Upper bound on distinct cached paths.
+ *
+ * The TTL is only checked on read, so an expired entry is never reclaimed --
+ * it just stops being served. Without a cap, an operator who leaves the desk
+ * open and pages through symbols accumulates one payload per distinct path
+ * (financials, ownership, government, insiders, ... x every symbol viewed)
+ * for the lifetime of the tab. `clearApiCache` is the only other eviction
+ * path and nothing outside tests calls it.
+ */
+const MAX_CACHE_ENTRIES = 200
+
+async function cachedReq<T>(path: string, ttlMs = 15_000, init?: RequestInit): Promise<T> {
+  const now = Date.now()
+  const hit = memoryCache.get(path)
+  if (hit && now - hit.ts < ttlMs) {
+    return Promise.resolve(hit.data as T)
+  }
+  const result = await req<T>(path, init)
+  // Re-insert last so Map iteration order stays oldest-write-first, which is
+  // what makes the eviction below drop the least recently written entry.
+  memoryCache.delete(path)
+  memoryCache.set(path, { ts: now, data: result })
+  while (memoryCache.size > MAX_CACHE_ENTRIES) {
+    const oldest = memoryCache.keys().next()
+    if (oldest.done) break
+    memoryCache.delete(oldest.value)
+  }
+  return result
 }
 
 /* ------------------------------------------------------------------ types */
@@ -223,21 +285,26 @@ export interface ActivityFlagRow {
   average_price?: number | null
   /** Latest underlying price carried from the provider tape when observed. */
   spot?: number | null
-  flow_focus?: Partial<Record<'call' | 'put', {
-    right: 'call' | 'put'
-    occ_symbol?: string | null
-    strike: number | null
-    expiry: string | null
-    dte?: number | null
-    underlying_price?: number | null
-    otm_pct?: number | null
-    price: number | null
-    price_estimated?: boolean
-    premium: number | null
-    contracts: number | null
-    timestamp: string | null
-    contract_multiplier?: number | null
-  }>>
+  flow_focus?: Partial<
+    Record<
+      'call' | 'put',
+      {
+        right: 'call' | 'put'
+        occ_symbol?: string | null
+        strike: number | null
+        expiry: string | null
+        dte?: number | null
+        underlying_price?: number | null
+        otm_pct?: number | null
+        price: number | null
+        price_estimated?: boolean
+        premium: number | null
+        contracts: number | null
+        timestamp: string | null
+        contract_multiplier?: number | null
+      }
+    >
+  >
   flow_focus_rejections?: Partial<Record<'call' | 'put', string[]>>
   average_dte?: number | null
   signed_print_count?: number
@@ -672,11 +739,7 @@ export interface MarketClock {
   next_regular_open_utc: string | null
   next_transition_utc: string | null
   next_transition:
-    | 'premarket_opens'
-    | 'regular_opens'
-    | 'regular_closes'
-    | 'after_hours_closes'
-    | null
+    'premarket_opens' | 'regular_opens' | 'regular_closes' | 'after_hours_closes' | null
   calendar_source: string
   warning: string | null
 }
@@ -758,7 +821,9 @@ export interface OptionsTapeRow {
   /** Why this print was flagged. Empty when nothing unusual. */
   why?: string[]
   premium_estimated: boolean
-  anomaly_flags: ('premium_outlier' | 'volume_outlier' | 'repeat_cluster' | 'sweep_burst' | string)[]
+  anomaly_flags: (
+    'premium_outlier' | 'volume_outlier' | 'repeat_cluster' | 'sweep_burst' | string
+  )[]
   anomaly_score: number
   premium_percentile: number
   is_unusual?: boolean
@@ -850,6 +915,108 @@ export interface PressureGauge {
   }
   weights: { alpha: number; beta: number }
   convention_note: string
+}
+/**
+ * Stacked-signals lenses (`stacked_signals`): theta/vanna exposure, the IV
+ * surface, a daily-bar volume profile, and a descriptive confluence map.
+ * Each lens is one independent read on the same chain; none alone is the
+ * whole picture, and confluence clusters are geometry, never probabilities.
+ */
+export interface ThetaVannaStrikeRow {
+  strike: number
+  call_theta_flow: number
+  put_theta_flow: number
+  /** Always negative for long premium — decay bleeds out of every side. */
+  net_theta_flow: number
+  call_vanna_flow: number
+  put_vanna_flow: number
+  net_vanna_flow: number
+  call_oi: number
+  put_oi: number
+}
+export interface ThetaSummary {
+  net_theta_flow: number
+  call_theta_flow: number
+  put_theta_flow: number
+  abs_theta_flow: number
+  decay_side: 'calls' | 'puts' | 'balanced' | null
+  source: string
+}
+export interface VannaSummary {
+  net_vanna_flow: number
+  call_vanna_flow: number
+  put_vanna_flow: number
+  /** iv_up_supportive → rising IV lifts dealer delta; negative → vol-spiral fuel. */
+  regime: 'iv_up_supportive' | 'iv_up_pressuring' | 'neutral' | null
+  source: string
+}
+export interface IvStrikeRow {
+  strike: number
+  call_iv: number | null
+  put_iv: number | null
+  /** call IV − put IV at matched strikes; negative = put skew. */
+  skew: number | null
+  distance_pct: number | null
+}
+export interface IvSurfaceSummary {
+  available: boolean
+  atm_iv: number | null
+  peak_call_iv_strike: number | null
+  peak_put_iv_strike: number | null
+  call_iv_wall: number | null
+  put_iv_wall: number | null
+  method: string
+}
+export interface VolumeProfileBin {
+  price: number
+  low: number
+  high: number
+  volume: number
+  pct_of_peak: number | null
+  in_value_area: boolean
+}
+export interface VolumeProfileLvn {
+  low: number
+  high: number
+  mid: number
+  volume_pct_of_peak: number | null
+}
+export interface VolumeProfileSummary {
+  available: boolean
+  bars?: number
+  bin_count?: number
+  poc?: number
+  value_area_low?: number
+  value_area_high?: number
+  lvn_count?: number
+  extremes?: { high: number; low: number }
+  lvns?: VolumeProfileLvn[]
+  method?: string
+}
+/** A level named by ≥2 independent lenses — where the stack gets its edge. */
+export interface ConfluenceCluster {
+  level: number
+  distance_pct: number | null
+  supporting_lenses: string[]
+  lens_count: number
+  labels: string[]
+  above_spot: boolean
+}
+export interface StackedSignals {
+  theta_by_strike: ThetaVannaStrikeRow[]
+  theta_summary: ThetaSummary
+  vanna_summary: VannaSummary
+  iv_surface: IvStrikeRow[]
+  iv_summary: IvSurfaceSummary
+  volume_profile: VolumeProfileBin[]
+  volume_profile_summary: VolumeProfileSummary
+  confluence: ConfluenceCluster[]
+  quality: {
+    theta_vanna_contracts_measured: number
+    theta_vanna_contracts_skipped: number
+    iv_strikes_measured: number
+    volume_profile_available: boolean
+  }
 }
 
 export interface OptionsProbability {
@@ -950,10 +1117,7 @@ export interface OptionsSqueeze {
 
 /** Why a symbol earned an expensive chain request. Ordinal unless noted. */
 export type BoardSelectionBasis =
-  | 'pead_ordinal'
-  | 'live_options_flow'
-  | 'activity_ordinal'
-  | 'directional_model'
+  'pead_ordinal' | 'live_options_flow' | 'activity_ordinal' | 'directional_model'
 
 export interface OptionsBoardRow {
   symbol: string
@@ -1115,11 +1279,7 @@ export interface LiveOpportunityPlaybook {
 }
 
 export type SetupLevelSource =
-  | 'resistance/support'
-  | 'options GEX'
-  | 'positions'
-  | 'technical analysis'
-  | string
+  'resistance/support' | 'options GEX' | 'positions' | 'technical analysis' | string
 
 export interface SetupLevelMark {
   price: number
@@ -1331,8 +1491,15 @@ export interface LiveOpportunities {
   warnings?: string[]
   caveats?: string[]
   sources?: {
-    board?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof_utc?: string | null; scan_asof?: string | null }
-    flow?: { cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }; asof?: string | null }
+    board?: {
+      cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }
+      asof_utc?: string | null
+      scan_asof?: string | null
+    }
+    flow?: {
+      cache?: { hit?: boolean; age_seconds?: number; ttl_seconds?: number }
+      asof?: string | null
+    }
     qlib?: { published?: boolean; asof?: string | null; source?: string | null; n_symbols?: number }
     scan_depth?: string
     symbol_specific?: boolean
@@ -1408,6 +1575,8 @@ export interface OptionsIntelligence {
     squeeze?: OptionsSqueeze
   }
   quality: {
+    /** False when OI is absent — GEX figures would be fake zeros. */
+    gex_measurable?: boolean
     chain_contracts_raw: number
     chain_contracts_included: number
     chain_rejected: Record<string, number>
@@ -1425,6 +1594,8 @@ export interface OptionsIntelligence {
   chain_by_strike?: ChainStrikeRow[]
   charm_summary?: CharmSummary
   pressure?: PressureGauge
+  /** Stacked-signals lenses — each an independent read on the same tape. */
+  stacked_signals?: StackedSignals
   delta_weighted_volume?: { call: number; put: number }
   oi_by_strike?: Array<{
     strike: number
@@ -1854,6 +2025,105 @@ export interface ChangepointDetail {
   stats: ChangepointRow | null
 }
 
+/* --------------------------------------------------- kalman constant-velocity */
+
+export interface KalmanParams {
+  q: number
+  entry_z: number
+  exit_z: number
+  noise_days: number
+  allow_short: boolean
+  /** `noise_days` resolved against this series' own bar spacing. */
+  noise_bars: number | null
+  bars_per_day: number | null
+  /** Fixed at 1 — only the ratio q/R sets the filter gain. */
+  observation_variance: number
+}
+
+export interface KalmanSeriesPoint {
+  d: string
+  close: number | null
+  /** Filtered velocity: log-price drift per bar. */
+  slope: number | null
+  /** slope / rolling sd(slope) — the traded statistic. */
+  score: number | null
+  noise: number | null
+  /** Position held into this bar: 1 long, -1 short, 0 flat. */
+  pos: number
+}
+
+export interface KalmanTrade {
+  entry_d: string
+  exit_d: string
+  dir: 'long' | 'short'
+  entry_px: number | null
+  exit_px: number | null
+  ret_pct: number | null
+  bars: number
+  entry_score: number | null
+  exit_score: number | null
+}
+
+export interface KalmanStats {
+  n_trades: number
+  n_long: number
+  n_short: number
+  win_rate_pct: number | null
+  avg_ret_pct: number | null
+  median_ret_pct: number | null
+  best_ret_pct: number | null
+  worst_ret_pct: number | null
+  compounded_pct: number | null
+  avg_bars: number | null
+  exposure_pct: number | null
+}
+
+export interface KalmanNow {
+  date: string
+  position: 'long' | 'short' | 'flat'
+  score: number | null
+  slope: number | null
+  slope_pct_per_day: number | null
+  /** The last trade was closed at the final bar by the harness, not by an
+   *  exit signal — the position was still on when the data ran out. */
+  forced_exit: boolean
+  last_trade: KalmanTrade | null
+}
+
+export interface KalmanTrendPayload {
+  available: boolean
+  reason: string | null
+  symbol: string
+  window: string
+  bars: 'daily' | '1h'
+  /** Bars in the displayed window. */
+  n_bars: number
+  /** Bars the filter actually ran over — always the full history. */
+  n_bars_full: number
+  first_date: string | null
+  last_date: string | null
+  generated_at: string
+  params: KalmanParams
+  series: KalmanSeriesPoint[]
+  /** Newest first, capped server-side; `n_trades` is the true total. */
+  trades: KalmanTrade[]
+  n_trades: number
+  stats: KalmanStats | null
+  now: KalmanNow | null
+  decision_authorized: boolean
+  caveat: string
+}
+
+export interface KalmanQuery {
+  window?: TrajWindow
+  q?: number
+  entry_z?: number
+  exit_z?: number
+  noise_days?: number
+  allow_short?: boolean
+  bars?: 'daily' | '1h'
+}
+
 /* ---------------------------------------------------------------- endpoints */
 
 export interface MomentumCandidate {
@@ -1893,7 +2163,7 @@ export interface MomentumScanPayload {
    the Model/EV panel renders permanently locked below that. */
 
 export type FlowStateName =
-  | 'NORMAL' | 'PRESSURE' | 'SHOCK' | 'TEST' | 'CASCADE' | 'ABSORB' | 'EXHAUSTION' | 'FADE'
+  'NORMAL' | 'PRESSURE' | 'SHOCK' | 'TEST' | 'CASCADE' | 'ABSORB' | 'EXHAUSTION' | 'FADE'
 
 export interface FlowStateRow {
   symbol: string
@@ -1946,6 +2216,92 @@ export interface FlowStateEvent {
 export interface BarrierFieldNode {
   price: number | null
   mass: number | null
+}
+
+export interface AbsorptionScanRow {
+  symbol: string
+  price: number
+  absorption_score: number
+  absorption_magnitude: number
+  vol_ratio: number
+  imbalance: number
+  signal: boolean
+  signal_kind?: 'buy_absorption' | 'sell_absorption' | string | null
+  flow_direction?: number | null
+  reversal_direction?: number | null
+  price_move?: number | null
+  atr_frac?: number | null
+  stall_atr?: number
+  asof?: string
+  [k: string]: unknown
+}
+
+export interface AbsorptionScanPayload {
+  schema_version: string
+  asof: string
+  universe_size: number
+  evaluated: number
+  rows: AbsorptionScanRow[]
+  gate_summary?: Record<string, unknown>
+  decision_authorized: boolean
+  score_kind: string
+  caveats?: string[]
+}
+
+export interface AbsorptionSeriesPoint {
+  t?: string
+  ts?: string
+  price: number
+  volume: number
+  signed_flow: number
+  absorption_score: number
+  absorption_magnitude: number
+  vol_ratio: number
+  imbalance: number
+  signal: boolean
+  signal_kind?: 'buy_absorption' | 'sell_absorption' | string | null
+  flow_direction?: number | null
+  reversal_direction?: number | null
+  stall_atr?: number
+  baseline_warming?: boolean | null
+  [k: string]: unknown
+}
+
+export interface AbsorptionBacktest {
+  n_trades?: number
+  precision?: number | null
+  roc_auc?: number | null
+  pr_auc?: number | null
+  win_rate?: number | null
+  expectancy?: number | null
+  sharpe?: number | null
+  max_drawdown?: number | null
+  profit_factor?: number | null
+  [k: string]: unknown
+}
+
+export interface AbsorptionSymbolPayload {
+  available: boolean
+  symbol: string
+  reason?: string | null
+  source?: string
+  asof?: string
+  decision_authorized: boolean
+  series: AbsorptionSeriesPoint[]
+  series_total?: number
+  series_limit?: number
+  series_start_index?: number | null
+  series_end_index?: number | null
+  series_first_ts?: string | null
+  series_last_ts?: string | null
+  signal_total_count: number
+  signal_window_count: number
+  baseline_warming_total_count: number
+  baseline_warming_window_count: number
+  latest?: AbsorptionSeriesPoint | null
+  backtest?: AbsorptionBacktest | null
+  config?: Record<string, unknown>
+  caveats?: string[]
 }
 
 export interface BarrierField {
@@ -2058,14 +2414,28 @@ export const api = {
   quotes: (symbols: string[]) =>
     req<QuotesPayload>(
       `/api/quotes?symbols=${encodeURIComponent(
-        symbols.map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 40).join(','),
+        symbols
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean)
+          .slice(0, 40)
+          .join(','),
       )}`,
     ),
   leaderboard: () => req<{ asof: string; leaderboard: LeaderboardRow[] }>('/api/leaderboard'),
   gcp: () => req<Record<string, unknown>>('/api/gcp'),
-  gates: () => req<{ gates: Gate[] }>('/api/gates'),
+  gates: () => cachedReq<{ gates: Gate[] }>('/api/gates', 5_000),
   momentumScan: () => req<MomentumScanPayload>('/api/momentum-scan'),
-  readiness: () => req<Readiness>('/api/readiness'),
+  absorptionScan: (opts?: { force?: boolean }) =>
+    req<AbsorptionScanPayload>(opts?.force ? '/api/absorption?force=1' : '/api/absorption'),
+  absorptionSymbol: (symbol: string, opts?: { limit?: number }) => {
+    const q = new URLSearchParams()
+    if (opts?.limit) q.set('limit', String(opts.limit))
+    const qs = q.toString()
+    return req<AbsorptionSymbolPayload>(
+      `/api/absorption/${encodeURIComponent(symbol.trim().toUpperCase())}${qs ? `?${qs}` : ''}`,
+    )
+  },
+  readiness: () => cachedReq<Readiness>('/api/readiness', 5_000),
   marketClock: () => req<MarketClock>('/api/market-clock'),
 
   sentiment: (symbol?: string, opts?: { force?: boolean }) => {
@@ -2089,11 +2459,7 @@ export const api = {
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ).then(normalizeSearch),
 
-  trajectory: (
-    symbol: string,
-    window: TrajWindow = '1y',
-    opts?: { includeQlib?: boolean },
-  ) =>
+  trajectory: (symbol: string, window: TrajWindow = '1y', opts?: { includeQlib?: boolean }) =>
     req<Trajectory>(
       `/api/trajectory?symbol=${encodeURIComponent(symbol)}&window=${window}${opts?.includeQlib === false ? '&include_qlib=0' : ''}`,
     ),
@@ -2269,9 +2635,7 @@ export const api = {
 
   /** Genetic evolution lab (research-only artifacts under runs/ga/). */
   ga: (runId?: string) =>
-    req<GaPayload>(
-      runId ? `/api/ga?run_id=${encodeURIComponent(runId)}` : '/api/ga',
-    ),
+    req<GaPayload>(runId ? `/api/ga?run_id=${encodeURIComponent(runId)}` : '/api/ga'),
 
   /** Repo knowledge graph. `maxNodes` caps what the browser has to lay out. */
   graph: (maxNodes = 400) => req<GraphPayload>(`/api/graph?max_nodes=${maxNodes}`),
@@ -2287,6 +2651,20 @@ export const api = {
     req<ChangepointDetail>(
       `/api/changepoints?symbol=${encodeURIComponent(symbol)}&window=${window}`,
     ),
+
+  /** Kalman constant-velocity trend for one symbol. The filter always runs
+   *  over full history; `window` slices the returned series only. */
+  kalmanTrend: (symbol: string, opts: KalmanQuery = {}) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts.window) q.set('window', opts.window)
+    if (opts.q != null) q.set('q', String(opts.q))
+    if (opts.entry_z != null) q.set('entry_z', String(opts.entry_z))
+    if (opts.exit_z != null) q.set('exit_z', String(opts.exit_z))
+    if (opts.noise_days != null) q.set('noise_days', String(opts.noise_days))
+    if (opts.allow_short != null) q.set('allow_short', opts.allow_short ? '1' : '0')
+    if (opts.bars) q.set('bars', opts.bars)
+    return req<KalmanTrendPayload>(`/api/kalman-trend?${q.toString()}`)
+  },
 
   /** Latent flow-state cross-section — offline artifact, tier-gated panels. */
   flowState: () => req<FlowStatePayload>('/api/flow-state'),
@@ -2304,10 +2682,15 @@ export const api = {
   fintelStatus: () => req<FintelStatusPayload>('/api/fintel/status'),
 
   /** Polled Fintel market boards (squeeze / SI / calendars). */
-  fintelStream: (opts?: { squeezeLimit?: number; shortInterestLimit?: number; force?: boolean }) => {
+  fintelStream: (opts?: {
+    squeezeLimit?: number
+    shortInterestLimit?: number
+    force?: boolean
+  }) => {
     const q = new URLSearchParams()
     if (opts?.squeezeLimit != null) q.set('squeeze_limit', String(opts.squeezeLimit))
-    if (opts?.shortInterestLimit != null) q.set('short_interest_limit', String(opts.shortInterestLimit))
+    if (opts?.shortInterestLimit != null)
+      q.set('short_interest_limit', String(opts.shortInterestLimit))
     if (opts?.force) q.set('force', '1')
     const qs = q.toString()
     return req<FintelStreamPayload>(`/api/fintel/stream${qs ? `?${qs}` : ''}`)
@@ -2335,15 +2718,10 @@ export const api = {
     req<Record<string, unknown>>(`/api/analyze?symbol=${encodeURIComponent(symbol)}`),
 
   triggerScan: (depth: ScanDepth = 'quick') =>
-    req<ScanJobPayload>(
-      `/api/trigger_scan?depth=${depth}`,
-      { method: 'POST' },
-    ),
+    req<ScanJobPayload>(`/api/trigger_scan?depth=${depth}`, { method: 'POST' }),
 
   scanStatus: (jobId?: string) =>
-    req<ScanJobPayload>(
-      `/api/scan_status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
-    ),
+    req<ScanJobPayload>(`/api/scan_status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`),
 
   plays: () => req<PlaysPayload>('/api/plays'),
 
@@ -2354,30 +2732,41 @@ export const api = {
     ),
 
   playsStatus: (jobId?: string) =>
-    req<PlaysJobPayload>(
-      `/api/plays/status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`,
-    ),
+    req<PlaysJobPayload>(`/api/plays/status${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ''}`),
 
   /** QuiverQuant-style stock financials & intelligence endpoints */
   financials: (symbol: string, period: 'quarterly' | 'annual' = 'quarterly') =>
-    req<FinancialsPayload>(
+    cachedReq<FinancialsPayload>(
       `/api/financials?symbol=${encodeURIComponent(symbol)}&period=${period}`,
+      30_000,
     ),
 
   companyProfile: (symbol: string) =>
-    req<CompanyProfilePayload>(`/api/company-profile?symbol=${encodeURIComponent(symbol)}`),
+    cachedReq<CompanyProfilePayload>(
+      `/api/company-profile?symbol=${encodeURIComponent(symbol)}`,
+      30_000,
+    ),
 
   insiders: (symbol: string) =>
-    req<InsidersIntelligencePayload>(`/api/insiders?symbol=${encodeURIComponent(symbol)}`),
+    cachedReq<InsidersIntelligencePayload>(
+      `/api/insiders?symbol=${encodeURIComponent(symbol)}`,
+      30_000,
+    ),
 
   government: (symbol: string) =>
-    req<GovernmentPayload>(`/api/government?symbol=${encodeURIComponent(symbol)}`),
+    cachedReq<GovernmentPayload>(`/api/government?symbol=${encodeURIComponent(symbol)}`, 30_000),
 
   ownership: (symbol: string) =>
-    req<OwnershipPayload>(`/api/ownership?symbol=${encodeURIComponent(symbol)}`),
+    cachedReq<OwnershipPayload>(`/api/ownership?symbol=${encodeURIComponent(symbol)}`, 30_000),
 
   /** Supply chain & thematic beneficiary propagation engine */
-  supplyChain: (opts?: { symbol?: string; theme?: string; depth?: number; mode?: 'dedicated' | 'intertwined'; force?: boolean }) => {
+  supplyChain: (opts?: {
+    symbol?: string
+    theme?: string
+    depth?: number
+    mode?: 'dedicated' | 'intertwined'
+    force?: boolean
+  }) => {
     const q = new URLSearchParams()
     if (opts?.symbol) q.set('symbol', opts.symbol.trim().toUpperCase())
     if (opts?.theme) q.set('theme', opts.theme)
@@ -2389,7 +2778,7 @@ export const api = {
   },
 
   supplyChainThemes: () =>
-    req<{ themes: SupplyChainThemeSummary[] }>('/api/supply-chain/themes'),
+    cachedReq<{ themes: SupplyChainThemeSummary[] }>('/api/supply-chain/themes', 60_000),
 }
 
 /* ---------------------------------------------------------------- fintel ----
@@ -2483,6 +2872,8 @@ export interface RevenueSegment {
   revenue: number
   pct: number
   growth_yoy?: number
+  /** Period end of the reported fact, e.g. "2025-09-27". */
+  period_end?: string | null
 }
 
 export interface RevenueGeography {
@@ -2494,6 +2885,12 @@ export interface RevenueGeography {
 export interface RevenueBreakdown {
   by_segment: RevenueSegment[]
   by_geography: RevenueGeography[]
+  /** Product/service split when the filer reports one (same row shape as segments). */
+  by_product?: RevenueSegment[]
+  /** Filing the facts came from, e.g. "10-K" or "10-Q". */
+  filing_form?: string | null
+  /** Filing date of the source document, e.g. "2025-10-31". */
+  filing_date?: string | null
 }
 
 export interface ModelForecast {
@@ -2507,9 +2904,19 @@ export interface ModelForecast {
   live_capital_authorized?: boolean
   features_used?: string[]
   observed_feature_count?: number
+  feature_count_total?: number
   spot_used?: number | null
   spot_source?: string | null
   lookthrough_growth?: number | null
+  sustainable_growth?: number | null
+  /** Total simple return implied by the mark over the look-through horizon. */
+  expected_return?: number | null
+  annualized_return?: number | null
+  /** Required return the annualised figure has to clear. Rises with leverage. */
+  cost_of_equity?: number | null
+  excess_annualized_return?: number | null
+  /** Horizon log-return dispersion behind the 10th/90th scenario band. */
+  scenario_sigma?: number | null
   timeframe?: string | null
   timeframe_months?: number | null
   factors?: Array<{
@@ -2750,7 +3157,17 @@ export interface InsidersIntelligencePayload {
   }
   transactions: InsiderTransaction[]
   quarterly_net: QuarterlyNetInsider[]
-  strategy: InsiderStrategyMetrics
+  /**
+   * Absent unless a real backtest produced it. The backend used to return a
+   * fixed set of invented performance figures here (identical for every
+   * symbol), so consumers must treat this as optional and render nothing
+   * rather than fall back to a placeholder.
+   */
+  strategy?: InsiderStrategyMetrics
+  /** False when the upstream provider returned no insider rows for the symbol. */
+  available?: boolean
+  /** Why the payload is empty, when `available` is false. */
+  reason?: string | null
   source?: string
   asof?: string
 }
@@ -2811,6 +3228,16 @@ export interface GovernmentPayload {
   lobbying: LobbyingIntelligence
   contracts: GovernmentContract[]
   patents: PatentRecord[]
+  /**
+   * False when no congressional-disclosure, lobbying, federal-contract or
+   * patent feed is configured. These lists used to be filled with invented
+   * records -- including trades attributed to real, named members of Congress
+   * -- so an empty list is now the correct, expected result and the UI must
+   * say the source is not connected rather than claim none were found.
+   */
+  available?: boolean
+  /** Operator-facing explanation rendered in the empty states. */
+  reason?: string | null
   source?: string
   asof?: string
 }
@@ -2870,11 +3297,7 @@ export interface OwnershipPayload {
    and quant-fundamental beneficiary elasticity models. Inspired by OpenPlanter. */
 
 export type SupplyTier =
-  | 'mega_driver'
-  | 'tier1_supplier'
-  | 'tier2_supplier'
-  | 'horizontal_enabler'
-  | 'downstream_customer'
+  'mega_driver' | 'tier1_supplier' | 'tier2_supplier' | 'horizontal_enabler' | 'downstream_customer'
 
 export type RelationshipType =
   | 'supplies_to'
@@ -2996,17 +3419,21 @@ export interface PlaysOptionLeg {
   dte: number
   strike: number
   multiplier: number
-  bid: number
-  ask: number
-  mid: number
-  spread_pct: number
+  /** Missing NBBO halves stay missing; the engine never substitutes prices. */
+  bid: number | null
+  ask: number | null
+  mid: number | null
+  spread_pct: number | null
   volume: number
   open_interest: number
-  quote_asof_utc: string
+  /** Snapshot capture time from the cached chain — never the run clock. */
+  quote_asof_utc: string | null
   provider: string
   iv?: number | null
   delta?: number | null
   gamma?: number | null
+  theta?: number | null
+  charm?: number | null
 }
 
 export interface PlaysConfidence {
@@ -3062,6 +3489,9 @@ export interface PlaysScanScope {
   model_domain_supported: number
   successfully_scanned_candidates: number
   directional_setups: number
+  /** Technical-screen sleeve counts (pullback engine runs). */
+  bounce_setups?: number
+  breakdown_setups?: number
   chain_requests: number | null
   chain_snapshots: number | null
   flow_activity_requested: number
@@ -3088,6 +3518,9 @@ export interface PlaysPayload {
   mode?: string
   account?: number
   config_hash?: string
+  /** Set when the pullback technical-screen engine produced this run. */
+  engine?: string | null
+  engine_version?: string | null
   warnings?: string[]
   status?: 'COMPLETE' | 'NO_PLAY' | string
   market_map?: PlaysMarketMap

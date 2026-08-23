@@ -41,6 +41,12 @@ function metricRows(g: Gate): { k: string; v: number | string }[] {
 function prettyKey(k: string): string {
   return k.replace(/_/g, ' ').replace(/\bpct\b/, '%').replace(/\bic\b/i, 'IC')
 }
+
+/** Counts (n_symbols, n_rows) are integers — 4dp on them is noise, not precision. */
+function metricValue(v: number | string): string {
+  if (typeof v !== 'number') return v ?? DASH
+  return Number.isInteger(v) ? num(v, 0) : num(v, 4)
+}
 </script>
 
 <template>
@@ -127,7 +133,7 @@ function prettyKey(k: string): string {
               class="fig"
               :class="typeof m.v === 'number' ? tone(m.v) : ''"
             >
-              {{ typeof m.v === 'number' ? num(m.v, 4) : (m.v ?? DASH) }}
+              {{ metricValue(m.v) }}
             </dd>
           </template>
         </dl>
@@ -200,7 +206,8 @@ function prettyKey(k: string): string {
 .num { text-align: right; }
 .bold { font-weight: 700; }
 .dim { color: var(--ink-dim); }
-.feat { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Feature lists are additive expressions — wrap so the whole set stays readable. */
+.feat { max-width: 30ch; white-space: normal; line-height: 1.4; }
 
 .strat { display: flex; flex-direction: column; gap: 2px; }
 .s-name { color: var(--ink); font-weight: 600; }
@@ -208,7 +215,9 @@ function prettyKey(k: string): string {
 
 .metrics {
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* 1fr auto let a wide value ("96,986.0000") starve the term column to 0px,
+     leaving a column of unlabelled numbers. Size the term to its content. */
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 3px var(--s3);
   align-items: baseline;
   margin-top: var(--s2);

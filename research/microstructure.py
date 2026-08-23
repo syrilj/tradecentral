@@ -12,6 +12,19 @@ import numpy as np
 import pandas as pd
 
 
+def _require_ascending(series: pd.Series, name: str) -> None:
+    """Reject an out-of-order index before any ``.rolling()`` call.
+
+    ``.rolling()`` walks positional order, not time order, so an unsorted input
+    silently stops being trailing and starts mixing future bars into a
+    "historical" median -- a look-ahead that produces plausible numbers and no
+    error. ``research/regimes.py`` guards its inputs the same way.
+    """
+    index = series.index
+    if not index.is_monotonic_increasing or index.has_duplicates:
+        raise ValueError(f"{name} must have a unique ascending index")
+
+
 def compute_signed_trade_imbalance(
     buy_volume: np.ndarray,
     sell_volume: np.ndarray,
@@ -63,6 +76,7 @@ def compute_relative_volume(
     """
     RVOL_t = Volume_t / Median volume at the same time of day (or trailing rolling median)
     """
+    _require_ascending(volume, "volume")
     vol = volume.astype(float)
     if time_of_day is not None and len(time_of_day) == len(volume):
         df = pd.DataFrame({"vol": vol, "tod": time_of_day})
@@ -102,6 +116,8 @@ def compute_liquidity_shock(
     Liquidity shock = (Spread / Rolling_Median_Spread) - (Volume / Rolling_Median_Volume)
     High positive value indicates widening spread with collapsing volume (liquidity shock).
     """
+    _require_ascending(spread, "spread")
+    _require_ascending(volume, "volume")
     med_spread = spread.rolling(window, min_periods=5).median()
     med_vol = volume.rolling(window, min_periods=5).median()
 

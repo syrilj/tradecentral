@@ -17,15 +17,17 @@ withDefaults(
     flush?: boolean
     /** Renders a phosphor left edge — marks the panel as live-polling. */
     live?: boolean
+    /** Renders a frosted glassmorphic surface. */
+    glass?: boolean
   }>(),
-  { meta: '', index: '', delay: 0, flush: false, live: false },
+  { meta: '', index: '', delay: 0, flush: false, live: false, glass: false },
 )
 </script>
 
 <template>
   <section
     class="panel ticked rise"
-    :class="{ flush, live }"
+    :class="{ flush, live, glass }"
     :style="{ animationDelay: `${delay}ms` }"
   >
     <header class="head">
@@ -42,6 +44,9 @@ withDefaults(
 </template>
 
 <style scoped>
+/* Content-layer material: opaque, even-lit, hairline rule + one specular
+   line along the top edge. No backdrop blur here — glass on cards produces
+   the "blur pile"; Liquid Glass is reserved for floating chrome. */
 .panel {
   position: relative;
   display: flex;
@@ -49,9 +54,11 @@ withDefaults(
   min-width: 0;
   min-height: 0;
   border: var(--hair) solid var(--rule);
-  border-radius: var(--r-md);
-  background: var(--panel);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 36px),
+    var(--panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   overflow: hidden;
   transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
@@ -61,13 +68,23 @@ withDefaults(
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
 }
 
+/* Opt-in: a panel that genuinely floats (popover-adjacent content) may take
+   true Liquid Glass. Use sparingly — one or two per screen at most. */
+.panel.glass {
+  background: var(--glass-surface);
+  border-color: var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+}
+
 .panel.live::before {
   content: '';
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 3px;
   background: var(--phosphor);
   z-index: 2;
 }
@@ -77,9 +94,9 @@ withDefaults(
   align-items: center;
   gap: var(--s2);
   padding: var(--s2) var(--s3);
-  min-height: 32px;
-  background: var(--panel-hi);
-  border-bottom: var(--hair) solid var(--rule-faint);
+  min-height: 34px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
+  border-bottom: var(--hair) solid var(--rule);
   flex: 0 0 auto;
 }
 
@@ -88,20 +105,26 @@ withDefaults(
   font-size: var(--t-micro);
   color: var(--phosphor);
   background: var(--phosphor-wash);
-  padding: 1px 5px;
-  border-radius: var(--r-xs);
-  border: var(--hair) solid color-mix(in srgb, var(--phosphor) 20%, transparent);
+  padding: 1px 7px;
+  border-radius: var(--r-capsule);
+  border: var(--hair) solid color-mix(in srgb, var(--phosphor) 30%, transparent);
   letter-spacing: 0.04em;
-  font-weight: 600;
+  font-weight: 700;
 }
 
+/* A panel title names the surface — it must never be cut short, so it wraps
+   instead of inheriting the .label ellipsis. */
 .lab {
+  overflow: visible;
   color: var(--ink);
-  font-family: var(--font-data);
+  font-family: var(--font-display);
   font-size: var(--t-micro);
-  font-weight: 600;
-  letter-spacing: var(--track-label);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  text-overflow: clip;
   text-transform: uppercase;
+  white-space: normal;
 }
 
 /* Spacer */
@@ -113,15 +136,20 @@ withDefaults(
 }
 
 .meta {
+  overflow: visible;
   color: var(--ink-dim);
   font-family: var(--font-data);
   letter-spacing: 0.04em;
   font-size: var(--t-micro);
   font-variant-numeric: tabular-nums;
-  background: rgba(255, 255, 255, 0.02);
-  padding: 2px 6px;
-  border-radius: var(--r-xs);
-  border: var(--hair) solid var(--rule-faint);
+  line-height: 1.35;
+  text-align: right;
+  text-overflow: clip;
+  white-space: normal;
+  background: var(--void-lift);
+  padding: 2px 8px;
+  border-radius: var(--r-capsule);
+  border: var(--hair) solid var(--rule);
 }
 
 .body {
@@ -134,5 +162,13 @@ withDefaults(
 
 .flush .body {
   padding: 0;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .panel.glass {
+    background: var(--panel-hi);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 </style>

@@ -556,17 +556,20 @@ def run_pipeline(
         for reason in (decision.get("confidence") or {}).get("reasons", [])
     )
     decision_blockers = list(decision_reasons)
-    # The pullback flow engine is a last-resort discovery path, used only when
-    # the main pipeline produced zero candidates at all (not merely when none
-    # reached ENTER).  If the pipeline scanned candidates but they all
-    # abstained/watched, those decisions must stand — they carry validated
-    # evidence and failed_checks that an operator needs to see.
-    # The fallback is gated on persist=True so isolated test runs (which use
-    # persist=False) never trigger an engine scan against real repo data.
-    # When the pipeline runs against an explicit output_root (tests, replay),
-    # the engine scans that same tree so it does not leak real repo data
-    # into an isolated run.
-    if not actionable_plays and not internals and persist:
+    # The pullback flow engine is a complementary live discovery path.  When
+    # the model funnel produced no actionable ticket (nothing reached
+    # execution validation), it contributes its own honestly-labelled,
+    # policy-gated technical-screen tickets so the operator surface is not
+    # empty all session.  Model decisions stay authoritative: they remain in
+    # watchlist/rejections with their validated evidence, and engine tickets
+    # are appended alongside them under a distinct provenance.
+    #
+    # Gating: persist=True separates production/API invocations from isolated
+    # test runs (which use persist=False and must never trigger an engine scan
+    # against real repo data).  When the pipeline runs against an explicit
+    # output_root, the engine scans that same tree so it cannot leak real repo
+    # data into an isolated run.
+    if not actionable_plays and persist:
         engine_root = (
             Path(output_root).resolve() if output_root else Path(__file__).resolve().parents[1]
         )
@@ -577,12 +580,94 @@ def run_pipeline(
                 config=config,
                 root_dir=engine_root,
             )
-            if pb_res.get("plays"):
-                if persist:
-                    persist_pullback_plays_run(
-                        pb_res, output_root=output_root or DEFAULT_OUTPUT_ROOT
-                    )
-                return pb_res
+            pb_plays = [row for row in (pb_res.get("plays") or []) if isinstance(row, Mapping)]
+            pb_watch = [row for row in (pb_res.get("watchlist") or []) if isinstance(row, Mapping)]
+            if pb_plays or pb_watch:
+                persist_pullback_plays_run(pb_res, output_root=output_root or DEFAULT_OUTPUT_ROOT)
+            # The model funnel's own artifacts still persist under this run id
+            # so replay/audit tooling finds a complete run either way.
+            persist_run(
+                manifest=manifest,
+                candidates=candidates,
+                option_snapshots=snapshots,
+                plays=[],
+                decisions=decision_dicts,
+                discovery=discovery,
+                flow_activity=flow_activity,
+                research_board=research_board,
+                output_root=output_root,
+            )
+            model_covered = [
+                str(symbol).upper()
+                for symbol in discovery.get("model_covered_symbols") or []
+                if symbol
+            ]
+            merged_warnings = _stable_unique(
+                [*warnings, f"fallback_engine_used:{pb_res.get('run_id')}"]
+            )
+            execution_health_warnings = _stable_unique(
+                [
+                    warning
+                    for warning in merged_warnings
+                    if not _is_advisory_evidence_warning(warning)
+                ]
+                + list(pb_res.get("execution_health_warnings") or ())
+            )
+            manifest = replace(
+                context.manifest(account=account, config_hash=config.config_hash, mode=mode),
+                warnings=tuple(merged_warnings),
+            )
+            manifest_data = manifest.to_dict()
+            manifest_data["warnings"] = merged_warnings
+            return {
+                **manifest_data,
+                "status": "COMPLETE" if pb_plays else "NO_PLAY",
+                "engine": "pullback_flow_engine" if (pb_plays or pb_watch) else None,
+                "market_map": discovery.get("market_map") or {},
+                "scan_scope": {
+                    "sector_books_scored": discovery.get("sector_books_scored", 0),
+                    "broad_universe_count": discovery.get("broad_universe_count", 0),
+                    "targeted_count": discovery.get("targeted_count", 0),
+                    "model_covered_count": discovery.get("model_covered_count", 0),
+                    "sector_books": discovery.get("sector_books_scored", 0),
+                    "routed_targets": discovery.get("targeted_count", 0),
+                    "model_domain_supported": len(model_covered),
+                    "model_domain_supported_symbols": model_covered,
+                    "successfully_scanned_candidates": len(internals),
+                    "fused_candidates": len(candidates),
+                    "directional_setups": sum(
+                        bool(row.get("setup_ok")) and str(row.get("side") or "neutral") != "neutral"
+                        for row in internals
+                    ),
+                    "chain_eligible_candidates": chain_eligible_candidates,
+                    "chain_requests": chain_requests,
+                    "chain_snapshots": len(snapshots)
+                    + int((pb_res.get("scan_scope") or {}).get("chain_snapshots") or 0),
+                    "unavailable_model_symbols": _stable_unique(
+                        symbol for symbol in (_warning_symbol(w) for w in merged_warnings) if symbol
+                    ),
+                    "flow_activity_requested": int(
+                        (flow_activity.get("coverage") or {}).get("requested") or 0
+                    ),
+                    "flow_activity_observed": int(
+                        (flow_activity.get("coverage") or {}).get("with_activity") or 0
+                    ),
+                },
+                "candidates": candidates,
+                "flow_activity": flow_activity,
+                "research_board": research_board,
+                "research_board_count": len(research_board),
+                "plays": pb_plays,
+                "watchlist": [*watchlist, *pb_watch],
+                "rejections": rejections,
+                "decision_count": len(decision_dicts) + len(pb_plays) + len(pb_watch),
+                "rejected_count": len(rejections),
+                "decision_blockers": [] if pb_plays else decision_blockers,
+                "advisory_evidence_warnings": advisory_evidence_warnings,
+                "execution_health_warnings": execution_health_warnings,
+                "abstention_reasons": [] if pb_plays else _stable_unique(decision_blockers),
+                "engine_run_id": pb_res.get("run_id"),
+            }
         except Exception as exc:
             warnings.append(f"pullback_flow_engine_unavailable:{type(exc).__name__}:{exc}")
 

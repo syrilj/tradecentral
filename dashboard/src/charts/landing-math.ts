@@ -22,18 +22,19 @@ export function normPdf(x: number): number {
   return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI)
 }
 
-/** Standard normal CDF via Abramowitz & Stegun 26.2.17 (±7e-8 accuracy). */
+/** Standard normal CDF via A&S 7.1.26 erf: Φ(z) = ½·[1 + erf(z/√2)], |ε| ≤ 1.5e-7. */
 export function normCdf(x: number): number {
-  const z = Math.abs(x)
+  const z = Math.abs(x) / Math.SQRT2
+  const p = 0.3275911
   const a1 = 0.254829592,
     a2 = -0.284496736,
-    a3 = 1.421413741
-  const a4 = -1.453152027,
-    a5 = 1.061405429,
-    p = 0.3275911
+    a3 = 1.421413741,
+    a4 = -1.453152027,
+    a5 = 1.061405429
   const t = 1 / (1 + p * z)
-  const y = 1 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-0.5 * z * z)
-  return x < 0 ? 1 - y : y
+  const poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+  const erfVal = (1 - poly * Math.exp(-z * z)) * (x < 0 ? -1 : 1)
+  return 0.5 * (1 + erfVal)
 }
 
 /* ── Black-Scholes ────────────────────────────────────────────────────────── */

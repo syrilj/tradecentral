@@ -38,6 +38,25 @@ describe('Plays of the Day workspace', () => {
     expect(view).toContain('Decision Blockers & Warnings')
   })
 
+  it('surfaces scanner evidence on engine tickets', () => {
+    expect(view).toContain('strategyLabel')
+    expect(view).toContain('Reward / Risk')
+    expect(view).toContain('chainFreshnessLabel')
+    expect(view).toContain('legGreeksLabel')
+    expect(view).toContain('CALL WALL')
+    expect(view).toContain('PUT WALL')
+    expect(view).toContain('MAX PAIN')
+    expect(view).toContain('PCR VOL')
+    expect(apiSrc).toContain('bounce_setups')
+    expect(apiSrc).toContain('breakdown_setups')
+    expect(apiSrc).toContain("engine?: string | null")
+  })
+
+  it('polls for fresh plays while the desk is open', () => {
+    expect(view).toMatch(/REFRESH_INTERVAL_MS = \d{2,}_000/)
+    expect(view).toMatch(/intervalMs: REFRESH_INTERVAL_MS/)
+  })
+
   it('keeps the fail-closed NO PLAY state visible and honest', () => {
     expect(view).toContain('No live-validated actionable plays today.')
     expect(view).toContain('The pipeline is fail-closed')

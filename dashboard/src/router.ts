@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { isLocalAuthMode } from './auth'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -73,6 +74,18 @@ const routes: RouteRecordRaw[] = [
     name: 'flow',
     component: () => import('@/views/FlowView.vue'),
     meta: { title: 'Market Flow', index: '06' },
+  },
+  {
+    path: '/absorption',
+    name: 'absorption',
+    component: () => import('@/views/AbsorptionView.vue'),
+    meta: { title: 'Absorption', index: '07' },
+  },
+  {
+    path: '/livestack',
+    name: 'livestack',
+    component: () => import('@/views/LiveStackView.vue'),
+    meta: { title: 'Live Stack', index: '07' },
   },
   {
     path: '/chain',
@@ -154,6 +167,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Breaks', index: '13' },
   },
   {
+    path: '/kalman',
+    name: 'kalman',
+    component: () => import('@/views/KalmanView.vue'),
+    meta: { title: 'Kalman', index: '14' },
+  },
+  {
     path: '/momentum',
     name: 'momentum',
     component: () => import('@/views/MomentumView.vue'),
@@ -194,7 +213,26 @@ export function safeRedirect(value: unknown, fallback = '/flow'): string {
   return value
 }
 
+/*
+ * EDGE_AUTH_MODE=local never installs the Clerk plugin (see main.ts), so
+ * AuthView's useClerk()/<SignIn> would throw and render a blank screen. There
+ * is no sign-in step in local mode — the operator is already the session — so
+ * send /auth straight to the requested desk surface instead.
+ */
+router.beforeEach((to) => {
+  if (to.name === 'auth' && isLocalAuthMode()) {
+    return safeRedirect(to.query.redirect, '/flow')
+  }
+  return true
+})
+
 router.afterEach((to) => {
   const t = to.meta.title as string | undefined
-  document.title = t ? `TradeCentral · ${t}` : 'TradeCentral · Research instrument'
+  const symRaw = to.query.symbol || to.query.setup
+  const sym = typeof symRaw === 'string' && symRaw ? symRaw.trim().toUpperCase() : ''
+  if (t) {
+    document.title = sym ? `TradeCentral · ${t} (${sym})` : `TradeCentral · ${t}`
+  } else {
+    document.title = 'TradeCentral · Research instrument'
+  }
 })

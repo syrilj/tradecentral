@@ -102,6 +102,22 @@ describe('Squeeze Screener Calculation Suite', () => {
       const resNullBothPos = calculateFeaturedSetup('quiet', undefined, undefined, 5)
       expect(resNullBothPos.side).toBe('bullish')
     })
+
+    it('handles compound primary labels and case-insensitivity cleanly', () => {
+      const bull = mockSetup(60)
+      const bear = mockSetup(40)
+      expect(calculateFeaturedSetup('bearish_squeeze', bull, bear).side).toBe('bearish')
+      expect(calculateFeaturedSetup('BEARISH_LEAN', bull, bear).side).toBe('bearish')
+      expect(calculateFeaturedSetup('bullish_squeeze', bull, bear).side).toBe('bullish')
+      expect(calculateFeaturedSetup('BULLISH', bull, bear).side).toBe('bullish')
+    })
+
+    it('falls back to available setup when preferred side setup is missing', () => {
+      const bull = mockSetup(65)
+      const res = calculateFeaturedSetup('bearish', bull, undefined)
+      expect(res.side).toBe('bearish')
+      expect(res.setup).toBe(bull)
+    })
   })
 
   describe('2. Radial Ring Offset Math & Geometry Bounds', () => {

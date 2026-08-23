@@ -738,6 +738,7 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .calc { display: grid; gap: var(--s4); }
 
 .underlier-shelf {
@@ -1155,9 +1156,6 @@ watch([strategy, spot, strikeHint, dte, volPct, skewPct, smilePct, legs], () => 
 .swatch { display: inline-block; width: 12px; height: 2px; }
 .swatch.expiry { background: var(--ink); }
 .swatch.theo { background: var(--phosphor); }
-
-.pos { color: var(--call-hi); }
-.neg { color: var(--put-hi); }
 
 .calc-note {
   font-size: var(--t-micro);

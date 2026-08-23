@@ -115,7 +115,7 @@ const { W: hostW, H: hostH } = useChartSize(hostRef, {
 
 const left = 48
 const right = 16
-const top = 36
+const top = 48
 const bottom = 26
 const minCol = 14
 
@@ -163,9 +163,14 @@ const maxAbs = computed(() => {
   const vals: number[] = []
   for (const r of orderedRows.value) {
     if (metric.value === 'gex') {
-      vals.push(Math.abs(r.call_gex_m), Math.abs(r.put_gex_m), Math.abs(r.net_gex_m))
+      const c = Number.isFinite(r.call_gex_m) ? Math.abs(r.call_gex_m) : 0
+      const p = Number.isFinite(r.put_gex_m) ? Math.abs(r.put_gex_m) : 0
+      const n = Number.isFinite(r.net_gex_m) ? Math.abs(r.net_gex_m) : 0
+      vals.push(c, p, n)
     } else {
-      vals.push(Math.abs(r.call_oi), Math.abs(r.put_oi), Math.abs(r.call_oi - r.put_oi))
+      const coi = Number.isFinite(r.call_oi) ? Math.abs(r.call_oi) : 0
+      const poi = Number.isFinite(r.put_oi) ? Math.abs(r.put_oi) : 0
+      vals.push(coi, poi, Math.abs(coi - poi))
     }
   }
   return Math.max(1e-9, ...vals)
@@ -178,7 +183,7 @@ const callTotal = computed(() =>
   orderedRows.value.reduce((s, r) => s + (metric.value === 'gex' ? r.call_gex_m : r.call_oi), 0),
 )
 const putTotal = computed(() =>
-  orderedRows.value.reduce((s, r) => s + (metric.value === 'gex' ? Math.abs(r.put_gex_m) : r.put_oi), 0),
+  orderedRows.value.reduce((s, r) => s + (metric.value === 'gex' ? r.put_gex_m : r.put_oi), 0),
 )
 
 const gexRatio = computed(() => {
@@ -205,8 +210,9 @@ const maxCumulative = computed(() => {
 
 function metricValue(value: number, signed = false): string {
   if (!Number.isFinite(value)) return DASH
-  const sign = value > 0 ? (signed ? '+' : '') : value < 0 ? '-' : ''
-  const abs = Math.abs(value)
+  const rounded = Number(value.toFixed(1))
+  const sign = rounded > 0 ? (signed ? '+' : '') : rounded < 0 ? '-' : ''
+  const abs = Math.abs(rounded === 0 ? 0 : rounded)
   return metric.value === 'gex' ? `${sign}$${num(abs, 1)}M` : `${sign}${compact(abs)}`
 }
 
@@ -219,9 +225,10 @@ function distanceLabel(strike: number): string {
   if (!props.spot || props.spot <= 0) return ''
   const diff = strike - props.spot
   const pct = (diff / props.spot) * 100
+  const rounded = Number(pct.toFixed(1))
   const sign = diff >= 0 ? '+' : ''
   const side = diff > 0 ? 'OTM' : diff < 0 ? 'ITM' : 'ATM'
-  return `${sign}$${num(Math.abs(diff), 2)} (${sign}${num(pct, 1)}% ${side})`
+  return `${sign}$${num(Math.abs(diff), 2)} (${sign}${num(rounded === 0 ? 0 : rounded, 1)}% ${side})`
 }
 
 const bars = computed<Bar[]>(() => {
@@ -342,10 +349,42 @@ function levelBadgeWidth(label: string, value: number): number {
 
 const levels = computed<Level[]>(() => {
   const raw: { key: string; label: string; value: number | null; cls: string }[] = [
-    { key: 'put', label: 'PUT W', value: props.putWall, cls: 'put' },
-    { key: 'flip', label: 'FLIP', value: props.gammaFlip, cls: 'flip' },
-    { key: 'spot', label: 'SPOT', value: props.spot, cls: 'spot' },
-    { key: 'call', label: 'CALL W', value: props.callWall, cls: 'call' },
+    {
+      key: 'put',
+      label: 'PUT W',
+      value:
+        props.putWall != null && Number.isFinite(props.putWall) && props.putWall > 0
+          ? props.putWall
+          : null,
+      cls: 'put',
+    },
+    {
+      key: 'flip',
+      label: 'FLIP',
+      value:
+        props.gammaFlip != null && Number.isFinite(props.gammaFlip) && props.gammaFlip > 0
+          ? props.gammaFlip
+          : null,
+      cls: 'flip',
+    },
+    {
+      key: 'spot',
+      label: 'SPOT',
+      value:
+        props.spot != null && Number.isFinite(props.spot) && props.spot > 0
+          ? props.spot
+          : null,
+      cls: 'spot',
+    },
+    {
+      key: 'call',
+      label: 'CALL W',
+      value:
+        props.callWall != null && Number.isFinite(props.callWall) && props.callWall > 0
+          ? props.callWall
+          : null,
+      cls: 'call',
+    },
   ]
   const placed = raw
     .map((level) => ({ ...level, x: level.value != null ? xOfPrice(level.value) : null }))
@@ -408,10 +447,10 @@ const levels = computed<Level[]>(() => {
 
   return placed.map((level, i) => {
     const labelX = Math.max(minBoundary, Math.min(maxBoundary, xs[i]))
-    // Position labels cleanly above the bars in the dedicated top banner lane [12 .. 32]
+    // Position labels cleanly in dedicated banner lane [24 .. 38]
     const labelY = (hasRemainingOverlap || isWidthConstrained)
-      ? (i % 2 === 0 ? 16 : 28)
-      : 22
+      ? (i % 2 === 0 ? 24 : 36)
+      : 30
 
     return {
       ...level,
@@ -592,31 +631,31 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
         </button>
       </div>
 
-      <div class="quick-levels" v-if="putWall != null || gammaFlip != null || spot || callWall != null">
+      <div class="quick-levels" v-if="(putWall != null && putWall > 0) || (gammaFlip != null && gammaFlip > 0) || (spot != null && spot > 0) || (callWall != null && callWall > 0)">
         <span class="label quick-title">JUMP:</span>
         <button
-          v-if="putWall != null"
+          v-if="putWall != null && putWall > 0"
           type="button"
           class="level-chip put label"
           @click="jumpToLevel(putWall)"
           title="Jump to Put Wall"
         >PUT W ${{ strikeLabel(putWall) }}</button>
         <button
-          v-if="gammaFlip != null"
+          v-if="gammaFlip != null && gammaFlip > 0"
           type="button"
           class="level-chip flip label"
           @click="jumpToLevel(gammaFlip)"
           title="Jump to Gamma Flip"
         >FLIP ${{ strikeLabel(gammaFlip) }}</button>
         <button
-          v-if="spot"
+          v-if="spot != null && spot > 0"
           type="button"
           class="level-chip spot label"
           @click="jumpToLevel(spot)"
           title="Jump to Spot"
         >SPOT ${{ strikeLabel(spot) }}</button>
         <button
-          v-if="callWall != null"
+          v-if="callWall != null && callWall > 0"
           type="button"
           class="level-chip call label"
           @click="jumpToLevel(callWall)"
@@ -625,7 +664,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
       </div>
 
       <span class="coverage label">
-        {{ bars.length }}/{{ rows.length }} STRIKES ·
+        {{ bars.length < rows.length ? `IN VIEW ${bars.length}/${rows.length}` : 'FULL CHAIN' }} ·
         <span class="call-leg"><i class="leg-dot call" />CALL</span> ·
         <span class="put-leg"><i class="leg-dot put" />PUT</span> ·
         <span class="net-leg"><i class="leg-dot net" />NET</span>
@@ -807,7 +846,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             :y="level.labelY - 11"
             :width="level.badgeW"
             height="18"
-            rx="3"
+            rx="9"
             class="level-badge-bg"
           />
           <text :x="level.labelX" :y="level.labelY + 2" text-anchor="middle">
@@ -946,7 +985,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
           v-if="rows.length"
           class="axis-cap"
           :x="left"
-          :y="top - 8"
+          :y="14"
         >
           {{
             viewMode === 'cumulative'
@@ -984,6 +1023,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .gex-map {
   width: 100%;
   max-width: 100%;
@@ -1019,74 +1059,82 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 }
 
 .mini-segment {
-  display: flex;
-  min-height: 24px;
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void);
-  border-radius: var(--r-xs, 2px);
-  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  min-height: 26px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
 .mini-segment button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0 8px;
   color: var(--ink-dim);
-  border-right: var(--hair) solid var(--rule);
+  border: none;
   font: 600 var(--t-micro) var(--font-display);
   letter-spacing: 0.04em;
-  min-height: 24px;
+  min-height: 22px;
   cursor: pointer;
   background: transparent;
-  transition: color 0.12s ease, background 0.12s ease;
-}
-
-.mini-segment button:last-child {
-  border-right: 0;
+  border-radius: var(--r-xs);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 
 .mini-segment button:hover {
   color: var(--ink);
-  background: var(--panel-hi);
+  background: var(--glass-surface-hi);
 }
 
 .mini-segment button.on {
-  color: var(--phosphor);
-  background: var(--phosphor-wash);
-  box-shadow: inset 0 -2px var(--phosphor);
-  font-weight: 700;
+  color: var(--void);
+  background: var(--phosphor);
+  font-weight: 750;
+  box-shadow: var(--glass-specular);
 }
 
 .pill-toggle {
-  padding: 2px 8px;
-  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 9px;
+  min-height: 26px;
   color: var(--ink-dim);
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void);
-  border-radius: var(--r-xs, 2px);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  border-radius: 9999px;
   font: 600 var(--t-micro) var(--font-display);
   letter-spacing: 0.05em;
   cursor: pointer;
-  transition: all 0.12s ease;
+  box-shadow: var(--glass-specular-subtle);
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .pill-toggle:hover {
   color: var(--ink);
-  background: var(--panel-hi);
+  border-color: var(--glass-border-hi);
+  background: var(--glass-surface-hi);
 }
 
 .pill-toggle.active {
-  color: var(--phosphor);
-  border-color: var(--phosphor-dim);
-  background: var(--phosphor-wash);
+  color: var(--void);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+  box-shadow: var(--glass-specular);
 }
 
 .quick-levels {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: var(--void);
+  background: var(--glass-base);
   padding: 2px 6px;
-  border: var(--hair) solid var(--rule);
-  border-radius: var(--r-xs, 2px);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-sm);
   flex-wrap: wrap;
 }
 
@@ -1097,25 +1145,44 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 }
 
 .level-chip {
-  padding: 2px 6px;
+  position: relative;
+  /* .label clips overflow; the chip needs it visible so the hit target below
+     is not cut back to the painted size. */
+  overflow: visible;
+  padding: 2px 8px;
   font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.03em;
   cursor: pointer;
-  border: var(--hair) solid var(--rule);
-  border-radius: var(--r-xs, 2px);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: 9999px;
   background: var(--void-lift);
+  box-shadow: var(--glass-specular-subtle);
   transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease, background 0.15s ease;
   white-space: nowrap;
 }
 
 .level-chip:hover {
   background: var(--panel-hi);
+  border-color: var(--glass-border-hi);
+  transform: translateY(-0.5px);
 }
 
 .level-chip.put { color: var(--put-hi); border-color: var(--put); background: var(--put-wash); }
 .level-chip.call { color: var(--call-hi); border-color: var(--call); background: var(--call-wash); }
 .level-chip.flip { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
 .level-chip.spot { color: var(--ink); border-color: var(--ink-dim); background: var(--void-lift); }
+/* Painted size stays compact for desk density; this restores a 28px pointer
+   target underneath without touching layout. */
+.level-chip::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 28px);
+  height: max(100%, 28px);
+  transform: translate(-50%, -50%);
+}
+
 
 .coverage {
   margin-left: auto;
@@ -1160,11 +1227,12 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   min-height: 36px;
   max-height: 38px;
   background: var(--void-lift);
-  border: var(--hair) solid var(--rule-hi);
-  border-radius: var(--r-xs, 2px);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-md);
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
 }
 
 .exposure-totals {

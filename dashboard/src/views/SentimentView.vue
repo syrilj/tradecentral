@@ -768,7 +768,7 @@ const TICKER_HELP =
   line-height: 1;
 }
 .refresh-icon.spinning {
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 @keyframes spin {
   from { transform: rotate(0deg); }

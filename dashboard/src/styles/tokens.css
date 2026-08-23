@@ -90,6 +90,50 @@
      it never reads as glassmorphism or a neon scrim. */
   --panel-wash: rgba(10, 11, 15, 0.7);
 
+  /* ---- Liquid Glass material system (Apple iOS 26 two-layer model) -------
+      The FUNCTIONAL layer only: floating chrome that sits above content —
+      rail navigation, instrument strip, toolbars, popovers, drawers. Glass
+      reads as glass because content scrolls beneath it; it must never be
+      applied to cards, rows, or panels in the content layer (the "blur
+      pile" failure mode). Content surfaces use the opaque panel tokens.
+      Fill is translucent + backdrop blur + saturation lift; a 1px specular
+      highlight along the top edge sells the curvature of the lens. */
+  --glass-base: rgba(13, 15, 20, 0.62);
+  --glass-surface: rgba(20, 23, 30, 0.58);
+  --glass-surface-hi: rgba(32, 36, 46, 0.66);
+  --glass-overlay: rgba(12, 14, 19, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-border-subtle: rgba(255, 255, 255, 0.055);
+  --glass-border-hi: rgba(255, 255, 255, 0.16);
+  --glass-border-accent: rgba(169, 196, 108, 0.35);
+  --glass-specular: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.28);
+  --glass-specular-subtle: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glass-specular-accent: inset 0 1px 0 rgba(169, 196, 108, 0.28);
+  --glass-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.22);
+  --glass-shadow-md: 0 2px 6px rgba(0, 0, 0, 0.32), 0 12px 32px rgba(0, 0, 0, 0.34);
+  --glass-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.38), 0 24px 64px rgba(0, 0, 0, 0.5);
+  --glass-shadow-drawer: -8px 0 32px rgba(0, 0, 0, 0.65);
+  /* Glass optics: blur softens what's beneath, saturate keeps it vivid —
+      the combination that makes iOS-style glass read "wet" instead of
+      "fogged". --glass-blur-* stay single-function blur(Npx) for utility
+      classes; --chrome-optics-* compose blur + saturation for floating
+      shell chrome (rail, strip, drawers). */
+  --glass-blur-sm: blur(6px);
+  --glass-blur-md: blur(14px);
+  --glass-blur-lg: blur(28px);
+  --glass-blur-xl: blur(44px);
+  --chrome-optics-sm: blur(6px) saturate(150%);
+  --chrome-optics-md: blur(14px) saturate(165%);
+  --chrome-optics-lg: blur(28px) saturate(180%);
+  --chrome-optics-xl: blur(44px) saturate(200%);
+
+  /* ---- concentric geometry ------------------------------------------------
+      Nested surfaces share a common curvature center: an inset element's
+      radius equals its container's radius minus the inset padding. */
+  --r-capsule: 999px;
+  --r-content: 12px;
+  --r-chrome: 16px;
+
   /* ---- categorical ramp (graph communities only) ------------------------- */
   --cat-1: #5b95b5;
   --cat-2: #c1955e;
@@ -107,33 +151,44 @@
   --running: var(--warn);
 
   /* ---- type: self-hosted Geist system ------------------------------------
-     Geist for display/UI, Geist Mono for data. Lora is the serif accent for
-     the public paper surfaces (landing/auth) only — never on the desk. */
-  --font-display: 'Geist Variable', 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-ui: 'Geist Variable', 'Geist', 'Instrument Sans Variable', 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-data: 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
-  --font-mono: 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
+     Geist for display/UI, Geist Mono for data. The public paper surfaces
+     (landing/auth) override these stacks inside their own scope with the
+     editorial set — Inter Tight, Inter, Space Mono — never on the desk. */
+  --font-display:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Geist Variable', 'Geist',
+    'Instrument Sans Variable', 'Instrument Sans', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Geist Variable', 'Geist',
+    'Instrument Sans Variable', 'Instrument Sans', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-data:
+    'SF Mono', 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', ui-monospace, Menlo, Monaco,
+    Consolas, monospace;
+  --font-mono:
+    'SF Mono', 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', ui-monospace, Menlo, Monaco,
+    Consolas, monospace;
   --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
 
-  --t-micro: 0.6875rem;   /* 11px — crisp technical labels     */
-  --t-tiny: 0.75rem;      /* 12px — dense table meta           */
-  --t-small: 0.8125rem;   /* 13px — table body                 */
-  --t-body: 0.875rem;     /* 14px — prose                      */
-  --t-lead: 1.0rem;       /* 16px                              */
-  --t-fig: 1.375rem;      /* 22px — readout figures            */
-  --t-fig-lg: 2.25rem;    /* 36px — hero readout               */
-  --t-display: 1.125rem;  /* 18px — view titles                */
+  --t-micro: 0.6875rem; /* 11px — crisp technical labels     */
+  --t-tiny: 0.75rem; /* 12px — dense table meta           */
+  --t-small: 0.8125rem; /* 13px — table body                 */
+  --t-body: 0.875rem; /* 14px — prose                      */
+  --t-lead: 1rem; /* 16px                              */
+  --t-fig: 1.375rem; /* 22px — readout figures            */
+  --t-fig-lg: 2.25rem; /* 36px — hero readout               */
+  --t-display: 1.125rem; /* 18px — view titles                */
 
   --track-display: -0.02em; /* tight display tracking         */
-  --track-label: 0.05em;   /* balanced uppercase mono tracking */
+  --track-label: 0.05em; /* balanced uppercase mono tracking */
   --track-tight: -0.01em;
 
-  /* ---- radius geometry (clean modern box curves) ------------------------ */
-  --r-xs: 2px;
-  --r-sm: 4px;
-  --r-md: 6px;
-  --r-lg: 8px;
-  --r-xl: 12px;
+  /* ---- radius geometry (concentric scale) --------------------------------
+      Softer curves than the old 2/4/6/8 ladder so nested surfaces can share
+      curvature centers: panel r-lg ≈ control r-sm + padding. */
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
 
   /* ---- space (4px base) -------------------------------------------------- */
   --s1: 4px;
@@ -164,9 +219,22 @@
   --dur: 220ms;
   --dur-slow: 480ms;
 
+  /* ---- loop durations -----------------------------------------------------
+     Infinite spinners/pulses can't route through --dur/--dur-slow (those are
+     one-shot transition speeds); they need their own tokens so the
+     prefers-reduced-motion block below can zero every loop in one place. */
+  --dur-spin: 800ms; /* refresh-icon spinners (Momentum/FlowState/Sentiment/Changepoints) */
+  --dur-orb: 900ms; /* LoadingState primary ring */
+  --dur-orb-mid: 1200ms; /* LoadingState middle ring (reverse) */
+  --dur-orb-fast: 700ms; /* LoadingState inner ring */
+  --dur-pulse: 2000ms; /* live/alert dot pulse (App nav-pulse, Drift/Flow dot-pulse) */
+  --dur-pulse-fast: 1400ms; /* VerdictChip "running" state dot */
+
   --z-strip: 40;
   --z-rail: 45;
+  --z-popover: 50; /* in-view dropdowns (search-hits, autocomplete) — above the strip, below the rail */
   --z-overlay: 90;
+  --z-tooltip: 95; /* must float above an open --z-overlay drawer */
   --z-toast: 100;
 
   /* ---- institutional flow order badges (strictly anti-neon) ------------- */
@@ -181,7 +249,37 @@
   --badge-split-wash: rgba(168, 120, 143, 0.12);
   --badge-multileg: #6f8fa0;
   --badge-multileg-wash: rgba(111, 143, 160, 0.12);
+
+  /* ---- paper palette (retained editorial print tokens) ---------------------
+     The original landing/auth "paper" palette: cream stock, near-black ink,
+     one ochre accent. The public landing now carries its own editorial remap
+     (see LandingView.vue), so these are currently unused; kept for future
+     editorial surfaces. Never applied to the desk itself. */
+  --paper-bg: #faf7f0;
+  --paper-bg-alt: #f4f0e6;
+  --paper-card: #fffdf8;
+  --paper-ink: #141412;
+  --paper-ink-soft: #45423a;
+  --paper-ink-dim: #6b675a;
+  --paper-ink-faint: #98937f;
+  --paper-ink-ghost: #bdb7a2;
+  --paper-rule: #e3dccb;
+  --paper-rule-hi: #c8bfa8;
+  --paper-grid: rgba(20, 20, 18, 0.045);
+  --paper-accent: #9c6b0c; /* readable ochre for text + line-art             */
+  --paper-accent-vivid: #e9a825; /* fills only (buttons), always ink text    */
+  --paper-call: #2f7d5a;
+  --paper-put: #b3494f;
+  --paper-warn: #946200;
 }
+
+/* ---- public editorial palette (landing/auth surfaces) ----------------------
+  The public pages borrow the desk vocabulary but resolve it to a warm
+  editorial paper scheme inside their own scope: off-white canvas (#fbfbf8),
+  hairline rules, zinc ink, near-black buttons, one orange accent (#ff5229),
+  decorative yellow/blue, and navy (#151524) bands (see LandingView.vue and
+  AuthView.vue). Inter Tight / Inter / Space Mono replace the desk stacks on
+  those surfaces only. Never applied to the desk itself. */
 
 /* A desk defaults to compact, while review / presentation sessions can be
    made calmer without changing the component structure. */
@@ -335,5 +433,20 @@
     --dur-fast: 0ms;
     --dur: 0ms;
     --dur-slow: 0ms;
+    --dur-spin: 0ms;
+    --dur-orb: 0ms;
+    --dur-orb-mid: 0ms;
+    --dur-orb-fast: 0ms;
+    --dur-pulse: 0ms;
+    --dur-pulse-fast: 0ms;
+  }
+  /* A 0s infinite animation still spins — each cycle just completes
+     instantly, back-to-back, forever. Zeroing the duration tokens above
+     removes the perceived motion; this stops the loop outright by forcing
+     every animation (token-driven or not) to run its cycle once and hold. */
+  *,
+  *::before,
+  *::after {
+    animation-iteration-count: 1 !important;
   }
 }

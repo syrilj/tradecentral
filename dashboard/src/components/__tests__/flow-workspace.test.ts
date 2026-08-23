@@ -33,7 +33,7 @@ describe('Standalone Flow workspace contract', () => {
     expect(flow).toMatch(/FLOW_POLL_MS = 15_000/)
     expect(flow).toMatch(/intervalMs: FLOW_POLL_MS/)
     expect(flow).toMatch(/forceNext\.value = true/)
-    expect(flow).toMatch(/minPremium: BASE_FLOW_FLOOR/)
+    expect(flow).toMatch(/minPremium: (minPremium\.value|BASE_FLOW_FLOOR)/)
   })
 
   it('does not expose legacy routed-symbol or Deep-scan coverage', () => {

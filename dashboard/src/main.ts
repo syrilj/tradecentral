@@ -2,16 +2,22 @@ import { createApp } from 'vue'
 import { clerkPlugin } from '@clerk/vue'
 import App from './App.vue'
 import { router } from './router'
+import { isLocalAuthMode } from './auth'
 import './styles/base.css'
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
-if (!publishableKey) {
+// EDGE_AUTH_MODE=local is the zero-credential workstation posture documented in
+// .env.example: the desk runs on a local operator session with the API isolated
+// by its 127.0.0.1 bind, so no Clerk publishable key is needed. Any other mode
+// keeps the Clerk operator session and still requires the key.
+if (!publishableKey && !isLocalAuthMode()) {
   throw new Error('VITE_CLERK_PUBLISHABLE_KEY is required. Add it to edge/.env or the GCP build environment.')
 }
 
-createApp(App)
-  .use(clerkPlugin, {
+if (publishableKey && !isLocalAuthMode()) {
+  createApp(App)
+    .use(clerkPlugin, {
     publishableKey,
     signInUrl: '/auth',
     signUpUrl: '/auth',
@@ -94,5 +100,13 @@ createApp(App)
       },
     },
   })
-  .use(router)
-  .mount('#app')
+    .use(router)
+    .mount('#app')
+} else {
+  // Local operator session: no Clerk plugin, so no @clerk/vue composable or
+  // component may run (they throw outside the plugin). App.vue branches on the
+  // same flag and renders the identical shell with a local identity.
+  createApp(App)
+    .use(router)
+    .mount('#app')
+}

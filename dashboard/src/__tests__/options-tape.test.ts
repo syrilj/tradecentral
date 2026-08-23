@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activityLeanRead, printWhy } from '@/optionsTape'
+import { activityLeanRead, formatTapeTime, printWhy } from '@/optionsTape'
 
 describe('activity lean readout', () => {
   it('surfaces a bullish activity sign without authorizing a trade', () => {
@@ -39,5 +39,24 @@ describe('print why', () => {
       is_unusual: true,
       is_momentum: true,
     })).toEqual(['near-dated OTM', 'premium outlier', 'repeat cluster', 'high relative volume'])
+  })
+})
+
+describe('formatTapeTime', () => {
+  it('extracts HH:MM:SS from ISO timestamps', () => {
+    expect(formatTapeTime('2026-08-22T14:32:05.123Z')).toBe('14:32:05')
+    expect(formatTapeTime('2026-08-22T09:15:30Z')).toBe('09:15:30')
+  })
+
+  it('preserves or normalizes short time formats', () => {
+    expect(formatTapeTime('14:32:05')).toBe('14:32:05')
+    expect(formatTapeTime('09:15')).toBe('09:15:00')
+  })
+
+  it('returns DASH for null, undefined, or blank timestamps', () => {
+    expect(formatTapeTime(null)).toBe('—')
+    expect(formatTapeTime(undefined)).toBe('—')
+    expect(formatTapeTime('')).toBe('—')
+    expect(formatTapeTime('   ')).toBe('—')
   })
 })

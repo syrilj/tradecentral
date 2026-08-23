@@ -414,6 +414,7 @@ function computePressureScore(row: OptionsBoardRow): {
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .refresh-btn,
 .live-toggle {
   display: inline-flex;

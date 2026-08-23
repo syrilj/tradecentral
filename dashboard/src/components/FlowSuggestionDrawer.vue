@@ -342,13 +342,27 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   background: color-mix(in srgb, var(--void) 82%, transparent);
 }
 
+/* Floating overlay chrome — this sheet genuinely floats over content, so it
+   takes true Liquid Glass: heavy optics, specular edge, deep shadow. */
 .setup-drawer {
   width: min(760px, calc(100vw - 72px));
   height: 100%;
-  border-left: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+  border-left: var(--hair) solid var(--glass-border-hi);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 140px),
+    var(--glass-overlay);
+  backdrop-filter: var(--chrome-optics-xl);
+  -webkit-backdrop-filter: var(--chrome-optics-xl);
+  box-shadow: var(--glass-shadow-drawer), inset 1px 0 0 rgba(255, 255, 255, 0.06);
   animation: drawer-in var(--dur) var(--ease-out) both;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .setup-drawer {
+    background: var(--void-lift);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 @keyframes drawer-in { from { transform: translateX(28px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -361,20 +375,35 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   gap: var(--s4);
   padding: var(--s4) var(--s5);
   border-bottom: var(--hair) solid var(--rule-hi);
-  background: var(--panel);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0));
 }
 .eyebrow { color: var(--phosphor); }
 .symbol-line { display: flex; align-items: center; gap: var(--s3); margin-top: 4px; }
 .symbol-line h2 { color: var(--ink); font-size: var(--t-fig); }
 .live-state { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); }
-.live-state i { width: 5px; height: 5px; background: currentColor; }
+.live-state i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .live-state.live { color: var(--phosphor); }
 .live-state.planning { color: var(--call-hi); }
 
 .head-actions { display: flex; align-items: center; gap: var(--s2); }
-.refresh { padding: 6px 10px; color: var(--phosphor); border: var(--hair) solid var(--phosphor-dim); background: var(--phosphor-wash); }
+.refresh {
+  min-height: 30px;
+  padding: 6px 14px;
+  color: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+  background: var(--phosphor-wash);
+  border-radius: var(--r-capsule);
+}
 .refresh:disabled { opacity: 0.55; cursor: wait; }
-.close { width: 30px; height: 30px; color: var(--ink-dim); border: var(--hair) solid var(--rule-hi); font-size: 22px; line-height: 1; }
+.close {
+  width: 32px;
+  height: 32px;
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+}
 .close:hover { color: var(--ink); border-color: var(--ink-faint); }
 
 .drawer-scroll { height: calc(100% - 84px); overflow-y: auto; padding: var(--s4); }

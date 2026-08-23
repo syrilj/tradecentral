@@ -980,7 +980,7 @@ const symbolInsight = computed(() => {
   position: absolute;
   top: calc(100% + 2px);
   left: 0;
-  z-index: 40;
+  z-index: var(--z-popover); /* was 40, tied --z-strip and fell to paint order */
   min-width: 180px;
   margin: 0;
   padding: 0;
@@ -1056,7 +1056,7 @@ const symbolInsight = computed(() => {
   line-height: 1;
 }
 .refresh-icon.spinning {
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 @keyframes spin {
   from { transform: rotate(0deg); }

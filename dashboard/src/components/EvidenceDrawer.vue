@@ -166,7 +166,7 @@ function nav(viewName: string) {
   max-width: 90vw;
   background: var(--panel);
   border-left: 1px solid var(--rule-hi);
-  z-index: 120;
+  z-index: var(--z-overlay); /* was 120, above the --z-toast ceiling */
   transform: translateX(100%);
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);

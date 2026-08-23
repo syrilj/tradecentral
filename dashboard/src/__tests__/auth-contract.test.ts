@@ -30,9 +30,9 @@ describe('Clerk operator access contract', () => {
   })
 
   it('offers a direct sidebar sign-out action in addition to the account menu', () => {
-    expect(appSource).toContain('const clerk = useClerk()')
+    expect(appSource).toContain('const clerk = localMode ? ref(null) : useClerk()')
     expect(appSource).toContain('async function signOut')
-    expect(appSource).toContain('await clerk.value?.signOut()')
+    expect(appSource).toContain('if (!localMode) await clerk.value?.signOut()')
     expect(appSource).toContain("'SIGN OUT'")
   })
 

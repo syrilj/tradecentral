@@ -300,3 +300,211 @@ def test_missing_has_no_fake_case_prices():
     assert out["cases"]["bull"]["price"] is None
     assert out["factors"] == []
     assert out["timeframe"] is None
+
+
+# ==============================================================================
+# Financial-soundness regressions. Each test below pins a defect found in the
+# 2026-08 audit of the Market-tab forecast; see the docstrings for the failure.
+# ==============================================================================
+
+
+def _annual_report() -> dict:
+    """Same figures as the growth report, but the periods span four YEARS."""
+    rep = _growth_report()
+    rep["symbol"] = "ANNL"
+    rep["period_type"] = "annual"
+    rep["periods"] = [
+        "2025-12-31", "2024-12-31", "2023-12-31", "2022-12-31", "2021-12-31",
+    ]
+    return rep
+
+
+def test_annual_periods_are_annualised_not_read_as_one_year():
+    """A 4-year span must not be published as if it were one year of growth.
+
+    Before the fix, `_growth` returned (newest-oldest)/oldest regardless of
+    period type, so a company that grew 82% over four years was capitalised as
+    an 82%-a-year compounder.
+    """
+    from research.financials_ml_forecast import _growth, _periods_per_year
+
+    assert _periods_per_year(_annual_report()) == 1
+    assert _periods_per_year(_growth_report()) == 4
+
+    quarterly = score_report_forecast(_growth_report())
+    annual = score_report_forecast(_annual_report())
+    # Identical cells, different calendars -> the annual read must be slower.
+    assert annual["lookthrough_growth"] < quarterly["lookthrough_growth"]
+    assert annual["predicted_price"] < quarterly["predicted_price"]
+    # 100 -> 200 over four years is ~19% CAGR, nowhere near the 82% raw span.
+    assert 0.10 < _growth([200.0, 170.0, 150.0, 130.0, 100.0], 1) < 0.25
+
+
+def test_negative_book_equity_is_distress_not_a_pristine_balance_sheet():
+    """Negative equity made D/E negative, which the model read as no leverage.
+
+    A buyback-heavy or impaired name printed a *better* score than a healthy
+    one because -2.67x standardised as extraordinarily low gearing.
+    """
+    rep = _growth_report()
+    rep["balance_sheet"]["rows"] = [
+        _row("current_assets", "Total Current Assets", [140e6, 120e6, 100e6]),
+        _row("current_liabilities", "Total Current Liabilities", [50e6, 48e6, 46e6]),
+        _row("total_assets", "Total Assets", [300e6, 270e6, 240e6]),
+        _row("long_term_debt", "Long-Term Debt", [400e6, 380e6, 360e6]),
+        _row("stockholders_equity", "Total Stockholders' Equity", [-150e6, -120e6, -90e6]),
+    ]
+    feats = build_report_features(rep)
+    assert feats["debt_to_equity"] > 1.0, "negative equity must not read as low gearing"
+    assert feats["roe"] is None, "return on a negative book is not a real ROE"
+
+    impaired = score_report_forecast(rep)
+    healthy = score_report_forecast(_growth_report())
+    assert impaired["forecast_score"] < healthy["forecast_score"]
+    assert impaired["predicted_price"] < healthy["predicted_price"]
+
+
+def test_vendor_percentage_debt_to_equity_is_normalised():
+    """yfinance reports debtToEquity as a percent: 150.0 means 1.5x.
+
+    Passed through raw it standardised to z>600 against the fitted panel and
+    pinned the Ridge leg to its floor for every vendor-covered symbol.
+    """
+    from research.financials_ml_forecast import _normalise_debt_to_equity
+
+    assert _normalise_debt_to_equity(150.0) == pytest.approx(1.5)
+    assert _normalise_debt_to_equity(1.5) == pytest.approx(1.5)
+    assert _normalise_debt_to_equity(-3.0) > 1.0  # negative book -> distress
+
+    rep = _growth_report()
+    rep["balance_sheet"]["rows"] = [
+        r for r in rep["balance_sheet"]["rows"]
+        if r["key"] not in {"long_term_debt", "stockholders_equity"}
+    ]
+    rep["ratios"]["debt_to_equity"] = 150.0
+    feats = build_report_features(rep)
+    assert feats["debt_to_equity"] == pytest.approx(1.5)
+
+
+def test_expensive_names_are_not_rewarded_for_being_expensive():
+    """The fitted panel must carry a value tilt, not 'expensive == good'.
+
+    The original synthetic panel drove P/E, P/B and the return label off the
+    same latent, so the Ridge learned a POSITIVE loading on both multiples.
+    """
+    from research.financials_ml_forecast import FEATURE_NAMES, get_fitted_models
+
+    ridge = get_fitted_models()["return"].named_steps["ridge"]
+    coefs = dict(zip(FEATURE_NAMES, ridge.coef_))
+    assert coefs["log_pe"] < 0, "paying a higher multiple must not raise expected return"
+    assert coefs["log_pb"] < 0
+    assert coefs["revenue_growth"] > 0
+    assert coefs["debt_to_equity"] < 0
+
+
+def test_flat_mature_name_at_a_full_multiple_is_allowed_to_be_negative():
+    """The model must be able to say 'overvalued'.
+
+    Hard floors (`log_ret = max(log_ret, log(1.28))` on expansion, and a
+    `predicted_price = spot * 1.28` override) made a bearish base case
+    structurally impossible.
+    """
+    rep = _growth_report()
+    rep["symbol"] = "MATR"
+    rep["income_statement"]["rows"] = [
+        _row("total_revenue", "Total Revenue", [100e6, 100e6, 99e6, 100e6, 99e6]),
+        _row("gross_profit", "Gross Profit", [40e6, 40e6, 39e6, 40e6, 39e6]),
+        _row("operating_income", "Operating Income (EBIT)", [15e6, 15e6, 14e6, 15e6, 14e6]),
+        _row("net_income", "Net Income", [11e6, 11e6, 10e6, 11e6, 10e6]),
+        _row("diluted_eps", "Diluted EPS", [1.1, 1.1, 1.0, 1.1, 1.0]),
+    ]
+    out = score_report_forecast(rep)
+    assert out["status"] == "ok"
+    assert out["predicted_price"] < out["spot_used"], (
+        "a flat compounder on a 20x multiple should not be marked up"
+    )
+    assert out["excess_annualized_return"] < 0
+
+
+def test_implied_return_is_railed_in_annualised_terms():
+    """No filing may produce an unbounded target price."""
+    from research.financials_ml_forecast import (
+        MAX_ANNUALISED_RETURN,
+        MIN_ANNUALISED_RETURN,
+    )
+
+    for rep in (_growth_report(), _levered_report(), _annual_report()):
+        out = score_report_forecast(rep, intel={"last_price": 70.98, "ret_3m": 0.9})
+        ann = out["annualized_return"]
+        assert MIN_ANNUALISED_RETURN - 1e-6 <= ann <= MAX_ANNUALISED_RETURN + 1e-6, (
+            f"{rep['symbol']} annualised {ann:.3f} outside the published rails"
+        )
+
+
+def test_scenario_band_widens_with_risk_instead_of_fixed_brackets():
+    """Bear/bull must carry information, not be clamped to +/-8% of spot."""
+    calm = _growth_report()
+    calm["income_statement"]["rows"][0]["values"] = [102e6, 101e6, 101e6, 100e6, 100e6]
+    calm["income_statement"]["rows"][4]["values"] = [11e6, 11e6, 10.8e6, 10.6e6, 10.5e6]
+
+    intel = {"last_price": 40.0}
+    wild_out = score_report_forecast(_growth_report(), intel)
+    calm_out = score_report_forecast(calm, intel)
+
+    def width(o):
+        return (o["cases"]["bull"]["price"] - o["cases"]["bear"]["price"]) / o["spot_used"]
+
+    assert wild_out["scenario_sigma"] > calm_out["scenario_sigma"]
+    assert width(wild_out) > width(calm_out), "a riskier name must get a wider band"
+    for o in (wild_out, calm_out):
+        assert o["cases"]["bear"]["price"] < o["cases"]["base"]["price"]
+        assert o["cases"]["base"]["price"] < o["cases"]["bull"]["price"]
+
+
+def test_forecast_publishes_hurdle_and_coverage_for_the_desk():
+    """The UI needs the hurdle and the input coverage to be auditable."""
+    out = score_report_forecast(_growth_report(), intel={"last_price": 40.0})
+    assert out["cost_of_equity"] > 0
+    assert out["annualized_return"] is not None
+    assert out["excess_annualized_return"] == pytest.approx(
+        out["annualized_return"] - out["cost_of_equity"], abs=1e-6
+    )
+    assert out["expected_return"] == pytest.approx(
+        math.expm1(out["implied_log_return"]), abs=1e-6
+    )
+    assert out["feature_count_total"] == 14
+    assert 0 < out["observed_feature_count"] <= out["feature_count_total"]
+    # Leverage must raise the hurdle.
+    assert score_report_forecast(_levered_report())["cost_of_equity"] > out["cost_of_equity"]
+
+
+def test_missing_report_publishes_no_fake_hurdle_or_return():
+    out = score_report_forecast(_empty_report())
+    for key in (
+        "expected_return", "annualized_return", "cost_of_equity",
+        "excess_annualized_return", "scenario_sigma", "sustainable_growth",
+    ):
+        assert out[key] is None, f"{key} must stay null when the report is missing"
+    assert out["feature_count_total"] == 14
+
+
+def test_live_tape_growth_is_a_fraction_not_a_percentage():
+    """yfinance reports revenueGrowth as a fraction: 1.8 means +180%.
+
+    Running the percent heuristic over it crushed a genuine 180% grower to
+    1.8% growth — silently, and only for the fastest names on the board.
+    """
+    from research.financials_ml_forecast import _tape_growth
+
+    assert _tape_growth(1.8) == pytest.approx(1.8)
+    assert _tape_growth(0.18) == pytest.approx(0.18)
+    assert _tape_growth(None) is None
+
+    hyper = score_report_forecast(_growth_report(), intel={
+        "last_price": 40.0, "revenue_growth": 1.8, "earnings_growth": 2.1,
+    })
+    steady = score_report_forecast(_growth_report(), intel={
+        "last_price": 40.0, "revenue_growth": 0.05, "earnings_growth": 0.05,
+    })
+    assert hyper["lookthrough_growth"] > steady["lookthrough_growth"]
+    assert hyper["predicted_price"] > steady["predicted_price"]

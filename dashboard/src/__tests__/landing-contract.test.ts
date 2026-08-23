@@ -104,3 +104,19 @@ describe('Landing page honours the product boundary', () => {
     expect(src).not.toContain('instrument-card')
   })
 })
+
+describe('landing route keeps three.js off its critical path', () => {
+  it('loads VolSurfaceCanvas asynchronously rather than importing it statically', () => {
+    // VolSurfaceCanvas statically imports three. A plain
+    // `import VolSurfaceCanvas from '...'` here makes the 514 kB (128 kB gzip)
+    // vendor-three chunk a hard dependency of `/` -- the public landing page --
+    // for a decorative figure below the fold. The operator desk already treats
+    // three this way; see ProbabilityDensityChart.vue.
+    expect(src).not.toMatch(/^\s*import\s+VolSurfaceCanvas\s+from/m)
+    expect(src).toMatch(/defineAsyncComponent\(\s*\(\)\s*=>\s*import\('@\/components\/VolSurfaceCanvas\.vue'\)/)
+  })
+
+  it('does not import three directly', () => {
+    expect(src).not.toMatch(/from\s+'three'/)
+  })
+})

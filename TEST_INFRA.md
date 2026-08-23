@@ -1,22 +1,28 @@
-# E2E Test Infra: Options Flow & Squeeze Screener Overhaul
+# E2E Test Infra: TradeCentral Dashboard Visual Redesign
 
 ## Test Philosophy
-- Requirement-driven opaque-box and component test verification.
-- Enforce 100% test pass rate on `npm test` (`vitest run`).
-- Validate zero TypeScript errors on `vue-tsc --noEmit && vite build`.
-- Enforce token compliance and high-contrast design system constraints.
+- Opaque-box, requirement-driven. Derives from ORIGINAL_REQUEST.md.
+- Methodology: Category-Partition + Boundary Value Analysis + Pairwise Combinatorial + Real-World Workload Testing.
 
-## Feature Inventory & Test Coverage Mapping
-| # | Feature | Source (Requirement) | Test Suite |
-|---|---------|----------------------|------------|
-| 1 | High-Contrast Token System & Token Alignment | ORIGINAL_REQUEST §4 | `src/components/__tests__/options-ui-tokens.test.ts`, `src/components/__tests__/gex-map-enhanced.test.ts` |
-| 2 | Squeeze Screener Calculation & Setup Fixes | ORIGINAL_REQUEST §1 | `src/__tests__/squeeze-screener-calc.test.ts` (NEW), `src/__tests__/options-direction.test.ts` |
-| 3 | Options Flow & Conviction Board Data Pipeline Fixes | ORIGINAL_REQUEST §1, §4 | `src/__tests__/flow-display.test.ts`, `src/components/__tests__/flow-workspace.test.ts`, `src/__tests__/e2e-tier1-feature-coverage.test.ts` |
-| 4 | Em-Dash Elimination & Clean Numeric Fallbacks | ORIGINAL_REQUEST §3 | `src/__tests__/options-display-fallbacks.test.ts` (NEW), `src/__tests__/chain-display.test.ts`, `src/__tests__/flow-display.test.ts` |
-| 5 | High-Impact Graphics & Charts Polish | ORIGINAL_REQUEST §2 | `src/charts/__tests__/charts.test.ts`, `src/components/__tests__/gex-map-enhanced.test.ts`, `src/__tests__/options-drift-chart.test.ts` (NEW) |
-| 6 | Full Test Suite Pass & Type Check | ORIGINAL_REQUEST §5 | `npm run test` (all 40+ files), `npm run build` (`vue-tsc --noEmit`) |
+## Feature Inventory & Test Mapping
+| # | Feature | Source (Requirement) | Tier 1 (Feature) | Tier 2 (Boundary) | Tier 3 (Cross-Feature) | Tier 4 (Workload) |
+|---|---------|----------------------|:----------------:|:-----------------:|:----------------------:|:-----------------:|
+| 1 | Glassmorphism & Token Conformance | ORIGINAL_REQUEST §R4 | 5 | 5 | ✓ | ✓ |
+| 2 | Aceternity UI Primitives | ORIGINAL_REQUEST §R4 | 5 | 5 | ✓ | ✓ |
+| 3 | Frosted Top Bar & Tape Tickers | ORIGINAL_REQUEST §R1 | 5 | 5 | ✓ | ✓ |
+| 4 | Collapsible Side Nav & Tool Groups | ORIGINAL_REQUEST §R1 | 5 | 5 | ✓ | ✓ |
+| 5 | Operator Profile Drawer & Clerk Flow | ORIGINAL_REQUEST §R2 | 5 | 5 | ✓ | ✓ |
+| 6 | Density & Preferences Persistence | ORIGINAL_REQUEST §R2 | 5 | 5 | ✓ | ✓ |
+| 7 | Options Chain Strike Grid & Call/Put Hierarchy | ORIGINAL_REQUEST §R3 | 5 | 5 | ✓ | ✓ |
+| 8 | Charm & Greeks Positioning Analytics | ORIGINAL_REQUEST §R3 | 5 | 5 | ✓ | ✓ |
 
 ## Test Architecture
-- Test runner: `vitest run` in `/Users/syriljacob/Desktop/alltrading/edge/dashboard`
-- Type checker: `vue-tsc --noEmit` in `/Users/syriljacob/Desktop/alltrading/edge/dashboard`
-- Pass/Fail semantics: Exit code 0, 0 test failures, 0 TypeScript errors.
+- Vitest unit & component test runner (`npm test` in `dashboard/`).
+- TypeScript compiler & Vite build runner (`npm run build` in `dashboard/`).
+- Design conformance suite (`src/__tests__/design-conformance.test.ts`).
+- New test suites for navigation shell, profile flow, options chain, and preferences composables.
+
+## Coverage Goals
+- 100% test pass on all existing 52 test suites (991+ tests).
+- 0 type errors on `vue-tsc --noEmit`.
+- 0 design conformance violations (all CSS variables valid, no raw colors, no illegal halos).

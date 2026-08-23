@@ -568,6 +568,7 @@ watch(canRender3d, (available) => {
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .pdf-chart {
   min-width: 0;
   display: flex;

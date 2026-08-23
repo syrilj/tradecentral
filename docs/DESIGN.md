@@ -17,6 +17,8 @@ The visual language is based on five ideas:
 
 The current design tokens live in `dashboard/src/styles/tokens.css`. This document defines how those tokens should be used and what the interface should communicate.
 
+**Public paper surfaces (landing/auth).** The public pages are a separate editorial design system, deliberately distinct from the desk: a warm off-white canvas (`#fbfbf8`), 1px hairline rules framing the content column, oversized tight grotesque headlines (Inter Tight 500), Inter for body, Space Mono for eyebrows and data labels, near-black buttons with pixel-arrow motifs, one orange accent (`#ff5229`) plus decorative yellow/blue, and navy (`#151524`) bands for the evidence and closing sections. LandingView.vue and AuthView.vue remap the desk token vocabulary inside their own scope; nothing leaks into the desk `:root`. See the comments atop the LandingView scoped styles for the full paper remap.
+
 ## 2. Product experience goals
 
 A good TradeCentral screen should let an operator answer these questions quickly:
@@ -39,15 +41,15 @@ If a screen cannot answer those questions without reading tooltips or guessing f
 
 The shell should keep the highest-frequency jobs in a small, stable primary set:
 
-| Workspace | Operator question |
-|---|---|
-| **Desk** | What is the market posture and what needs attention now? |
-| **Market** | What is happening in this symbol and relative to peers? |
-| **Options** | What is the positioning/structure for one underlier? |
-| **Flow** | Where is market-wide activity concentrating? |
-| **Setups** | What call or put does Flow + GEX suggest, and where is the sell? |
-| **Plays** | What is today's decision funnel? |
-| **Chain** | How does the value chain and thematic book sit? |
+| Workspace   | Operator question                                                |
+| ----------- | ---------------------------------------------------------------- |
+| **Desk**    | What is the market posture and what needs attention now?         |
+| **Market**  | What is happening in this symbol and relative to peers?          |
+| **Options** | What is the positioning/structure for one underlier?             |
+| **Flow**    | Where is market-wide activity concentrating?                     |
+| **Setups**  | What call or put does Flow + GEX suggest, and where is the sell? |
+| **Plays**   | What is today's decision funnel?                                 |
+| **Chain**   | How does the value chain and thematic book sit?                  |
 
 Options URL, API, and LSE flow-router contracts: `docs/OPTIONS_ROUTE_NOTE.md`. Do not add a second options home or a Dark Pool surface.
 
@@ -126,16 +128,16 @@ The interface is dark and neutral. Panels are separated with structure, not glow
 
 Core surfaces:
 
-| Token | Role |
-|---|---|
-| `--void` | canvas/background |
-| `--void-lift` | base shell lift |
-| `--panel` | default panel |
-| `--panel-hi` | overlay/high panel |
+| Token           | Role                          |
+| --------------- | ----------------------------- |
+| `--void`        | canvas/background             |
+| `--void-lift`   | base shell lift               |
+| `--panel`       | default panel                 |
+| `--panel-hi`    | overlay/high panel            |
 | `--panel-raise` | selected/raised local surface |
-| `--rule` | standard structural line |
-| `--rule-hi` | emphasized boundary |
-| `--rule-faint` | quiet internal separation |
+| `--rule`        | standard structural line      |
+| `--rule-hi`     | emphasized boundary           |
+| `--rule-faint`  | quiet internal separation     |
 
 ### Rules
 
@@ -168,9 +170,9 @@ Do not use the accent as generic decoration across every chart and label.
 
 ### 7.2 Signed direction
 
-| Meaning | Token | Value |
-|---|---|---|
-| Positive / long | `--long` | `#4fae80` |
+| Meaning          | Token     | Value     |
+| ---------------- | --------- | --------- |
+| Positive / long  | `--long`  | `#4fae80` |
 | Negative / short | `--short` | `#cf5f6b` |
 
 Green and red are reserved for signed quantities and verdict semantics. They should never mean ordinary navigation, hover, or decorative emphasis.
@@ -179,10 +181,10 @@ Green and red are reserved for signed quantities and verdict semantics. They sho
 
 Options need a semantic channel separate from bullish/bearish direction.
 
-| Meaning | Token | Value |
-|---|---|---|
+| Meaning       | Token    | Value     |
+| ------------- | -------- | --------- |
 | Call identity | `--call` | `#5b95b5` |
-| Put identity | `--put` | `#c1955e` |
+| Put identity  | `--put`  | `#c1955e` |
 
 A call is not automatically bullish evidence and a put is not automatically bearish evidence. The UI must preserve that distinction.
 
@@ -201,11 +203,11 @@ The `--cat-*` ramp is for nominal categories such as graph communities. It shoul
 
 TradeCentral uses three typography roles.
 
-| Role | Font token | Use |
-|---|---|---|
+| Role                       | Font token       | Use                                                         |
+| -------------------------- | ---------------- | ----------------------------------------------------------- |
 | Display / instrument label | `--font-display` | workspace title, section identity, compact uppercase labels |
-| UI | `--font-ui` | explanatory text, controls, menus |
-| Data | `--font-data` | prices, percentages, timestamps, tabular metrics |
+| UI                         | `--font-ui`      | explanatory text, controls, menus                           |
+| Data                       | `--font-data`    | prices, percentages, timestamps, tabular metrics            |
 
 ### Rules
 
@@ -445,7 +447,7 @@ Do not use a generic gauge when the actual topology across strikes is what matte
 
 A squeeze score must state what it measures. If it combines short interest, borrow, options positioning, volume, and price behavior, expose those components.
 
-The main visual should explain *why* pressure is high or low, not only display a final number.
+The main visual should explain _why_ pressure is high or low, not only display a final number.
 
 ## 16. Flow-specific visualization rules
 
@@ -507,12 +509,14 @@ Use stable icons and labels for the five primary workspaces. Active state should
 Specialist tools should be grouped by job, for example:
 
 **Market diagnostics**
+
 - Sectors
 - Pulse
 - Momentum
 - Fintel
 
 **Research and governance**
+
 - Gates
 - Evolution
 - Live Blend

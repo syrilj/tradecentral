@@ -9,7 +9,14 @@
 export const DASH = '—'
 
 function bad(v: unknown): boolean {
-  return v === null || v === undefined || (typeof v === 'number' && !Number.isFinite(v))
+  if (v === null || v === undefined) return true
+  if (typeof v === 'number') return !Number.isFinite(v)
+  // Everything below is a value JS would happily coerce to a number even
+  // though nothing measured it: Number('') and Number('   ') and Number([])
+  // are all 0, and Number(true) is 1. Coercing those would print a zero that
+  // means "missing", which is the one thing this module refuses to do.
+  if (typeof v === 'string') return v.trim() === '' || !Number.isFinite(Number(v))
+  return true
 }
 
 /** Fixed-decimal number. Returns "—" for missing/non-finite input. */
@@ -35,14 +42,20 @@ export function pctFrac(v: unknown, dp = 2): string {
 /** Signed percentage with an explicit + so direction is never ambiguous. */
 export function signedPct(v: unknown, dp = 2): string {
   if (bad(v)) return DASH
-  const n = Number(v)
-  return `${n > 0 ? '+' : ''}${num(n, dp)}%`
+  const raw = Number(v)
+  if (!Number.isFinite(raw)) return DASH
+  const rounded = Number(raw.toFixed(dp))
+  if (rounded === 0 || Object.is(rounded, -0)) return `+${num(0, dp)}%`
+  return `${rounded > 0 ? '+' : ''}${num(raw, dp)}%`
 }
 
 export function signed(v: unknown, dp = 2): string {
   if (bad(v)) return DASH
-  const n = Number(v)
-  return `${n > 0 ? '+' : ''}${num(n, dp)}`
+  const raw = Number(v)
+  if (!Number.isFinite(raw)) return DASH
+  const rounded = Number(raw.toFixed(dp))
+  if (rounded === 0 || Object.is(rounded, -0)) return `+${num(0, dp)}`
+  return `${rounded > 0 ? '+' : ''}${num(raw, dp)}`
 }
 
 /** Compact magnitude for volume / notional: 1.2B, 340.5M, 12.1K. */
@@ -103,73 +116,77 @@ export function pick(o: unknown, ...keys: string[]): unknown {
   return undefined
 }
 
-/* ------------------------------------------------------------------ Options & Squeeze Clean Numeric Formatters */
+/* ------------------------------------------------------------------ Options & Squeeze Numeric Formatters
+ *
+ * These used to fabricate a zero ("0.00", "$0.00", "+$0.0M") for missing or
+ * non-finite input — the exact lie the file header forbids: a symbol with no
+ * gamma data would render as "flat gamma" instead of "no data". They now
+ * honour the same rule as the base formatters and return DASH.
+ */
 
-/** Options / squeeze fixed-decimal number. Defaults to clean numeric fallback (e.g. "0.00", "0"). */
+/** Options / squeeze fixed-decimal number. Returns "—" for missing/non-finite input. */
 export function optNum(v: unknown, dp = 2): string {
-  if (bad(v)) {
-    return (0).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
-  }
-  const n = Number(v)
-  if (!Number.isFinite(n)) {
-    return (0).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
-  }
-  return n.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+  return num(v, dp)
 }
 
-/** Options / squeeze percentage, input already in percent units (12.5 → "12.50%"). Defaults to "0.00%". */
+/** Options / squeeze percentage, input already in percent units (12.5 → "12.50%"). Returns "—" for missing/non-finite input. */
 export function optPct(v: unknown, dp = 2): string {
-  return `${optNum(v, dp)}%`
+  return pct(v, dp)
 }
 
-/** Options / squeeze percentage from fraction (0.125 → "12.50%"). Defaults to "0.00%" or "0.0%". */
+/** Options / squeeze percentage from fraction (0.125 → "12.50%"). Returns "—" for missing/non-finite input. */
 export function optPctFrac(v: unknown, dp = 2): string {
-  if (bad(v) || !Number.isFinite(Number(v))) {
-    return `${optNum(0, dp)}%`
-  }
-  return `${optNum(Number(v) * 100, dp)}%`
+  return pctFrac(v, dp)
 }
 
-/** Options / squeeze signed percentage with an explicit + when positive or zero. Defaults to "+0.0%" or "+0.00%". */
+/** Options / squeeze signed percentage with an explicit + when positive or zero. Returns "—" for missing/non-finite input. */
 export function optSignedPct(v: unknown, dp = 2): string {
-  if (bad(v) || !Number.isFinite(Number(v))) {
-    return `+${optNum(0, dp)}%`
-  }
-  const n = Number(v)
-  return `${n >= 0 ? '+' : ''}${optNum(n, dp)}%`
+  if (bad(v) || !Number.isFinite(Number(v))) return DASH
+  const raw = Number(v)
+  const rounded = Number(raw.toFixed(dp))
+  if (rounded === 0 || Object.is(rounded, -0)) return `+${optNum(0, dp)}%`
+  return `${rounded > 0 ? '+' : ''}${optNum(raw, dp)}%`
 }
 
-/** Options / squeeze signed number with an explicit + when positive or zero. Defaults to "+0.00" or "+0.0". */
+/** Options / squeeze signed number with an explicit + when positive or zero. Returns "—" for missing/non-finite input. */
 export function optSigned(v: unknown, dp = 2): string {
-  if (bad(v) || !Number.isFinite(Number(v))) {
-    return `+${optNum(0, dp)}`
-  }
-  const n = Number(v)
-  return `${n >= 0 ? '+' : ''}${optNum(n, dp)}`
+  if (bad(v) || !Number.isFinite(Number(v))) return DASH
+  const raw = Number(v)
+  const rounded = Number(raw.toFixed(dp))
+  if (rounded === 0 || Object.is(rounded, -0)) return `+${optNum(0, dp)}`
+  return `${rounded > 0 ? '+' : ''}${optNum(raw, dp)}`
 }
 
-/** Options / squeeze compact magnitude for volume/notional: 1.2B, 340.5M, 0. Defaults to "0". */
+/** Options / squeeze compact magnitude for volume/notional: 1.2B, 340.5M. Returns "—" for missing/non-finite input. */
 export function optCompact(v: unknown, dp = 1): string {
-  if (bad(v) || !Number.isFinite(Number(v))) {
-    return '0'
-  }
   return compact(v, dp)
 }
 
-/** Options / squeeze USD currency ($12.50). Defaults to "$0.00" or "$0". */
+/** Options / squeeze USD currency ($12.50). Returns "—" for missing/non-finite input. */
 export function optUsd(v: unknown, dp = 2): string {
-  return `$${optNum(v, dp)}`
+  return usd(v, dp)
 }
 
-/** Options / squeeze GEX in USD millions/billions. Defaults to "$0.0M". */
+/** Options / squeeze GEX in USD millions/billions. Returns "—" for missing/non-finite input. */
 export function optGex(v: unknown, dp = 1): string {
-  if (bad(v) || !Number.isFinite(Number(v))) {
-    return `$${(0).toFixed(dp)}M`
-  }
-  const n = Number(v)
-  const a = Math.abs(n)
-  const s = n < 0 ? '-$' : '$'
+  if (bad(v) || !Number.isFinite(Number(v))) return DASH
+  const raw = Number(v)
+  const a = Math.abs(raw)
+  const roundedAbs = Number(a.toFixed(dp))
+  if (roundedAbs === 0) return `$0.0M`
+  const s = raw < 0 ? '-$' : '$'
   if (a >= 1e3) return `${s}${(a / 1e3).toFixed(dp)}B`
   return `${s}${a.toFixed(dp)}M`
 }
 
+/** Options / squeeze signed GEX in USD millions/billions (+-$X.XM). Sign precedes dollar symbol. Returns "—" for missing/non-finite input. */
+export function optSignedGex(v: unknown, dp = 1): string {
+  if (bad(v) || !Number.isFinite(Number(v))) return DASH
+  const raw = Number(v)
+  const a = Math.abs(raw)
+  const roundedAbs = Number(a.toFixed(dp))
+  if (roundedAbs === 0) return `+$0.0M`
+  const s = raw < 0 ? '-$' : '+$'
+  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(dp)}B`
+  return `${s}${a.toFixed(dp)}M`
+}

@@ -107,45 +107,54 @@ def test_financials_model_forecast_consistent_and_symbol_specific(api_client):
 
 
 def test_insiders_endpoint(api_client):
-    """Verify /api/insiders returns transactions, quarterly net volume, summary, and strategy backtest."""
+    """Verify /api/insiders returns real Form 4 rows, or an honest empty result."""
     res = api_client.get("/api/insiders?symbol=ASTS")
     assert res.status_code == 200
     data = res.json()
     assert data["symbol"] == "ASTS"
     assert "summary" in data
     assert "transactions" in data
-    assert len(data["transactions"]) > 0
-    tx = data["transactions"][0]
-    assert "date" in tx
-    assert "insider_name" in tx
-    assert "transaction_type" in tx
-    assert "shares" in tx
+    # Not asserted non-empty: a symbol with no provider rows used to be padded
+    # with 16 invented filings attributed to real named executives.
+    for tx in data["transactions"]:
+        assert "date" in tx
+        assert "insider_name" in tx
+        assert "transaction_type" in tx
+        assert "shares" in tx
     assert "quarterly_net" in data
-    assert "strategy" in data
-    assert "cagr" in data["strategy"]
-    assert "sharpe" in data["strategy"]
+    # `strategy` is present only if a real backtest produced it. It used to be
+    # a fixed invented block, identical for every symbol.
+    if "strategy" in data:
+        assert data["strategy"].get("cagr") is not None
+        assert data["strategy"].get("sharpe") is not None
 
 
 def test_government_endpoint(api_client):
-    """Verify /api/government returns congress trades, lobbying, contracts, and patents."""
+    """/api/government keeps its shape but reports that it has no source.
+
+    It used to return congressional trades attributed to real, named, living
+    members of Congress -- invented dates and dollar brackets, each stamped
+    with a real disclosures-clerk.house.gov URL -- plus invented lobbying
+    spend, federal contracts and real-format US patent numbers. No disclosure,
+    lobbying, USASpending or USPTO feed is wired up, so every list is empty
+    and the payload says why.
+    """
     res = api_client.get("/api/government?symbol=ASTS")
     assert res.status_code == 200
     data = res.json()
     assert data["symbol"] == "ASTS"
-    assert "congress" in data
     assert isinstance(data["congress"], list)
-    assert len(data["congress"]) > 0
-    cg = data["congress"][0]
-    assert "politician_name" in cg
-    assert "party" in cg
-    assert "type" in cg
+    assert data["congress"] == []
+    assert data["available"] is False
+    assert data["source"] == "unavailable"
+    assert data["reason"]
 
     assert "lobbying" in data
     assert "history" in data["lobbying"]
     assert "filings" in data["lobbying"]
 
-    assert "contracts" in data
-    assert "patents" in data
+    assert data["contracts"] == []
+    assert data["patents"] == []
 
 
 def test_ownership_endpoint(api_client):

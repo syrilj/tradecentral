@@ -22,6 +22,7 @@ from edge.daily_plays.qlib_scan_score import (
 from edge.daily_plays.adapters.pead_adapter import (
     generate_pead_candidates,
 )
+from edge.daily_plays.live_activity import build_market_activity_scan
 from edge.tools import render_dashboard as dashboard
 
 
@@ -319,6 +320,23 @@ def test_concurrent_scan_resilience_all_stages_throw_exceptions(monkeypatch):
     monkeypatch.setattr(dashboard, "fetch_internal_directional_signals", explode_dir)
     monkeypatch.setattr(dashboard, "get_all_gcp_resources", lambda: {})
     monkeypatch.setattr(dashboard, "load_dynamic_leaderboard", lambda: [])
+
+    # Deep scans route local activity names into build_market_activity_scan's
+    # live per-symbol LSE flow pass. get_dashboard_data does not expose a
+    # flow_fetcher passthrough, so route the real build_market_activity_scan
+    # (the fail-closed logic this test actually cares about) through a fake,
+    # instantaneous flow_fetcher via the dependency-injection seam it already
+    # accepts -- otherwise this "no deadlock" assertion would accidentally be
+    # measuring real api.londonstrategicedge.com latency instead of testing
+    # the concurrent-stage-failure path.
+    def fake_flow_fetcher(*, symbol, timeout):
+        return []
+
+    def scan_with_fake_flow_fetcher(**kwargs):
+        kwargs.setdefault("flow_fetcher", fake_flow_fetcher)
+        return build_market_activity_scan(**kwargs)
+
+    monkeypatch.setattr(dashboard, "build_market_activity_scan", scan_with_fake_flow_fetcher)
 
     # Test both quick and deep scan depths
     for depth in ["quick", "deep"]:

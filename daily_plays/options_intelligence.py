@@ -198,6 +198,47 @@ def _bs_charm_per_day(*, spot: float, strike: float, years: float, iv: float, ra
     return charm_year / 365.0
 
 
+def _bs_theta_per_day(*, spot: float, strike: float, years: float, iv: float, rate: float, is_call: bool = True) -> float | None:
+    """Theta = ∂V/∂t in option-price-points-per-day (standard −∂V/∂τ, /365).
+    Theta_call = −S·φ(d1)·σ / (2√T) − r·K·e^{−rT}·N(d2)
+    Theta_put  = −S·φ(d1)·σ / (2√T) + r·K·e^{−rT}·N(−d2)
+    Near-expiry contracts (T < 1 day) and implausible IV return None so decay
+    never explodes into a fake reading.
+    """
+    if spot <= 0 or strike <= 0 or years <= 0 or not 0.005 <= iv <= 5.0:
+        return None
+    if years < 1.0 / 365.0:
+        return None
+    root_t = math.sqrt(years)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * years) / (iv * root_t)
+    d2 = d1 - iv * root_t
+    pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+    common = -spot * pdf_d1 * iv / (2.0 * root_t)
+    if is_call:
+        theta_year = common - rate * strike * math.exp(-rate * years) * _normal_cdf(d2)
+    else:
+        theta_year = common + rate * strike * math.exp(-rate * years) * _normal_cdf(-d2)
+    return theta_year / 365.0
+
+
+def _bs_vanna(*, spot: float, strike: float, years: float, iv: float, rate: float) -> float | None:
+    """Vanna = ∂Δ/∂σ in delta per +1.00 IV move (per vol point /100).
+    Vanna = −φ(d1)·d2 / σ   (q = 0 single-stock approximation)
+    Identical for calls and puts. Sign: OTM calls gain delta as IV rises,
+    OTM puts lose delta as IV rises. Near-expiry contracts (T < 1 day) and
+    implausible IV return None so exposure never explodes into a fake reading.
+    """
+    if spot <= 0 or strike <= 0 or years <= 0 or not 0.005 <= iv <= 5.0:
+        return None
+    if years < 1.0 / 365.0:
+        return None
+    root_t = math.sqrt(years)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * years) / (iv * root_t)
+    d2 = d1 - iv * root_t
+    pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+    return -pdf_d1 * d2 / iv / 100.0
+
+
 def _date_bounds(filters: OptionsFilters, asof: datetime) -> tuple[datetime, datetime]:
     """Calendar window for price series / history chain selection."""
     window_days = {"1d": 1, "5d": 5, "1m": 31, "3m": 93}[filters.range]
@@ -305,16 +346,34 @@ def _filter_chain(
         else:
             included.append(row)
     expiry_counts: dict[date, int] = {}
+    expiry_oi: dict[date, int] = {}
     for row in included:
         expiry = row["expiry"]
         expiry_counts[expiry] = expiry_counts.get(expiry, 0) + 1
+        expiry_oi[expiry] = expiry_oi.get(expiry, 0) + int(row["open_interest"] or 0)
 
     available = sorted(expiry_counts)
     selection_day = selection_date or asof.date()
     selected: date | None = None
+    skipped_unmeasurable: list[date] = []
     if filters.expiry == "nearest":
         unexpired = [expiry for expiry in available if expiry >= selection_day]
-        selected = unexpired[0] if unexpired else (available[-1] if available else None)
+        # Every structural figure downstream — GEX, the walls, the squeeze
+        # board — is open-interest weighted. An expiry whose whole slice has
+        # zero OI is unmeasurable, and scoring it renders a fake-flat "quiet"
+        # structure. That happens whenever the live feed lists a nearer expiry
+        # than the delayed OI reference carries (LSE quotes a Monday weekly the
+        # yfinance snapshot never listed). Measure the nearest expiry that can
+        # actually be measured, and only fall back to the literal nearest when
+        # no expiry carries OI at all — then "unmeasured" is the honest answer.
+        measurable = [expiry for expiry in unexpired if expiry_oi.get(expiry, 0) > 0]
+        if measurable:
+            selected = measurable[0]
+            skipped_unmeasurable = [
+                expiry for expiry in unexpired if expiry < selected
+            ]
+        else:
+            selected = unexpired[0] if unexpired else (available[-1] if available else None)
     elif filters.expiry != "all":
         selected = _expiry(filters.expiry)
 
@@ -331,12 +390,18 @@ def _filter_chain(
         "selected_dte": (selected - selection_day).days if selected else None,
         "snapshot_dte": (selected - asof.date()).days if selected else None,
         "selection_asof": selection_day.isoformat(),
+        # Nearer expiries the feed listed but no OI reference covers. Named so
+        # the desk can see the structure is scored one expiry out, not silently.
+        "skipped_unmeasurable_expiries": [
+            expiry.isoformat() for expiry in skipped_unmeasurable
+        ],
         "available_expiries": [
             {
                 "expiry": expiry.isoformat(),
                 "dte": (expiry - selection_day).days,
                 "snapshot_dte": (expiry - asof.date()).days,
                 "contracts": expiry_counts[expiry],
+                "open_interest": expiry_oi.get(expiry, 0),
             }
             for expiry in available
         ],
@@ -1575,6 +1640,16 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _usd_millions(value: float, dp: int = 2) -> str:
+    """Signed USD-millions label with the sign ahead of the currency symbol.
+
+    ``f"${-6.55:.2f}M"`` renders ``"$-6.55M"``, which reads as a malformed
+    amount rather than a negative one. Net GEX is negative for most of the
+    short-gamma tape this text describes, so the sign placement matters.
+    """
+    return f"{'-' if value < 0 else ''}${abs(value):.{dp}f}M"
+
+
 def _pct_from_spot(level: float | None, spot: float) -> float | None:
     if level is None or spot <= 0:
         return None
@@ -1609,7 +1684,17 @@ def _setup_from_gex_score(
     Factor meters use unscaled structure so long-gamma names still show
     wall proximity / OTM concentration. Board score is the sum of factor
     points (0–100), not a hard-zero when squeeze fuel is absent.
+
+    Each factor is normalised by the *true* output range of its gex_core
+    component (``STRUCTURE_COMPONENT_RANGES``) before being scaled onto its
+    display weight. Clamping the raw component against the display max instead
+    made two meters permanently unfillable — ``call_conc_score`` caps at 15 against
+    a display max of 20 and ``wall_asym_score`` at 10 against 15 — so a perfect
+    structure topped out at 90/100, while ``call_prox_score`` (range 30) saturated
+    its 25-point meter at 5/6 of the way in and lost the top of its range.
     """
+    from edge.daily_plays.gex_core import STRUCTURE_COMPONENT_RANGES
+
     side_sign = 1.0 if side == "bullish" else -1.0
     factor_specs = [
         ("regime_score", "Gamma Regime", 25, "Short-gamma fuel near spot (required for true squeeze)"),
@@ -1627,20 +1712,31 @@ def _setup_from_gex_score(
     max_sum = 0
     for key, label, max_pts, detail in factor_specs:
         raw_c = float(components.get(key, 0.0))
-        # Contribution for this side: only count when signed with side.
-        # Components are already in point units matching factor maxes; clamp.
-        contrib = max(0.0, raw_c * side_sign)
         if key == "regime_score":
-            # regime_score is signed fuel contribution (~0..20); map onto 0..max_pts.
-            pts = int(round(min(max_pts, abs(contrib) * (max_pts / 20.0))))
+            # Fuel is direction-neutral: short dealer gamma amplifies whichever way
+            # price is already moving. Both boards see the same fuel; direction comes
+            # from the five structure factors below, not from re-signing the fuel.
+            fill = min(1.0, max(0.0, float(fuel)))
+            detail_txt = (
+                f"{detail} · fuel={fill:.0%}"
+                if fill > 0
+                else f"{detail} · fuel unmeasured (needs ADV + ATM strikes)"
+            )
         else:
-            pts = int(round(min(max_pts, abs(contrib))))
+            # Contribution for this side: only count when signed with side.
+            contrib = max(0.0, raw_c * side_sign)
+            # Normalise by the component's own range, then scale onto the display
+            # weight, so every meter can genuinely reach its stated max.
+            span = float(STRUCTURE_COMPONENT_RANGES.get(key) or max_pts)
+            fill = min(1.0, contrib / span) if span > 0 else 0.0
+            detail_txt = f"{detail} · raw={raw_c:+.1f}"
+        pts = int(round(max_pts * fill))
         factors.append({
             "id": key,
             "label": label,
             "score": pts,
             "max": max_pts,
-            "detail": f"{detail} · raw={raw_c:+.1f}",
+            "detail": detail_txt,
         })
         factor_sum += pts
         max_sum += max_pts
@@ -1651,7 +1747,8 @@ def _setup_from_gex_score(
     likelihood = _likelihood(score)
 
     setup_analysis = [
-        f"Near-spot net GEX ${near_net:.2f}M · total ${net_dealer:.2f}M · fuel {fuel:.0%}",
+        f"Near-spot net GEX {_usd_millions(near_net)} · total {_usd_millions(net_dealer)}"
+        f" · fuel {fuel:.0%}",
     ]
     if wall_level is not None:
         setup_analysis.append(
@@ -1859,6 +1956,9 @@ def _enrich_chain_for_theory(
 # behind it. Shrink toward neutral until the sample can carry information.
 IMBALANCE_FULL_CONFIDENCE_PRINTS = 8
 MOMENTUM_MAX_AGE_DAYS = 4
+# Below this fuel_ui a long-gamma charting regime is reported as dampening the
+# squeeze rather than merely coexisting with it.
+DAMPENED_MAX_FUEL_UI = 0.2
 
 
 def _imbalance_confidence(print_count: int) -> float:
@@ -1913,7 +2013,13 @@ def _squeeze_readout(
     put_wall_pct = _pct_from_spot(put_wall, spot)
 
     near_net = near_spot_net_gex(rows, spot=spot, band_pct=0.05)
-    if near_net == 0.0:
+    # Fall back to the whole-chain total only when the ±5% band holds no strikes at
+    # all. A band that genuinely nets to zero (calls cancelling puts) is a real
+    # measurement of a flat regime and must not be overwritten by the full book.
+    near_band_populated = any(
+        spot * 0.95 <= float(r.get("strike") or 0) <= spot * 1.05 for r in rows
+    ) if spot > 0 else False
+    if not near_band_populated:
         near_net = total_gex
 
     # OTM OI weights for concentration terms
@@ -2026,9 +2132,17 @@ def _squeeze_readout(
         "theory_imbalance_confidence": imbalance_confidence,
     }
     scored_components = dict(structure["squeeze_components"])
-    fuel = float(theory.get("squeeze_risk") or 0.0)
-    # Dampened only when charting near-spot GEX is positive *and* theory fuel is weak
-    dampened = bool(structure.get("long_gamma_dampened")) and fuel < 1e-6
+    # ``fuel`` is reported on the theory's own calibration — tanh(fuel_scale · SR),
+    # the same transform the directional scores use. The previous UI scale
+    # (min(1, 10 · SR)) saturated at SR = 0.10 while the theory saturated at ≈0.05,
+    # so the tab showed "FUEL 25%" on books the model already treated as ~76% fuelled.
+    fuel = float(theory_components.get("fuel_ui") or 0.0)
+    # Dampened means "long-gamma regime with too little short-gamma fuel to overcome
+    # it". The old test (raw SR < 1e-6) could never fire on a real chain: under the
+    # short-premium assumption dealer GEX is ≤ 0 by construction, so SR is positive
+    # for any book with OI. That inverted the flag into "chain is unmeasurable" and
+    # left the LONG Γ tag dead. Compare against the fuel scale the UI actually shows.
+    dampened = bool(structure.get("long_gamma_dampened")) and fuel < DAMPENED_MAX_FUEL_UI
     short_gex = theory.get("short_premium_gex_m") or {}
 
     bullish = _clamp01(float(theory.get("bullish_ui") or 0.0) / 100.0)
@@ -2085,7 +2199,7 @@ def _squeeze_readout(
         spot=spot,
         near_net=near_net,
         net_dealer=total_gex,
-        fuel=min(1.0, fuel * 10.0) if fuel > 0 else float(structure.get("negative_fuel") or 0.0),
+        fuel=fuel,
         dampened=dampened,
     )
     bearish_setup = _setup_from_gex_score(
@@ -2097,7 +2211,7 @@ def _squeeze_readout(
         spot=spot,
         near_net=near_net,
         net_dealer=total_gex,
-        fuel=min(1.0, fuel * 10.0) if fuel > 0 else float(structure.get("negative_fuel") or 0.0),
+        fuel=fuel,
         dampened=dampened,
     )
 
@@ -2127,6 +2241,7 @@ def _squeeze_readout(
         "scored_components": scored_components,
         "theory": {
             "squeeze_risk": theory.get("squeeze_risk"),
+            "fuel_ui": fuel,
             "bullish_score_raw": theory.get("bullish_score_raw"),
             "bearish_score_raw": theory.get("bearish_score_raw"),
             "bullish_ui": theory.get("bullish_ui"),
@@ -2144,7 +2259,8 @@ def _squeeze_readout(
         "structure_score": structure.get("squeeze_score"),
         "structure_label": structure.get("squeeze_label"),
         "long_gamma_dampened": dampened,
-        "negative_fuel": round(min(1.0, fuel * 10.0), 4) if fuel > 0 else float(structure.get("negative_fuel") or 0.0),
+        "negative_fuel": round(fuel, 4),
+        "structure_negative_fuel": float(structure.get("negative_fuel") or 0.0),
         "key_levels": {
             "spot": round(spot, 4),
             "call_wall": call_wall,
@@ -2280,6 +2396,331 @@ def _gex_history(
     return history
 
 
+def _stacked_theta_vanna(
+    *, chain_rows: Sequence[Mapping[str, Any]], spot: float, rate: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], dict[str, Any], int]:
+    """Theta and vanna exposure by strike + per-contract BS diagnostics.
+    Theta flow = theta × OI × 100: option-price points/day decaying out of
+    every strike (always negative for long premium — the sign carries which
+    SIDE of the book bleeds). Vanna flow = vanna × OI × 100 × spot: delta
+    shares dealers must trade per +1 vol-point move, signed call + / put −
+    like GEX/charm so a positive bar is dealer delta that RISES with IV.
+    Same skip-don't-clamp rule as _charm_map: no IV or T < 1 day → None.
+    """
+    by_strike: dict[float, dict[str, float]] = {}
+    chain_rows_out: list[dict[str, Any]] = []
+    source_counts = {"black_scholes": 0, "unavailable": 0}
+    for row in chain_rows:
+        strike = _number(row.get("strike"))
+        dte = _integer(row.get("dte"))
+        iv = _number(row.get("iv"))
+        right = row.get("right")
+        if not strike or right not in {"call", "put"}:
+            source_counts["unavailable"] += 1
+            continue
+        years = max(float(dte or 0), 0.5) / 365.0
+        theta = _bs_theta_per_day(
+            spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate, is_call=(right == "call"),
+        )
+        vanna = _bs_vanna(spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate)
+        if theta is None or vanna is None:
+            source_counts["unavailable"] += 1
+            continue
+        source_counts["black_scholes"] += 1
+        oi = _integer(row.get("open_interest")) or 0
+        multiplier = _integer(row.get("multiplier")) or 100
+        sign = 1.0 if right == "call" else -1.0
+        theta_flow = theta * oi * multiplier
+        vanna_flow = sign * vanna * oi * multiplier * spot
+        cell = by_strike.setdefault(strike, {
+            "call_theta": 0.0, "put_theta": 0.0, "call_vanna": 0.0, "put_vanna": 0.0,
+            "call_oi": 0.0, "put_oi": 0.0,
+        })
+        cell[f"{right}_theta"] += theta_flow
+        cell[f"{right}_vanna"] += vanna_flow
+        cell[f"{right}_oi"] += oi
+        chain_rows_out.append({
+            "strike": strike,
+            "right": right,
+            "dte": dte,
+            "iv": iv,
+            "open_interest": oi,
+            "volume": _integer(row.get("volume")) or 0,
+            "theta_per_day": theta,
+            "theta_flow": theta_flow,
+            "vanna": vanna,
+            "vanna_flow": vanna_flow,
+        })
+    mapped = []
+    for strike, value in sorted(by_strike.items()):
+        mapped.append({
+            "strike": strike,
+            "call_theta_flow": round(value["call_theta"], 4),
+            "put_theta_flow": round(value["put_theta"], 4),
+            "net_theta_flow": round(value["call_theta"] + value["put_theta"], 4),
+            "call_vanna_flow": round(value["call_vanna"], 4),
+            "put_vanna_flow": round(value["put_vanna"], 4),
+            "net_vanna_flow": round(value["call_vanna"] + value["put_vanna"], 4),
+            "call_oi": int(value["call_oi"]),
+            "put_oi": int(value["put_oi"]),
+        })
+    net_theta = sum(row["net_theta_flow"] for row in mapped)
+    call_theta = sum(row["call_theta_flow"] for row in mapped)
+    put_theta = sum(row["put_theta_flow"] for row in mapped)
+    net_vanna = sum(row["net_vanna_flow"] for row in mapped)
+    call_vanna = sum(row["call_vanna_flow"] for row in mapped)
+    put_vanna = sum(row["put_vanna_flow"] for row in mapped)
+    theta_summary = {
+        "net_theta_flow": round(net_theta, 4),
+        "call_theta_flow": round(call_theta, 4),
+        "put_theta_flow": round(put_theta, 4),
+        "abs_theta_flow": round(abs(call_theta) + abs(put_theta), 4),
+        "decay_side": (
+            "calls" if abs(call_theta) > abs(put_theta)
+            else "puts" if abs(put_theta) > abs(call_theta)
+            else "balanced"
+        ) if mapped else None,
+        "source": "black_scholes_theta",
+    }
+    # Vanna regime: net dealer delta sensitivity to a parallel IV shift.
+    # Positive → rising IV lifts dealer delta (dealers buy dips into vol spikes);
+    # negative → rising IV forces dealer selling (vol spiral fuel).
+    vanna_summary = {
+        "net_vanna_flow": round(net_vanna, 4),
+        "call_vanna_flow": round(call_vanna, 4),
+        "put_vanna_flow": round(put_vanna, 4),
+        "regime": (
+            "iv_up_supportive" if net_vanna > 0 else "iv_up_pressuring" if net_vanna < 0 else "neutral"
+        ) if mapped else None,
+        "source": "black_scholes_vanna",
+    }
+    return mapped, theta_summary, chain_rows_out, vanna_summary, source_counts["unavailable"]
+
+
+def _stacked_iv_surface(
+    *, chain_rows: Sequence[Mapping[str, Any]], spot: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """IV smile by strike + IV walls (where the options market prices uncertainty).
+    An IV wall is the strike with peak quoted open interest AND elevated IV on
+    its side of the smile — where positioning and priced volatility agree.
+    Skew = call IV − put IV at matched strikes (negative = put skew).
+    """
+    by_strike: dict[float, dict[str, float]] = {}
+    for row in chain_rows:
+        strike = _number(row.get("strike"))
+        iv = _number(row.get("iv"))
+        right = row.get("right")
+        if not strike or iv is None or not 0.005 <= iv <= 5.0 or right not in {"call", "put"}:
+            continue
+        oi = _integer(row.get("open_interest")) or 0
+        vol = _integer(row.get("volume")) or 0
+        cell = by_strike.setdefault(strike, {"call_iv_sum": 0.0, "call_iv_w": 0.0, "put_iv_sum": 0.0, "put_iv_w": 0.0})
+        key_sum, key_w = f"{right}_iv_sum", f"{right}_iv_w"
+        # OI-weighted mean IV per side; volume as tiebreaker weight keeps a
+        # dead-but-huge OI line from fully masking today's active quoting.
+        weight = oi + vol * 0.25
+        cell[key_sum] += iv * weight
+        cell[key_w] += weight
+    rows_out = []
+    for strike, value in sorted(by_strike.items()):
+        call_iv = value["call_iv_sum"] / value["call_iv_w"] if value["call_iv_w"] > 0 else None
+        put_iv = value["put_iv_sum"] / value["put_iv_w"] if value["put_iv_w"] > 0 else None
+        rows_out.append({
+            "strike": strike,
+            "call_iv": round(call_iv, 6) if call_iv is not None else None,
+            "put_iv": round(put_iv, 6) if put_iv is not None else None,
+            "skew": round(call_iv - put_iv, 6) if call_iv is not None and put_iv is not None else None,
+            "distance_pct": round((strike - spot) / spot, 6) if spot > 0 else None,
+        })
+    atm_iv: float | None = None
+    if spot > 0 and rows_out:
+        atm_row = min(rows_out, key=lambda row: abs(row["strike"] - spot))
+        atm_candidates = [atm_row["call_iv"], atm_row["put_iv"]]
+        atm_values = [value for value in atm_candidates if value is not None]
+        atm_iv = sum(atm_values) / len(atm_values) if atm_values else None
+    def peak(side: str) -> float | None:
+        values = [row for row in rows_out if row[side] is not None]
+        if not values:
+            return None
+        return max(values, key=lambda row: row[side])["strike"]
+    def iv_wall(side: str) -> float | None:
+        """Peak-OI strike on each side whose IV also sits above ATM IV."""
+        candidates = [
+            row for row in rows_out
+            if row[side] is not None and atm_iv is not None and row[side] >= atm_iv
+            and ((side == "call_iv" and row["strike"] >= spot) or (side == "put_iv" and row["strike"] <= spot))
+        ]
+        if not candidates:
+            return None
+        # OI proxy: pick the candidate nearest the peak-IV strike among the
+        # top quartile of distance — walls are where size and IV coexist.
+        top = sorted(candidates, key=lambda row: row[side] or 0.0, reverse=True)[: max(len(candidates) // 4, 3)]
+        return max(top, key=lambda row: abs(row["strike"] - spot))["strike"] if top else None
+    summary = {
+        "available": bool(rows_out),
+        "atm_iv": round(atm_iv, 6) if atm_iv is not None else None,
+        "peak_call_iv_strike": peak("call_iv"),
+        "peak_put_iv_strike": peak("put_iv"),
+        "call_iv_wall": iv_wall("call_iv"),
+        "put_iv_wall": iv_wall("put_iv"),
+        "method": "OI+volume weighted mean IV per strike; walls = peak IV above ATM on each side",
+    }
+    return rows_out, summary
+
+
+def _stacked_volume_profile(
+    *, price_series: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Volume-by-price histogram from the chart's own daily bars.
+    POC = highest-volume price bin. Value area = standard 70% expansion around
+    the POC. LVNs = local-minima bins under 35% of peak volume — prices where
+    real trading thinned out and price tends to slip through rather than stall.
+    Daily bars are an approximation of intrabar tape; the summary says so.
+    """
+    bars = [
+        (float(row["close"]), float(row.get("volume") or 0.0))
+        for row in price_series
+        if _number(row.get("close")) is not None and _number(row.get("close")) > 0
+    ]
+    if len(bars) < 5 or sum(volume for _, volume in bars) <= 0:
+        return [], {"available": False, "method": "needs ≥5 priced bars with volume"}
+    closes = [price for price, _ in bars]
+    low, high = min(closes), max(closes)
+    if high <= low:
+        return [], {"available": False, "method": "degenerate price range"}
+    bin_count = min(48, max(12, len(bars) // 2))
+    width = (high - low) / bin_count
+    volumes = [0.0] * bin_count
+    for price, volume in bars:
+        idx = min(int((price - low) / width), bin_count - 1)
+        volumes[idx] += volume
+    total_volume = sum(volumes)
+    peak_volume = max(volumes)
+    poc_idx = volumes.index(peak_volume)
+    # Value area: expand outward from POC until ≥70% of volume is enclosed.
+    lo_idx = hi_idx = poc_idx
+    enclosed = volumes[poc_idx]
+    target = 0.70 * total_volume
+    while enclosed < target and (lo_idx > 0 or hi_idx < bin_count - 1):
+        below = volumes[lo_idx - 1] if lo_idx > 0 else -1.0
+        above = volumes[hi_idx + 1] if hi_idx < bin_count - 1 else -1.0
+        if above >= below:
+            hi_idx += 1
+            enclosed += volumes[hi_idx]
+        else:
+            lo_idx -= 1
+            enclosed += volumes[lo_idx]
+    profile = []
+    for idx, volume in enumerate(volumes):
+        bin_lo = low + idx * width
+        profile.append({
+            "price": round(bin_lo + width / 2.0, 4),
+            "low": round(bin_lo, 4),
+            "high": round(bin_lo + width, 4),
+            "volume": round(volume, 2),
+            "pct_of_peak": round(volume / peak_volume, 4) if peak_volume > 0 else None,
+            "in_value_area": lo_idx <= idx <= hi_idx,
+        })
+    # LVNs: interior local minima below 35% of peak, ignoring one-bin noise
+    # by requiring both neighbours to be heavier.
+    lvn_bins = [
+        idx for idx in range(1, bin_count - 1)
+        if volumes[idx] < 0.35 * peak_volume
+        and volumes[idx] <= volumes[idx - 1] and volumes[idx] <= volumes[idx + 1]
+    ]
+    lvn_levels = [
+        {
+            "low": round(low + idx * width, 4),
+            "high": round(low + (idx + 1) * width, 4),
+            "mid": round(profile[idx]["price"], 4),
+            "volume_pct_of_peak": profile[idx]["pct_of_peak"],
+        }
+        for idx in lvn_bins
+    ]
+    extremes = {
+        "high": round(high, 4),
+        "low": round(low, 4),
+    }
+    summary = {
+        "available": True,
+        "bars": len(bars),
+        "bin_count": bin_count,
+        "poc": round(profile[poc_idx]["price"], 4),
+        "value_area_low": round(profile[lo_idx]["price"], 4),
+        "value_area_high": round(profile[hi_idx]["price"], 4),
+        "lvn_count": len(lvn_levels),
+        "extremes": extremes,
+        "method": "daily-bar volume-by-price approximation of intrabar tape",
+    }
+    return profile, {**summary, "lvns": lvn_levels}
+
+
+def _stacked_confluence(
+    *,
+    spot: float | None,
+    call_wall: float | None, put_wall: float | None, gamma_flip: float | None, pin_strike: float | None,
+    theta_decay_strike: float | None, vanna_pivot: float | None,
+    call_iv_wall: float | None, put_iv_wall: float | None,
+    poc: float | None, value_area_low: float | None, value_area_high: float | None,
+) -> list[dict[str, Any]]:
+    """Level confluence: which price zones multiple independent lenses name.
+    A level named by ≥2 lenses is where the stacked picture gets its edge —
+    e.g. a GEX call wall that is ALSO the IV wall and near the POC. Purely
+    descriptive clustering (±0.75% band); never a probability or a signal score.
+    """
+    lenses: list[tuple[str, str, float]] = []
+    if call_wall is not None:
+        lenses.append(("gamma", "GEX call wall", call_wall))
+    if put_wall is not None:
+        lenses.append(("gamma", "GEX put wall", put_wall))
+    if gamma_flip is not None:
+        lenses.append(("gamma", "Gamma flip", gamma_flip))
+    if pin_strike is not None:
+        lenses.append(("gamma", "Pin (max |net GEX|)", pin_strike))
+    if theta_decay_strike is not None:
+        lenses.append(("theta", "Max theta decay", theta_decay_strike))
+    if vanna_pivot is not None:
+        lenses.append(("vanna", "Vanna pivot", vanna_pivot))
+    if call_iv_wall is not None:
+        lenses.append(("iv", "Call IV wall", call_iv_wall))
+    if put_iv_wall is not None:
+        lenses.append(("iv", "Put IV wall", put_iv_wall))
+    if poc is not None:
+        lenses.append(("volume", "Volume POC", poc))
+    if value_area_high is not None:
+        lenses.append(("volume", "Value area high", value_area_high))
+    if value_area_low is not None:
+        lenses.append(("volume", "Value area low", value_area_low))
+    clusters: list[dict[str, Any]] = []
+    used = [False] * len(lenses)
+    band = 0.0075
+    for i, (family, label, level) in enumerate(lenses):
+        if used[i]:
+            continue
+        members = [(family, label, level)]
+        used[i] = True
+        for j in range(i + 1, len(lenses)):
+            if used[j]:
+                continue
+            other_level = lenses[j][2]
+            ref = sum(value for _, _, value in members) / len(members)
+            if abs(other_level - ref) / ref <= band:
+                members.append(lenses[j])
+                used[j] = True
+        avg = sum(value for _, _, value in members) / len(members)
+        families = sorted({family for family, _, _ in members})
+        clusters.append({
+            "level": round(avg, 4),
+            "distance_pct": round((avg - spot) / spot, 6) if spot else None,
+            "supporting_lenses": families,
+            "lens_count": len(families),
+            "labels": [label for _, label, _ in members],
+            "above_spot": bool(spot and avg > spot),
+        })
+    clusters.sort(key=lambda cluster: (-cluster["lens_count"], abs(cluster["distance_pct"] or 9)))
+    return clusters
+
+
 def build_options_intelligence(
     *, symbol: str, chain_rows: Sequence[Mapping[str, Any]], flow_rows: Sequence[Mapping[str, Any]],
     price_series: Sequence[Mapping[str, Any]], spot: float | None, filters: OptionsFilters,
@@ -2378,6 +2819,39 @@ def build_options_intelligence(
     )
     charm_by_strike, charm_summary, charm_chain_rows = _charm_map(
         filtered_chain, spot=resolved_spot, rate=filters.risk_free_rate,
+    )
+    # Stacked-signals lenses: theta/vanna exposure, IV surface, volume profile.
+    theta_rows, theta_summary, tv_chain_rows, vanna_summary, tv_skipped = _stacked_theta_vanna(
+        chain_rows=filtered_chain, spot=resolved_spot, rate=filters.risk_free_rate,
+    )
+    iv_surface, iv_summary = _stacked_iv_surface(
+        chain_rows=filtered_chain, spot=resolved_spot,
+    )
+    volume_profile, volume_profile_summary = _stacked_volume_profile(
+        price_series=price_series,
+    )
+    # Strongest single-strike decay and vanna pivots feed the confluence map.
+    max_theta_strike = (
+        max(theta_rows, key=lambda row: abs(row["net_theta_flow"]))["strike"]
+        if theta_rows else None
+    )
+    vanna_pivot = (
+        max(theta_rows, key=lambda row: abs(row["net_vanna_flow"]))["strike"]
+        if theta_rows else None
+    )
+    confluence = _stacked_confluence(
+        spot=resolved_spot,
+        call_wall=gex_summary.get("call_wall"),
+        put_wall=gex_summary.get("put_wall"),
+        gamma_flip=gex_summary.get("gamma_flip"),
+        pin_strike=gex_summary.get("pin_strike"),
+        theta_decay_strike=max_theta_strike,
+        vanna_pivot=vanna_pivot,
+        call_iv_wall=iv_summary.get("call_iv_wall"),
+        put_iv_wall=iv_summary.get("put_iv_wall"),
+        poc=volume_profile_summary.get("poc") if volume_profile_summary.get("available") else None,
+        value_area_low=volume_profile_summary.get("value_area_low") if volume_profile_summary.get("available") else None,
+        value_area_high=volume_profile_summary.get("value_area_high") if volume_profile_summary.get("available") else None,
     )
     # Delta-weighted live volume (supporting context for the pressure gauge).
     # Uses the same BS delta as charm so the gauge components share one model.
@@ -2685,6 +3159,23 @@ def build_options_intelligence(
         "chain_by_strike": charm_chain_rows,
         "charm_summary": charm_summary,
         "pressure": pressure,
+        # Stacked-signals lenses — each an independent read on the same tape.
+        "stacked_signals": {
+            "theta_by_strike": theta_rows,
+            "theta_summary": theta_summary,
+            "vanna_summary": vanna_summary,
+            "iv_surface": iv_surface,
+            "iv_summary": iv_summary,
+            "volume_profile": volume_profile,
+            "volume_profile_summary": volume_profile_summary,
+            "confluence": confluence,
+            "quality": {
+                "theta_vanna_contracts_measured": len(tv_chain_rows),
+                "theta_vanna_contracts_skipped": tv_skipped,
+                "iv_strikes_measured": len(iv_surface),
+                "volume_profile_available": bool(volume_profile_summary.get("available")),
+            },
+        },
         "delta_weighted_volume": {
             "call": round(delta_weighted_call_vol, 4),
             "put": round(delta_weighted_put_vol, 4),

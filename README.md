@@ -37,15 +37,15 @@ For the visual system, navigation model, component rules, chart semantics, and i
 
 The current dashboard is organized around five primary workspaces and a set of specialist research surfaces.
 
-| Workspace | Purpose |
-|---|---|
-| **Desk** | Operator posture, queue, market state, readiness, and high-level activity |
-| **Market** | Symbol research, price trajectory, factor context, comparison, and cross-asset inspection |
-| **Options** | Single-underlier options intelligence, positioning, gamma structure, ranges, and contract context |
-| **Flow** | Market-wide flow, sector activity, unusual options attention, and latent flow-state research |
-| **Research** | Methods, models, diagnostics, experiments, and governance surfaces |
+| Workspace    | Purpose                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| **Desk**     | Operator posture, queue, market state, readiness, and high-level activity                         |
+| **Market**   | Symbol research, price trajectory, factor context, comparison, and cross-asset inspection         |
+| **Options**  | Single-underlier options intelligence, positioning, gamma structure, ranges, and contract context |
+| **Flow**     | Market-wide flow, sector activity, unusual options attention, and latent flow-state research      |
+| **Research** | Methods, models, diagnostics, experiments, and governance surfaces                                |
 
-Specialist routes currently include Sectors, Pulse, Momentum, Fintel, Gates, Evolution, Live Blend, Graph, Breaks, and Cloud. The route definitions in [`dashboard/src/router.ts`](dashboard/src/router.ts) are the source of truth for the current workspace inventory.
+Specialist routes currently include Sectors, Pulse, Momentum, Fintel, Gates, Evolution, Live Blend, Graph, Breaks, Cloud, and Kalman (constant-velocity trend). The route definitions in [`dashboard/src/router.ts`](dashboard/src/router.ts) are the source of truth for the current workspace inventory.
 
 ## Core capabilities
 
@@ -88,18 +88,18 @@ Specialist routes currently include Sectors, Pulse, Momentum, Fintel, Gates, Evo
 
 ## Technology
 
-| Layer | Current implementation |
-|---|---|
-| Frontend | Vue 3, TypeScript, Vue Router, Vite |
-| Frontend design | Dark "instrument" design-token system (`tokens.css`, `base.css`, `docs/DESIGN.md`) |
-| Frontend testing | Vitest, `vue-tsc`, static design-conformance guard test |
-| Visualization | Dependency-light SVG chart primitives plus Three.js where 3D rendering is required |
-| API | Python `http.server` with threaded request handling |
-| Data / numerical work | pandas, NumPy and research-specific Python packages |
-| Market calendar | `exchange_calendars` |
-| Research | Local Python modules, Qlib workflows, model artifacts, point-in-time datasets |
-| Persistence | Filesystem-first datasets, JSON/JSONL/Parquet artifacts, run directories, model files |
-| Cloud research | Optional GCP / Vertex AI tooling for isolated training workflows |
+| Layer                 | Current implementation                                                                                                                                                           |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend              | Vue 3, TypeScript, Vue Router, Vite                                                                                                                                              |
+| Frontend design       | Dark "instrument" design-token system for the desk (`tokens.css`, `base.css`, `docs/DESIGN.md`); public landing/auth use a warm editorial paper system scoped inside their views |
+| Frontend testing      | Vitest, `vue-tsc`, static design-conformance guard test                                                                                                                          |
+| Visualization         | Dependency-light SVG chart primitives plus Three.js where 3D rendering is required                                                                                               |
+| API                   | Python `http.server` with threaded request handling                                                                                                                              |
+| Data / numerical work | pandas, NumPy and research-specific Python packages                                                                                                                              |
+| Market calendar       | `exchange_calendars`                                                                                                                                                             |
+| Research              | Local Python modules, Qlib workflows, model artifacts, point-in-time datasets                                                                                                    |
+| Persistence           | Filesystem-first datasets, JSON/JSONL/Parquet artifacts, run directories, model files                                                                                            |
+| Cloud research        | Optional GCP / Vertex AI tooling for isolated training workflows                                                                                                                 |
 
 The operator runtime dependencies are intentionally kept separate from the frozen model-training environment so dashboard changes do not silently change model reproducibility.
 

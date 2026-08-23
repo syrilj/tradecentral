@@ -60,3 +60,22 @@ export function printWhy(row: Pick<OptionsTapeRow, 'why' | 'anomaly_flags' | 'is
   if (row.is_moonshot) reasons.push('cheap far-OTM')
   return reasons
 }
+
+export function formatTapeTime(ts: string | null | undefined): string {
+  if (!ts) return '—'
+  const str = String(ts).trim()
+  if (!str) return '—'
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+    return str.length === 5 ? `${str}:00` : str
+  }
+  if (str.includes('T')) {
+    const timePart = str.split('T')[1]
+    if (timePart && timePart.length >= 8) return timePart.slice(0, 8)
+  }
+  const ms = Date.parse(str)
+  if (!Number.isNaN(ms)) {
+    const d = new Date(ms)
+    return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`
+  }
+  return str.length >= 19 ? str.slice(11, 19) : str.slice(0, 8)
+}

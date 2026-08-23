@@ -41,6 +41,15 @@ DEEP_LIVE_TARGET_LIMIT = 100
 ACTIVITY_ROW_LIMIT = 40
 # How many top qlib ranks to promote into live-target routing (deep only).
 QLIB_LIVE_PRIORITY_LIMIT = 40
+# Hard ceiling on the TOTAL wall-clock time build_market_activity_scan's live
+# per-symbol flow stage may run, regardless of how many symbols are routed.
+# load_live_flow_activity already bounds each individual provider request via
+# per_symbol_timeout_seconds, but it blocks until every routed symbol has
+# been attempted, so its own latency scales with len(targets)/max_workers --
+# with the defaults (12 workers, 2s per request) a 48-name batch alone costs
+# ~8s once the vendor is slow or down. 6.0s caps that at three full "waves"
+# no matter how many targets are routed; see _live_flow_wave_capacity.
+LIVE_FLOW_BUDGET_SECONDS_DEFAULT = 6.0
 
 # Standalone Flow polls every 15 seconds, but its local context is built from
 # completed daily bars. Re-decoding 175 parquet files on every provider poll
@@ -310,6 +319,30 @@ def _sector_watch_symbols(sector_flow: Mapping[str, Any] | None) -> list[str]:
             values.append(row.get("etf"))
             values.extend(row.get("focus_names") or [])
     return [_symbol(value).split()[0] for value in values if _symbol(value)]
+
+
+def _live_flow_wave_capacity(
+    *,
+    max_workers: int,
+    per_symbol_timeout_seconds: float,
+    budget_seconds: float,
+) -> int:
+    """How many symbols can be routed to ``load_live_flow_activity`` while
+    provably staying inside ``budget_seconds`` of total wall-clock time.
+
+    ``load_live_flow_activity`` bounds each individual provider request to
+    ``per_symbol_timeout_seconds`` (see ``adapters/flow.py::_bounded_call``)
+    but does not return until every routed symbol has been attempted, so its
+    worst-case total time is ``ceil(N / worker_count) * per_symbol_timeout_seconds``.
+    Capping ``N`` to a whole number of "waves" that fit inside the budget
+    makes that ceiling provable by construction: no in-flight request is ever
+    cancelled or abandoned, because this simply never submits more work than
+    can finish inside the budget in the first place.
+    """
+    timeout = max(float(per_symbol_timeout_seconds), 1e-6)
+    worker_count = max(1, int(max_workers))
+    max_waves = math.floor(max(0.0, float(budget_seconds)) / timeout)
+    return worker_count * max_waves
 
 
 def _select_live_targets(
@@ -808,6 +841,7 @@ def build_market_activity_scan(
     live_target_limit: int = DEEP_LIVE_TARGET_LIMIT,
     per_symbol_timeout_seconds: float = 2.0,
     max_workers: int = 12,
+    live_flow_budget_seconds: float = LIVE_FLOW_BUDGET_SECONDS_DEFAULT,
     row_limit: int = ACTIVITY_ROW_LIMIT,
     qlib_asof: str | None = None,
     enable_qlib_score: bool | None = None,
@@ -818,6 +852,14 @@ def build_market_activity_scan(
     Deep mode attaches the trained qlib ensemble over the scanned catalog and
     uses top ranks as a live-target priority tier. Quick mode attaches the
     zero-fit desk ranker (rev5 + mom12_1) and still skips live option prints.
+
+    ``live_flow_budget_seconds`` bounds the TOTAL wall-clock time the live
+    per-symbol flow stage may run in Deep mode, independent of how many
+    symbols are routed or how many workers are configured -- see
+    ``_live_flow_wave_capacity``. Callers that need a tighter ceiling (e.g. a
+    latency-sensitive API path) may pass a smaller value; symbols that do not
+    fit inside the budget are never attempted and are reported explicitly as
+    skipped in ``coverage`` rather than silently missing from the result.
     """
     def report(stage: str, percent: int, message: str) -> None:
         if progress is not None:
@@ -925,12 +967,33 @@ def build_market_activity_scan(
         limit=live_target_limit if mode == "deep" else 0,
         qlib_priority=qlib_priority,
     )
+    live_capacity = _live_flow_wave_capacity(
+        max_workers=max_workers,
+        per_symbol_timeout_seconds=per_symbol_timeout_seconds,
+        budget_seconds=live_flow_budget_seconds,
+    )
+    routed_live_targets = live_targets[:live_capacity]
+    budget_skipped_targets = live_targets[live_capacity:]
     live_flow = load_live_flow_activity(
-        symbols=live_targets,
+        symbols=routed_live_targets,
         fetcher=flow_fetcher,
         per_symbol_timeout_seconds=per_symbol_timeout_seconds,
         max_workers=max_workers,
     )
+    # Never silently return a shorter-than-requested live board without
+    # saying so: attempted/skipped are explicit here, not inferred later from
+    # a row count that could just as easily mean "no interesting prints."
+    live_flow_coverage = dict(live_flow.get("coverage") or {})
+    live_flow_coverage["attempted"] = len(routed_live_targets)
+    live_flow_coverage["skipped_budget"] = len(budget_skipped_targets)
+    live_flow_coverage["budget_seconds"] = round(float(live_flow_budget_seconds), 3)
+    live_flow_coverage["budget_exhausted"] = bool(budget_skipped_targets)
+    live_flow["coverage"] = live_flow_coverage
+    if budget_skipped_targets:
+        live_flow["warnings"] = [
+            *(live_flow.get("warnings") or []),
+            "live_flow_budget_exhausted",
+        ]
     live_coverage = live_flow.get("coverage") or {}
     report(
         "live_flow" if mode == "deep" else "local_activity",
@@ -994,8 +1057,12 @@ def build_market_activity_scan(
             "local_failed": int(local_scan["coverage"]["failed"]),
             "local_flagged": int(local_scan["coverage"]["flagged"]),
             "local_asof": local_scan.get("asof"),
-            "live_requested": int(coverage.get("requested") or 0),
+            "live_requested": len(live_targets),
+            "live_attempted": int(coverage.get("attempted") or 0),
             "live_completed": int(coverage.get("completed") or 0),
+            "live_skipped_budget": int(coverage.get("skipped_budget") or 0),
+            "live_flow_budget_seconds": coverage.get("budget_seconds"),
+            "live_flow_budget_exhausted": bool(coverage.get("budget_exhausted")),
             "live_with_activity": int(coverage.get("with_activity") or 0),
             "qlib_attempted": int(qlib_cov.get("attempted") or 0),
             "qlib_scored": int(qlib_cov.get("scored") or 0),

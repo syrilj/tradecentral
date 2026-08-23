@@ -59,7 +59,7 @@ describe('application market strip contract', () => {
   it('uses the TradeCentral identity throughout the operator shell', () => {
     expect(app).toContain("import TradeCentralMark from '@/components/TradeCentralMark.vue'")
     expect(app).toContain('aria-label="TradeCentral workspaces"')
-    expect(app).toContain('<TradeCentralMark :size="28" />')
+    expect(app).toContain('<TradeCentralMark :size="22" />')
     expect(app).toContain('<strong>Trade</strong>')
     expect(app).toContain('<strong>Central</strong>')
     expect(app).not.toContain('class="mark-e"')

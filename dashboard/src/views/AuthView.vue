@@ -16,7 +16,7 @@ const { user } = useUser()
 onMounted(() => document.body.classList.add('edge-public-mode'))
 onUnmounted(() => document.body.classList.remove('edge-public-mode'))
 
-const mode = computed(() => route.query.mode === 'setup' ? 'setup' : 'signin')
+const mode = computed(() => (route.query.mode === 'setup' ? 'setup' : 'signin'))
 const redirectTarget = computed(() => safeRedirect(route.query.redirect, '/flow'))
 const email = computed(() => user.value?.primaryEmailAddress?.emailAddress ?? '')
 const denied = computed(() => Boolean(isSignedIn.value && !isAllowedOperatorEmail(email.value)))
@@ -54,11 +54,10 @@ watch(
     <main class="auth-shell">
       <section class="auth-context" aria-labelledby="auth-context-title">
         <p class="eyebrow"><span aria-hidden="true" /> Operator access · measured Flow</p>
-        <h1 id="auth-context-title">One identity.<br>The full instrument.</h1>
+        <h1 id="auth-context-title">One identity.<br />The full instrument.</h1>
         <p class="context-copy">
-          Clerk verifies the operator; TradeCentral preserves the local boundary.
-          After that, Flow opens the measured market-wide window—not a demo board,
-          promised return, or trade ticket.
+          Clerk verifies the operator; TradeCentral preserves the local boundary. After that, Flow
+          opens the measured market-wide window—not a demo board, promised return, or trade ticket.
         </p>
         <div class="close-row">
           <span>Next: authenticate</span>
@@ -89,14 +88,22 @@ watch(
         <div class="panel-head">
           <p>{{ mode === 'setup' ? 'Create operator access' : 'Continue to Flow' }}</p>
           <h2 id="auth-title">
-            {{ denied ? 'This account is not authorized' : mode === 'setup' ? 'Create the operator session' : 'Unlock the instrument' }}
+            {{
+              denied
+                ? 'This account is not authorized'
+                : mode === 'setup'
+                  ? 'Create the operator session'
+                  : 'Unlock the instrument'
+            }}
           </h2>
           <span>
-            {{ denied
-              ? 'The signed-in account is not on the operator allowlist. Sign in with the authorized address.'
-              : mode === 'setup'
-                ? 'Create a Clerk operator session for this workstation.'
-                : 'Sign in to open the Flow tape and the rest of the desk.' }}
+            {{
+              denied
+                ? 'The signed-in account is not on the operator allowlist. Sign in with the authorized address.'
+                : mode === 'setup'
+                  ? 'Create a Clerk operator session for this workstation.'
+                  : 'Sign in to open the Flow tape and the rest of the desk.'
+            }}
           </span>
         </div>
 
@@ -122,9 +129,8 @@ watch(
         />
 
         <p class="security-note">
-          Clerk holds the operator session for this dashboard. The research API
-          still binds to 127.0.0.1. That is a workstation lock, not permission
-          to expose the local API on a network.
+          Clerk holds the operator session. The research API still binds to 127.0.0.1. That is a
+          workstation lock, not permission to expose the local API on a network.
         </p>
       </section>
     </main>
@@ -139,7 +145,7 @@ watch(
 <style scoped>
 :global(body.edge-public-mode) {
   overflow: auto !important;
-  background: #141413;
+  background: #fbfbf8;
 }
 :global(body.edge-public-mode #app),
 :global(body.edge-public-mode .shell) {
@@ -147,11 +153,15 @@ watch(
   min-height: 100vh;
   overflow: visible !important;
 }
-:global(body.edge-public-mode .shell) { display: block !important; }
+:global(body.edge-public-mode .shell) {
+  display: block !important;
+}
 :global(body.edge-public-mode .rail),
 :global(body.edge-public-mode .strip),
 :global(body.edge-public-mode .foot),
-:global(body.edge-public-mode .skip-link) { display: none !important; }
+:global(body.edge-public-mode .skip-link) {
+  display: none !important;
+}
 :global(body.edge-public-mode .stage) {
   display: block !important;
   width: 100% !important;
@@ -162,24 +172,27 @@ watch(
 }
 
 .auth-page {
-  --auth-dark: #141413;
-  --auth-paper: #faf9f5;
-  --auth-muted: #b0aea5;
-  --auth-rule: #363531;
-  --auth-orange: #d97757;
-  --auth-blue: #6a9bcc;
-  --auth-green: #788c5d;
+  --auth-dark: #18181b;
+  --auth-paper: #fbfbf8;
+  --auth-muted: #565660;
+  --auth-rule: #e4e3de;
+  --auth-orange: #ff5229;
+  --auth-blue: #0082e6;
+  --auth-green: #0f8a5f;
+  /* Editorial typography aligned with the landing paper system. */
+  --font-display: 'Inter Tight Variable', 'Inter Tight', 'Geist Variable', 'Geist', sans-serif;
+  --font-ui: 'Inter Variable', 'Inter', 'Geist Variable', 'Geist', sans-serif;
+  --font-data: 'Space Mono', 'IBM Plex Mono', 'Geist Mono Variable', monospace;
   position: relative;
   z-index: 3;
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr auto;
   overflow-x: hidden;
-  color: var(--auth-paper);
+  color: var(--auth-dark);
   background:
-    linear-gradient(rgba(250, 249, 245, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(250, 249, 245, 0.025) 1px, transparent 1px),
-    var(--auth-dark);
+    linear-gradient(rgba(24, 24, 27, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24, 24, 27, 0.045) 1px, transparent 1px), var(--auth-paper);
   background-size: 40px 40px;
   font-family: var(--font-ui);
 }
@@ -204,12 +217,17 @@ watch(
   align-items: center;
   gap: 11px;
   padding: 8px 12px 8px 9px;
-  color: var(--auth-paper);
-  border: 1px solid #3c3c37;
-  background: #191a18;
+  color: var(--auth-dark);
+  border: 1px solid #c9c9c4;
+  background: #f5f4ef;
 }
-.auth-brand:hover { text-decoration: none; }
-.auth-wordmark { display: grid; line-height: 1.05; }
+.auth-brand:hover {
+  text-decoration: none;
+}
+.auth-wordmark {
+  display: grid;
+  line-height: 1.05;
+}
 .auth-wordmark strong {
   font-family: var(--font-display);
   font-size: 15px;
@@ -233,7 +251,10 @@ watch(
   font-family: var(--font-ui);
   font-size: 12px;
 }
-.back-link:hover { color: var(--auth-paper); text-decoration: none; }
+.back-link:hover {
+  color: var(--auth-dark);
+  text-decoration: none;
+}
 
 .auth-shell {
   display: grid;
@@ -243,7 +264,9 @@ watch(
   padding-block: clamp(48px, 7vh, 88px);
 }
 
-.auth-context { max-width: 720px; }
+.auth-context {
+  max-width: 720px;
+}
 .eyebrow {
   display: flex;
   align-items: center;
@@ -255,11 +278,15 @@ watch(
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
-.eyebrow span { width: 24px; height: 2px; background: var(--auth-orange); }
+.eyebrow span {
+  width: 24px;
+  height: 2px;
+  background: var(--auth-orange);
+}
 .auth-context h1 {
   margin-top: 22px;
   max-width: 16ch;
-  color: var(--auth-paper);
+  color: var(--auth-dark);
   font-family: var(--font-display);
   font-size: clamp(38px, 4.8vw, 62px);
   font-weight: 600;
@@ -269,7 +296,7 @@ watch(
 .context-copy {
   margin-top: 22px;
   max-width: 54ch;
-  color: #cfcdc5;
+  color: #3f3f46;
   font-family: var(--font-ui);
   font-size: 16px;
   line-height: 1.7;
@@ -279,25 +306,31 @@ watch(
   align-items: center;
   gap: 10px;
   margin: 24px 0 28px;
-  color: #8a877f;
+  color: #6f6f78;
   font-family: var(--font-display);
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.close-row i { flex: 1; height: 1px; background: var(--auth-rule); }
+.close-row i {
+  flex: 1;
+  height: 1px;
+  background: var(--auth-rule);
+}
 
-.access-route-visual { max-width: 660px; }
+.access-route-visual {
+  max-width: 660px;
+}
 
 .auth-panel {
   position: sticky;
   top: 28px;
   padding: 28px 32px 30px;
   color: var(--auth-dark);
-  background: var(--auth-paper);
-  border: 1px solid #d1cdc3;
+  background: #ffffff;
+  border: 1px solid #c9c9c4;
   border-top: 3px solid var(--auth-orange);
-  box-shadow: 18px 22px 0 rgba(106, 155, 204, 0.14);
+  box-shadow: 18px 22px 0 rgba(0, 130, 230, 0.1);
 }
 .auth-panel::before,
 .auth-panel::after {
@@ -307,13 +340,23 @@ watch(
   height: 13px;
   pointer-events: none;
 }
-.auth-panel::before { top: -3px; left: -1px; border-top: 1px solid #141413; border-left: 1px solid #141413; }
-.auth-panel::after { right: -1px; bottom: -1px; border-right: 1px solid #141413; border-bottom: 1px solid #141413; }
+.auth-panel::before {
+  top: -3px;
+  left: -1px;
+  border-top: 1px solid #18181b;
+  border-left: 1px solid #18181b;
+}
+.auth-panel::after {
+  right: -1px;
+  bottom: -1px;
+  border-right: 1px solid #18181b;
+  border-bottom: 1px solid #18181b;
+}
 .panel-index {
   position: absolute;
   top: -24px;
   right: 0;
-  color: #a19e95;
+  color: #6f6f78;
   font-family: var(--font-display);
   font-size: 9px;
   letter-spacing: 0.1em;
@@ -323,22 +366,28 @@ watch(
   grid-template-columns: 1fr 1fr;
   margin: 0 0 27px;
   padding: 4px;
-  border: 1px solid #c9c5bb;
-  background: #ece9e0;
+  border: 1px solid #c9c9c4;
+  background: #ebe9e0;
 }
 .auth-mode-switch a {
   min-height: 38px;
   display: grid;
   place-items: center;
-  color: #706d65;
+  color: #565660;
   font-family: var(--font-display);
   font-size: 8px;
   font-weight: 700;
-  letter-spacing: .09em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
-.auth-mode-switch a:hover { color: #2a2a25; text-decoration: none; }
-.auth-mode-switch a.active { color: #faf9f5; background: #242520; }
+.auth-mode-switch a:hover {
+  color: #18181b;
+  text-decoration: none;
+}
+.auth-mode-switch a.active {
+  color: #fbfbf8;
+  background: #09090b;
+}
 .panel-head p {
   color: var(--auth-orange);
   font-family: var(--font-display);
@@ -357,7 +406,7 @@ watch(
 .panel-head > span {
   display: block;
   margin-top: 8px;
-  color: #68665f;
+  color: #3f3f46;
   font-family: var(--font-ui);
   font-size: 13px;
   line-height: 1.5;
@@ -365,7 +414,7 @@ watch(
 
 .clerk-wait {
   margin-top: 28px;
-  color: #6f6c64;
+  color: #6f6f78;
   font-family: var(--font-ui);
   font-size: 13px;
 }
@@ -382,11 +431,22 @@ watch(
   font-size: 12px;
   line-height: 1.45;
 }
-.auth-panel :deep(.cl-rootBox) { margin-top: 22px; }
+.auth-panel :deep(.cl-rootBox) {
+  margin-top: 22px;
+}
 .auth-panel :deep(.cl-cardBox),
-.auth-panel :deep(.cl-card) { width: 100%; }
-.auth-panel :deep(.cl-rootBox) { color: #252521; font-family: var(--font-ui); }
-.auth-panel :deep(.cl-formFieldLabel) { color: #3e3c36; font-size: 12px; font-weight: 650; }
+.auth-panel :deep(.cl-card) {
+  width: 100%;
+}
+.auth-panel :deep(.cl-rootBox) {
+  color: #252521;
+  font-family: var(--font-ui);
+}
+.auth-panel :deep(.cl-formFieldLabel) {
+  color: #3e3c36;
+  font-size: 12px;
+  font-weight: 650;
+}
 .auth-panel :deep(.cl-formFieldInput) {
   min-height: 46px;
   padding-inline: 13px;
@@ -396,17 +456,25 @@ watch(
   background: #fffefa;
   box-shadow: none;
 }
-.auth-panel :deep(.cl-formFieldInput::placeholder) { color: #77746c; opacity: 1; }
-.auth-panel :deep(.cl-formFieldInput:focus) { border-color: #8d402b; box-shadow: 0 0 0 2px rgba(141, 64, 43, 0.18); }
+.auth-panel :deep(.cl-formFieldInput::placeholder) {
+  color: #77746c;
+  opacity: 1;
+}
+.auth-panel :deep(.cl-formFieldInput:focus) {
+  border-color: #c93a10;
+  box-shadow: 0 0 0 2px rgba(255, 82, 41, 0.18);
+}
 .auth-panel :deep(.cl-formButtonPrimary) {
   min-height: 47px;
-  color: #fffdf8;
-  border-left: 3px solid #793622;
+  color: #fbfbf8;
+  border-left: 3px solid #ff5229;
   border-radius: 0;
-  background: #b8583c;
+  background: #09090b;
   box-shadow: none;
 }
-.auth-panel :deep(.cl-formButtonPrimary:hover) { background: #873d29; }
+.auth-panel :deep(.cl-formButtonPrimary:hover) {
+  background: #26262c;
+}
 .auth-panel :deep(.cl-socialButtonsBlockButton) {
   min-height: 46px;
   color: #292923;
@@ -415,21 +483,34 @@ watch(
   background: #fffefa;
   box-shadow: none;
 }
-.auth-panel :deep(.cl-socialButtonsBlockButton:hover) { color: #1e1f1b; border-color: #3f3e38; background: #f0eee8; }
-.auth-panel :deep(.cl-dividerLine) { background: #c7c3b9; }
+.auth-panel :deep(.cl-socialButtonsBlockButton:hover) {
+  color: #1e1f1b;
+  border-color: #3f3e38;
+  background: #f0eee8;
+}
+.auth-panel :deep(.cl-dividerLine) {
+  background: #c7c3b9;
+}
 .auth-panel :deep(.cl-dividerText),
 .auth-panel :deep(.cl-footerActionText),
-.auth-panel :deep(.cl-identityPreviewText) { color: #5e5b53; }
+.auth-panel :deep(.cl-identityPreviewText) {
+  color: #5e5b53;
+}
 .auth-panel :deep(.cl-footerActionLink),
 .auth-panel :deep(.cl-formResendCodeLink),
-.auth-panel :deep(.cl-identityPreviewEditButton) { color: #8d402b; font-weight: 700; }
-.auth-panel :deep(.cl-alertText) { color: #7d2931; }
+.auth-panel :deep(.cl-identityPreviewEditButton) {
+  color: #c93a10;
+  font-weight: 700;
+}
+.auth-panel :deep(.cl-alertText) {
+  color: #7d2931;
+}
 
 .security-note {
   margin-top: 26px;
   padding-top: 18px;
-  color: #817e76;
-  border-top: 1px solid #ddd9d0;
+  color: #6f6f78;
+  border-top: 1px solid #e4e3de;
   font-family: var(--font-ui);
   font-size: 10px;
   line-height: 1.55;
@@ -441,7 +522,7 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  color: #85827a;
+  color: #6f6f78;
   border-top: 1px solid var(--auth-rule);
   font-family: var(--font-display);
   font-size: 9px;
@@ -450,18 +531,41 @@ watch(
 }
 
 @media (max-width: 980px) {
-  .auth-shell { grid-template-columns: 1fr; gap: 36px; }
-  .auth-panel { position: relative; max-width: 560px; }
+  .auth-shell {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+  .auth-panel {
+    position: relative;
+    max-width: 560px;
+  }
 }
 
 @media (max-width: 620px) {
   .auth-topbar,
   .auth-shell,
-  .auth-footer { width: min(100% - 32px, 1240px); }
-  .auth-wordmark small { display: none; }
-  .back-link { font-size: 0; gap: 0; }
-  .auth-context h1 { font-size: clamp(34px, 12vw, 48px); }
-  .auth-panel { padding: 22px 18px 24px; box-shadow: 9px 11px 0 rgba(106, 155, 204, 0.14); }
-  .auth-footer { flex-direction: column; align-items: flex-start; justify-content: center; padding-block: 18px; }
+  .auth-footer {
+    width: min(100% - 32px, 1240px);
+  }
+  .auth-wordmark small {
+    display: none;
+  }
+  .back-link {
+    font-size: 0;
+    gap: 0;
+  }
+  .auth-context h1 {
+    font-size: clamp(34px, 12vw, 48px);
+  }
+  .auth-panel {
+    padding: 22px 18px 24px;
+    box-shadow: 9px 11px 0 rgba(0, 130, 230, 0.1);
+  }
+  .auth-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    padding-block: 18px;
+  }
 }
 </style>

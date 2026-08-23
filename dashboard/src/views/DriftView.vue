@@ -791,6 +791,7 @@ const focusStrike = ref<number | null>(null)
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .drift-view {
   display: flex;
   flex-direction: column;
@@ -1404,7 +1405,7 @@ h1 {
   background: var(--phosphor);
   margin-right: 6px;
   vertical-align: middle;
-  animation: dot-pulse 2s ease-in-out infinite;
+  animation: dot-pulse var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; }

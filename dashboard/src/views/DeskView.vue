@@ -1878,7 +1878,7 @@ function navTo(name: string): void {
   font-weight: 700;
   letter-spacing: var(--track-tight);
 }
-.last-scan { color: var(--ink-ghost); font-size: var(--t-micro); font-weight: 600; }
+.last-scan { overflow: visible; color: var(--ink-ghost); font-size: var(--t-micro); font-weight: 600; line-height: 1.3; text-overflow: clip; white-space: normal; }
 
 .scan-readouts {
   display: grid;

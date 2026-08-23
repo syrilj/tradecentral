@@ -707,7 +707,7 @@ const staleReason = computed(() =>
 .refresh-btn:hover:not(:disabled) { background: var(--phosphor); color: var(--void); }
 .refresh-btn:disabled { opacity: 0.6; cursor: wait; }
 .refresh-icon { display: inline-block; font-size: 0.9rem; line-height: 1; }
-.refresh-icon.spinning { animation: spin 0.8s linear infinite; }
+.refresh-icon.spinning { animation: spin var(--dur-spin) linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 .empty-state {

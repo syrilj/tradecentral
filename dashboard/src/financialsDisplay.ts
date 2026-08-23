@@ -169,6 +169,14 @@ export interface ModelForecastPayload {
   spot_used?: number | null
   spot_source?: string | null
   lookthrough_growth?: number | null
+  sustainable_growth?: number | null
+  expected_return?: number | null
+  annualized_return?: number | null
+  cost_of_equity?: number | null
+  excess_annualized_return?: number | null
+  scenario_sigma?: number | null
+  observed_feature_count?: number | null
+  feature_count_total?: number | null
 }
 
 export interface ModelForecastCaseView {
@@ -184,6 +192,16 @@ export interface ModelForecastView {
   spotUsed: number | null
   spotSource: string | null
   lookthroughGrowth: number | null
+  sustainableGrowth: number | null
+  /** Total simple return implied by the mark over the horizon. */
+  expectedReturn: number | null
+  annualizedReturn: number | null
+  /** Hurdle the annualised return must clear before the name is interesting. */
+  costOfEquity: number | null
+  excessAnnualizedReturn: number | null
+  scenarioSigma: number | null
+  observedFeatureCount: number | null
+  featureCountTotal: number | null
   timeframe: string | null
   timeframeMonths: number | null
   factors: Array<{ label: string; display: string; tone: string }>
@@ -221,6 +239,14 @@ function emptyForecastView(status: ModelForecastStatus): ModelForecastView {
     spotUsed: null,
     spotSource: null,
     lookthroughGrowth: null,
+    sustainableGrowth: null,
+    expectedReturn: null,
+    annualizedReturn: null,
+    costOfEquity: null,
+    excessAnnualizedReturn: null,
+    scenarioSigma: null,
+    observedFeatureCount: null,
+    featureCountTotal: null,
     timeframe: null,
     timeframeMonths: null,
     factors: [],
@@ -263,6 +289,14 @@ export function presentModelForecast(
     spotUsed: finiteOrNull(raw.spot_used),
     spotSource: raw.spot_source || null,
     lookthroughGrowth: finiteOrNull(raw.lookthrough_growth),
+    sustainableGrowth: finiteOrNull(raw.sustainable_growth),
+    expectedReturn: finiteOrNull(raw.expected_return),
+    annualizedReturn: finiteOrNull(raw.annualized_return),
+    costOfEquity: finiteOrNull(raw.cost_of_equity),
+    excessAnnualizedReturn: finiteOrNull(raw.excess_annualized_return),
+    scenarioSigma: finiteOrNull(raw.scenario_sigma),
+    observedFeatureCount: finiteOrNull(raw.observed_feature_count),
+    featureCountTotal: finiteOrNull(raw.feature_count_total),
     timeframe,
     timeframeMonths: finiteOrNull(raw.timeframe_months),
     factors,

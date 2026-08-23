@@ -53,12 +53,17 @@ backend_is_current() {
   local base="http://127.0.0.1:${port}"
   local code path health
   health="$(curl -fsS "${base}/api/health" 2>/dev/null)" || return 1
-  case "$health" in
-    *'"flow_feed_contract": "market-wide-v1"'*) ;;
+  # /api/health is serialized with compact separators (`{"k":"v"}`), so match
+  # against a space-stripped copy rather than assuming `"k": "v"` spacing --
+  # a spacing-sensitive pattern here never matches, and the caller then kills
+  # the healthy backend it just started as "stale".
+  local health_nospace="${health// /}"
+  case "$health_nospace" in
+    *'"flow_feed_contract":"market-wide-v1"'*) ;;
     *) return 1 ;;
   esac
-  case "$health" in
-    *'"suggestion_contract": "paper-candidate-contract-v9"'*) ;;
+  case "$health_nospace" in
+    *'"suggestion_contract":"paper-candidate-contract-v9"'*) ;;
     *) return 1 ;;
   esac
   for path in /api/ga /api/factors /api/graph /api/changepoints /api/flow-state /api/scan_status; do

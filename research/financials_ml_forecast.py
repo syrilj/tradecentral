@@ -1,8 +1,36 @@
-"""Report-native ML forecast: predicted price, forecast score, gearing-up readout.
+"""Report-native forecast: predicted price, forecast score, gearing-up readout.
 
-Decision support only. Fit is a frozen Ridge on a deterministic synthetic
-fundamental panel — Street consensus / median targets are never labels or
-features. Missing filings stay None; zeros are not substituted for absence.
+Decision support only. Street consensus and median targets are never labels or
+features, and missing filings stay ``None`` — zeros are not substituted for
+absence.
+
+Method
+------
+The published mark is a *forward* target price at the look-through horizon,
+built from two bounded legs plus a small quality tilt:
+
+1. **Earnings leg** — observed growth is shrunk toward a cross-sectional prior
+   (:data:`GROWTH_SHRINK`), then faded exponentially toward
+   :data:`TERMINAL_GROWTH` over the horizon. A single hot quarter is evidence,
+   not a compounding rate.
+2. **Multiple leg** — the log move from today's trailing multiple to the fair
+   multiple implied by *faded* growth at the horizon. A rich name whose growth
+   is rolling over pays for it, which is how the growth trap gets expressed.
+3. **Quality tilt** — a frozen Ridge on a deterministic synthetic panel, at 28%
+   weight. The panel carries an explicit value tilt, so a higher multiple
+   lowers expected return rather than raising it.
+
+Both the mark and the scenario band are railed in *annualised* terms
+(:data:`MAX_ANNUALISED_RETURN` / :data:`MIN_ANNUALISED_RETURN`), so no input
+combination can print an unbounded target and a bearish read is always
+reachable. The target is not discounted — it is a price at the horizon, not a
+present value — so :func:`cost_of_equity` is published alongside it as the
+hurdle the implied return has to clear.
+
+Units are taken from the source, never guessed from magnitude: the ``ratios``
+block is percent, the live ``tape`` block is fractional, ``period_type`` decides
+whether a five-row statement spans four quarters or four years, and a vendor
+``debtToEquity`` of 150.0 means 1.5x.
 """
 from __future__ import annotations
 
@@ -40,6 +68,34 @@ FEATURE_NAMES: tuple[str, ...] = (
 # At least this many observed (non-null) model features plus a spot are required
 # before the scorer will emit a price / score instead of a missing state.
 MIN_OBSERVED_FEATURES = 6
+
+# ── Valuation rails ────────────────────────────────────────────────────────
+# The mark is a *forward* target price at the look-through horizon, so it is not
+# discounted back. The cost of equity is carried alongside it instead, as the
+# hurdle the implied return has to clear before the name is interesting.
+DEFAULT_COST_OF_EQUITY = 0.09
+LEVERAGE_RISK_PREMIUM = 0.015  # added per 1.0x of debt / equity
+TERMINAL_GROWTH = 0.03  # long-run fade target, roughly nominal GDP
+GROWTH_FADE_TAU_YEARS = 3.0  # supernormal growth half-lives into the terminal rate
+GROWTH_PRIOR = 0.06  # shrinkage prior: typical sustainable growth
+GROWTH_SHRINK = 0.55  # how much of the observed gap from the prior we keep
+MAX_SUSTAINED_GROWTH = 0.60  # no filing justifies capitalising more than this
+BASE_FAIR_PE = 15.0  # fair trailing multiple at zero sustainable growth
+PE_GROWTH_SLOPE = 55.0  # fair multiple added per 1.0 of sustainable growth
+MAX_FAIR_PE = 45.0
+MIN_FAIR_PE = 8.0
+# Annualised rails on the published view. Wide enough for a genuine top-decile
+# call, tight enough that no input combination prints a fantasy target.
+MAX_ANNUALISED_RETURN = 0.35
+MIN_ANNUALISED_RETURN = -0.35
+# Book equity at or below zero is balance-sheet distress, not zero leverage.
+DISTRESS_DEBT_TO_EQUITY = 6.0
+# 10th / 90th percentile band around the base case.
+SCENARIO_Z = 1.2816
+# Scenario rails, annualised. Wider than the base rails — a tail is allowed to
+# be a tail — but still bounded so a bull case stays a forecast, not a fantasy.
+MAX_SCENARIO_ANNUALISED = 0.80
+MIN_SCENARIO_ANNUALISED = -0.60
 
 # Gearing-up labels — model's view of the trajectory, not Street ratings.
 GEARING_EXPANSION = "product and capacity expansion"
@@ -122,13 +178,67 @@ def _latest(series: list[float | None]) -> float | None:
     return None
 
 
-def _growth(series: list[float | None]) -> float | None:
+def _growth(series: list[float | None], periods_per_year: int = 4) -> float | None:
+    """Annualised growth from a newest-first series.
+
+    The widest available span is used and then converted to a per-year rate, so
+    an annual filing's four-year span is never read as if it were one year of
+    growth (and a two-point quarterly span is not read as a full year either).
+    """
     observed = [v for v in series if v is not None]
     if len(observed) >= 5 and observed[4] != 0:
-        return (observed[0] - observed[4]) / abs(observed[4])
-    if len(observed) >= 2 and observed[1] != 0:
-        return (observed[0] - observed[1]) / abs(observed[1])
-    return None
+        newest, oldest, periods = observed[0], observed[4], 4
+    elif len(observed) >= 2 and observed[1] != 0:
+        newest, oldest, periods = observed[0], observed[1], 1
+    else:
+        return None
+    ppy = periods_per_year if periods_per_year and periods_per_year > 0 else 4
+    years = periods / float(ppy)
+    total = (newest - oldest) / abs(oldest)
+    if years <= 0:
+        return None
+    if abs(years - 1.0) < 1e-9:
+        return total
+    ratio = 1.0 + total
+    if ratio <= 0:
+        # Sign flip (profit into loss): a root of a negative ratio is undefined,
+        # so fall back to a linear per-year rate rather than inventing one.
+        return max(total / years, -0.95)
+    return ratio ** (1.0 / years) - 1.0
+
+
+def _periods_per_year(payload: Mapping[str, Any] | None) -> int:
+    """4 for quarterly reports, 1 for annual. Defaults to quarterly."""
+    ptype = str((payload or {}).get("period_type") or "").strip().lower()
+    if ptype.startswith(("annual", "year", "fy")):
+        return 1
+    if ptype.startswith(("quarter", "q")):
+        return 4
+    periods = (payload or {}).get("periods")
+    if isinstance(periods, list) and len(periods) >= 2:
+        try:
+            y0 = int(str(periods[0])[:4])
+            y1 = int(str(periods[1])[:4])
+        except (TypeError, ValueError):
+            return 4
+        if abs(y0 - y1) >= 1:
+            return 1
+    return 4
+
+
+def _normalise_debt_to_equity(val: float | None) -> float | None:
+    """yfinance reports ``debtToEquity`` as a percentage — 150.0 means 1.5x.
+
+    Left unconverted this standardises to z>600 against the fitted panel and
+    pins the model to its floor for every symbol the vendor covers.
+    """
+    if val is None:
+        return None
+    if abs(val) > 5.0:
+        val = val / 100.0
+    if val < 0:
+        return DISTRESS_DEBT_TO_EQUITY
+    return val
 
 
 def _ratio(numer: float | None, denom: float | None) -> float | None:
@@ -141,6 +251,14 @@ def _log_pos(val: float | None) -> float | None:
     if val is None or val <= 0:
         return None
     return math.log(val)
+
+
+def _tape_growth(val: Any) -> float | None:
+    """Growth straight off the live tape. Already a fraction — never rescaled."""
+    num = _finite(val)
+    if num is None:
+        return None
+    return float(np.clip(num, -0.99, 10.0))
 
 
 def _pct_to_frac(val: float | None) -> float | None:
@@ -203,6 +321,7 @@ def build_report_features(
     inc = _table_rows(payload, "income_statement")
     bal = _table_rows(payload, "balance_sheet")
     cf = _table_rows(payload, "cash_flow")
+    ppy = _periods_per_year(payload)
     ratios = payload.get("ratios") if isinstance(payload.get("ratios"), Mapping) else {}
     extra = intel if isinstance(intel, Mapping) else {}
 
@@ -245,22 +364,28 @@ def build_report_features(
     if net_margin is None:
         net_margin = _pct_to_frac(_finite(ratios.get("net_margin")))
 
-    revenue_growth = _growth(take("revenue"))
+    revenue_growth = _growth(take("revenue"), ppy)
     if revenue_growth is None:
         revenue_growth = _pct_to_frac(_finite(ratios.get("revenue_growth_yoy")))
-    live_rg = _pct_to_frac(_finite(extra.get("revenue_growth")))
+    # Tape growth comes from yfinance as a FRACTION (0.82 == 82%); the ratios
+    # block is built as a PERCENT. Running the magnitude heuristic over the tape
+    # crushed a genuine 180% grower (1.8) to 1.8%, so units follow the source.
+    live_rg = _tape_growth(extra.get("revenue_growth"))
     if live_rg is not None:
         revenue_growth = live_rg if revenue_growth is None else 0.45 * revenue_growth + 0.55 * live_rg
 
-    earnings_growth = _growth(take("net_income"))
+    earnings_growth = _growth(take("net_income"), ppy)
     if earnings_growth is None:
         earnings_growth = _pct_to_frac(_finite(ratios.get("earnings_growth_yoy")))
-    live_eg = _pct_to_frac(_finite(extra.get("earnings_growth")))
+    live_eg = _tape_growth(extra.get("earnings_growth"))
     if live_eg is not None:
         earnings_growth = live_eg
 
-    roe = _ratio(net_income, equity)
-    if roe is None:
+    # Return on a negative book is arithmetically positive and economically
+    # meaningless, so it stays undefined rather than flattering the name.
+    negative_book = equity is not None and equity <= 0
+    roe = None if negative_book else _ratio(net_income, equity)
+    if roe is None and not negative_book:
         roe = _pct_to_frac(_finite(ratios.get("roe")))
     roa = _ratio(net_income, total_assets)
     if roa is None:
@@ -269,9 +394,14 @@ def build_report_features(
     current_ratio = _ratio(current_assets, current_liab)
     if current_ratio is None:
         current_ratio = _finite(ratios.get("current_ratio"))
-    debt_to_equity = _ratio(lt_debt, equity)
+    if negative_book:
+        debt_to_equity = DISTRESS_DEBT_TO_EQUITY
+    else:
+        debt_to_equity = _ratio(lt_debt, equity)
     if debt_to_equity is None:
-        debt_to_equity = _finite(ratios.get("debt_to_equity"))
+        debt_to_equity = _normalise_debt_to_equity(_finite(ratios.get("debt_to_equity")))
+    if debt_to_equity is not None:
+        debt_to_equity = float(np.clip(debt_to_equity, 0.0, DISTRESS_DEBT_TO_EQUITY))
 
     pe = _finite(ratios.get("pe_trailing"))
     pb = _finite(ratios.get("pb_trailing"))
@@ -368,8 +498,12 @@ def _synthetic_panel(n: int = 480, seed: int = 42) -> tuple[np.ndarray, np.ndarr
     roe = nm * (1.8 + 0.2 * q) + rng.normal(0.0, 0.03, size=n)
     roa = nm * (0.9 + 0.1 * q) + rng.normal(0.0, 0.02, size=n)
     log_rev = 18.0 + 1.2 * q + rng.normal(0.0, 0.8, size=n)
-    log_pe = np.log(np.clip(18.0 + 6.0 * q + rng.normal(0.0, 3.0, size=n), 4.0, 80.0))
-    log_pb = np.log(np.clip(3.0 + 2.0 * q + rng.normal(0.0, 0.8, size=n), 0.4, 25.0))
+    # Richness carries its own dispersion instead of being a restatement of
+    # quality. Tying the multiple to ``q`` alone taught the fit that expensive
+    # names earn more (corr(log_pe, label) was +0.83), inverting the value tilt.
+    richness = 0.35 * q + rng.normal(0.0, 0.95, size=n)
+    log_pe = np.log(np.clip(18.0 + 7.0 * richness + rng.normal(0.0, 2.0, size=n), 4.0, 80.0))
+    log_pb = np.log(np.clip(3.0 + 2.2 * richness + rng.normal(0.0, 0.6, size=n), 0.4, 25.0))
 
     x = np.column_stack([
         log_rev, growth, gm, om, nm, rd, fcf_m, capex_i, cr, de, roe, roa, log_pe, log_pb,
@@ -382,6 +516,7 @@ def _synthetic_panel(n: int = 480, seed: int = 42) -> tuple[np.ndarray, np.ndarr
         + 0.20 * fcf_m
         + 0.12 * om
         - 0.08 * de
+        - 0.055 * richness  # paying up mean-reverts: the value tilt
         + rng.normal(0.0, 0.03, size=n)
     )
     quality = 50.0 + 18.0 * np.tanh(q) + 12.0 * np.tanh(growth / 0.20) + 6.0 * np.tanh(fcf_m / 0.10)
@@ -512,18 +647,100 @@ def timeframe_from_years(years: float) -> tuple[str, int]:
     return f"{months} months", months
 
 
+def cost_of_equity(features: Mapping[str, float | None]) -> float:
+    """Annual hurdle the implied return has to clear. Rises with leverage."""
+    de = features.get("debt_to_equity")
+    premium = 0.0 if de is None else LEVERAGE_RISK_PREMIUM * float(np.clip(de, 0.0, 3.0))
+    return DEFAULT_COST_OF_EQUITY + premium
+
+
+def sustainable_growth(growth: float | None) -> float | None:
+    """Shrink an observed growth rate toward the cross-sectional prior.
+
+    A single filing's growth is a noisy estimate of what a company can sustain,
+    and the market has already paid for part of it. Capitalising the raw print
+    is what turned an 82% quarter into a 3x price target.
+    """
+    if growth is None:
+        return None
+    shrunk = GROWTH_PRIOR + GROWTH_SHRINK * (growth - GROWTH_PRIOR)
+    return float(np.clip(shrunk, -0.40, MAX_SUSTAINED_GROWTH))
+
+
+def _faded_growth_log(g0: float, years: float) -> float:
+    """Integral of log(1+g(t)) with g fading exponentially to TERMINAL_GROWTH.
+
+    No business compounds its current rate flat out to the horizon, so the
+    earnings leg decays toward the terminal rate instead of staying pinned.
+    """
+    steps = 240
+    dt = max(years, 0.0) / steps
+    total = 0.0
+    for i in range(steps):
+        t = (i + 0.5) * dt
+        g_t = TERMINAL_GROWTH + (g0 - TERMINAL_GROWTH) * math.exp(-t / GROWTH_FADE_TAU_YEARS)
+        total += math.log1p(max(g_t, -0.85)) * dt
+    return total
+
+
+def fair_multiple(growth_at_horizon: float) -> float:
+    """Fair trailing multiple for a given sustainable growth rate."""
+    fair = BASE_FAIR_PE + PE_GROWTH_SLOPE * max(growth_at_horizon, 0.0)
+    return float(np.clip(fair, MIN_FAIR_PE, MAX_FAIR_PE))
+
+
+def multiple_rerate_log(
+    pe_now: float | None,
+    g0: float,
+    years: float,
+    gearing: str | None,
+) -> float:
+    """Log change from today's multiple to the fair multiple at the horizon.
+
+    The horizon multiple is priced off *faded* growth, so a rich name whose
+    growth is rolling over pays for it — the growth trap the old unconditional
+    ``+0.32 * tanh(growth)`` re-rate could never express.
+    """
+    if pe_now is None or pe_now <= 0:
+        return 0.0
+    g_h = TERMINAL_GROWTH + (g0 - TERMINAL_GROWTH) * math.exp(-max(years, 0.0) / GROWTH_FADE_TAU_YEARS)
+    fair = fair_multiple(g_h)
+    if gearing == GEARING_REPAIR:
+        fair = min(fair, BASE_FAIR_PE)
+    return float(np.clip(math.log(fair / pe_now), -0.50, 0.40))
+
+
 def growth_lookthrough_log_return(
     growth: float,
     gearing: str | None,
     rd_intensity: float | None,
+    pe_now: float | None = None,
+    years: float | None = None,
 ) -> float:
-    """Compound future earnings the company is building toward — not last year's run-rate."""
-    years = lookthrough_years(growth, gearing, rd_intensity)
-    fwd = max(0.40, (1.0 + growth) ** years)
-    rerate = 0.32 * math.tanh(max(growth, 0.0) / 0.26)
-    if gearing == GEARING_REPAIR:
-        rerate = min(rerate, 0.0)
-    return math.log(fwd) + rerate
+    """Earnings the company is building toward, plus the multiple it should carry.
+
+    Two legs, both bounded: faded earnings growth over the horizon, and the
+    re-rating from today's multiple to the one that growth deserves by then.
+    """
+    if years is None:
+        years = lookthrough_years(growth, gearing, rd_intensity)
+    g0 = sustainable_growth(growth) or 0.0
+    earnings_leg = _faded_growth_log(g0, years)
+    rerate = multiple_rerate_log(pe_now, g0, years, gearing)
+    return earnings_leg + rerate
+
+
+def scenario_sigma(
+    features: Mapping[str, float | None],
+    future_g: float | None,
+    years: float,
+) -> float:
+    """Horizon log-return dispersion. Faster growth and more debt widen it."""
+    g = abs(future_g or 0.0)
+    de = features.get("debt_to_equity") or 0.0
+    annual = 0.28 + 0.30 * min(g, 0.60) + 0.04 * float(np.clip(de, 0.0, 3.0))
+    annual = float(np.clip(annual, 0.22, 0.75))
+    return annual * math.sqrt(max(years, 0.25))
 
 
 def _pct_display(val: float) -> str:
@@ -549,6 +766,8 @@ def forecast_factors(
         tone = "pos" if val > 0 else "neg" if val < 0 else "flat"
         if key == "debt_to_equity":
             tone = "neg" if val >= 1.0 else "pos" if val <= 0.45 else "flat"
+        if key == "cost_of_equity":
+            tone = "flat"
         rows.append({
             "key": key,
             "label": label,
@@ -592,48 +811,32 @@ def _case_thesis(side: str, gearing: str | None, future_g: float | None) -> str:
 def scenario_case_prices(
     spot: float,
     predicted_price: float,
-    ridge_ret: float,
-    future_g: float | None,
-    gearing: str | None,
-    rd_intensity: float | None,
+    sigma_h: float,
+    years: float = 1.0,
+    z: float = SCENARIO_Z,
 ) -> tuple[float, float, float]:
-    """Bear / base / bull from the same growth engine.
+    """10th / base / 90th percentile of a lognormal band around the base case.
 
-    Bear is a downside scenario from the live mark — it is allowed (and
-    expected) to print below spot. A cheaper bull is not a bear case.
-    Ordered bear < min(spot, base) < base < bull.
+    The width is the model's own uncertainty (growth volatility and leverage
+    scaled by the horizon), so it carries information. The previous version
+    pinned bear and bull to fixed multiples of spot, which made the band
+    decorative — the same +/-8% brackets whatever the inputs said.
     """
-    g = 0.0 if future_g is None else future_g
-    g_bull = float(np.clip(g * 1.40 + 0.06, -0.15, 1.05))
-    # Growth slip + multiple compression. Never keep compounding the boom.
-    g_bear = float(np.clip(min(g * 0.25 - 0.18, -0.06), -0.50, 0.04))
-    bull_lt = growth_lookthrough_log_return(
-        g_bull,
-        GEARING_EXPANSION if g_bull >= 0.10 else gearing,
-        rd_intensity,
-    )
-    bear_lt = growth_lookthrough_log_return(
-        g_bear,
-        GEARING_REPAIR,
-        rd_intensity,
-    )
-    bull_log = float(np.clip(0.22 * ridge_ret + 0.78 * bull_lt + 0.10, -0.40, 1.60))
-    bear_log = float(np.clip(0.22 * ridge_ret + 0.78 * bear_lt - 0.22, -0.80, 0.08))
-    bull = spot * math.exp(bull_log)
-    bear = spot * math.exp(bear_log)
-    bear = min(bear, spot * 0.92, predicted_price * 0.85)
-    bull = max(bull, predicted_price * 1.10, spot * 1.08)
+    spread = max(z * max(sigma_h, 0.05), 0.05)
+    bear = predicted_price * math.exp(-spread)
+    bull = predicted_price * math.exp(spread)
+    # A bear case has to be a genuine adverse outcome against the live mark;
+    # a merely cheaper bull is not a downside scenario.
+    bear = min(bear, spot * 0.92)
+    bull = max(bull, spot * 1.05, predicted_price * 1.05)
+    # Rail the tails in annualised terms so a long horizon cannot compound the
+    # band into a number nobody would underwrite.
+    yrs = max(years, 0.25)
+    bull = min(bull, spot * (1.0 + MAX_SCENARIO_ANNUALISED) ** yrs)
+    bear = max(bear, spot * (1.0 + MIN_SCENARIO_ANNUALISED) ** yrs)
+    bull = max(bull, predicted_price * 1.05)
     if bear >= predicted_price:
-        bear = min(predicted_price * 0.82, spot * 0.88)
-    if bear >= spot:
-        bear = spot * 0.88
-    if bull <= predicted_price:
-        bull = max(predicted_price * 1.12, spot * 1.12)
-    if bear >= bull:
-        floor = min(spot, predicted_price)
-        ceiling = max(spot, predicted_price)
-        bear = floor * 0.80
-        bull = ceiling * 1.20
+        bear = min(predicted_price * 0.85, spot * 0.90)
     return round(float(bear), 4), round(float(predicted_price), 4), round(float(bull), 4)
 
 
@@ -657,6 +860,13 @@ def _empty_forecast(*, status: str = MISSING_STATUS) -> dict[str, Any]:
         "live_capital_authorized": False,
         "features_used": [],
         "observed_feature_count": 0,
+        "feature_count_total": len(FEATURE_NAMES),
+        "expected_return": None,
+        "annualized_return": None,
+        "cost_of_equity": None,
+        "excess_annualized_return": None,
+        "scenario_sigma": None,
+        "sustainable_growth": None,
     }
 
 
@@ -699,9 +909,15 @@ def score_report_forecast(
     ridge_ret = float(np.clip(log_ret, -0.75, 0.75))
     gearing = classify_gearing_up(features)
     future_g = blend_future_growth(features)
+    years = lookthrough_years(future_g, gearing, features.get("rd_intensity"))
+    hurdle = cost_of_equity(features)
+    g_sustainable = sustainable_growth(future_g)
+    log_pe = features.get("log_pe")
+    pe_now = math.exp(log_pe) if log_pe is not None else None
+
     if future_g is not None:
         look_ret = growth_lookthrough_log_return(
-            future_g, gearing, features.get("rd_intensity"),
+            future_g, gearing, features.get("rd_intensity"), pe_now=pe_now, years=years,
         )
         # Growth/future earnings dominate — the Ridge residual only tempers.
         log_ret = 0.28 * ridge_ret + 0.72 * look_ret
@@ -709,32 +925,45 @@ def score_report_forecast(
         log_ret = ridge_ret
     ret_3m = features.get("ret_3m")
     if ret_3m is not None:
-        log_ret = log_ret + 0.22 * math.tanh(ret_3m)
+        log_ret += 0.12 * math.tanh(ret_3m)
     range_pos = features.get("range_position")
-    if range_pos is not None and range_pos > 0.7:
-        log_ret += 0.06
-    if gearing == GEARING_EXPANSION:
-        log_ret = max(log_ret, math.log(1.28))
-    elif future_g is not None and future_g >= 0.12:
-        log_ret = max(log_ret, math.log(1.16))
-    log_ret = float(np.clip(log_ret, -0.55, 1.45))
+    if range_pos is not None:
+        # Symmetric: extended names give some back, based names are not punished.
+        log_ret += 0.06 * (2.0 * float(np.clip(range_pos, 0.0, 1.0)) - 1.0)
+
+    # Annualised rails. Nothing in a filing justifies an unbounded target, and
+    # the old expansion ratchets (a hard +28% floor) made a bearish read
+    # structurally impossible however poor the fundamentals were.
+    cap = years * math.log1p(MAX_ANNUALISED_RETURN)
+    floor = years * math.log1p(MIN_ANNUALISED_RETURN)
+    log_ret = float(np.clip(log_ret, floor, cap))
+
+    annualized = math.expm1(log_ret / max(years, 0.25))
+    excess = annualized - hurdle
     quality = float(np.clip(raw_score, 5.0, 95.0))
-    return_leg = 50.0 + 40.0 * math.tanh(log_ret / 0.28)
+    # The return leg scores return *above the hurdle*, not raw return, so a
+    # levered name has to work harder for the same mark.
+    return_leg = 50.0 + 40.0 * math.tanh(excess / 0.22)
     forecast_score = float(np.clip(0.55 * quality + 0.45 * return_leg, 5.0, 95.0))
     predicted_price = None
     if spot is not None and spot > 0:
         predicted_price = float(spot) * math.exp(log_ret)
         fwd_eps = features.get("forward_eps")
-        if fwd_eps is not None and fwd_eps > 0 and future_g is not None:
-            multiple = 18.0 + 52.0 * math.tanh(max(future_g, 0.0) / 0.34)
+        if fwd_eps is not None and fwd_eps > 0 and g_sustainable is not None:
+            multiple = fair_multiple(g_sustainable)
             eps_px = fwd_eps * multiple
-            if 0.55 * spot < eps_px < 4.2 * spot:
+            if 0.55 * spot < eps_px < 2.5 * spot:
                 predicted_price = 0.58 * predicted_price + 0.42 * eps_px
+        # Re-assert the rail after the EPS cross-check so the blend cannot
+        # carry the mark back outside it.
+        predicted_price = float(
+            np.clip(predicted_price, spot * math.exp(floor), spot * math.exp(cap))
+        )
+        log_ret = math.log(predicted_price / float(spot))
+        annualized = math.expm1(log_ret / max(years, 0.25))
+        excess = annualized - hurdle
         predicted_price = round(predicted_price, 4)
-        if gearing == GEARING_EXPANSION and predicted_price < spot:
-            predicted_price = round(float(spot) * 1.28, 4)
 
-    years = lookthrough_years(future_g, gearing, features.get("rd_intensity"))
     timeframe, timeframe_months = timeframe_from_years(years)
     factors = forecast_factors(features, future_g)
     horizon = f"{timeframe_months}m research"
@@ -763,6 +992,13 @@ def score_report_forecast(
             "observed_feature_count": observed,
             "implied_log_return": round(log_ret, 6),
             "lookthrough_growth": None if future_g is None else round(future_g, 6),
+            "sustainable_growth": None if g_sustainable is None else round(g_sustainable, 6),
+            "cost_of_equity": round(hurdle, 6),
+            "annualized_return": round(annualized, 6),
+            "excess_annualized_return": round(excess, 6),
+            "expected_return": round(math.expm1(log_ret), 6),
+            "feature_count_total": len(FEATURE_NAMES),
+            "scenario_sigma": None,
             "spot_used": None,
             "spot_source": None,
         }
@@ -776,13 +1012,9 @@ def score_report_forecast(
     else:
         spot_source = "report"
 
+    sigma_h = scenario_sigma(features, future_g, years)
     bear_px, base_px, bull_px = scenario_case_prices(
-        float(spot),
-        float(predicted_price),
-        ridge_ret,
-        future_g,
-        gearing,
-        features.get("rd_intensity"),
+        float(spot), float(predicted_price), sigma_h, years,
     )
     return {
         "predicted_price": predicted_price,
@@ -817,6 +1049,13 @@ def score_report_forecast(
         "observed_feature_count": observed,
         "implied_log_return": round(log_ret, 6),
         "lookthrough_growth": None if future_g is None else round(future_g, 6),
+        "sustainable_growth": None if g_sustainable is None else round(g_sustainable, 6),
+        "cost_of_equity": round(hurdle, 6),
+        "annualized_return": round(annualized, 6),
+        "excess_annualized_return": round(excess, 6),
+        "expected_return": round(math.expm1(log_ret), 6),
+        "feature_count_total": len(FEATURE_NAMES),
+        "scenario_sigma": round(sigma_h, 6),
         "spot_used": round(float(spot), 4) if spot else None,
         "spot_source": spot_source,
     }
