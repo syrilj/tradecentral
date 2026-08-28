@@ -908,3 +908,114 @@ class TestSetupLevelModel:
         assert row["playbook"]["status"] != "candidate"
         assert row["confidence"]["band"] == "HIGH"
         assert result["coverage"]["live_ready"] == 0
+
+
+class TestGammaFlipLevelSource:
+    """Verify gamma_flip is strictly attributed to LEVEL_SOURCE_GEX ("options GEX")."""
+
+    def test_gamma_flip_below_spot_is_tagged_as_options_gex_in_supports(self):
+        """When gamma_flip < spot, it must be added to supports with source="options GEX"."""
+        model = setup_level_model(
+            direction="long",
+            spot=100.0,
+            gamma_flip=98.0,
+            support=None,
+            resistance=None,
+            call_wall=None,
+            put_wall=None,
+        )
+        assert len(model["supports"]) == 1
+        support_item = model["supports"][0]
+        assert support_item["price"] == pytest.approx(98.0)
+        assert support_item["source"] == "options GEX"
+        assert support_item["source"] != "technical analysis"
+        assert model["source_status"]["options GEX"] == "measured"
+        assert model["source_status"]["technical analysis"] == "unmeasured"
+
+    def test_gamma_flip_above_spot_is_tagged_as_options_gex_in_resistances(self):
+        """When gamma_flip > spot, it must be added to take_profit_zones with source="options GEX"."""
+        model = setup_level_model(
+            direction="long",
+            spot=100.0,
+            gamma_flip=105.0,
+            support=None,
+            resistance=None,
+            call_wall=None,
+            put_wall=None,
+        )
+        assert len(model["take_profit_zones"]) == 1
+        zone_item = model["take_profit_zones"][0]
+        assert zone_item["price"] == pytest.approx(105.0)
+        assert zone_item["source"] == "options GEX"
+        assert zone_item["source"] != "technical analysis"
+        assert model["source_status"]["options GEX"] == "measured"
+        assert model["source_status"]["technical analysis"] == "unmeasured"
+
+    def test_gamma_flip_invalidation_source_is_options_gex(self):
+        """When gamma_flip serves as the closest support for a long setup, invalidation_source is "options GEX"."""
+        model = setup_level_model(
+            direction="long",
+            spot=100.0,
+            gamma_flip=97.5,
+            put_wall=95.0,  # further below spot than gamma_flip
+        )
+        assert model["invalidation"] == pytest.approx(97.5)
+        assert model["invalidation_source"] == "options GEX"
+
+
+class TestPlanTargetAndInvalidationSources:
+    """Verify plan_target_source and plan_invalidation_source are preserved and never None when prices exist."""
+
+    def test_plan_sources_populated_for_standard_gex_walls(self):
+        """Standard GEX call/put walls retain 'options GEX' or specific wall source tags."""
+        helper = TestConfidenceFreshnessAndPlaybook()
+        result = build_live_opportunities(
+            board_rows=[helper._live_board(
+                spot=100.0,
+                call_wall=110.0,
+                put_wall=95.0,
+                support_price=97.0,
+                resistance_price=108.0,
+            )],
+            flow_rows=[helper._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        sug = row["suggestion"]
+
+        # Target assertions
+        assert sug["plan_target"] is not None
+        assert sug["plan_target_source"] is not None
+        assert sug["plan_target_source"] in {"call_wall", "options GEX", "resistance/support", "technical analysis"}
+
+        # Invalidation assertions
+        assert sug["plan_invalidation"] is not None
+        assert sug["plan_invalidation_source"] is not None
+        assert sug["plan_invalidation_source"] in {"put_wall", "options GEX", "resistance/support", "technical analysis"}
+
+    def test_plan_sources_retained_when_flow_state_levels_attached(self):
+        """Attached flow state resistance/support levels retain valid source tags in suggestion."""
+        helper = TestConfidenceFreshnessAndPlaybook()
+        # Board with flow state support/resistance but no raw GEX walls
+        board = helper._live_board(
+            spot=100.0,
+            call_wall=None,
+            put_wall=None,
+            gamma_flip=None,
+            support_price=96.5,
+            resistance_price=107.5,
+        )
+        result = build_live_opportunities(
+            board_rows=[board],
+            flow_rows=[helper._live_flow()],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        sug = row["suggestion"]
+
+        assert sug["invalidation"] == pytest.approx(96.5)
+        assert sug["invalidation_source"] == "resistance/support"
+        if sug.get("plan_invalidation") is not None:
+            assert sug["plan_invalidation_source"] is not None

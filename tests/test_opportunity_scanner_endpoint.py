@@ -324,3 +324,92 @@ def test_payload_folds_published_qlib_without_rebuilding(monkeypatch):
     assert rebuilt == []
     assert payload["sources"]["qlib"]["published"] is True
     clear_shared_qlib_panel()
+
+
+class TestFlowSuggestionCacheLifecycle:
+    """Verify _FLOW_SUGGESTION_CACHE clear, force-bypass, and invalidation mechanics."""
+
+    def test_cache_clears_completely_via_clear(self, monkeypatch):
+        """Calling clear() empties all cached entries."""
+        api_server._FLOW_SUGGESTION_CACHE.clear()
+        api_server._FLOW_SUGGESTION_CACHE["AAPL"] = (time.time(), {"symbol": "AAPL", "v": 1})
+        api_server._FLOW_SUGGESTION_CACHE["TSLA"] = (time.time(), {"symbol": "TSLA", "v": 1})
+        assert len(api_server._FLOW_SUGGESTION_CACHE) == 2
+
+        api_server._FLOW_SUGGESTION_CACHE.clear()
+        assert len(api_server._FLOW_SUGGESTION_CACHE) == 0
+        assert "AAPL" not in api_server._FLOW_SUGGESTION_CACHE
+
+    def test_force_true_bypasses_cache_and_refreshes_entry(self, monkeypatch):
+        """force=True bypasses a warm cache entry and overwrites it with fresh payload."""
+        calls = []
+        payload_v1 = {"symbol": "NVDA", "version": 1, "rows": []}
+        payload_v2 = {"symbol": "NVDA", "version": 2, "rows": []}
+
+        def mock_impl(symbol, force=False):
+            calls.append((symbol, force))
+            return payload_v2 if force else payload_v1
+
+        monkeypatch.setattr(api_server, "_flow_suggestion_payload_impl", mock_impl)
+        api_server._FLOW_SUGGESTION_CACHE.clear()
+
+        # Step 1: Initial passive fetch (populates cache with v1)
+        res1 = api_server._flow_suggestion_payload("NVDA", force=False)
+        assert res1["version"] == 1
+        assert len(calls) == 1
+        assert calls[-1] == ("NVDA", False)
+
+        # Step 2: Second passive fetch within TTL (hits cache, no impl call)
+        res2 = api_server._flow_suggestion_payload("NVDA", force=False)
+        assert res2["version"] == 1
+        assert len(calls) == 1  # no new call
+
+        # Step 3: Explicit force refresh (bypasses cache, calls impl with force=True)
+        res3 = api_server._flow_suggestion_payload("NVDA", force=True)
+        assert res3["version"] == 2
+        assert len(calls) == 2
+        assert calls[-1] == ("NVDA", True)
+
+        # Step 4: Subsequent passive fetch returns updated v2 from cache
+        res4 = api_server._flow_suggestion_payload("NVDA", force=False)
+        assert res4["version"] == 2
+        assert len(calls) == 2
+
+    def test_cache_evicts_oldest_when_exceeding_capacity_limit(self, monkeypatch):
+        """Cache enforces max capacity (64 items) with LRU/FIFO eviction."""
+        api_server._FLOW_SUGGESTION_CACHE.clear()
+        now = time.time()
+        for i in range(70):
+            api_server._FLOW_SUGGESTION_CACHE[f"SYM_{i}"] = (now - 100 + i, {"symbol": f"SYM_{i}"})
+
+        # Trigger an insert through the payload wrapper
+        monkeypatch.setattr(
+            api_server,
+            "_flow_suggestion_payload_impl",
+            lambda sym, force=False: {"symbol": sym},
+        )
+        api_server._flow_suggestion_payload("NEW_SYM", force=True)
+
+        assert len(api_server._FLOW_SUGGESTION_CACHE) <= 65
+        assert "NEW_SYM" in api_server._FLOW_SUGGESTION_CACHE
+
+    def test_fresh_flow_evicts_matching_symbols_from_suggestion_cache(self, monkeypatch):
+        """Fresh unusual flow arrival evicts affected symbols from _FLOW_SUGGESTION_CACHE."""
+        api_server._FLOW_SUGGESTION_CACHE.clear()
+        api_server._UNUSUAL_FLOW_CACHE.clear()
+        api_server._FLOW_SUGGESTION_CACHE["AAPL"] = (time.time(), {"symbol": "AAPL", "v": 1})
+        api_server._FLOW_SUGGESTION_CACHE["MSFT"] = (time.time(), {"symbol": "MSFT", "v": 1})
+
+        monkeypatch.setattr(
+            api_server,
+            "build_unusual_options_flow",
+            lambda **_: {
+                "rows": [{"symbol": "AAPL", "activity_lean": "bullish"}],
+                "coverage": {},
+            },
+        )
+
+        api_server._unusual_flow_payload_impl(limit=40, min_premium=25_000.0, force=True)
+
+        assert "AAPL" not in api_server._FLOW_SUGGESTION_CACHE
+        assert "MSFT" in api_server._FLOW_SUGGESTION_CACHE

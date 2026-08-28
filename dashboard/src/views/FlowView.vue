@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, type StatusPayload } from '@/api'
 import { useResource, type Resource } from '@/composables/useResource'
 import FlowDashboard from '@/components/FlowDashboard.vue'
-import FlowSuggestionDrawer from '@/components/FlowSuggestionDrawer.vue'
 
 const FLOW_LIMIT = 500
 const BASE_FLOW_FLOOR = 25_000
@@ -17,7 +16,7 @@ const statusPayload = computed(() => sharedStatus?.data.value ?? null)
 const minPremium = ref(BASE_FLOW_FLOOR)
 const forceNext = ref(false)
 
-function queryTicker(key: 'setup' | 'symbol'): string {
+function queryTicker(key: 'symbol' | 'setup'): string {
   const raw = route.query[key]
   const value = Array.isArray(raw) ? raw[0] : raw
   return String(value || '')
@@ -26,10 +25,10 @@ function queryTicker(key: 'setup' | 'symbol'): string {
 }
 
 function focusNameFromQuery(): string {
-  return queryTicker('setup') || queryTicker('symbol')
+  return queryTicker('symbol') || queryTicker('setup')
 }
 
-const selectedSetup = ref(focusNameFromQuery())
+const focusSymbol = ref(focusNameFromQuery())
 
 const unusual = useResource(
   () =>
@@ -59,25 +58,17 @@ async function refreshFlow(): Promise<void> {
 }
 
 function openSymbol(symbol: string): void {
-  selectedSetup.value = symbol
+  focusSymbol.value = symbol
   void router.replace({
     name: 'flow',
-    query: { ...route.query, setup: symbol, symbol },
+    query: { ...route.query, symbol },
   })
 }
 
-function closeSetup(): void {
-  selectedSetup.value = ''
-  const query = { ...route.query }
-  delete query.setup
-  delete query.symbol
-  void router.replace({ name: 'flow', query })
-}
-
 watch(
-  () => [route.query.setup, route.query.symbol],
+  () => [route.query.symbol, route.query.setup],
   () => {
-    selectedSetup.value = focusNameFromQuery()
+    focusSymbol.value = focusNameFromQuery()
   },
 )
 </script>
@@ -99,6 +90,7 @@ watch(
         <span class="scope-chip label live"><i aria-hidden="true" /> LIVE TAPE</span>
         <span class="scope-chip label">SWEEPS &amp; BLOCKS</span>
         <span class="scope-chip label">GOLDEN SWEEPS</span>
+        <span class="scope-chip label">POWER ALERTS</span>
         <span class="scope-chip label">WATCHLIST ALERTS</span>
         <span class="scope-chip label">15s POLL</span>
       </div>
@@ -111,13 +103,11 @@ watch(
       :error="unusual.error.value"
       :min-premium="minPremium"
       :poll-ms="FLOW_POLL_MS"
-      :focus-symbol="selectedSetup"
+      :focus-symbol="focusSymbol"
       @refresh="void refreshFlow()"
       @threshold="setPremium"
       @open-symbol="openSymbol"
     />
-
-    <FlowSuggestionDrawer v-if="selectedSetup" :symbol="selectedSetup" @close="closeSetup" />
   </div>
 </template>
 

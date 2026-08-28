@@ -75,7 +75,7 @@ const optionsRes = useResource<OptionsIntelligence>(
     minPremium: minPremium.value,
     expiry: selectedExpiry.value,
   }),
-  { intervalMs: refreshMs.value },
+  { intervalMs: () => refreshMs.value },
 )
 
 watch(symbol, () => {

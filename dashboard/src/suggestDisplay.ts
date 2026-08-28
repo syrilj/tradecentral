@@ -9,13 +9,17 @@ export const UNMEASURED = DASH
 const RIGHTS = new Set(['call', 'put', 'watch', 'blocked'])
 
 export function suggestedRightLabel(right: string | null | undefined): string {
-  const value = String(right ?? '').trim().toLowerCase()
+  const value = String(right ?? '')
+    .trim()
+    .toLowerCase()
   if (!RIGHTS.has(value)) return UNMEASURED
   return value.toUpperCase()
 }
 
 export function suggestedRightTokenClass(right: string | null | undefined): string {
-  const value = String(right ?? '').trim().toLowerCase()
+  const value = String(right ?? '')
+    .trim()
+    .toLowerCase()
   if (value === 'call') return 'token-call'
   if (value === 'put') return 'token-put'
   if (value === 'watch') return 'token-warn'
@@ -23,7 +27,9 @@ export function suggestedRightTokenClass(right: string | null | undefined): stri
 }
 
 export function sellSourceLabel(source: string | null | undefined): string {
-  const value = String(source ?? '').trim().toLowerCase()
+  const value = String(source ?? '')
+    .trim()
+    .toLowerCase()
   if (value === 'call_wall') return 'call wall'
   if (value === 'put_wall') return 'put wall'
   const family = levelSourceLabel(source)
@@ -31,17 +37,25 @@ export function sellSourceLabel(source: string | null | undefined): string {
 }
 
 export function levelSourceLabel(source: string | null | undefined): string {
-  const value = String(source ?? '').trim().toLowerCase()
+  const value = String(source ?? '')
+    .trim()
+    .toLowerCase()
   if (value === 'resistance/support' || value === 'support' || value === 'resistance') {
     return 'resistance/support'
   }
-  if (value === 'options gex' || value === 'call_wall' || value === 'put_wall' || value === 'gex') {
+  if (
+    value === 'options gex' ||
+    value === 'call_wall' ||
+    value === 'put_wall' ||
+    value === 'gex' ||
+    value === 'gamma_flip'
+  ) {
     return 'options GEX'
   }
   if (value === 'positions' || value === 'pin_strike' || value === 'open_interest') {
     return 'positions'
   }
-  if (value === 'technical analysis' || value === 'gamma_flip' || value === 'ta') {
+  if (value === 'technical analysis' || value === 'ta') {
     return 'technical analysis'
   }
   return UNMEASURED
@@ -52,19 +66,14 @@ export interface SetupLevelMark {
   source?: string | null
 }
 
-export function formatSetupLevel(
-  price: number | null | undefined,
-  source?: string | null,
-): string {
+export function formatSetupLevel(price: number | null | undefined, source?: string | null): string {
   if (price == null || !Number.isFinite(Number(price))) return UNMEASURED
   const tagged = levelSourceLabel(source)
   const figure = `$${num(price, 2)}`
   return tagged === UNMEASURED ? figure : `${figure}  ${tagged}`
 }
 
-export function formatSupportLevels(
-  supports: SetupLevelMark[] | null | undefined,
-): string {
+export function formatSupportLevels(supports: SetupLevelMark[] | null | undefined): string {
   if (!Array.isArray(supports) || supports.length === 0) return UNMEASURED
   const parts = supports
     .map((item) => formatSetupLevel(item?.price, item?.source))
@@ -72,9 +81,7 @@ export function formatSupportLevels(
   return parts.length ? parts.join(' · ') : UNMEASURED
 }
 
-export function formatTakeProfitZones(
-  zones: SetupLevelMark[] | null | undefined,
-): string {
+export function formatTakeProfitZones(zones: SetupLevelMark[] | null | undefined): string {
   return formatSupportLevels(zones)
 }
 
@@ -84,7 +91,7 @@ export function setupHeadlineInvalidation(input: {
   planInvalidation?: number | null
   planInvalidationSource?: string | null
   supports?: unknown
-}): { price: number | null, source: string | null } {
+}): { price: number | null; source: string | null } {
   if (input.invalidation != null && Number.isFinite(Number(input.invalidation))) {
     return { price: Number(input.invalidation), source: input.invalidationSource ?? null }
   }
@@ -107,9 +114,10 @@ export function spotRelativeSellCopy(input: {
 }): string {
   if (input.sell == null || !Number.isFinite(Number(input.sell))) return UNMEASURED
   const price = `$${num(input.sell, 2)}`
-  const rel = input.sellRelPct == null || !Number.isFinite(Number(input.sellRelPct))
-    ? UNMEASURED
-    : signedPct(Number(input.sellRelPct) * 100, 1)
+  const rel =
+    input.sellRelPct == null || !Number.isFinite(Number(input.sellRelPct))
+      ? UNMEASURED
+      : signedPct(Number(input.sellRelPct) * 100, 1)
   const wall = sellSourceLabel(input.sellSource)
   if (rel === UNMEASURED && wall === UNMEASURED) return price
   if (wall === UNMEASURED) return `${price}  ${rel}`
@@ -117,10 +125,7 @@ export function spotRelativeSellCopy(input: {
   return `${price}  ${rel}  ${wall}`
 }
 
-export function freshnessLabel(
-  status: string | null | undefined,
-  pass?: boolean | null,
-): string {
+export function freshnessLabel(status: string | null | undefined, pass?: boolean | null): string {
   if (pass === true || String(status ?? '').toUpperCase() === 'FRESH') return 'FRESH'
   if (pass === false || String(status ?? '').toUpperCase() === 'STALE_OR_PROXY') return 'STALE'
   if (!status && pass == null) return UNMEASURED
@@ -128,7 +133,9 @@ export function freshnessLabel(
 }
 
 export function qlibAlignmentLabel(alignment: string | null | undefined): string {
-  const value = String(alignment ?? '').trim().toLowerCase()
+  const value = String(alignment ?? '')
+    .trim()
+    .toLowerCase()
   if (value === 'confirms' || value === 'conflicts' || value === 'neutral') {
     return value.toUpperCase()
   }
@@ -165,7 +172,9 @@ export function setupCalculatorQuery(input: {
   const query: Record<string, string> = {
     strategy: right === 'put' ? 'long_put' : 'long_call',
   }
-  const symbol = String(input.symbol || '').trim().toUpperCase()
+  const symbol = String(input.symbol || '')
+    .trim()
+    .toUpperCase()
   if (symbol) query.symbol = symbol
   const spot = finiteQuery(input.spot)
   const strike = finiteQuery(input.strike)
@@ -217,7 +226,9 @@ const RIGHT_ORDER: Record<string, number> = {
 }
 
 export function suggestionRightOf(row: SetupRowLike | null | undefined): string {
-  return String(row?.suggestion?.right ?? '').trim().toLowerCase()
+  return String(row?.suggestion?.right ?? '')
+    .trim()
+    .toLowerCase()
 }
 
 export function suggestionStabilityCopy(
@@ -227,14 +238,14 @@ export function suggestionStabilityCopy(
   if (!['call', 'put'].includes(right)) return UNMEASURED
   const directionObserved = Number(suggestion?.direction_observations ?? 0)
   const directionRequired = Number(suggestion?.direction_required ?? 0)
-  const direction = directionRequired > 0
-    ? `DIR ${directionObserved}/${directionRequired}`
-    : 'DIR —'
+  const direction =
+    directionRequired > 0 ? `DIR ${directionObserved}/${directionRequired}` : 'DIR —'
   const contract = suggestion?.contract_plan
   const contractRequired = Number(contract?.stability_required ?? 0)
-  const contractCopy = contract && contractRequired > 0
-    ? ` · CTR ${Number(contract.stability_observations ?? 0)}/${contractRequired}`
-    : ''
+  const contractCopy =
+    contract && contractRequired > 0
+      ? ` · CTR ${Number(contract.stability_observations ?? 0)}/${contractRequired}`
+      : ''
   const prefix = suggestion?.direction_churned
     ? 'FLIPPED'
     : suggestion?.review_label || (suggestion?.direction_stable ? 'REPEATED' : 'NEW')
@@ -246,9 +257,10 @@ export function suggestionStabilityCopy(
  * later put is not buried under forty blocked names. Coverage is counted from
  * these same rows — never from an unsliced payload while the table is sliced.
  */
-export function presentSetupRows(
-  payload: { rows?: SetupRowLike[] | null } | null | undefined,
-): { rows: SetupRowLike[]; coverage: SetupCoverage } {
+export function presentSetupRows(payload: { rows?: SetupRowLike[] | null } | null | undefined): {
+  rows: SetupRowLike[]
+  coverage: SetupCoverage
+} {
   const incoming = Array.isArray(payload?.rows) ? payload.rows : []
   const ranked = incoming.map((row, index) => ({ row, index }))
   ranked.sort((a, b) => {

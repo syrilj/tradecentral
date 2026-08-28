@@ -3876,22 +3876,48 @@ def _fetch_live_option_inputs(
             sys.path.insert(0, str(provider_src))
         from lse_provider import fetch_lse_options_flow  # type: ignore[import-not-found]
 
-        # Pull a wide premium band so mid-cap names with many small recent
-        # prints still prove the feed is live. UI min_premium still filters
-        # the displayed tape; using min(min_premium, 10k) previously dropped
-        # sub-$10k prints and left only day-old whales → false "TAPE STALE".
-        fetch_floor = 0.0
-        if float(filters.min_premium) > 0:
-            fetch_floor = min(float(filters.min_premium), 1_000.0)
-        return list(
-            fetch_lse_options_flow(
-                symbol,
-                min_premium=fetch_floor,
-                limit=500,
-                timeout=12,
-            )
-            or []
-        )
+        # The provider caps every pull at `limit` rows ordered ts.desc, so the
+        # premium floor decides how far back that budget reaches. On an active
+        # name a $0 floor burns all 500 rows inside ~90 seconds, which is why
+        # the tape used to open showing only the last few minutes of the
+        # session instead of the day. Two passes fix that without losing the
+        # liveness signal a wide band provides:
+        #   coverage — pull at the UI floor, the only rows that can ever be
+        #     displayed, so 500 rows stretch across the whole session.
+        #   liveness — a short low-floor pull so quiet names still prove the
+        #     feed is alive (and hand us a fresh underlying print for spot)
+        #     instead of showing day-old whales and reading "TAPE STALE".
+        ui_floor = max(float(filters.min_premium or 0.0), 0.0)
+        live_floor = min(ui_floor, 1_000.0)
+        passes: list[tuple[float, int]] = [(ui_floor, 500)]
+        if live_floor < ui_floor:
+            passes.append((live_floor, 150))
+
+        merged: dict[tuple[Any, ...], dict] = {}
+        for floor, cap in passes:
+            try:
+                rows = fetch_lse_options_flow(
+                    symbol,
+                    min_premium=floor,
+                    limit=cap,
+                    timeout=12,
+                )
+            except Exception:  # noqa: BLE001 - one pass failing must not blank the tape
+                if not merged:
+                    raise
+                continue
+            for row in rows or []:
+                if not isinstance(row, Mapping):
+                    continue
+                key = (
+                    str(row.get("ts") or row.get("timestamp") or ""),
+                    str(row.get("option_symbol") or row.get("occ_symbol") or ""),
+                    row.get("strike"),
+                    row.get("premium"),
+                    row.get("size") or row.get("volume"),
+                )
+                merged.setdefault(key, dict(row))
+        return list(merged.values())
 
     # Chain, tape, and equity last are independent network reads. Overlap them
     # so live Options latency is bounded by the slowest provider call rather
@@ -4834,6 +4860,14 @@ def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = 
         if len(_UNUSUAL_FLOW_CACHE) > 8:
             oldest = min(_UNUSUAL_FLOW_CACHE, key=lambda k: _UNUSUAL_FLOW_CACHE[k][0])
             _UNUSUAL_FLOW_CACHE.pop(oldest, None)
+    with _FLOW_SUGGESTION_LOCK:
+        for row in (payload.get("rows") or []):
+            if isinstance(row, dict):
+                sym = str(row.get("symbol") or "").strip().upper()
+                if sym in _FLOW_SUGGESTION_CACHE:
+                    _FLOW_SUGGESTION_CACHE.pop(sym, None)
+    with _LIVE_OPPORTUNITIES_LOCK:
+        _LIVE_OPPORTUNITIES_CACHE = None
     return payload
 
 
@@ -5377,7 +5411,7 @@ def _flow_suggestion_payload(symbol: str, *, force: bool = False) -> dict:
         payload = _flow_suggestion_payload_impl(symbol, force=force)
         with _FLOW_SUGGESTION_LOCK:
             _FLOW_SUGGESTION_CACHE[symbol] = (time.time(), payload)
-            if len(_FLOW_SUGGESTION_CACHE) > 64:
+            while len(_FLOW_SUGGESTION_CACHE) > 64:
                 oldest = min(_FLOW_SUGGESTION_CACHE, key=lambda key: _FLOW_SUGGESTION_CACHE[key][0])
                 _FLOW_SUGGESTION_CACHE.pop(oldest, None)
         return payload

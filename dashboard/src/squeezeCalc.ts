@@ -18,11 +18,12 @@ export interface TakeawayItem {
  * Rules:
  * 1. Explicit primary direction ('bullish' or 'bearish') takes precedence.
  * 2. When primary is not directional (e.g. 'quiet', 'two_way', or undefined):
- *    - Highest structure score wins (rs > bs -> bearish, bs > rs -> bullish).
- *    - On a tie (bs === rs), tie-break using signedScore:
+ *    - Align with signedScore / directional flow lean if measured and non-zero:
  *      - signedScore > 0 -> bullish
  *      - signedScore < 0 -> bearish
- *      - signedScore === 0 / null -> defaults to bullish
+ *    - When signedScore is zero or unmeasured (null/undefined/NaN), fall back to comparing wall proximity:
+ *      - Highest structure score wins (rs > bs -> bearish, bs > rs -> bullish).
+ *      - On a tie (bs === rs), defaults to bullish.
  */
 export function calculateFeaturedSetup(
   primary: string = 'quiet',
@@ -30,16 +31,30 @@ export function calculateFeaturedSetup(
   bear?: SqueezeSetup,
   signedScore?: number | null,
 ): { side: 'bullish' | 'bearish'; setup: SqueezeSetup | undefined } {
-  const normPrimary = String(primary || 'quiet').trim().toLowerCase()
+  const normPrimary = String(primary || 'quiet')
+    .trim()
+    .toLowerCase()
   const bs = bull?.score ?? 0
   const rs = bear?.score ?? 0
 
+  // 1. Explicit directional primary takes absolute precedence
   if (normPrimary.includes('bear')) {
     return { side: 'bearish', setup: bear ?? bull }
   }
   if (normPrimary.includes('bull')) {
     return { side: 'bullish', setup: bull ?? bear }
   }
+
+  // 2. Non-directional primary (quiet / two_way / unmeasured): Prioritize signed flow / theory score
+  const sc = typeof signedScore === 'number' && Number.isFinite(signedScore) ? signedScore : 0
+  if (sc > 0) {
+    return { side: 'bullish', setup: bull ?? bear }
+  }
+  if (sc < 0) {
+    return { side: 'bearish', setup: bear ?? bull }
+  }
+
+  // 3. Fall back to structure score comparison (bs vs rs) only when signedScore is zero or unmeasured
   if (rs > bs) {
     return { side: 'bearish', setup: bear ?? bull }
   }
@@ -47,11 +62,6 @@ export function calculateFeaturedSetup(
     return { side: 'bullish', setup: bull ?? bear }
   }
 
-  // bs === rs: tie-break using signedScore (positive -> bullish, negative -> bearish)
-  const sc = signedScore ?? 0
-  if (sc < 0) {
-    return { side: 'bearish', setup: bear ?? bull }
-  }
   return { side: 'bullish', setup: bull ?? bear }
 }
 
@@ -151,7 +161,8 @@ export function buildTakeaways(options: {
 
   const lines: TakeawayItem[] = []
   if (wallLevel != null) {
-    const pctTxt = wallPct == null ? '' : ` (${wallPct >= 0 ? '+' : ''}${(wallPct * 100).toFixed(1)}%)`
+    const pctTxt =
+      wallPct == null ? '' : ` (${wallPct >= 0 ? '+' : ''}${(wallPct * 100).toFixed(1)}%)`
     lines.push({
       line: `${wallLabel || (side === 'bullish' ? 'Call Wall' : 'Put Wall')} at ${usd(wallLevel)}${pctTxt}.`,
       icon: side === 'bullish' ? '↑' : '↓',

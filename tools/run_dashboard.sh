@@ -14,7 +14,9 @@ cd "$(dirname "$0")/../.."
 
 DASH="edge/dashboard"
 PY="edge/.venv-qlib/bin/python"
-[ -x "$PY" ] || PY="python3"
+if [ ! -x "$PY" ] || ! "$PY" -c 'import sys' >/dev/null 2>&1; then
+  PY="python3"
+fi
 PY_REQUIREMENTS="edge/requirements-dashboard.txt"
 
 MODE="${1:-}"

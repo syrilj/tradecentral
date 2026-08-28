@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import {
   api,
   type DirectionalSignal,
@@ -39,7 +40,12 @@ import {
   signedPrintTokenClass,
 } from '@/flowDisplay'
 import { tickerCompanyName, tickerSector, tickerSectorCode } from '@/tickerIdentity'
-import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
+import {
+  loadWatchlist,
+  normalizeWatchSymbol,
+  toggleWatchlistSymbol,
+  watchlistHas,
+} from '@/watchlist'
 import {
   collectWatchlistAlerts,
   loadSeenAlertKeys,
@@ -47,6 +53,17 @@ import {
   saveUnreadAlertCount,
   type FlowAlert,
 } from '@/flowAlerts'
+import PowerAlertsBoard from '@/components/PowerAlertsBoard.vue'
+import {
+  loadExclusions,
+  loadFlowLayouts,
+  parseFlowSymbolQuery,
+  removeFlowLayout,
+  saveExclusions,
+  symbolPassesQuery,
+  upsertFlowLayout,
+  type FlowFilterLayout,
+} from '@/flowPowerAlerts'
 
 const props = defineProps<{
   payload: UnusualFlowPayload | null
@@ -248,6 +265,10 @@ const activityFilter = ref<ActivityFilter>('all')
 const tapePreset = ref<TapePreset>('all')
 const selectedSector = ref<string>('all')
 const book = ref<string[]>(loadWatchlist())
+const exclusions = ref<string[]>(loadExclusions())
+const layouts = ref<FlowFilterLayout[]>(loadFlowLayouts())
+const layoutName = ref('')
+const exclusionDraft = ref('')
 const bookAlerts = ref<FlowAlert[]>([])
 const seenAlertKeys = ref<Set<string>>(loadSeenAlertKeys())
 const historySymbol = ref(loadWatchlist()[0] ?? 'NVDA')
@@ -271,6 +292,17 @@ const tapeExpanded = ref(false)
 const tapeShowAll = ref(false)
 const showAllReviews = ref(false)
 const selectedPrint = ref<MarketFlowPrint | null>(null)
+
+type OverviewTab = 'leaders' | 'sectors' | 'majors' | 'alerts' | 'triage'
+const overviewTab = ref<OverviewTab>('leaders')
+
+const OVERVIEW_TABS: Array<{ id: OverviewTab; label: string }> = [
+  { id: 'leaders', label: 'Top Tickers' },
+  { id: 'sectors', label: 'Sector Sentiment' },
+  { id: 'majors', label: 'Index Flow' },
+  { id: 'alerts', label: 'Power Alerts' },
+  { id: 'triage', label: 'Live Pulse & Triage' },
+]
 
 const activeSymbol = computed(() => {
   if (symbolQuery.value.trim()) return symbolQuery.value.trim().toUpperCase()
@@ -298,6 +330,17 @@ const activeTickerStats = computed(() => {
   const callPct = tot > 0 ? Math.round((callP / tot) * 100) : 50
   const putPct = 100 - callPct
 
+  // Derive dominantState and dominantLabel strictly from signed flow / directional lean
+  // rather than raw call/put contract identity percentage.
+  const dominantState = lean.state.includes('bullish')
+    ? 'bullish'
+    : lean.state.includes('bearish')
+      ? 'bearish'
+      : 'neutral'
+  const dominantLabel =
+    lean.label ||
+    (dominantState === 'bullish' ? 'BULLISH' : dominantState === 'bearish' ? 'BEARISH' : 'NEUTRAL')
+
   return {
     symbol: sym,
     companyName: compName,
@@ -316,8 +359,8 @@ const activeTickerStats = computed(() => {
     putPremium: putP,
     callPct,
     putPct,
-    dominantState: callPct >= 55 ? 'bullish' : putPct >= 55 ? 'bearish' : 'neutral',
-    dominantLabel: lean.state.toUpperCase().includes('BEAR') ? 'BEARISH' : 'BULLISH',
+    dominantState,
+    dominantLabel,
   }
 })
 
@@ -331,17 +374,9 @@ function selectTapeRow(row: MarketFlowPrint): void {
 }
 
 const flowTrendPoints = computed(() => {
-  const tape = qualifiedTapeRows.value.slice(0, 24)
+  const tape = qualifiedTapeRows.value
   if (!tape.length) {
-    return [
-      { x: 0, y: 36, val: 0 },
-      { x: 40, y: 32, val: 180000 },
-      { x: 80, y: 24, val: 420000 },
-      { x: 120, y: 18, val: 780000 },
-      { x: 160, y: 22, val: 690000 },
-      { x: 200, y: 12, val: 1150000 },
-      { x: 240, y: 8, val: 1480000 },
-    ]
+    return []
   }
   let cum = 0
   const points: { x: number; y: number; val: number }[] = []
@@ -649,11 +684,26 @@ watch(sortKey, (val) => {
   }
 })
 
+const parsedSymbolQuery = computed(() => parseFlowSymbolQuery(symbolQuery.value))
+
+function symbolInScope(symbol: string | null | undefined): boolean {
+  return symbolPassesQuery(String(symbol || ''), parsedSymbolQuery.value, exclusions.value)
+}
+
+const alertTape = computed(() =>
+  (props.payload?.tape ?? []).filter((row) =>
+    symbolPassesQuery(
+      String(row.symbol || ''),
+      { includes: [], excludes: parsedSymbolQuery.value.excludes },
+      exclusions.value,
+    ),
+  ),
+)
+
 const filteredRows = computed<UnusualFlowRow[]>(() => {
-  const query = symbolQuery.value.trim().toUpperCase()
   const rows = qualifiedRows.value.filter(
     (row) =>
-      (!query || row.symbol.toUpperCase().includes(query)) &&
+      symbolInScope(row.symbol) &&
       aggregateMatchesActivity(row) &&
       aggregateMatchesPreset(row) &&
       aggregateMatchesRight(row) &&
@@ -752,17 +802,22 @@ function setTapeSort(key: TapeSortKey): void {
   }
 }
 
+function showFlaggedPrints(): void {
+  activityFilter.value = 'flagged'
+  tapeSortKey.value = 'premium'
+  tapeSortDir.value = 'desc'
+}
+
 function tapeSortArrow(key: TapeSortKey): string {
   if (tapeSortKey.value !== key) return ''
   return tapeSortDir.value === 'asc' ? '▴' : '▾'
 }
 
 const qualifiedTapeRows = computed<MarketFlowPrint[]>(() => {
-  const query = symbolQuery.value.trim().toUpperCase()
   return (props.payload?.tape ?? []).filter(
     (row) =>
       row.symbol != null &&
-      (!query || row.symbol.toUpperCase().includes(query)) &&
+      symbolInScope(row.symbol) &&
       (rightFilter.value === 'all' || row.right === rightFilter.value) &&
       inDteBand(row.dte) &&
       tapeMatchesActivity(row) &&
@@ -816,7 +871,9 @@ const sortedTapeRows = computed<MarketFlowPrint[]>(() => {
     if (typeof av === 'string' || typeof bv === 'string') {
       return dir * String(av).localeCompare(String(bv))
     }
-    return dir * (Number(av) - Number(bv))
+    const byValue = dir * (Number(av) - Number(bv))
+    if (byValue !== 0) return byValue
+    return dir * String(b.timestamp || '').localeCompare(String(a.timestamp || ''))
   })
 
   return rows
@@ -854,10 +911,31 @@ const marketFlowSentiment = computed(() => {
       ? Math.round(projectedSummary.value.putFlowPct * 100)
       : 50
   const callPct = 100 - putPct
-  const putDominant = putPct >= 55
-  const callDominant = callPct >= 55
-  const dominantState = callDominant ? 'bullish' : putDominant ? 'bearish' : 'neutral'
   const dominantPct = Math.max(callPct, putPct)
+
+  // Derive dominantState from aggregate signed lean across all qualified rows —
+  // NOT from raw call/put contract identity percentage. This ensures the macro
+  // sentiment card agrees with the per-ticker activeTickerStats.dominantState,
+  // both of which use signed flow / directional lean rather than identity.
+  let bullishLean = 0
+  let bearishLean = 0
+  for (const row of qualifiedRows.value) {
+    const lean = String(row.activity_lean || '').toLowerCase()
+    if (lean === 'bullish') bullishLean++
+    else if (lean === 'bearish') bearishLean++
+  }
+  const hasAggregateLean = bullishLean + bearishLean > 0
+  let dominantState: 'bullish' | 'bearish' | 'neutral'
+  if (hasAggregateLean) {
+    const leanBias = (bullishLean - bearishLean) / (bullishLean + bearishLean)
+    dominantState = leanBias >= 0.1 ? 'bullish' : leanBias <= -0.1 ? 'bearish' : 'neutral'
+  } else {
+    // No signed lean available — stay neutral; never invent direction from identity.
+    dominantState = 'neutral'
+  }
+
+  const callDominant = callPct >= 55
+  const putDominant = putPct >= 55
   const label = callDominant
     ? `CALL FLOW ${callPct}%`
     : putDominant
@@ -1599,6 +1677,7 @@ const directionPolicy = computed(() => {
 const activeFilterCount = computed(
   () =>
     Number(symbolQuery.value.trim().length > 0) +
+    Number(exclusions.value.length > 0) +
     Number(activityFilter.value !== 'all') +
     Number(tapePreset.value !== 'all') +
     Number(selectedSector.value !== 'all') +
@@ -1698,6 +1777,75 @@ function clearFilters(): void {
   tapeSortDir.value = 'desc'
 }
 
+function pinExclusion(raw: string): void {
+  const symbol = normalizeWatchSymbol(raw)
+  if (!symbol) return
+  exclusions.value = saveExclusions([...exclusions.value, symbol])
+}
+
+function unpinExclusion(raw: string): void {
+  const symbol = normalizeWatchSymbol(raw)
+  exclusions.value = saveExclusions(exclusions.value.filter((item) => item !== symbol))
+}
+
+function addExclusionDraft(): void {
+  pinExclusion(exclusionDraft.value)
+  exclusionDraft.value = ''
+}
+
+function captureLayout(): void {
+  const name = layoutName.value.trim().slice(0, 32)
+  if (!name) return
+  layouts.value = upsertFlowLayout(layouts.value, {
+    id: `${Date.now().toString(36)}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    name,
+    savedAt: new Date().toISOString(),
+    tapePreset: tapePreset.value,
+    activityFilter: activityFilter.value,
+    rightFilter: rightFilter.value,
+    dteFilter: dteFilter.value,
+    moneynessFilter: moneynessFilter.value,
+    selectedSector: selectedSector.value,
+    minPremium: props.minPremium,
+    symbolQuery: symbolQuery.value,
+  })
+  layoutName.value = ''
+}
+
+function applyLayout(layout: FlowFilterLayout): void {
+  const presets = new Set(TAPE_PRESETS.map((item) => item.id))
+  tapePreset.value = presets.has(layout.tapePreset as TapePreset)
+    ? (layout.tapePreset as TapePreset)
+    : 'all'
+  activityFilter.value = (
+    ['all', 'incoming', 'sweeps', 'flagged', 'near'] as ActivityFilter[]
+  ).includes(layout.activityFilter as ActivityFilter)
+    ? (layout.activityFilter as ActivityFilter)
+    : 'all'
+  rightFilter.value = (['all', 'call', 'put'] as RightFilter[]).includes(
+    layout.rightFilter as RightFilter,
+  )
+    ? (layout.rightFilter as RightFilter)
+    : 'all'
+  dteFilter.value = (['all', 'week', 'month', 'dated'] as DteFilter[]).includes(
+    layout.dteFilter as DteFilter,
+  )
+    ? (layout.dteFilter as DteFilter)
+    : 'all'
+  moneynessFilter.value = (['all', 'otm', 'atm', 'itm'] as MoneynessFilter[]).includes(
+    layout.moneynessFilter as MoneynessFilter,
+  )
+    ? (layout.moneynessFilter as MoneynessFilter)
+    : 'all'
+  selectedSector.value = layout.selectedSector || 'all'
+  symbolQuery.value = layout.symbolQuery
+  emit('threshold', layout.minPremium)
+}
+
+function dropLayout(id: string): void {
+  layouts.value = removeFlowLayout(layouts.value, id)
+}
+
 /** Premium-based put share; never invent 100% put when the field is missing. */
 function putShare(row: UnusualFlowRow): number | null {
   const direct = finite(row.put_flow_pct)
@@ -1786,8 +1934,15 @@ function heatWidth(value: unknown): string {
 
 function openSymbol(symbol: string | null | undefined): void {
   if (!symbol) return
-  historySymbol.value = symbol
-  emit('openSymbol', symbol)
+  const clean = symbol.trim().toUpperCase()
+  historySymbol.value = clean
+  symbolQuery.value = clean
+  emit('openSymbol', clean)
+}
+
+function clearActiveSymbol(): void {
+  symbolQuery.value = ''
+  emit('openSymbol', '')
 }
 
 type CsvCell = string | number | boolean | null | undefined
@@ -2059,6 +2214,15 @@ function downloadHistoryTapeCsv(): void {
                 <div class="ticker-symbol-line">
                   <strong class="ticker-symbol-text fig">{{ activeTickerStats.symbol }}</strong>
                   <span class="ticker-company-name label">{{ activeTickerStats.companyName }}</span>
+                  <button
+                    v-if="symbolQuery"
+                    type="button"
+                    class="clear-symbol-btn label"
+                    title="Clear ticker focus"
+                    @click="clearActiveSymbol"
+                  >
+                    RESET FOCUS ×
+                  </button>
                 </div>
                 <div class="ticker-quote-line fig">
                   <span class="ticker-quote-price">{{ activeTickerStats.spot }}</span>
@@ -2135,157 +2299,426 @@ function downloadHistoryTapeCsv(): void {
         </div>
       </section>
 
-      <section class="majors-section rise" aria-labelledby="majors-title">
-        <header class="majors-head">
-          <div>
-            <span class="label section-kicker">Index flow first</span>
-            <h2 id="majors-title">
-              Where the major tape is concentrated
-              <HelpTip
-                label="Index Concentration"
-                text="Real-time order flow concentration across SPY, QQQ, IWM, and DIA index aggregates."
-                align="left"
-              />
-            </h2>
+      <!-- Consolidated Market Flow Intelligence Hub -->
+      <section class="market-intelligence-hub rise" aria-labelledby="intelligence-hub-title">
+        <header class="intelligence-hub-head">
+          <div class="hub-title-group">
+            <span class="label section-kicker">Market Flow Intelligence</span>
+            <h2 id="intelligence-hub-title">Market Breakdown &amp; Leaders</h2>
           </div>
-          <p>
-            <strong class="label">{{ directionPolicy }}</strong
-            ><br />
-            Activity lean is descriptive; signed buy/sell and ENTER-state models upgrade evidence.
-            Open a live setup to combine walls, gates, and sizing.
-          </p>
+          <div class="hub-tabs" role="tablist" aria-label="Market Flow Intelligence Sections">
+            <button
+              v-for="tab in OVERVIEW_TABS"
+              :key="tab.id"
+              type="button"
+              role="tab"
+              :aria-selected="overviewTab === tab.id"
+              class="hub-tab-btn label"
+              :class="{ active: overviewTab === tab.id }"
+              @click="overviewTab = tab.id"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
         </header>
 
-        <div class="major-grid">
-          <article
-            v-for="major in majorRows"
-            :key="major.symbol"
-            class="major-card"
-            :class="[
-              directionRead(major.symbol).state,
-              { incoming: symbolPulse(major.symbol).newPrints > 0, absent: !major.row },
-            ]"
-          >
-            <template v-if="major.row">
-              <header class="major-symbol-line">
-                <button type="button" class="major-symbol fig" @click="openSymbol(major.symbol)">
-                  {{ major.symbol }}
-                </button>
-                <span v-if="symbolPulse(major.symbol).newPrints > 0" class="new-badge label"
-                  >NEW</span
-                >
-                <span class="major-rank fig">REVIEW #{{ reviewRank(major.symbol) }}</span>
-                <span class="rank-move fig" :class="rankMoveClass(major.symbol)">{{
-                  rankMoveLabel(major.symbol)
-                }}</span>
-              </header>
-
-              <div class="major-premium">
-                <div>
-                  <span class="label">Sample premium</span>
-                  <strong class="fig">{{ moneyCompact(major.row.premium) }}</strong>
-                </div>
-                <div>
-                  <span class="label">{{
-                    pulse.baseline ? 'First window' : 'Vs previous window'
-                  }}</span>
-                  <strong class="fig">{{
-                    pulse.baseline
-                      ? FIRST_WINDOW_BASELINE
-                      : moneyCompact(symbolPulse(major.symbol).newPremium)
-                  }}</strong>
-                </div>
+        <!-- Tab 1: Top Tickers -->
+        <div v-show="overviewTab === 'leaders'" class="hub-tab-panel">
+          <section class="leaders-rail" aria-labelledby="top-tickers-title">
+            <header class="leaders-head">
+              <div>
+                <span class="label section-kicker">Options-only leaders</span>
+                <h2 id="top-tickers-title">
+                  Top Tickers
+                  <HelpTip
+                    label="Top Tickers"
+                    text="Leading market tickers categorized by institutional criteria: Unusual OTM volume, sweeps, high momentum, and premium size."
+                    align="left"
+                  />
+                </h2>
               </div>
+              <p class="book-hits-copy">
+                <span id="book-hits-title">Watchlist hits on this tape</span>
+                · {{ book.length }} pinned · {{ bookHits.length }} printed
+              </p>
+            </header>
+            <div class="ticker-cats" role="tablist" aria-label="Top Tickers categories">
+              <button
+                v-for="category in TOP_TICKER_CATEGORIES"
+                :key="category.id"
+                type="button"
+                role="tab"
+                :class="{ active: topTickerCategory === category.id }"
+                @click="topTickerCategory = category.id"
+              >
+                {{ category.label }}
+              </button>
+            </div>
+            <div v-if="topTickerRows.length" class="symbol-tape">
+              <button
+                v-for="(row, index) in topTickerRows.slice(0, 10)"
+                :key="`${topTickerCategory}-${row.symbol}`"
+                type="button"
+                class="sym-chip"
+                :class="{ on: onBook(row.symbol) }"
+                @click="openSymbol(row.symbol)"
+              >
+                <div class="sym-chip-head">
+                  <span class="fig">{{ String(index + 1).padStart(2, '0') }} {{ row.symbol }}</span>
+                  <strong class="fig">{{ tickerScore(row.score) }}</strong>
+                </div>
+                <div
+                  v-if="row.bullish_share != null || row.bearish_share != null"
+                  class="ticker-sentiment-bar"
+                  aria-hidden="true"
+                >
+                  <i
+                    class="bull-bar"
+                    :style="{ width: `${Math.round((row.bullish_share ?? 0.5) * 100)}%` }"
+                  />
+                  <i
+                    class="bear-bar"
+                    :style="{ width: `${Math.round((row.bearish_share ?? 0.5) * 100)}%` }"
+                  />
+                </div>
+                <div class="sym-chip-foot">
+                  <small>
+                    {{
+                      row.bullish_share == null
+                        ? 'No classified share'
+                        : `${fractionPercent(row.bullish_share, 0)} / ${fractionPercent(row.bearish_share, 0)}`
+                    }}
+                  </small>
+                  <span v-if="row.print_count" class="chip-count label"
+                    >{{ exactCount(row.print_count) }} prints</span
+                  >
+                </div>
+              </button>
+            </div>
+            <p v-else class="ticker-empty label">
+              No names in this category for the latest provider sample.
+            </p>
+            <div v-if="bookHits.length" class="symbol-tape book-tape">
+              <button
+                v-for="row in bookHits.slice(0, 12)"
+                :key="`book-${row.symbol}`"
+                type="button"
+                class="sym-chip book"
+                @click="openSymbol(row.symbol)"
+              >
+                <div class="sym-chip-head">
+                  <span class="fig">{{ row.symbol }}</span>
+                  <strong class="fig">{{ moneyCompact(row.premium) }}</strong>
+                </div>
+                <div class="sym-chip-foot">
+                  <small
+                    >{{ exactCount(row.print_count) }} prints ·
+                    {{ (row.unusual_contracts ?? 0) > 0 ? 'Unusual' : 'On tape' }}</small
+                  >
+                </div>
+              </button>
+            </div>
+          </section>
+        </div>
 
-              <div
-                class="major-direction"
+        <!-- Tab 2: Sector Sentiment -->
+        <div v-show="overviewTab === 'sectors'" class="hub-tab-panel">
+          <section class="sector-sentiment-rail" aria-labelledby="sector-sentiment-title">
+            <header class="sector-head">
+              <div>
+                <span class="label section-kicker">Market breakdown</span>
+                <h2 id="sector-sentiment-title">
+                  Options Sector Sentiment
+                  <HelpTip
+                    label="Sector Sentiment"
+                    text="Institutional options premium aggregated across major industry sectors. Click a sector card to filter the entire tape."
+                    align="left"
+                  />
+                </h2>
+              </div>
+              <p class="sector-meta label">
+                {{ sectorSentimentList.length }} active sectors ·
+                <button
+                  v-if="selectedSector !== 'all'"
+                  type="button"
+                  class="sector-clear-link"
+                  @click="selectedSector = 'all'"
+                >
+                  CLEAR SECTOR FILTER ({{ selectedSector }})
+                </button>
+                <span v-else>Click a sector card to isolate flow</span>
+              </p>
+            </header>
+
+            <div v-if="sectorSentimentList.length" class="sector-grid">
+              <button
+                v-for="sec in sectorSentimentList"
+                :key="sec.sector"
+                type="button"
+                class="sector-card"
+                :class="{ active: selectedSector === sec.sector }"
+                @click="toggleSectorFilter(sec.sector)"
+              >
+                <div class="sector-card-top">
+                  <strong class="sector-name">{{ sec.sector }}</strong>
+                  <span class="sector-code label">{{ sec.code }}</span>
+                </div>
+                <div class="sector-premium fig">
+                  {{ moneyCompact(sec.totalPremium) }}
+                </div>
+                <div class="sector-mix-bar" aria-hidden="true">
+                  <i
+                    class="call-segment"
+                    :style="{ width: `${Math.round(sec.callShare * 100)}%` }"
+                  />
+                  <i class="put-segment" :style="{ width: `${Math.round(sec.putShare * 100)}%` }" />
+                </div>
+                <div class="sector-card-foot">
+                  <span class="call-text fig">{{ Math.round(sec.callShare * 100) }}% C</span>
+                  <span class="put-text fig">{{ Math.round(sec.putShare * 100) }}% P</span>
+                  <span class="top-in-sec label">Top: {{ sec.topTicker }}</span>
+                </div>
+              </button>
+            </div>
+            <p v-else class="sector-empty label">
+              No sector aggregation available in the latest sample.
+            </p>
+          </section>
+        </div>
+
+        <!-- Tab 3: Index Majors -->
+        <div v-show="overviewTab === 'majors'" class="hub-tab-panel">
+          <section class="majors-section" aria-labelledby="majors-title">
+            <header class="majors-head">
+              <div>
+                <span class="label section-kicker">Index flow first</span>
+                <h2 id="majors-title">
+                  Where the major tape is concentrated
+                  <HelpTip
+                    label="Index Concentration"
+                    text="Real-time order flow concentration across SPY, QQQ, IWM, and DIA index aggregates."
+                    align="left"
+                  />
+                </h2>
+              </div>
+              <p>
+                <strong class="label">{{ directionPolicy }}</strong
+                ><br />
+                Activity lean is descriptive; signed buy/sell and ENTER-state models upgrade
+                evidence. Focus a symbol to combine walls, gates, and sizing.
+              </p>
+            </header>
+
+            <div class="major-grid">
+              <article
+                v-for="major in majorRows"
+                :key="major.symbol"
+                class="major-card"
                 :class="[
                   directionRead(major.symbol).state,
-                  flowLeanTokenClass(directionRead(major.symbol).state),
+                  { incoming: symbolPulse(major.symbol).newPrints > 0, absent: !major.row },
                 ]"
               >
-                <span class="direction-arrow" aria-hidden="true">
-                  {{
-                    directionRead(major.symbol).state.includes('bullish')
-                      ? '↑'
-                      : directionRead(major.symbol).state.includes('bearish')
-                        ? '↓'
-                        : directionRead(major.symbol).state === 'mixed'
-                          ? '↕'
-                          : '·'
-                  }}
-                </span>
-                <div>
-                  <strong class="label">{{ directionRead(major.symbol).label }}</strong>
-                  <small>{{ directionRead(major.symbol).detail }}</small>
-                </div>
-              </div>
+                <template v-if="major.row">
+                  <header class="major-symbol-line">
+                    <button
+                      type="button"
+                      class="major-symbol fig"
+                      @click="openSymbol(major.symbol)"
+                    >
+                      {{ major.symbol }}
+                    </button>
+                    <span v-if="symbolPulse(major.symbol).newPrints > 0" class="new-badge label"
+                      >NEW</span
+                    >
+                    <span class="major-rank fig">REVIEW #{{ reviewRank(major.symbol) }}</span>
+                    <span class="rank-move fig" :class="rankMoveClass(major.symbol)">{{
+                      rankMoveLabel(major.symbol)
+                    }}</span>
+                  </header>
 
-              <div class="major-identity">
-                <div class="identity-labels fig">
-                  <span class="call-text">CALLS {{ callShareLabel(major.row) }}</span>
-                  <span class="put-text">PUTS {{ putShareLabel(major.row) }}</span>
-                </div>
-                <span class="identity-bar" aria-hidden="true">
-                  <i class="call-segment" :style="{ width: callBarWidth(major.row) }" />
-                  <i class="put-segment" :style="{ width: putBarWidth(major.row) }" />
-                </span>
-                <small>Contract type only · not provider-signed buy / sell</small>
-              </div>
+                  <div class="major-premium">
+                    <div>
+                      <span class="label">Sample premium</span>
+                      <strong class="fig">{{ moneyCompact(major.row.premium) }}</strong>
+                    </div>
+                    <div>
+                      <span class="label">{{
+                        pulse.baseline ? 'First window' : 'Vs previous window'
+                      }}</span>
+                      <strong class="fig">{{
+                        pulse.baseline
+                          ? FIRST_WINDOW_BASELINE
+                          : moneyCompact(symbolPulse(major.symbol).newPremium)
+                      }}</strong>
+                    </div>
+                  </div>
 
-              <dl class="major-concentration">
-                <div>
-                  <dt class="label">Strike</dt>
-                  <dd class="fig">
-                    {{ concentrationLabel(tapeStats(major.symbol)?.topStrike, NO_STRIKE_IN_TAPE) }}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="label">DTE zone</dt>
-                  <dd class="fig">
-                    {{
-                      concentrationLabel(tapeStats(major.symbol)?.topDteBucket, 'NO DTE IN TAPE')
-                    }}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="label">Spot</dt>
-                  <dd class="fig">{{ priceRead(major.row).spot }}</dd>
-                  <small :class="priceRead(major.row).tone">{{ priceRead(major.row).move }}</small>
-                </div>
-              </dl>
-              <p
-                class="major-action label"
-                :class="[
-                  actionInsight(major.row).leanState,
-                  flowLeanTokenClass(actionInsight(major.row).leanState),
-                ]"
+                  <div
+                    class="major-direction"
+                    :class="[
+                      directionRead(major.symbol).state,
+                      flowLeanTokenClass(directionRead(major.symbol).state),
+                    ]"
+                  >
+                    <span class="direction-arrow" aria-hidden="true">
+                      {{
+                        directionRead(major.symbol).state.includes('bullish')
+                          ? '↑'
+                          : directionRead(major.symbol).state.includes('bearish')
+                            ? '↓'
+                            : directionRead(major.symbol).state === 'mixed'
+                              ? '↕'
+                              : '·'
+                      }}
+                    </span>
+                    <div>
+                      <strong class="label">{{ directionRead(major.symbol).label }}</strong>
+                      <small>{{ directionRead(major.symbol).detail }}</small>
+                    </div>
+                  </div>
+
+                  <div class="major-identity">
+                    <div class="identity-labels fig">
+                      <span class="call-text">CALLS {{ callShareLabel(major.row) }}</span>
+                      <span class="put-text">PUTS {{ putShareLabel(major.row) }}</span>
+                    </div>
+                    <span class="identity-bar" aria-hidden="true">
+                      <i class="call-segment" :style="{ width: callBarWidth(major.row) }" />
+                      <i class="put-segment" :style="{ width: putBarWidth(major.row) }" />
+                    </span>
+                    <small>Contract type only · not provider-signed buy / sell</small>
+                  </div>
+
+                  <dl class="major-concentration">
+                    <div>
+                      <dt class="label">Strike</dt>
+                      <dd class="fig">
+                        {{
+                          concentrationLabel(tapeStats(major.symbol)?.topStrike, NO_STRIKE_IN_TAPE)
+                        }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt class="label">DTE zone</dt>
+                      <dd class="fig">
+                        {{
+                          concentrationLabel(
+                            tapeStats(major.symbol)?.topDteBucket,
+                            'NO DTE IN TAPE',
+                          )
+                        }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt class="label">Spot</dt>
+                      <dd class="fig">{{ priceRead(major.row).spot }}</dd>
+                      <small :class="priceRead(major.row).tone">{{
+                        priceRead(major.row).move
+                      }}</small>
+                    </div>
+                  </dl>
+                  <p
+                    class="major-action label"
+                    :class="[
+                      actionInsight(major.row).leanState,
+                      flowLeanTokenClass(actionInsight(major.row).leanState),
+                    ]"
+                  >
+                    <span>{{ actionInsight(major.row).priority.toUpperCase() }}</span>
+                    {{ actionInsight(major.row).action }}
+                  </p>
+                  <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
+                    FILTER {{ major.symbol }} FLOW <span aria-hidden="true">→</span>
+                  </button>
+                </template>
+                <template v-else>
+                  <header class="major-symbol-line">
+                    <strong class="major-symbol fig">{{ major.symbol }}</strong>
+                  </header>
+                  <div class="major-absent">
+                    <strong>Not in the latest provider sample</strong>
+                    <p>
+                      No qualifying {{ major.symbol }} aggregate cleared ${{ compact(minPremium) }}.
+                    </p>
+                  </div>
+                  <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
+                    FILTER {{ major.symbol }} FLOW <span aria-hidden="true">→</span>
+                  </button>
+                </template>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <!-- Tab 4: Power Alerts -->
+        <div v-show="overviewTab === 'alerts'" class="hub-tab-panel">
+          <PowerAlertsBoard
+            :prints="alertTape"
+            :rows="payload.rows ?? []"
+            :book="book"
+            :asof="payload.asof"
+            @open-symbol="openSymbol"
+          />
+        </div>
+
+        <!-- Tab 5: Live Pulse & Triage -->
+        <div v-show="overviewTab === 'triage'" class="hub-tab-panel">
+          <section
+            class="live-pulse"
+            :class="`brief-${workspaceBrief.tone}`"
+            aria-labelledby="live-pulse-title"
+          >
+            <div class="pulse-copy" :class="workspaceBrief.tone">
+              <span class="section-kicker label">{{ workspaceBrief.eyebrow }}</span>
+              <h2 id="live-pulse-title">{{ workspaceBrief.title }}</h2>
+              <p>{{ workspaceBrief.body }}</p>
+              <div class="pulse-cadence label">
+                <span><i aria-hidden="true" /> {{ pulseState.label }}</span>
+                <span>AUTO POLL {{ pollSeconds }}S</span>
+                <span>SERVER CACHE {{ payload.cache?.ttl_seconds ?? '—' }}S</span>
+                <span>{{ rankMoveCount }} RANK MOVES</span>
+              </div>
+            </div>
+
+            <button
+              v-for="(triagePick, index) in triagePicks"
+              :key="triagePick.key"
+              type="button"
+              class="triage-pick"
+              :class="[triagePick.leanState, flowLeanTokenClass(triagePick.leanState)]"
+              :aria-label="`Inspect ${triagePick.symbol} live options flow — ${triagePick.eyebrow}`"
+              @click="openSymbol(triagePick.symbol)"
+            >
+              <span class="triage-index fig">0{{ index + 1 }}</span>
+              <span class="label">{{ triagePick.eyebrow }}</span>
+              <span class="triage-symbol-line">
+                <strong class="fig">{{ triagePick.symbol }}</strong>
+                <b class="fig">{{ triagePick.value }}</b>
+              </span>
+              <span
+                class="triage-lean label"
+                :class="[triagePick.leanState, flowLeanTokenClass(triagePick.leanState)]"
+                >{{ triagePick.lean }}</span
               >
-                <span>{{ actionInsight(major.row).priority.toUpperCase() }}</span>
-                {{ actionInsight(major.row).action }}
-              </p>
-              <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
-                SUGGEST {{ major.symbol }} SETUP <span aria-hidden="true">→</span>
-              </button>
-            </template>
-            <template v-else>
-              <header class="major-symbol-line">
-                <strong class="major-symbol fig">{{ major.symbol }}</strong>
-              </header>
-              <div class="major-absent">
-                <strong>Not in the latest provider sample</strong>
-                <p>
-                  No qualifying {{ major.symbol }} aggregate cleared ${{ compact(minPremium) }}.
-                </p>
-              </div>
-              <button type="button" class="major-open label" @click="openSymbol(major.symbol)">
-                SUGGEST {{ major.symbol }} SETUP <span aria-hidden="true">→</span>
-              </button>
-            </template>
-          </article>
+              <small class="triage-action">{{ triagePick.detail }}</small>
+              <small class="triage-focus">Focus: {{ triagePick.action }}</small>
+              <span class="triage-tags">
+                <span
+                  v-for="tag in triagePick.tags"
+                  :key="tag.label"
+                  class="label"
+                  :class="tag.kind"
+                  >{{ tag.label }}</span
+                >
+              </span>
+              <span class="triage-open label">VIEW LIVE SETUP →</span>
+            </button>
+          </section>
         </div>
       </section>
 
+      <!-- Book alerts banner / tray (Matching Section Ordering for contract tests) -->
       <section
         class="alert-tray rise"
         :class="{ empty: !bookAlerts.length, armed: bookAlerts.length > 0 }"
@@ -2316,211 +2749,6 @@ function downloadHistoryTapeCsv(): void {
         </button>
       </section>
 
-      <!-- Sector Sentiment Breakdown (InsiderFinance Inspired) -->
-      <section class="sector-sentiment-rail rise" aria-labelledby="sector-sentiment-title">
-        <header class="sector-head">
-          <div>
-            <span class="label section-kicker">Market breakdown</span>
-            <h2 id="sector-sentiment-title">
-              Options Sector Sentiment
-              <HelpTip
-                label="Sector Sentiment"
-                text="Institutional options premium aggregated across major industry sectors. Click a sector card to filter the entire tape."
-                align="left"
-              />
-            </h2>
-          </div>
-          <p class="sector-meta label">
-            {{ sectorSentimentList.length }} active sectors ·
-            <button
-              v-if="selectedSector !== 'all'"
-              type="button"
-              class="sector-clear-link"
-              @click="selectedSector = 'all'"
-            >
-              CLEAR SECTOR FILTER ({{ selectedSector }})
-            </button>
-            <span v-else>Click a sector card to isolate flow</span>
-          </p>
-        </header>
-
-        <div v-if="sectorSentimentList.length" class="sector-grid">
-          <button
-            v-for="sec in sectorSentimentList"
-            :key="sec.sector"
-            type="button"
-            class="sector-card"
-            :class="{ active: selectedSector === sec.sector }"
-            @click="toggleSectorFilter(sec.sector)"
-          >
-            <div class="sector-card-top">
-              <strong class="sector-name">{{ sec.sector }}</strong>
-              <span class="sector-code label">{{ sec.code }}</span>
-            </div>
-            <div class="sector-premium fig">
-              {{ moneyCompact(sec.totalPremium) }}
-            </div>
-            <div class="sector-mix-bar" aria-hidden="true">
-              <i class="call-segment" :style="{ width: `${Math.round(sec.callShare * 100)}%` }" />
-              <i class="put-segment" :style="{ width: `${Math.round(sec.putShare * 100)}%` }" />
-            </div>
-            <div class="sector-card-foot">
-              <span class="call-text fig">{{ Math.round(sec.callShare * 100) }}% C</span>
-              <span class="put-text fig">{{ Math.round(sec.putShare * 100) }}% P</span>
-              <span class="top-in-sec label">Top: {{ sec.topTicker }}</span>
-            </div>
-          </button>
-        </div>
-        <p v-else class="sector-empty label">
-          No sector aggregation available in the latest sample.
-        </p>
-      </section>
-
-      <!-- Options Top Tickers (InsiderFinance Inspired with Visual Sentiment Share Bars) -->
-      <section class="leaders-rail rise" aria-labelledby="top-tickers-title">
-        <header class="leaders-head">
-          <div>
-            <span class="label section-kicker">Options-only leaders</span>
-            <h2 id="top-tickers-title">
-              Top Tickers
-              <HelpTip
-                label="Top Tickers"
-                text="Leading market tickers categorized by institutional criteria: Unusual OTM volume, sweeps, high momentum, and premium size."
-                align="left"
-              />
-            </h2>
-          </div>
-          <p class="book-hits-copy">
-            <span id="book-hits-title">Watchlist hits on this tape</span>
-            · {{ book.length }} pinned · {{ bookHits.length }} printed
-          </p>
-        </header>
-        <div class="ticker-cats" role="tablist" aria-label="Top Tickers categories">
-          <button
-            v-for="category in TOP_TICKER_CATEGORIES"
-            :key="category.id"
-            type="button"
-            role="tab"
-            :class="{ active: topTickerCategory === category.id }"
-            @click="topTickerCategory = category.id"
-          >
-            {{ category.label }}
-          </button>
-        </div>
-        <div v-if="topTickerRows.length" class="symbol-tape">
-          <button
-            v-for="(row, index) in topTickerRows.slice(0, 10)"
-            :key="`${topTickerCategory}-${row.symbol}`"
-            type="button"
-            class="sym-chip"
-            :class="{ on: onBook(row.symbol) }"
-            @click="openSymbol(row.symbol)"
-          >
-            <div class="sym-chip-head">
-              <span class="fig">{{ String(index + 1).padStart(2, '0') }} {{ row.symbol }}</span>
-              <strong class="fig">{{ tickerScore(row.score) }}</strong>
-            </div>
-            <div
-              v-if="row.bullish_share != null || row.bearish_share != null"
-              class="ticker-sentiment-bar"
-              aria-hidden="true"
-            >
-              <i
-                class="bull-bar"
-                :style="{ width: `${Math.round((row.bullish_share ?? 0.5) * 100)}%` }"
-              />
-              <i
-                class="bear-bar"
-                :style="{ width: `${Math.round((row.bearish_share ?? 0.5) * 100)}%` }"
-              />
-            </div>
-            <div class="sym-chip-foot">
-              <small>
-                {{
-                  row.bullish_share == null
-                    ? 'No classified share'
-                    : `${fractionPercent(row.bullish_share, 0)} / ${fractionPercent(row.bearish_share, 0)}`
-                }}
-              </small>
-              <span v-if="row.print_count" class="chip-count label"
-                >{{ exactCount(row.print_count) }} prints</span
-              >
-            </div>
-          </button>
-        </div>
-        <p v-else class="ticker-empty label">
-          No names in this category for the latest provider sample.
-        </p>
-        <div v-if="bookHits.length" class="symbol-tape book-tape">
-          <button
-            v-for="row in bookHits.slice(0, 12)"
-            :key="`book-${row.symbol}`"
-            type="button"
-            class="sym-chip book"
-            @click="openSymbol(row.symbol)"
-          >
-            <div class="sym-chip-head">
-              <span class="fig">{{ row.symbol }}</span>
-              <strong class="fig">{{ moneyCompact(row.premium) }}</strong>
-            </div>
-            <div class="sym-chip-foot">
-              <small
-                >{{ exactCount(row.print_count) }} prints ·
-                {{ (row.unusual_contracts ?? 0) > 0 ? 'Unusual' : 'On tape' }}</small
-              >
-            </div>
-          </button>
-        </div>
-      </section>
-
-      <section
-        class="live-pulse rise"
-        :class="`brief-${workspaceBrief.tone}`"
-        aria-labelledby="live-pulse-title"
-      >
-        <div class="pulse-copy" :class="workspaceBrief.tone">
-          <span class="section-kicker label">{{ workspaceBrief.eyebrow }}</span>
-          <h2 id="live-pulse-title">{{ workspaceBrief.title }}</h2>
-          <p>{{ workspaceBrief.body }}</p>
-          <div class="pulse-cadence label">
-            <span><i aria-hidden="true" /> {{ pulseState.label }}</span>
-            <span>AUTO POLL {{ pollSeconds }}S</span>
-            <span>SERVER CACHE {{ payload.cache?.ttl_seconds ?? '—' }}S</span>
-            <span>{{ rankMoveCount }} RANK MOVES</span>
-          </div>
-        </div>
-
-        <button
-          v-for="(pick, index) in triagePicks"
-          :key="pick.key"
-          type="button"
-          class="triage-pick"
-          :class="[pick.leanState, flowLeanTokenClass(pick.leanState)]"
-          :aria-label="`Build ${pick.symbol} live options setup — ${pick.eyebrow}`"
-          @click="openSymbol(pick.symbol)"
-        >
-          <span class="triage-index fig">0{{ index + 1 }}</span>
-          <span class="label">{{ pick.eyebrow }}</span>
-          <span class="triage-symbol-line">
-            <strong class="fig">{{ pick.symbol }}</strong>
-            <b class="fig">{{ pick.value }}</b>
-          </span>
-          <span
-            class="triage-lean label"
-            :class="[pick.leanState, flowLeanTokenClass(pick.leanState)]"
-            >{{ pick.lean }}</span
-          >
-          <small class="triage-action">{{ pick.detail }}</small>
-          <small class="triage-focus">Focus: {{ pick.action }}</small>
-          <span class="triage-tags">
-            <span v-for="tag in pick.tags" :key="tag.label" class="label" :class="tag.kind">{{
-              tag.label
-            }}</span>
-          </span>
-          <span class="triage-open label">VIEW LIVE SETUP →</span>
-        </button>
-      </section>
-
       <!-- 2-Column Institutional Options Flow Workspace (Matching Reference Layout) -->
       <div class="flow-institutional-grid">
         <!-- Left Main Area: Filters, Tape Table, Evidence, and Review Queue (72% width) -->
@@ -2544,11 +2772,67 @@ function downloadHistoryTapeCsv(): void {
                   <input
                     v-model="symbolQuery"
                     type="search"
-                    placeholder="Search symbol"
+                    placeholder="NVDA or -SPY to hide"
                     autocomplete="off"
                   />
                 </span>
+                <small>Prefix a symbol with − to hide it from this window.</small>
               </label>
+
+              <div class="exclusion-block">
+                <span class="label">Pinned exclusions</span>
+                <form class="exclusion-form" @submit.prevent="addExclusionDraft">
+                  <input
+                    v-model="exclusionDraft"
+                    type="text"
+                    maxlength="10"
+                    placeholder="Hide symbol"
+                    aria-label="Pin a symbol exclusion"
+                  />
+                  <button type="submit" class="panel-action label">PIN</button>
+                </form>
+                <div v-if="exclusions.length" class="exclusion-chips">
+                  <button
+                    v-for="symbol in exclusions"
+                    :key="symbol"
+                    type="button"
+                    class="exclusion-chip label"
+                    :title="`Show ${symbol} again`"
+                    @click="unpinExclusion(symbol)"
+                  >
+                    −{{ symbol }} ×
+                  </button>
+                </div>
+              </div>
+
+              <div class="layout-block">
+                <span class="label">Saved layouts</span>
+                <form class="exclusion-form" @submit.prevent="captureLayout">
+                  <input
+                    v-model="layoutName"
+                    type="text"
+                    maxlength="32"
+                    placeholder="Name this filter set"
+                    aria-label="Saved layout name"
+                  />
+                  <button type="submit" class="panel-action label" :disabled="!layoutName.trim()">
+                    SAVE
+                  </button>
+                </form>
+                <div v-if="layouts.length" class="exclusion-chips">
+                  <button
+                    v-for="layout in layouts"
+                    :key="layout.id"
+                    type="button"
+                    class="layout-chip label"
+                    @click="applyLayout(layout)"
+                    @keydown.delete.prevent="dropLayout(layout.id)"
+                  >
+                    {{ layout.name }}
+                  </button>
+                </div>
+                <small>Click a layout to restore it. Delete key removes the focused chip.</small>
+              </div>
 
               <fieldset class="seg-filter preset-filter">
                 <legend class="label">
@@ -2620,9 +2904,9 @@ function downloadHistoryTapeCsv(): void {
                   </button>
                   <button
                     type="button"
-                    title="Premium, volume, repeat, or sweep heuristics in the current tape"
+                    title="Largest flagged prints first, newest on ties — premium, volume, repeat, or sweep heuristics in the current tape"
                     :class="{ active: activityFilter === 'flagged' }"
-                    @click="activityFilter = 'flagged'"
+                    @click="showFlaggedPrints"
                   >
                     Flags
                   </button>
@@ -2635,7 +2919,8 @@ function downloadHistoryTapeCsv(): void {
                   </button>
                 </div>
                 <small
-                  >Flags mark unusual prints for inspection; they do not establish direction.</small
+                  >Flags surface the largest unusual prints first, newest on ties; they do not
+                  establish direction.</small
                 >
               </fieldset>
 
@@ -2773,7 +3058,7 @@ function downloadHistoryTapeCsv(): void {
             </header>
 
             <div v-if="tapeRows.length" class="table-scroll tape-scroll">
-              <table class="grid tape-table">
+              <table class="grid tape-table tape-live">
                 <thead>
                   <tr>
                     <th
@@ -2962,7 +3247,6 @@ function downloadHistoryTapeCsv(): void {
                       />
                       <span class="sort-indicator">{{ tapeSortArrow('aggressor') }}</span>
                     </th>
-                    <th><span class="sr-only">Setup</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3112,17 +3396,6 @@ function downloadHistoryTapeCsv(): void {
                         >{{ aggressorLabel(row) }}</span
                       >
                     </td>
-                    <td class="action-cell">
-                      <button
-                        v-if="row.symbol"
-                        type="button"
-                        class="row-open label"
-                        :aria-label="`Build ${row.symbol} live setup`"
-                        @click.stop="openSymbol(row.symbol)"
-                      >
-                        SETUP <span aria-hidden="true">→</span>
-                      </button>
-                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -3215,8 +3488,8 @@ function downloadHistoryTapeCsv(): void {
                   v-if="historyTape.length"
                   type="button"
                   class="panel-action label"
-                  @click="downloadHistoryTapeCsv"
                   title="Export historical tape to CSV"
+                  @click="downloadHistoryTapeCsv"
                 >
                   EXPORT CSV
                 </button>
@@ -3440,7 +3713,6 @@ function downloadHistoryTapeCsv(): void {
                       />
                       <span class="sort-indicator">{{ reviewSortArrow('lean') }}</span>
                     </th>
-                    <th><span class="sr-only">Open live setup</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3566,16 +3838,6 @@ function downloadHistoryTapeCsv(): void {
                         directionRead(row.symbol).label
                       }}</span>
                       <small>{{ directionRead(row.symbol).detail }}</small>
-                    </td>
-                    <td class="open-cell">
-                      <button
-                        type="button"
-                        class="row-open label"
-                        :aria-label="`Build ${row.symbol} live setup`"
-                        @click="openSymbol(row.symbol)"
-                      >
-                        SETUP <span aria-hidden="true">→</span>
-                      </button>
                     </td>
                   </tr>
                 </tbody>
@@ -3806,14 +4068,13 @@ function downloadHistoryTapeCsv(): void {
                 </span>
               </div>
             </div>
-            <button
+            <RouterLink
               v-if="effectiveSelectedPrint.symbol"
-              type="button"
+              :to="{ name: 'options', query: { symbol: effectiveSelectedPrint.symbol } }"
               class="inspector-open-btn label"
-              @click="openSymbol(effectiveSelectedPrint.symbol)"
             >
-              BUILD {{ effectiveSelectedPrint.symbol }} LIVE SETUP →
-            </button>
+              VIEW {{ effectiveSelectedPrint.symbol }} OPTIONS CHAIN →
+            </RouterLink>
           </div>
         </aside>
       </div>
@@ -3830,7 +4091,9 @@ function downloadHistoryTapeCsv(): void {
         <article>
           <span class="label">Direction gate</span>
           <p>
-            Activity lean (bullish/bearish) uses premium mix + price impulse; signed trade direction requires provider buy/sell. Models appear only when calibrated, setup-qualified, ENTER-state, and ≥55%.
+            Activity lean (bullish/bearish) uses premium mix + price impulse; signed trade direction
+            requires provider buy/sell. Models appear only when calibrated, setup-qualified,
+            ENTER-state, and ≥55%.
           </p>
         </article>
         <article>
@@ -4241,6 +4504,31 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Ticker-focus reset chip — the class was referenced in the hero header but
+   never defined, so the button rendered as a bare browser-default control. */
+.clear-symbol-btn {
+  min-height: 20px;
+  padding: 0 8px;
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  font-family: var(--font-display);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.clear-symbol-btn:hover {
+  color: var(--ink);
+  border-color: var(--glass-border-hi);
+  background: var(--glass-surface-hi);
+}
+
 .ticker-quote-line {
   display: flex;
   align-items: baseline;
@@ -4418,6 +4706,107 @@ button:disabled {
 }
 .freshness-stat > .label:first-child {
   padding-right: 58px;
+}
+
+/* ── Market Flow Intelligence Hub ────────────────────────────────────────── */
+.market-intelligence-hub {
+  display: flex;
+  flex-direction: column;
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xl);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 44px),
+    var(--surface-raised);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.intelligence-hub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--surface-base);
+  border-bottom: var(--hair) solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.hub-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hub-title-group h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 700 var(--t-small) var(--font-display);
+}
+
+.hub-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-capsule);
+  background: var(--glass-base);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  box-shadow: var(--glass-specular-subtle);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .hub-tabs {
+    background: var(--panel-hi);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+.hub-tab-btn {
+  min-height: 28px;
+  padding: 0 var(--s3);
+  color: var(--text-secondary);
+  border: 0;
+  border-radius: var(--r-capsule);
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: var(--t-micro);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.hub-tab-btn:hover:not(.active) {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.hub-tab-btn.active {
+  color: var(--void);
+  background: var(--phosphor);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-weight: 800;
+}
+
+.hub-tab-panel {
+  min-width: 0;
+}
+
+.hub-tab-panel .leaders-rail,
+.hub-tab-panel .sector-sentiment-rail,
+.hub-tab-panel .majors-section,
+.hub-tab-panel .live-pulse {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
 /* ── Sector Sentiment Rail ──────────────────────────────────────────────────── */
@@ -5032,11 +5421,53 @@ button:disabled {
 }
 
 .search-filter,
-.select-filter {
+.select-filter,
+.exclusion-block,
+.layout-block {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+
+.exclusion-form {
+  display: flex;
+  gap: 6px;
+}
+
+.exclusion-form input {
+  min-width: 0;
+  flex: 1;
+  min-height: 32px;
+  padding: 3px 8px;
+  color: var(--text-primary);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+  border-radius: var(--r-xs);
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  text-transform: uppercase;
+}
+
+.exclusion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.exclusion-chip,
+.layout-chip {
+  min-height: 24px;
+  padding: 0 7px;
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule);
+  background: var(--panel-hi);
+  border-radius: 2px;
+}
+
+.layout-chip {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
 }
 .search-filter > .label,
 .select-filter > .label,
@@ -5490,6 +5921,12 @@ button.major-symbol:hover {
 }
 .tape-scroll {
   max-height: 610px;
+  /* Fade the last stretch of the scrollport so clipped columns read as
+     "more to the right" instead of a broken table edge. The mask is pinned to
+     the scroll container, not the content, so the fade stays put while
+     scrolling. */
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), rgba(0, 0, 0, 0.35));
+  mask-image: linear-gradient(90deg, #000 calc(100% - 40px), rgba(0, 0, 0, 0.35));
 }
 
 .review-table {
@@ -5856,8 +6293,113 @@ button.major-symbol:hover {
   border-bottom: var(--hair) solid var(--border-subtle);
   vertical-align: middle;
 }
+/* ── Pinned identity columns ──────────────────────────────────────────────
+   The tape is deliberately wider than its column on most desks (min-width
+   1180px against an ~800–1000px main column). Time, Symbol, and Contract
+   pin to the left edge so a scrolled tape still names every print; the
+   fixed time/symbol/contract tracks (116/124/132px) carry the NEW badge,
+   spot price, and strike without shifting the pinned trio. Pinned cells
+   must stay opaque and mirror every row state, or scrolled content shows
+   through underneath. */
+.tape-table th:nth-child(1),
+.tape-table td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+.tape-table th:nth-child(1) {
+  width: 116px;
+}
+.tape-table th:nth-child(2),
+.tape-table td:nth-child(2) {
+  position: sticky;
+  left: 116px;
+  z-index: 3;
+  box-shadow: inset -1px 0 0 var(--border-strong);
+}
+.tape-table th:nth-child(-n + 2) {
+  background: var(--surface-overlay);
+}
+.tape-table td:nth-child(-n + 2) {
+  background: var(--surface-raised);
+}
+.tape-table tbody tr:hover td:nth-child(-n + 2) {
+  background: var(--panel-hi);
+}
+.tape-table tbody tr.incoming td:nth-child(-n + 2),
+.tape-table tbody tr.selected td:nth-child(-n + 2) {
+  background: var(--phosphor-wash);
+}
 .tape-table tbody tr:hover {
   background: var(--surface-overlay);
+}
+/* Live tape pins the Contract column as well so the strike never slides
+   under the Symbol column when the tape scrolls horizontally. Offsets
+   track the fixed 116px + 124px tracks below. */
+.tape-live th:nth-child(2) {
+  width: 124px;
+}
+.tape-live th:nth-child(2),
+.tape-live td:nth-child(2) {
+  box-shadow: inset -1px 0 0 var(--border-subtle);
+}
+.tape-live th:nth-child(3) {
+  width: 132px;
+}
+.tape-live th:nth-child(3),
+.tape-live td:nth-child(3) {
+  position: sticky;
+  left: 240px;
+  z-index: 3;
+  box-shadow: inset -1px 0 0 var(--border-strong);
+}
+.tape-live th:nth-child(-n + 3) {
+  background: var(--surface-overlay);
+}
+.tape-live td:nth-child(-n + 3) {
+  background: var(--surface-raised);
+}
+.tape-live tbody tr:hover td:nth-child(-n + 3) {
+  background: var(--panel-hi);
+}
+.tape-live tbody tr.incoming td:nth-child(-n + 3),
+.tape-live tbody tr.selected td:nth-child(-n + 3) {
+  background: var(--phosphor-wash);
+}
+
+/* ── Pinned column width clamps ─────────────────────────────────────────────
+   The sticky left offsets (0 / 116px / 240px) assume the pinned tracks render
+   at exactly 116 / 124 / 132px. Without a clamp, nowrap content (symbol + spot
+   price, the NEW badge) can grow a track past its th width hint, desyncing the
+   offsets so pinned columns overlap and the tape shears when scrolled. Lock
+   each pinned track to its offset width on both th and td, and clip overflow
+   so a long print can never push the track wider than the sticky math allows. */
+.tape-table th:nth-child(1),
+.tape-table td:nth-child(1) {
+  width: 116px;
+  min-width: 116px;
+  max-width: 116px;
+  overflow: hidden;
+}
+.tape-live th:nth-child(2),
+.tape-live td:nth-child(2) {
+  width: 124px;
+  min-width: 124px;
+  max-width: 124px;
+  overflow: hidden;
+}
+.tape-live th:nth-child(3),
+.tape-live td:nth-child(3) {
+  width: 132px;
+  min-width: 132px;
+  max-width: 132px;
+  overflow: hidden;
+}
+/* Non-pinned columns keep a readable floor so the scrollable region never
+   crushes them below their content when the main column is narrow. */
+.tape-table th,
+.tape-table td {
+  min-width: 88px;
 }
 
 th.sortable {
@@ -5884,8 +6426,11 @@ th.sortable:hover {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  white-space: nowrap;
+  min-width: 0;
 }
 .tape-spot-label {
+  flex: 0 0 auto;
   font-size: var(--t-micro);
   color: var(--text-tertiary);
 }
@@ -5896,6 +6441,9 @@ th.sortable:hover {
   color: var(--short);
 }
 
+.contract-cell {
+  white-space: nowrap;
+}
 .strike-val {
   margin-left: 6px;
   color: var(--text-primary);
@@ -5941,6 +6489,9 @@ th.sortable:hover {
 .moneyness-tag {
   font-size: var(--t-micro);
   font-weight: 700;
+}
+.moneyness-tag.moneyness-none {
+  color: var(--text-tertiary);
 }
 .moneyness-tag.moneyness-atm {
   color: var(--phosphor);

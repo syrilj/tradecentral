@@ -377,6 +377,15 @@
   color: var(--ink-dim);
 }
 
+/* No open interest to divide by: show a plain dash, not a boxed figure that
+   looks like a real reading. */
+.vol-oi-pill.unknown {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
 .vol-oi-pill.high,
 .vol-oi-pill.vol-oi-high {
   color: var(--phosphor);

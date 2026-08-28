@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   api,
@@ -38,7 +38,7 @@ import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
 
 import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
-import { activityLeanRead, formatTapeTime } from '@/optionsTape'
+import { activityLeanRead, formatTapeDate, formatTapeTime, isDateOnlyStamp } from '@/optionsTape'
 import { calculateFeaturedSetup } from '@/squeezeCalc'
 import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
@@ -58,6 +58,31 @@ type TapeView =
   | 'moonshot'
 type TapeSort = 'near-signed' | 'newest' | 'premium' | 'anomaly'
 type PremiumFloor = 0 | 25_000 | 50_000 | 100_000 | 250_000 | 500_000 | 1_000_000
+
+type LiveStreamSpeed = '5s' | '10s' | '15s' | '30s' | 'pause'
+type AnomalyFlagFilter =
+  | 'all'
+  | 'golden_sweep'
+  | 'whales'
+  | 'mega_whales'
+  | 'sweeps'
+  | 'repeat_cluster'
+  | 'sweep_burst'
+  | 'high_vol_oi'
+  | 'moonshot'
+
+type StrikeBand = 'all' | 'atm' | 'near' | 'wide' | 'deep_otm'
+type DteBand = 'all' | '0dte' | 'weekly' | 'monthly' | 'quarterly' | 'leaps'
+
+const liveStreamSpeed = ref<LiveStreamSpeed>('10s')
+const streamCountdown = ref<number>(10)
+const knownPrintKeys = ref<Set<string>>(new Set())
+const newPrintKeys = ref<Set<string>>(new Set())
+const showAllFlagged = ref<boolean>(false)
+const activeFlagFilter = ref<AnomalyFlagFilter>('all')
+const strikeBand = ref<StrikeBand>('all')
+const dteBand = ref<DteBand>('all')
+const tapeSearchQuery = ref<string>('')
 
 const status = inject<Resource<StatusPayload>>('status')
 const route = useRoute()
@@ -339,6 +364,74 @@ function openInsiders(): void {
 const searchHits = ref<SearchHit[]>([])
 const searching = ref(false)
 const searchOpen = ref(false)
+
+/* Real-time WebSocket-style Live Feed Stream Timer */
+let streamTimer: number | undefined
+
+const STREAM_INTERVALS: Record<LiveStreamSpeed, number> = {
+  '5s': 5,
+  '10s': 10,
+  '15s': 15,
+  '30s': 30,
+  pause: 10,
+}
+
+function startStreamTimer(): void {
+  stopStreamTimer()
+  if (liveStreamSpeed.value === 'pause' || mode.value !== 'live') return
+  const intervalSec = STREAM_INTERVALS[liveStreamSpeed.value]
+  streamCountdown.value = intervalSec
+  streamTimer = window.setInterval(() => {
+    if (liveStreamSpeed.value === 'pause' || mode.value !== 'live') return
+    if (streamCountdown.value > 1) {
+      streamCountdown.value -= 1
+    } else {
+      streamCountdown.value = intervalSec
+      if (document.visibilityState === 'visible' && !resource.loading.value) {
+        void resource.refresh({ clear: false })
+      }
+    }
+  }, 1000)
+}
+
+function stopStreamTimer(): void {
+  if (streamTimer !== undefined) {
+    clearInterval(streamTimer)
+    streamTimer = undefined
+  }
+}
+
+function tickStreamNow(): void {
+  const intervalSec = STREAM_INTERVALS[liveStreamSpeed.value]
+  streamCountdown.value = intervalSec
+  void resource.refresh({ clear: false })
+}
+
+function selectHistoricalDate(day: string): void {
+  mode.value = 'history'
+  dateTo.value = day
+}
+
+function returnToLive(): void {
+  mode.value = 'live'
+  dateFrom.value = ''
+  dateTo.value = ''
+  selectedExpiry.value = 'all'
+  liveStreamSpeed.value = '10s'
+  startStreamTimer()
+}
+
+watch([liveStreamSpeed, mode], () => {
+  startStreamTimer()
+})
+
+onMounted(() => {
+  startStreamTimer()
+})
+
+onUnmounted(() => {
+  stopStreamTimer()
+})
 
 const resource = useResource<OptionsIntelligence>(
   () =>
@@ -772,15 +865,16 @@ const leanRead = computed(() => {
       decision_authorized: s.value.decision_authorized,
     })
   }
-  const call = flowPremSplit.value.call ?? 0
-  const put = flowPremSplit.value.put ?? 0
-  const total = call + put
-  const imb = total > 0 ? (call - put) / total : 0
-  const lean = total <= 0 || Math.abs(imb) < 0.15 ? 'neutral' : imb > 0 ? 'bullish' : 'bearish'
+  // When the backend has not supplied activity_lean, do NOT invent a
+  // directional read from raw call/put premium identity. Call-heavy premium
+  // alone does not mean bullish — it can reflect covered-call selling or
+  // protection buying. Stay neutral so the activity strip agrees with
+  // directionRead (which requires signed flow or fired squeeze to go
+  // directional). The premium split remains visible in the flow context bar.
   return activityLeanRead({
-    activity_lean: lean,
-    activity_lean_source: total > 0 && Math.abs(imb) >= 0.15 ? 'call_put_premium' : 'none',
-    activity_lean_label: lean.toUpperCase(),
+    activity_lean: 'neutral',
+    activity_lean_source: 'none',
+    activity_lean_label: 'CONTRACT MIX ONLY',
     decision_authorized: false,
   })
 })
@@ -889,6 +983,130 @@ function moneynessInfo(row: OptionsTapeRow): { text: string; cls: 'itm' | 'otm' 
   return { text: `${dist}% OTM`, cls: 'otm' }
 }
 
+function matchesStrikeBand(row: OptionsTapeRow): boolean {
+  if (strikeBand.value === 'all') return true
+  const spot = row.underlying_price ?? s.value?.spot
+  if (!spot || spot <= 0 || row.strike == null || row.strike <= 0) return true
+  const diffPct = Math.abs((row.strike - spot) / spot) * 100
+  if (strikeBand.value === 'atm') return diffPct <= 2.0
+  if (strikeBand.value === 'near') return diffPct <= 6.0
+  if (strikeBand.value === 'wide') return diffPct <= 15.0
+  if (strikeBand.value === 'deep_otm') return diffPct > 15.0
+  return true
+}
+
+function matchesDteBand(row: OptionsTapeRow): boolean {
+  if (dteBand.value === 'all') return true
+  let dte = row.dte
+  if (dte == null && row.expiry) {
+    const expDate = new Date(row.expiry)
+    dte = Math.ceil((expDate.getTime() - Date.now()) / 86_400_000)
+  }
+  if (dte == null) return true
+  if (dteBand.value === '0dte') return dte === 0
+  if (dteBand.value === 'weekly') return dte >= 0 && dte <= 7
+  if (dteBand.value === 'monthly') return dte >= 8 && dte <= 30
+  if (dteBand.value === 'quarterly') return dte >= 31 && dte <= 90
+  if (dteBand.value === 'leaps') return dte > 90
+  return true
+}
+
+function matchesActiveFlag(row: OptionsTapeRow): boolean {
+  if (activeFlagFilter.value === 'all') return true
+  if (activeFlagFilter.value === 'golden_sweep') return tradeClassLabel(row) === 'GOLDEN SWEEP'
+  if (activeFlagFilter.value === 'mega_whales') return (row.premium ?? 0) >= 500_000
+  if (activeFlagFilter.value === 'whales') return (row.premium ?? 0) >= 100_000
+  if (activeFlagFilter.value === 'sweeps')
+    return (
+      row.trade_class === 'sweep' ||
+      row.is_sweep === true ||
+      (row.anomaly_flags ?? []).includes('sweep_burst')
+    )
+  if (activeFlagFilter.value === 'repeat_cluster')
+    return (row.anomaly_flags ?? []).includes('repeat_cluster')
+  if (activeFlagFilter.value === 'sweep_burst')
+    return (row.anomaly_flags ?? []).includes('sweep_burst')
+  if (activeFlagFilter.value === 'high_vol_oi') {
+    const ratio = volOiRatio(row)
+    return ratio != null && ratio >= 2.0
+  }
+  if (activeFlagFilter.value === 'moonshot')
+    return row.is_moonshot === true || (row.presets ?? []).includes('moonshot')
+  return true
+}
+
+function matchesSearchQuery(row: OptionsTapeRow): boolean {
+  const q = tapeSearchQuery.value.trim().toLowerCase()
+  if (!q) return true
+  const strikeStr = row.strike != null ? String(row.strike) : ''
+  const expStr = row.expiry ? row.expiry.toLowerCase() : ''
+  const rightStr = row.right ? row.right.toLowerCase() : ''
+  const classStr = row.trade_class ? row.trade_class.toLowerCase() : ''
+  const occStr = row.occ_symbol ? row.occ_symbol.toLowerCase() : ''
+  const lean = tapeLean(row).label.toLowerCase()
+  const flags = (row.anomaly_flags ?? []).join(' ').toLowerCase()
+  const classLabel = tradeClassLabel(row).toLowerCase()
+  return (
+    strikeStr.includes(q) ||
+    expStr.includes(q) ||
+    rightStr.includes(q) ||
+    classStr.includes(q) ||
+    occStr.includes(q) ||
+    lean.includes(q) ||
+    flags.includes(q) ||
+    classLabel.includes(q)
+  )
+}
+
+function isNewPrint(row: OptionsTapeRow): boolean {
+  const k = `${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`
+  return newPrintKeys.value.has(k)
+}
+
+const activeFiltersCount = computed(() => {
+  let count = 0
+  if (strikeBand.value !== 'all') count++
+  if (dteBand.value !== 'all') count++
+  if (activeFlagFilter.value !== 'all') count++
+  if (tapeSearchQuery.value.trim()) count++
+  if (tapeView.value !== 'all' && tapeView.value !== 'near') count++
+  if (minPremium.value > 25000) count++
+  return count
+})
+
+function resetAllFilters(): void {
+  strikeBand.value = 'all'
+  dteBand.value = 'all'
+  activeFlagFilter.value = 'all'
+  tapeSearchQuery.value = ''
+  tapeView.value = 'all'
+  minPremium.value = 25000
+}
+
+watch(
+  () => d.value?.flow_tape,
+  (tape) => {
+    if (!tape || !tape.length) return
+    const currentKeys = new Set<string>()
+    const newlyArrived = new Set<string>()
+    for (const r of tape) {
+      const k = `${r.timestamp ?? ''}-${r.right ?? ''}-${r.strike ?? ''}-${r.premium ?? ''}-${contractsOf(r)}`
+      currentKeys.add(k)
+      if (knownPrintKeys.value.size > 0 && !knownPrintKeys.value.has(k)) {
+        newlyArrived.add(k)
+      }
+    }
+    knownPrintKeys.value = currentKeys
+    if (newlyArrived.size > 0) {
+      newPrintKeys.value = newlyArrived
+      setTimeout(() => {
+        newPrintKeys.value = new Set()
+      }, 3500)
+    }
+  },
+  { deep: true },
+)
+
 const visibleTape = computed<OptionsTapeRow[]>(() => {
   const allRows = d.value?.flow_tape ?? []
   const now = new Date()
@@ -915,6 +1133,11 @@ const visibleTape = computed<OptionsTapeRow[]>(() => {
   }
 
   const rows = [...allRows].filter((row) => {
+    if (!matchesStrikeBand(row)) return false
+    if (!matchesDteBand(row)) return false
+    if (!matchesActiveFlag(row)) return false
+    if (!matchesSearchQuery(row)) return false
+
     if (tapeView.value === 'near') return isNear(row)
     if (tapeView.value === 'whales') return row.premium >= 100_000
     if (tapeView.value === 'itm') return isItm(row)
@@ -970,15 +1193,21 @@ const renderedTape = computed(() =>
 )
 const flaggedPrints = computed<OptionsTapeRow[]>(() => {
   const all = d.value?.flow_tape ?? []
-  const flagged = all.filter(
+  return all.filter(
     (r) =>
       (r.anomaly_flags && r.anomaly_flags.length > 0) ||
       (r.premium ?? 0) >= 100_000 ||
       tradeClassLabel(r) === 'GOLDEN SWEEP' ||
-      (volOiRatio(r) != null && volOiRatio(r)! >= 2),
+      (volOiRatio(r) != null && volOiRatio(r)! >= 2) ||
+      r.is_moonshot === true ||
+      r.is_unusual === true,
   )
-  return flagged.slice(0, 4)
 })
+
+const displayedFlaggedPrints = computed(() =>
+  showAllFlagged.value ? flaggedPrints.value : flaggedPrints.value.slice(0, 4),
+)
+
 const tapeTruncated = computed(
   () => !tapeShowAll.value && visibleTape.value.length > TAPE_RENDER_CAP,
 )
@@ -987,7 +1216,15 @@ const tapePanelMeta = computed(() => {
   const counts = tapeClassCounts.value
   const total = d.value?.flow_tape.length ?? 0
   const shown = `${renderedTape.value.length}/${visibleTape.value.length}`
-  return `${shown} OF ${total} PRINTS · ${counts.whales} WHALES · ${counts.sweeps} SWEEPS · ${counts.blocks} BLOCKS`
+  // NBSP between each count and its unit so the meta wraps only at "·" seams —
+  // a bare "0 BLOCKS" split across two lines reads as broken, not as a wrap.
+  const nb = '\u00a0'
+  return [
+    `${shown}${nb}OF${nb}${total}${nb}PRINTS`,
+    `${counts.whales}${nb}WHALES`,
+    `${counts.sweeps}${nb}SWEEPS`,
+    `${counts.blocks}${nb}BLOCKS`,
+  ].join(' · ')
 })
 
 const featuredSqueeze = computed(() => {
@@ -1231,14 +1468,17 @@ function volOiRatio(row: OptionsTapeRow): number | null {
 }
 
 function volOiPillCls(ratio: number | null): string {
-  if (ratio == null) return 'vol-oi-pill'
+  // Unknown OI gets no pill chrome — a boxed value reads as a measurement.
+  if (ratio == null) return 'vol-oi-pill unknown'
   if (ratio >= 3) return 'vol-oi-pill extreme'
   if (ratio >= 1) return 'vol-oi-pill high'
   return 'vol-oi-pill'
 }
 
 function volOiLabel(ratio: number | null): string {
-  if (ratio == null) return '0.00x'
+  // No open interest means the ratio is unknown. Printing 0.00x asserted that
+  // every print traded against a deep book, which is the opposite of the truth.
+  if (ratio == null) return '—'
   if (ratio >= 10) return '>10x'
   return `${ratio.toFixed(1)}x`
 }
@@ -1552,12 +1792,33 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         </div>
 
         <div class="segment mode-seg">
-          <button class="seg label" :class="{ on: mode === 'live' }" @click="mode = 'live'">
+          <button class="seg label" :class="{ on: mode === 'live' }" @click="returnToLive">
             LIVE
           </button>
           <button class="seg label" :class="{ on: mode === 'history' }" @click="mode = 'history'">
             HIST
           </button>
+        </div>
+
+        <!-- Live Streaming Status / Interval indicator -->
+        <div v-if="mode === 'live'" class="stream-status-pill label" :title="`WebSocket-style stream updating every ${liveStreamSpeed}`">
+          <span class="stream-pulse-dot" :class="{ active: liveStreamSpeed !== 'pause' }" />
+          <span class="stream-label">STREAM: {{ liveStreamSpeed.toUpperCase() }}</span>
+          <span v-if="liveStreamSpeed !== 'pause'" class="stream-sec fig">({{ streamCountdown }}s)</span>
+        </div>
+
+        <!-- Historical Date Selector when in history mode -->
+        <div v-if="mode === 'history' && historyDays.length" class="history-quick-pick">
+          <select
+            class="history-quick-select label"
+            :value="historyMeta?.selected_asof ?? dateTo"
+            aria-label="Select historical chain day"
+            @change="selectHistoricalDate(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="day in [...historyDays].reverse()" :key="day" :value="day">
+              {{ shortDate(day) }}{{ day === historyMeta?.last_good_asof ? ' · LAST GOOD' : '' }}
+            </option>
+          </select>
         </div>
 
         <div class="segment range-seg">
@@ -1584,6 +1845,32 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             {{ shortDate(item.expiry) }} · {{ item.dte }}D
           </option>
         </select>
+      </div>
+    </section>
+
+    <!-- HISTORICAL SNAPSHOT REPLAY BANNER -->
+    <section v-if="mode === 'history'" class="historical-replay-banner rise">
+      <div class="hist-banner-content">
+        <span class="hist-lamp-pulse" aria-hidden="true" />
+        <div class="hist-banner-text">
+          <strong class="label hist-title">HISTORICAL SNAPSHOT REPLAY · {{ historyMeta?.selected_asof || dateTo || 'SELECTED DATE' }}</strong>
+          <span class="hist-sub">
+            Squeeze score, trigger distance, price ladder & GEX map are strictly calculated for this historical chain day.
+          </span>
+        </div>
+      </div>
+      <div class="hist-banner-actions">
+        <button
+          v-if="historyMeta?.last_good_asof && dateTo !== historyMeta.last_good_asof"
+          type="button"
+          class="label jump-last-good"
+          @click="selectHistoricalDate(historyMeta.last_good_asof)"
+        >
+          LAST GOOD ({{ shortDate(historyMeta.last_good_asof) }})
+        </button>
+        <button type="button" class="label return-live-btn" @click="returnToLive">
+          ▶ SWITCH TO LIVE STREAM
+        </button>
       </div>
     </section>
 
@@ -2005,23 +2292,67 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           class="tape-panel tape-panel-full"
         >
           <template #action>
-            <div class="mini-segment tape-display-seg">
-              <button
-                type="button"
-                class="label"
-                :class="{ on: tapeDisplayMode === 'table' }"
-                @click="tapeDisplayMode = 'table'"
-              >
-                TABLE
-              </button>
-              <button
-                type="button"
-                class="label"
-                :class="{ on: tapeDisplayMode === 'cards' }"
-                @click="tapeDisplayMode = 'cards'"
-              >
-                CARDS
-              </button>
+            <div class="tape-action-bar">
+              <!-- Live Stream speed controls -->
+              <div v-if="mode === 'live'" class="mini-segment stream-rate-seg" title="Real-time WebSocket-style stream refresh rate">
+                <span class="stream-pulse-lamp" :class="{ running: liveStreamSpeed !== 'pause' }" />
+                <button
+                  v-for="s_ in (['5s', '10s', '15s', '30s', 'pause'] as LiveStreamSpeed[])"
+                  :key="s_"
+                  type="button"
+                  class="label"
+                  :class="{ on: liveStreamSpeed === s_ }"
+                  @click="liveStreamSpeed = s_"
+                >
+                  {{ s_ === 'pause' ? 'PAUSE' : s_ }}
+                </button>
+                <button
+                  type="button"
+                  class="label tick-btn"
+                  title="Force instant stream tick"
+                  :disabled="resource.loading.value"
+                  @click="tickStreamNow"
+                >
+                  {{ resource.loading.value ? '…' : '⚡ TICK' }}
+                </button>
+              </div>
+
+              <!-- Instant Tape Search Query -->
+              <div class="tape-search-wrap">
+                <input
+                  v-model="tapeSearchQuery"
+                  type="text"
+                  placeholder="Filter prints (strike, class, lean…)"
+                  class="tape-search-input label"
+                  aria-label="Filter tape"
+                />
+                <button
+                  v-if="tapeSearchQuery"
+                  type="button"
+                  class="clear-search label"
+                  @click="tapeSearchQuery = ''"
+                >×</button>
+              </div>
+
+              <!-- Table / Cards Mode Toggle -->
+              <div class="mini-segment tape-display-seg">
+                <button
+                  type="button"
+                  class="label"
+                  :class="{ on: tapeDisplayMode === 'table' }"
+                  @click="tapeDisplayMode = 'table'"
+                >
+                  TABLE
+                </button>
+                <button
+                  type="button"
+                  class="label"
+                  :class="{ on: tapeDisplayMode === 'cards' }"
+                  @click="tapeDisplayMode = 'cards'"
+                >
+                  CARDS
+                </button>
+              </div>
             </div>
           </template>
 
@@ -2035,6 +2366,175 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               :tape-title="tapeHealth.title"
               :direction="directionRead"
             />
+          </div>
+
+          <!-- FLAGGED PRINTS & HIGH-CONVICTION ALERTS SHELF (Top Highlight Section) -->
+          <div
+            v-if="flaggedPrints.length"
+            class="flagged-prints-section"
+          >
+            <div class="flagged-prints-header">
+              <div class="flagged-title-group">
+                <span class="flagged-pulse-icon" aria-hidden="true">⚡</span>
+                <strong class="flagged-title label">HIGH-CONVICTION & FLAG ALERTS ({{ flaggedPrints.length }})</strong>
+                <span class="flagged-sub label">Golden Sweeps · Whales ($100k+) · Clusters · Vol/OI Surges</span>
+              </div>
+              <div class="flagged-quick-filters">
+                <button
+                  type="button"
+                  class="flag-pill label"
+                  :class="{ on: activeFlagFilter === 'all' }"
+                  @click="activeFlagFilter = 'all'"
+                >
+                  ALL ({{ flaggedPrints.length }})
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label golden-pill"
+                  :class="{ on: activeFlagFilter === 'golden_sweep' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'golden_sweep' ? 'all' : 'golden_sweep'"
+                >
+                  GOLDEN SWEEP
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label mega-whale-pill"
+                  :class="{ on: activeFlagFilter === 'mega_whales' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'mega_whales' ? 'all' : 'mega_whales'"
+                >
+                  MEGA WHALE ($500k+)
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label whale-pill"
+                  :class="{ on: activeFlagFilter === 'whales' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'whales' ? 'all' : 'whales'"
+                >
+                  WHALE ($100k+)
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label cluster-pill"
+                  :class="{ on: activeFlagFilter === 'repeat_cluster' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'repeat_cluster' ? 'all' : 'repeat_cluster'"
+                >
+                  REPEAT CLUSTER
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label burst-pill"
+                  :class="{ on: activeFlagFilter === 'sweep_burst' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'sweep_burst' ? 'all' : 'sweep_burst'"
+                >
+                  SWEEP BURST
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label vol-oi-pill-filter"
+                  :class="{ on: activeFlagFilter === 'high_vol_oi' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'high_vol_oi' ? 'all' : 'high_vol_oi'"
+                >
+                  VOL/OI &gt; 2X
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label moonshot-pill"
+                  :class="{ on: activeFlagFilter === 'moonshot' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'moonshot' ? 'all' : 'moonshot'"
+                >
+                  MOONSHOT
+                </button>
+                <button
+                  v-if="flaggedPrints.length > 4"
+                  type="button"
+                  class="flag-toggle-btn label"
+                  @click="showAllFlagged = !showAllFlagged"
+                >
+                  {{ showAllFlagged ? 'COLLAPSE' : `SHOW ALL (${flaggedPrints.length})` }}
+                </button>
+              </div>
+            </div>
+            <div class="flagged-prints-grid">
+              <div
+                v-for="row in displayedFlaggedPrints"
+                :key="`flagged-${row.timestamp ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
+                class="tape-stalker-card flagged-card"
+                :class="{
+                  anomalous: (row.anomaly_flags ?? []).length > 0,
+                  isWhale: (row.premium ?? 0) >= 100_000,
+                  isMegaWhale: (row.premium ?? 0) >= 500_000,
+                  isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
+                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                  'just-arrived': isNewPrint(row),
+                  [tapeLean(row).cls]: true,
+                }"
+              >
+                <div class="card-head-row">
+                  <span class="lean-pill label" :class="tapeLean(row).cls">
+                    {{ tapeLean(row).label }}
+                    <span v-if="premiumTierLabel(row.premium) !== 'STD'" class="card-tier-tag">{{
+                      premiumTierLabel(row.premium)
+                    }}</span>
+                  </span>
+                  <span class="ts-time fig"
+                    ><em v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
+                      formatTapeDate(row.timestamp)
+                    }}</em
+                    >{{
+                      isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
+                    }}</span
+                  >
+                  <span
+                    v-if="tradeClassLabel(row) !== 'SINGLE'"
+                    :class="tradeClassTokenCls(tradeClassLabel(row))"
+                    style="margin-left: auto"
+                    >{{ tradeClassLabel(row) }}</span
+                  >
+                </div>
+                <div class="card-body-row">
+                  <div class="strike-box">
+                    <span class="strike-label label">CONTRACT</span>
+                    <strong class="strike-val fig"
+                      >{{ symbol }} {{ optUsd(row.strike)
+                      }}{{ row.right === 'call' ? 'C' : 'P' }}</strong
+                    >
+                    <span class="exp-tag label"
+                      >{{
+                        row.expiry
+                          ? `${shortDate(row.expiry)}${row.dte != null ? ` · ${row.dte}D` : ''}`
+                          : ''
+                      }}
+                      {{ moneynessInfo(row)?.text ?? '' }}</span
+                    >
+                  </div>
+                  <div class="prem-box" :class="row.right">
+                    <span class="prem-label label">PREMIUM</span>
+                    <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
+                    <span class="fill-sub label"
+                      >{{ num(contractsOf(row), 0) }} contracts @
+                      {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row), 2)}` }}</span
+                    >
+                  </div>
+                </div>
+                <div class="card-foot-row">
+                  <span
+                    v-if="volOiRatio(row) != null"
+                    :class="volOiPillCls(volOiRatio(row))"
+                    style="font-size: var(--t-micro); padding: 1px 5px"
+                  >
+                    {{ volOiLabel(volOiRatio(row)) }} VOL/OI
+                  </span>
+                  <span
+                    v-for="flag in row.anomaly_flags ?? []"
+                    :key="flag"
+                    class="flag-chip label"
+                    :class="flag"
+                  >
+                    {{ anomalyLabel(flag) }}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div v-if="d?.flow_tape.length" class="tape-toolbar">
@@ -2184,88 +2684,114 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </span>
               </div>
             </div>
-          </div>
 
-          <!-- FLAGGED PRINTS CARD SHELF (Institutional Conviction Cards) -->
-          <div
-            v-if="flaggedPrints.length && tapeDisplayMode === 'table'"
-            class="flagged-prints-section"
-          >
-            <div class="flagged-prints-header label">
-              <span class="flagged-title">FLAGGED PRINTS ({{ flaggedPrints.length }})</span>
-              <span class="flagged-sub"
-                >High-conviction institutional prints, anomalies & sweeps</span
-              >
-            </div>
-            <div class="flagged-prints-grid">
-              <div
-                v-for="row in flaggedPrints"
-                :key="`flagged-${row.timestamp ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}`"
-                class="tape-stalker-card flagged-card"
-                :class="{
-                  anomalous: (row.anomaly_flags ?? []).length > 0,
-                  isWhale: (row.premium ?? 0) >= 100_000,
-                  isMegaWhale: (row.premium ?? 0) >= 500_000,
-                  isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
-                  [tapeLean(row).cls]: true,
-                }"
-              >
-                <div class="card-head-row">
-                  <span class="lean-pill label" :class="tapeLean(row).cls">
-                    {{ tapeLean(row).label }}
-                    <span v-if="premiumTierLabel(row.premium) !== 'STD'" class="card-tier-tag">{{
-                      premiumTierLabel(row.premium)
-                    }}</span>
-                  </span>
-                  <span class="ts-time fig">{{ formatTapeTime(row.timestamp) }}</span>
-                  <span
-                    :class="tradeClassTokenCls(tradeClassLabel(row))"
-                    style="margin-left: auto"
-                    >{{ tradeClassLabel(row) }}</span
-                  >
-                </div>
-                <div class="card-body-row">
-                  <div class="strike-box">
-                    <span class="strike-label label">CONTRACT</span>
-                    <strong class="strike-val fig"
-                      >{{ symbol }} {{ optUsd(row.strike)
-                      }}{{ row.right === 'call' ? 'C' : 'P' }}</strong
-                    >
-                    <span class="exp-tag label"
-                      >{{
-                        row.expiry
-                          ? `${shortDate(row.expiry)}${row.dte != null ? ` · ${row.dte}D` : ''}`
-                          : ''
-                      }}
-                      {{ moneynessInfo(row)?.text ?? '' }}</span
-                    >
-                  </div>
-                  <div class="prem-box" :class="row.right">
-                    <span class="prem-label label">PREMIUM</span>
-                    <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
-                    <span class="fill-sub label"
-                      >{{ num(contractsOf(row), 0) }} contracts @
-                      {{ pricePaid(row) == null ? '$0.00' : `$${num(pricePaid(row), 2)}` }}</span
-                    >
-                  </div>
-                </div>
-                <div class="card-foot-row">
-                  <span
-                    v-if="volOiRatio(row) != null"
-                    :class="volOiPillCls(volOiRatio(row))"
-                    style="font-size: var(--t-micro); padding: 1px 5px"
-                  >
-                    {{ volOiLabel(volOiRatio(row)) }} VOL/OI
-                  </span>
-                  <span
-                    v-for="flag in row.anomaly_flags ?? []"
-                    :key="flag"
-                    class="flag-chip label"
-                    :class="flag"
-                  >
-                    {{ anomalyLabel(flag) }}
-                  </span>
-                </div>
+            <!-- Row 2: Strike & DTE Filter Bands -->
+            <div class="tape-bands-row">
+              <div class="band-group">
+                <span class="band-label label">STRIKE:</span>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'all' }"
+                  @click="strikeBand = 'all'"
+                >
+                  ALL
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'atm' }"
+                  @click="strikeBand = 'atm'"
+                  title="Within ±2% of spot"
+                >
+                  ATM (±2%)
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'near' }"
+                  @click="strikeBand = 'near'"
+                  title="Within ±6% of spot"
+                >
+                  NEAR (±6%)
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'wide' }"
+                  @click="strikeBand = 'wide'"
+                  title="Within ±15% of spot"
+                >
+                  WIDE (±15%)
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'deep_otm' }"
+                  @click="strikeBand = 'deep_otm'"
+                  title="Over 15% OTM"
+                >
+                  DEEP OTM (15%+)
+                </button>
+              </div>
+
+              <div class="band-group">
+                <span class="band-label label">DTE:</span>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'all' }"
+                  @click="dteBand = 'all'"
+                >
+                  ALL
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === '0dte' }"
+                  @click="dteBand = '0dte'"
+                >
+                  0DTE
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'weekly' }"
+                  @click="dteBand = 'weekly'"
+                >
+                  0–7D
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'monthly' }"
+                  @click="dteBand = 'monthly'"
+                >
+                  8–30D
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'quarterly' }"
+                  @click="dteBand = 'quarterly'"
+                >
+                  31–90D
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'leaps' }"
+                  @click="dteBand = 'leaps'"
+                >
+                  LEAPS (90D+)
+                </button>
+              </div>
+
+              <div v-if="activeFiltersCount > 0" class="active-filters-pill">
+                <span class="active-badge label">{{ activeFiltersCount }} ACTIVE</span>
+                <button type="button" class="reset-filter-btn label" @click="resetAllFilters">
+                  RESET ALL
+                </button>
               </div>
             </div>
           </div>
@@ -2278,13 +2804,15 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <div class="tape-cards-grid">
               <div
                 v-for="row in renderedTape"
-                :key="`card-${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}`"
+                :key="`card-${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
                 class="tape-stalker-card"
                 :class="{
                   anomalous: (row.anomaly_flags ?? []).length > 0,
                   isWhale: (row.premium ?? 0) >= 100_000,
                   isMegaWhale: (row.premium ?? 0) >= 500_000,
                   isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
+                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                  'just-arrived': isNewPrint(row),
                   [tapeLean(row).cls]: true,
                 }"
               >
@@ -2292,11 +2820,21 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <span class="lean-pill label" :class="tapeLean(row).cls">{{
                     tapeLean(row).label
                   }}</span>
-                  <span class="ts-time fig">{{ formatTapeTime(row.timestamp) }}</span>
-                  <span :class="premiumTierCls(row.premium)">{{
-                    premiumTierLabel(row.premium)
-                  }}</span>
+                  <span class="ts-time fig"
+                    ><em v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
+                      formatTapeDate(row.timestamp)
+                    }}</em
+                    >{{
+                      isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
+                    }}</span
+                  >
                   <span
+                    v-if="premiumTierLabel(row.premium) !== 'STD'"
+                    :class="premiumTierCls(row.premium)"
+                    >{{ premiumTierLabel(row.premium) }}</span
+                  >
+                  <span
+                    v-if="tradeClassLabel(row) !== 'SINGLE'"
                     :class="tradeClassTokenCls(tradeClassLabel(row))"
                     style="margin-left: auto"
                     >{{ tradeClassLabel(row) }}</span
@@ -2309,7 +2847,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     <strong class="strike-val fig">{{ optUsd(row.strike) }}</strong>
                     <span
                       v-if="moneynessInfo(row)"
-                      class="money-tag label"
+                      class="moneyness-tag label"
                       :class="moneynessInfo(row)!.cls"
                       >{{ moneynessInfo(row)!.text }}</span
                     >
@@ -2319,7 +2857,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
                     <span class="fill-sub label"
                       >{{ num(contractsOf(row), 0) }} contracts @
-                      {{ pricePaid(row) == null ? '$0.00' : `$${num(pricePaid(row), 2)}` }}</span
+                      {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row), 2)}` }}</span
                     >
                   </div>
                 </div>
@@ -2353,8 +2891,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <table class="tape-table">
               <thead>
                 <tr>
-                  <th class="label flag-col">Tier</th>
-                  <th class="label">Time</th>
+                  <th class="label">Date · Time UTC</th>
                   <th class="label tape-col-group">Lean</th>
                   <th class="label">Class</th>
                   <th class="label tape-col-group">Expiry</th>
@@ -2369,23 +2906,34 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <tbody>
                 <tr
                   v-for="row in renderedTape"
-                  :key="`${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}`"
+                  :key="`${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
                   :class="{
                     anomalous: (row.anomaly_flags ?? []).length > 0,
                     isWhale: (row.premium ?? 0) >= 100_000,
                     isMegaWhale: (row.premium ?? 0) >= 500_000,
                     isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
+                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                    'just-arrived': isNewPrint(row),
                     [tapeLean(row).cls]: true,
                   }"
                 >
-                  <td class="flag-col">
+                  <td class="fig dim ts-cell">
+                    <span v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
+                      formatTapeDate(row.timestamp)
+                    }}</span>
                     <span
-                      :class="premiumTierCls(row.premium)"
-                      :title="`Premium tier: ${premiumTierLabel(row.premium)}`"
-                      >{{ premiumTierLabel(row.premium) }}</span
+                      class="ts-clock"
+                      :class="{ 'ts-eod': isDateOnlyStamp(row.timestamp) }"
+                      :title="
+                        isDateOnlyStamp(row.timestamp)
+                          ? 'End-of-day roll-up — the provider gave no intraday timestamp'
+                          : String(row.timestamp ?? '')
+                      "
+                      >{{
+                        isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
+                      }}</span
                     >
                   </td>
-                  <td class="fig dim ts-cell">{{ formatTapeTime(row.timestamp) }}</td>
                   <td class="tape-col-group">
                     <span
                       class="bias-chip label"
@@ -2396,7 +2944,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     </span>
                   </td>
                   <td>
-                    <span :class="tradeClassTokenCls(tradeClassLabel(row))">
+                    <span
+                      v-if="tradeClassLabel(row) !== 'SINGLE'"
+                      :class="tradeClassTokenCls(tradeClassLabel(row))"
+                    >
                       {{ tradeClassLabel(row) }}
                     </span>
                   </td>
@@ -2406,9 +2957,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <td class="fig num-col strike-cell">{{ optUsd(row.strike) }}</td>
                   <td class="fig num-col tape-col-group stock-cell">
                     <div class="stock-lockup">
-                      <span class="stock-val">{{
+                      <span class="stock-val" :class="{ 'cell-na': (row.underlying_price ?? s?.spot) == null }">{{
                         (row.underlying_price ?? s?.spot) == null
-                          ? '$0.00'
+                          ? '—'
                           : optUsd(row.underlying_price ?? s?.spot)
                       }}</span>
                       <span
@@ -2421,11 +2972,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   </td>
                   <td
                     class="fig num-col tape-col-group"
+                    :class="{ 'cell-na': pricePaid(row) == null }"
                     :title="
                       row.premium_estimated ? 'Back-solved from notional' : 'Per-contract fill'
                     "
                   >
-                    {{ pricePaid(row) == null ? '$0.00' : `$${num(pricePaid(row)!, 2)}` }}
+                    {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row)!, 2)}` }}
                   </td>
                   <td class="fig num-col">{{ num(contractsOf(row), 0) }}</td>
                   <td class="num-col">
@@ -2442,10 +2994,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   </td>
                   <td
                     class="fig num-col premium-cell"
-                    :class="[row.right, { 'whale-prem': row.premium >= 100_000 }]"
+                    :class="[
+                      row.right,
+                      { 'whale-prem': row.premium >= 100_000, 'cell-na': !(row.premium > 0) },
+                    ]"
                   >
-                    ${{ compact(row.premium || 0) }}
-                    <small v-if="row.premium_estimated" class="est">≈</small>
+                    {{ row.premium > 0 ? `$${compact(row.premium)}` : '—' }}
+                    <small v-if="row.premium_estimated && row.premium > 0" class="est">≈</small>
                   </td>
                 </tr>
               </tbody>
@@ -4480,12 +5035,190 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: 0 !important;
 }
 
+/* Stream Status and Pulse */
+.stream-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  min-height: 28px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  border-radius: 9999px;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--ink-dim);
+}
+.stream-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-ghost);
+}
+.stream-pulse-dot.active {
+  background: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+}
+.stream-sec {
+  font-size: var(--t-micro);
+  color: var(--phosphor);
+  font-weight: 750;
+}
+
+/* Historical Replay Banner */
+.historical-replay-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4);
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-md);
+  flex-wrap: wrap;
+}
+.hist-banner-content {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.hist-lamp-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 70%, var(--rule));
+}
+.hist-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.hist-title {
+  color: var(--warn);
+  font-size: var(--t-micro);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.hist-sub {
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
+}
+.hist-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-left: auto;
+}
+.jump-last-good {
+  padding: 4px 10px;
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink-soft);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.return-live-btn {
+  padding: 4px 12px;
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+  color: var(--phosphor);
+  font-weight: 750;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  box-shadow: var(--glass-specular-subtle);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.return-live-btn:hover {
+  background: var(--phosphor);
+  color: var(--void);
+  border-color: var(--phosphor);
+}
+.history-quick-pick {
+  display: inline-flex;
+  align-items: center;
+}
+.history-quick-select {
+  min-height: 28px;
+  padding: 0 10px;
+  border: var(--hair) solid var(--warn);
+  background: var(--warn-wash);
+  color: var(--warn);
+  font-weight: 700;
+  border-radius: var(--r-sm);
+  font-size: var(--t-micro);
+}
+
+/* Tape Action Bar (Panel 04 Action Slot) */
+.tape-action-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.stream-rate-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.stream-pulse-lamp {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-ghost);
+  margin: 0 4px;
+}
+.stream-pulse-lamp.running {
+  background: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+}
+.tick-btn {
+  color: var(--phosphor) !important;
+  font-weight: 800 !important;
+}
+.tape-search-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.tape-search-input {
+  min-height: 26px;
+  width: 180px;
+  padding: 0 20px 0 8px;
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: var(--t-micro);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.tape-search-input:focus {
+  width: 220px;
+  border-color: var(--phosphor);
+  outline: none;
+}
+.clear-search {
+  position: absolute;
+  right: 4px;
+  background: transparent;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* Flagged Prints & High Conviction Shelf */
 .flagged-prints-section {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
   padding: var(--s3);
-  background: var(--glass-base);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
   border-bottom: var(--hair) solid var(--glass-border);
 }
 .flagged-prints-header {
@@ -4495,9 +5228,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: var(--s2);
   flex-wrap: wrap;
 }
+.flagged-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.flagged-pulse-icon {
+  color: var(--badge-golden);
+}
 .flagged-title {
-  font-weight: 750;
-  color: var(--phosphor);
+  font-weight: 800;
+  color: var(--badge-golden);
   letter-spacing: 0.08em;
   font-size: var(--t-micro);
 }
@@ -4505,9 +5246,63 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-dim);
   font-size: var(--t-micro);
 }
+.flagged-quick-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.flag-pill {
+  min-height: 22px;
+  padding: 0 8px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  color: var(--ink-dim);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.flag-pill:hover {
+  background: var(--glass-surface-hi);
+  color: var(--ink);
+  border-color: var(--glass-border-hi);
+}
+.flag-pill.on {
+  color: var(--void);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+}
+.flag-pill.golden-pill.on {
+  color: var(--void);
+  background: var(--badge-golden);
+  border-color: var(--badge-golden);
+}
+.flag-pill.mega-whale-pill.on,
+.flag-pill.whale-pill.on {
+  color: var(--void);
+  background: var(--warn);
+  border-color: var(--warn);
+}
+.flag-toggle-btn {
+  min-height: 22px;
+  padding: 0 8px;
+  background: var(--glass-surface-hi);
+  border: var(--hair) solid var(--glass-border-hi);
+  color: var(--ink-soft);
+  font-size: 9px;
+  font-weight: 750;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  margin-left: 4px;
+}
 .flagged-prints-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  /* 285px floor keeps contract + premium on one row without hitting the
+     truncation path for typical strike/expiry strings. */
+  grid-template-columns: repeat(auto-fill, minmax(285px, 1fr));
   gap: var(--s2);
 }
 .flagged-card {
@@ -4519,22 +5314,107 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   flex-direction: column;
   gap: var(--s2);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
-  transition:
-    transform var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .flagged-card:hover {
   border-color: var(--glass-border-hi);
   box-shadow: var(--glass-shadow-md), var(--glass-specular);
   transform: translateY(-1px);
 }
-.flagged-card.bull {
-  border-left: 3px solid var(--long);
+.flagged-card.isGoldenSweep {
+  border: 1px solid var(--badge-golden-border);
+  border-left: 4px solid var(--badge-golden);
+  background: var(--badge-golden-wash);
 }
-.flagged-card.bear {
-  border-left: 3px solid var(--short);
+.flagged-card.isMegaWhale {
+  border-left: 4px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--glass-surface-hi));
 }
+
+/* Tape Filter Bands Row */
+.tape-bands-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 4px var(--s3);
+  background: var(--glass-base);
+  border-top: var(--hair) solid var(--glass-border-subtle);
+  flex-wrap: wrap;
+}
+.band-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.band-label {
+  font-size: 9px;
+  font-weight: 750;
+  color: var(--ink-faint);
+  letter-spacing: 0.05em;
+  margin-right: 2px;
+}
+.band-chip {
+  min-height: 22px;
+  padding: 0 7px;
+  border: var(--hair) solid var(--glass-border);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.band-chip:hover {
+  color: var(--ink);
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-hi);
+}
+.band-chip.on {
+  color: var(--void);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+  box-shadow: var(--glass-specular-subtle);
+}
+.active-filters-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.active-badge {
+  font-size: 9px;
+  font-weight: 750;
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+  padding: 1px 6px;
+  border-radius: 9999px;
+}
+.reset-filter-btn {
+  font-size: 9px;
+  font-weight: 750;
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid var(--warn);
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+/* Streaming Arrival Flash Animation */
+@keyframes printArrivalFlash {
+  0% {
+    background-color: color-mix(in srgb, var(--phosphor) 28%, var(--glass-surface-hi));
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.just-arrived {
+  animation: printArrivalFlash 3.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 .card-tier-tag {
   margin-left: 4px;
   padding: 1px 5px;
@@ -4971,20 +5851,19 @@ th.num-col,
 td.num-col {
   font-size: var(--t-small);
 }
-.flag-col {
-  min-width: 80px;
-}
 /* One consistent anomaly-flag treatment. The abbreviation (PRM/VOL/CLU/SWP)
    already carries the sub-type, so color stays a single "flagged" signal
    instead of four competing hues — and never phosphor, which means
-   live-now everywhere else on this page. */
+   live-now everywhere else on this page. Wash + tinted text (not a solid
+   fill) so the flag reads as a quiet annotation, matching every other chip
+   on the page instead of shouting over the premium figure. */
 .flag-chip {
   display: inline-block;
   margin: 1px 4px 2px 0;
   padding: 2px 6px;
-  color: var(--void);
-  background: var(--warn);
-  border: var(--hair) solid var(--warn);
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 45%, var(--rule));
   font-size: var(--t-micro);
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -5001,6 +5880,30 @@ td.num-col {
 .ts-cell {
   font-size: var(--t-micro);
   letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+/* Date sits above the clock so the column stays as narrow as it was when it
+   showed time alone — the tape now spans sessions, so the day has to be
+   readable without widening the row past the numeric columns. */
+.ts-cell .ts-date {
+  display: block;
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+}
+.ts-cell .ts-clock {
+  display: block;
+}
+/* End-of-day roll-ups carry no intraday clock; mark them so they cannot be
+   misread as a real fill that printed at midnight. */
+.ts-eod {
+  color: var(--ink-faint);
+  font-style: normal;
+  letter-spacing: 0.08em;
+}
+.ts-time .ts-date {
+  font-style: normal;
+  color: var(--ink-faint);
+  margin-right: 4px;
 }
 /* Expiry cell: compact mono */
 .expiry-cell {
@@ -5011,21 +5914,21 @@ td.num-col {
 .type-chip {
   min-width: 24px;
 }
-/* Golden sweep rows: left amber rule + subtle gold wash */
-tr.isGoldenSweep {
-  background: var(--badge-golden-wash);
-  box-shadow: inset 4px 0 0 var(--badge-golden);
-}
-tr.isGoldenSweep td {
-  color: var(--ink);
-}
-.tape-stalker-card.isGoldenSweep {
-  border-left: 3px solid var(--badge-golden);
-  background: color-mix(in srgb, var(--badge-golden) 8%, var(--panel));
-}
 /* Anomalous rows: left rule only, no gradient wash */
 tr.anomalous {
   box-shadow: inset 3px 0 0 var(--warn);
+}
+/* Sweep rows: steel-blue rule + faint wash so intermarket routing is visible
+   at a scan. Declared after .anomalous so a flagged sweep keeps its routing
+   color — the specific identity beats the generic anomaly flag. Whale tiers
+   (size) still outrank it below. */
+tr.isSweep {
+  background: var(--badge-sweep-wash);
+  box-shadow: inset 3px 0 0 var(--badge-sweep);
+}
+.tape-stalker-card.isSweep {
+  border-left: 3px solid var(--badge-sweep);
+  background: color-mix(in srgb, var(--badge-sweep) 7%, var(--panel));
 }
 /* Whale row thresholds — $100k and $500k+ (previously $250k) */
 /* Whale rows: progressively heavier left rule, flat background */
@@ -5039,14 +5942,34 @@ tr.isMegaWhale {
 }
 tr.anomalous td,
 tr.isWhale td,
-tr.isMegaWhale td {
+tr.isMegaWhale td,
+tr.isSweep td {
   color: var(--ink);
+}
+/* Golden sweep is the highest-conviction row state — declared last so a
+   golden mega-whale keeps its gold rule instead of being washed amber by the
+   whale tiers above it. */
+tr.isGoldenSweep {
+  background: var(--badge-golden-wash);
+  box-shadow: inset 4px 0 0 var(--badge-golden);
+}
+tr.isGoldenSweep td {
+  color: var(--ink);
+}
+.tape-stalker-card.isGoldenSweep {
+  border-left: 3px solid var(--badge-golden);
+  background: color-mix(in srgb, var(--badge-golden) 8%, var(--panel));
 }
 .num-col {
   text-align: right;
 }
 .dim {
   color: var(--ink-dim);
+}
+/* Missing measurements render as a muted dash — never a fabricated $0.00. */
+.cell-na {
+  color: var(--ink-ghost);
+  font-weight: 400;
 }
 .tape-table th {
   font-size: var(--t-micro);
@@ -5586,6 +6509,18 @@ tr.isMegaWhale:hover {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* Flex children default to min-width:auto, so a long contract string pushed
+     the premium box past the card edge and its value rendered clipped. Allow
+     both boxes to shrink and truncate their overflow instead. */
+  min-width: 0;
+}
+.strike-box {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+.prem-box {
+  flex: 0 1 auto;
+  align-items: flex-end;
 }
 .strike-box .strike-label,
 .prem-box .prem-label {
@@ -5597,9 +6532,15 @@ tr.isMegaWhale:hover {
   font: 700 15px var(--font-data);
   color: var(--ink);
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
-.prem-box {
-  align-items: flex-end;
+.prem-box .prem-val,
+.prem-box .fill-sub,
+.strike-box .exp-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .prem-box .prem-val {
   font: 700 15px var(--font-data);

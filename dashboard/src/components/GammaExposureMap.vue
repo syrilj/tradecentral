@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * Net-GEX & Call/Put Strike Profile — vertical dual bars & net profile across the options desk.
+ * Net-GEX & Call/Put Strike Profile — InsiderFinance-style glow profile.
  *
  *   · X axis = strike (low → high, left → right)
- *   · Call GEX / Call OI = positive call-emerald bar ABOVE zero line (var(--call))
- *   · Put GEX / Put OI = negative put-crimson bar BELOW zero line (var(--put))
- *   · Net GEX / Net OI = flat ink circle marker on top (var(--ink))
- *   · Net Trace = continuous profile line connecting net markers
- *   · Regime Zones = subtle demarcation of Long Gamma vs Short Gamma relative to Flip
+ *   · Call GEX / Call OI = gradient emerald bar ABOVE zero line (glows)
+ *   · Put GEX / Put OI = gradient crimson bar BELOW zero line (glows)
+ *   · Net profile = smooth phosphor-white trace line (no per-strike dots)
+ *   · Wall bars carry direct value labels at the bar tip
+ *   · Structural levels (PUT W / FLIP / SPOT / CALL W) = pinned badges + guides
  *
  * Dual-bar representation ensures neutral strikes (e.g. +$50M Call / -$50M Put)
  * show full gamma battleground instead of disappearing into a 0-height net line.
@@ -50,6 +50,14 @@ interface Level {
    *  each level label are sized to their text so long strike labels such as
    *  `CALL W $1234.56` never clip or overlap an adjacent badge. */
   badgeW: number
+}
+
+interface WallLabel {
+  key: string
+  x: number
+  y: number
+  text: string
+  cls: 'call' | 'put'
 }
 
 const props = withDefaults(defineProps<{
@@ -113,10 +121,10 @@ const { W: hostW, H: hostH } = useChartSize(hostRef, {
   fallbackH: 340,
 })
 
-const left = 48
+const left = 52
 const right = 16
 const top = 48
-const bottom = 26
+const bottom = 28
 const minCol = 14
 
 const hoverStrike = ref<number | null>(null)
@@ -216,6 +224,18 @@ function metricValue(value: number, signed = false): string {
   return metric.value === 'gex' ? `${sign}$${num(abs, 1)}M` : `${sign}${compact(abs)}`
 }
 
+/** Axis ticks drop the trailing ".0" and use a typographic minus so the
+ *  gutter reads "+$20M / 0 / −$20M" instead of "$20.0M / - $20.0M". */
+function axisValue(v: number): string {
+  if (v === 0) return '0'
+  const rounded = Number(v.toFixed(1))
+  const abs = Math.abs(rounded)
+  const body = Number.isInteger(abs) ? String(abs) : abs.toFixed(1)
+  const magnitude = metric.value === 'gex' ? `$${body}M` : compact(Number(body))
+  if (rounded > 0) return `+${magnitude}`
+  return `−${magnitude}`
+}
+
 function strikeLabel(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return DASH
   return num(value, Number.isInteger(value) ? 0 : 2)
@@ -253,7 +273,8 @@ const bars = computed<Bar[]>(() => {
     const netH = Math.max(2, (Math.abs(net) / maxAbs.value) * halfPlotH.value)
     const cumNetY = zeroY.value - (cumNet / cumDenominator) * halfPlotH.value
 
-    const thickness = Math.max(4, Math.min(bandW.value * 0.76, 26))
+    // ≤ 24px thick per mark spec — never fill the slot; the leftover is air.
+    const thickness = Math.max(4, Math.min(bandW.value * 0.64, 24))
     const cx = bandCenter(index)
 
     const isSpotNear = Math.abs(row.strike - props.spot) <= (bandW.value > 0 ? (props.spot * 0.01) : 0.5)
@@ -282,6 +303,28 @@ const bars = computed<Bar[]>(() => {
       isFlip,
     }
   })
+})
+
+/** Direct labels on the two bars that matter most — the walls. Value rides the
+ *  bar tip so the extremes are readable without hover. */
+const wallLabels = computed<WallLabel[]>(() => {
+  const out: WallLabel[] = []
+  if (viewMode.value === 'cumulative' || !bars.value.length) return out
+  const cw =
+    props.callWall != null
+      ? bars.value.find((b) => Math.abs(b.strike - (props.callWall as number)) < 0.01)
+      : undefined
+  const pw =
+    props.putWall != null
+      ? bars.value.find((b) => Math.abs(b.strike - (props.putWall as number)) < 0.01)
+      : undefined
+  if (cw && cw.callH > 16) {
+    out.push({ key: 'call', x: cw.cx, y: cw.callY - 8, text: metricValue(cw.callVal, true), cls: 'call' })
+  }
+  if (pw && pw.putH > 16) {
+    out.push({ key: 'put', x: pw.cx, y: pw.putY + pw.putH + 16, text: metricValue(pw.putVal), cls: 'put' })
+  }
+  return out
 })
 
 const focusBar = computed(() => {
@@ -461,9 +504,28 @@ const levels = computed<Level[]>(() => {
   })
 })
 
+/** Catmull-Rom → cubic Bézier smoothing. The net profile reads as a single
+ *  swept line (InsiderFinance convention), not a zigzag between bar tops. */
+function smoothPath(pts: { x: number; y: number }[]): string {
+  if (pts.length < 2) return ''
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)]
+    const p1 = pts[i]
+    const p2 = pts[i + 1]
+    const p3 = pts[Math.min(pts.length - 1, i + 2)]
+    const c1x = p1.x + (p2.x - p0.x) / 6
+    const c1y = p1.y + (p2.y - p0.y) / 6
+    const c2x = p2.x - (p3.x - p1.x) / 6
+    const c2y = p2.y - (p3.y - p1.y) / 6
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`
+  }
+  return d
+}
+
 const netTracePath = computed(() => {
   if (bars.value.length <= 1) return ''
-  return bars.value.map((b, i) => `${i === 0 ? 'M' : 'L'} ${b.cx.toFixed(1)} ${b.netY.toFixed(1)}`).join(' ')
+  return smoothPath(bars.value.map((b) => ({ x: b.cx, y: b.netY })))
 })
 
 const cumulativeAreaPath = computed(() => {
@@ -476,7 +538,7 @@ const cumulativeAreaPath = computed(() => {
 
 const cumulativeLinePath = computed(() => {
   if (bars.value.length <= 1) return ''
-  return bars.value.map((b, i) => `${i === 0 ? 'M' : 'L'} ${b.cx.toFixed(1)} ${b.cumNetY.toFixed(1)}`).join(' ')
+  return smoothPath(bars.value.map((b) => ({ x: b.cx, y: b.cumNetY })))
 })
 
 const tickCount = computed(() => (H.value < 220 ? 3 : 5))
@@ -494,7 +556,7 @@ const strikeTicks = computed(() => {
   const rows = orderedRows.value
   const n = rows.length
   if (!n) return [] as { x: number; label: string; strike: number; isSpot: boolean }[]
-  const maxLabels = Math.min(n, Math.max(4, Math.floor(plotInnerW.value / 52)))
+  const maxLabels = Math.min(n, Math.max(4, Math.floor(plotInnerW.value / 56)))
   const indices = new Set<number>()
   if (maxLabels <= 1) indices.add(0)
   else {
@@ -667,7 +729,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
         {{ bars.length < rows.length ? `IN VIEW ${bars.length}/${rows.length}` : 'FULL CHAIN' }} ·
         <span class="call-leg"><i class="leg-dot call" />CALL</span> ·
         <span class="put-leg"><i class="leg-dot put" />PUT</span> ·
-        <span class="net-leg"><i class="leg-dot net" />NET</span>
+        <span class="net-leg"><i class="leg-line net" />NET</span>
       </span>
     </div>
 
@@ -744,9 +806,9 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
           display: 'block'
         }"
         role="img"
-        aria-label="Call and Put gamma exposure by strike. Calls up, Puts down, Net indicator as circle."
+        aria-label="Call and Put gamma exposure by strike. Calls up, Puts down, Net as a smooth trace line."
       >
-        <title>Call vs Put GEX by strike. Call GEX up, Put GEX down, Net as circle marker.</title>
+        <title>Call vs Put GEX by strike. Call GEX up, Put GEX down, Net as a smooth trace line.</title>
 
         <defs>
           <!-- Plot frame clip path to guarantee zero bar overflow -->
@@ -760,6 +822,18 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
               ry="1"
             />
           </clipPath>
+
+          <!-- Bar gradients: bright at the data tip, settling into the baseline -->
+          <linearGradient id="gex-call-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--call-hi)" />
+            <stop offset="0.55" stop-color="var(--call)" />
+            <stop offset="1" stop-color="var(--call-dim)" />
+          </linearGradient>
+          <linearGradient id="gex-put-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--put-dim)" />
+            <stop offset="0.45" stop-color="var(--put)" />
+            <stop offset="1" stop-color="var(--put-hi)" />
+          </linearGradient>
         </defs>
 
         <!-- Base Plot Background Frame -->
@@ -792,22 +866,22 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             :height="plotInnerH"
           />
           <text
-            v-if="flipX > left + 70"
+            v-if="flipX > left + 110"
             :x="left + 8"
-            :y="plotBottom - 6"
-            class="regime-label neg"
-          >SHORT GAMMA · VOLATILITY AMPLIFIED</text>
+            :y="top + 14"
+            class="regime-label neg halo"
+          >SHORT GAMMA · VOL AMPLIFIED</text>
           <text
-            v-if="flipX < left + plotInnerW - 70"
+            v-if="flipX < left + plotInnerW - 110"
             :x="left + plotInnerW - 8"
             :y="top + 14"
             text-anchor="end"
-            class="regime-label pos"
-          >LONG GAMMA · VOLATILITY DAMPENED</text>
+            class="regime-label pos halo"
+          >LONG GAMMA · VOL DAMPENED</text>
         </g>
 
-        <!-- Y Grid Lines -->
-        <g v-if="rows.length" class="grid">
+        <!-- Y Grid Lines (hairline, recessive) + vertical strike guides -->
+        <g v-if="rows.length" class="grid" clip-path="url(#gex-plot-clip)">
           <line
             v-for="tick in yTicks"
             :key="`grid-${tick.value}`"
@@ -817,9 +891,18 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             :y2="tick.y"
             :class="{ zero: tick.value === 0 }"
           />
+          <line
+            v-for="tick in strikeTicks"
+            :key="`vgrid-${tick.strike}`"
+            :x1="tick.x"
+            :x2="tick.x"
+            :y1="top"
+            :y2="plotBottom"
+            class="vgrid"
+          />
         </g>
 
-        <!-- Zero Axis Baseline Tag -->
+        <!-- Zero Axis — the one allowed-to-be-loud gridline -->
         <g v-if="rows.length" class="zero-baseline-group">
           <line
             :x1="left"
@@ -834,9 +917,12 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
         <g v-for="level in levels" :key="level.key" class="level" :class="level.cls">
           <!-- Guide line inside plot frame -->
           <line :x1="level.x" :x2="level.x" :y1="top" :y2="plotBottom" />
-          <!-- Header connector -->
-          <path
-            :d="`M ${level.labelX} ${level.labelY + 8} L ${level.labelX} ${top - 6} L ${level.x} ${top}`"
+          <!-- Straight leader from badge down to its guide -->
+          <line
+            :x1="level.labelX"
+            :y1="level.labelY + 8"
+            :x2="level.x"
+            :y2="top - 2"
             class="level-connector"
           />
           <!-- Badge background pill — width is derived from the label text
@@ -910,7 +996,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
             <!-- DUAL BARS MODE: Call UP / Put DOWN -->
             <template v-if="viewMode === 'dual'">
-              <!-- Call Bar (Call Emerald, grows UP from zeroY) -->
+              <!-- Call Bar (gradient emerald, grows UP from zeroY) -->
               <rect
                 v-if="bar.callH > 0"
                 class="call-bar"
@@ -918,13 +1004,13 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
                 :y="bar.callY"
                 :width="bar.thickness"
                 :height="bar.callH"
-                rx="1.5"
-                ry="1.5"
+                rx="2"
+                ry="2"
               >
                 <title>${{ strikeLabel(bar.strike) }} Call {{ metricValue(bar.callVal) }}</title>
               </rect>
 
-              <!-- Put Bar (Put Crimson, grows DOWN from zeroY) -->
+              <!-- Put Bar (gradient crimson, grows DOWN from zeroY) -->
               <rect
                 v-if="bar.putH > 0"
                 class="put-bar"
@@ -932,8 +1018,8 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
                 :y="bar.putY"
                 :width="bar.thickness"
                 :height="bar.putH"
-                rx="1.5"
-                ry="1.5"
+                rx="2"
+                ry="2"
               >
                 <title>${{ strikeLabel(bar.strike) }} Put {{ metricValue(bar.putVal) }}</title>
               </rect>
@@ -948,28 +1034,40 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
                 :y="bar.net >= 0 ? zeroY - bar.netH : zeroY"
                 :width="bar.thickness"
                 :height="bar.netH"
-                rx="1.5"
-                ry="1.5"
+                rx="2"
+                ry="2"
               >
                 <title>${{ strikeLabel(bar.strike) }} Net {{ metricValue(bar.net, true) }}</title>
               </rect>
             </template>
-
-            <!-- Net Indicator Circle Marker (Flat ink token) -->
-            <circle
-              v-if="viewMode !== 'cumulative'"
-              class="net-dot"
-              :cx="bar.cx"
-              :cy="bar.netY"
-              r="3.25"
-            />
           </g>
         </g>
 
-        <!-- Continuous Net Trace Polyline -->
+        <!-- Wall bars carry direct value labels at the bar tip -->
+        <g v-if="wallLabels.length" class="wall-labels" aria-hidden="true">
+          <text
+            v-for="wl in wallLabels"
+            :key="wl.key"
+            :x="wl.x"
+            :y="wl.y"
+            text-anchor="middle"
+            class="wall-label halo"
+            :class="wl.cls"
+          >{{ wl.text }}</text>
+        </g>
+
+        <!-- Continuous Net Trace — smooth swept line, single hover crosshair dot -->
         <g v-if="showTrace && viewMode !== 'cumulative' && rows.length" class="net-trace-group" clip-path="url(#gex-plot-clip)" aria-hidden="true">
           <path class="net-trace-path" :d="netTracePath" />
         </g>
+        <circle
+          v-if="showTrace && viewMode !== 'cumulative' && focusBar && (hoverStrike != null || focusStrike != null)"
+          class="net-trace-dot"
+          :cx="focusBar.cx"
+          :cy="focusBar.netY"
+          r="4.5"
+          aria-hidden="true"
+        />
 
         <!-- Y Axis Numbers & Metric Header -->
         <g v-if="rows.length" class="y-axis">
@@ -979,7 +1077,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             :x="left - 8"
             :y="tick.y + 3.5"
             text-anchor="end"
-          >{{ tick.value === 0 ? '0' : metricValue(tick.value, true) }}</text>
+          >{{ axisValue(tick.value) }}</text>
         </g>
         <text
           v-if="rows.length"
@@ -997,8 +1095,17 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
         <!-- X Axis Strikes & Tick Marks -->
         <g v-if="rows.length" class="x-axis">
           <template v-for="tick in strikeTicks" :key="`st-${tick.strike}`">
+            <rect
+              v-if="tick.isSpot"
+              :x="tick.x - 24"
+              :y="plotBottom + 7"
+              width="48"
+              height="16"
+              rx="8"
+              class="spot-pill"
+            />
             <line :x1="tick.x" :x2="tick.x" :y1="plotBottom" :y2="plotBottom + 5" :class="{ 'spot-tick': tick.isSpot }" />
-            <text :x="tick.x" :y="plotBottom + 18" text-anchor="middle" :class="{ 'spot-label': tick.isSpot }">
+            <text :x="tick.x" :y="plotBottom + 19" text-anchor="middle" :class="{ 'spot-label': tick.isSpot }">
               ${{ tick.label }}
             </text>
           </template>
@@ -1216,10 +1323,14 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
 .leg-dot.call { background: var(--call); }
 .leg-dot.put { background: var(--put); }
-.leg-dot.net {
-  background: var(--ink);
-  border: 1px solid var(--void);
-  outline: var(--hair) solid var(--rule-hi);
+
+/* NET identity marker is a short line swatch — the trace is a line, not dots */
+.leg-line.net {
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink-soft);
+  flex: 0 0 auto;
 }
 
 .exposure-head {
@@ -1398,59 +1509,79 @@ svg {
 }
 
 .regime-zone.neg {
-  fill: color-mix(in srgb, var(--put) 4%, transparent);
+  fill: color-mix(in srgb, var(--put) 3%, transparent);
 }
 
 .regime-zone.pos {
-  fill: color-mix(in srgb, var(--call) 4%, transparent);
+  fill: color-mix(in srgb, var(--call) 3%, transparent);
 }
 
 .regime-label {
   font: 700 var(--t-micro) var(--font-display);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   pointer-events: none;
+  opacity: 0.7;
 }
 
 .regime-label.neg {
   fill: var(--put-hi);
-  opacity: 0.75;
 }
 
 .regime-label.pos {
   fill: var(--call-hi);
-  opacity: 0.75;
+}
+
+/* Halo keeps floating plot text legible when it crosses a bar. */
+.halo {
+  paint-order: stroke;
+  stroke: var(--void);
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
 }
 
 .grid line {
-  stroke: var(--rule-hi);
+  stroke: var(--rule);
   stroke-width: 1px;
-  opacity: 0.35;
+  opacity: 0.55;
   vector-effect: non-scaling-stroke;
 }
 
+.grid line.vgrid {
+  opacity: 0.22;
+}
+
 .grid line.zero {
-  stroke: var(--rule-hi);
-  stroke-width: 1px;
-  opacity: 0.9;
+  stroke: none;
+  opacity: 0;
 }
 
 .zero-baseline {
   stroke: var(--rule-hi);
   stroke-width: 1px;
-  stroke-dasharray: 3 3;
-  opacity: 0.85;
+  opacity: 1;
   vector-effect: non-scaling-stroke;
 }
 
 .y-axis text, .x-axis text {
   fill: var(--ink-dim);
   font: 600 var(--t-micro) var(--font-data);
+  font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
+}
+
+.y-axis text {
+  fill: var(--ink-soft);
 }
 
 .x-axis text.spot-label {
   fill: var(--ink);
   font-weight: 700;
+}
+
+.spot-pill {
+  fill: var(--phosphor-wash);
+  stroke: var(--phosphor-dim);
+  stroke-width: 1px;
 }
 
 .x-axis line {
@@ -1491,40 +1622,38 @@ svg {
 
 .focus-beam .beam-rect {
   fill: var(--phosphor-wash);
-  stroke: var(--phosphor-dim);
-  stroke-width: 1;
-  stroke-dasharray: 2 2;
+  stroke: none;
   pointer-events: none;
 }
 
-/* Flat call/put fills — crisp strokes with high-contrast borders for high-DPI clarity */
+/* Gradient fills + soft glow — the InsiderFinance profile look. The glow is an
+   ambience layer (drop-shadow of the bar's own hue), not a data channel */
 .strike-bar .call-bar,
 .strike-bar .put-bar {
   vector-effect: non-scaling-stroke;
-  stroke-width: 1px;
-  opacity: 0.92;
-  transition: opacity 0.12s ease, stroke-width 0.12s ease;
+  stroke: none;
+  opacity: 0.96;
+  transition: opacity 0.12s ease;
 }
 
-.strike-bar .call-bar { fill: var(--call); stroke: var(--call-hi); }
-.strike-bar .put-bar { fill: var(--put); stroke: var(--put-hi); }
+.strike-bar .call-bar {
+  fill: url(#gex-call-grad);
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--call) 50%, transparent));
+}
+
+.strike-bar .put-bar {
+  fill: url(#gex-put-grad);
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--put) 50%, transparent));
+}
 
 .strike-bar.call-dominant .call-bar {
-  fill: var(--call-hi);
-  stroke: var(--call-hi);
   opacity: 1;
+  filter: drop-shadow(0 0 9px color-mix(in srgb, var(--call-hi) 70%, transparent));
 }
 
 .strike-bar.put-dominant .put-bar {
-  fill: var(--put-hi);
-  stroke: var(--put-hi);
   opacity: 1;
-}
-
-.strike-bar .net-dot {
-  fill: var(--ink);
-  stroke: var(--void);
-  stroke-width: 1.25px;
+  filter: drop-shadow(0 0 9px color-mix(in srgb, var(--put-hi) 70%, transparent));
 }
 
 .strike-bar:hover .call-bar,
@@ -1532,29 +1661,42 @@ svg {
 .strike-bar:hover .put-bar,
 .strike-bar.active .put-bar {
   opacity: 1;
-  stroke-width: 1.5px;
 }
 
 .strike-bar.locked .call-bar,
 .strike-bar.locked .put-bar {
   opacity: 1;
-  stroke-width: 1.75px;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--phosphor) 40%, transparent));
 }
 
-.strike-bar.locked .net-dot {
-  fill: var(--phosphor);
-  stroke: var(--void);
-  stroke-width: 1.5;
+/* Direct value labels on the wall bars — text wears text ink, never series hue */
+.wall-label {
+  font: 700 var(--t-micro) var(--font-data);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  fill: var(--ink);
+  pointer-events: none;
 }
 
 .net-trace-path {
   fill: none;
-  stroke: var(--ink);
-  stroke-width: 1.5;
-  stroke-dasharray: 3 3;
-  opacity: 0.75;
+  stroke: var(--ink-soft);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.9;
   pointer-events: none;
   vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 3.5px color-mix(in srgb, var(--ink) 35%, transparent));
+}
+
+/* Single crosshair dot that rides the trace on hover — 2px surface ring so it
+   stays legible where it crosses bars or the trace itself */
+.net-trace-dot {
+  fill: var(--ink);
+  stroke: var(--void);
+  stroke-width: 2px;
+  pointer-events: none;
 }
 
 .cumulative-group .cum-area {
@@ -1567,8 +1709,11 @@ svg {
   fill: none;
   stroke: var(--phosphor);
   stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
   pointer-events: none;
   vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--phosphor) 45%, transparent));
 }
 
 .focus-lock line {
@@ -1613,13 +1758,13 @@ svg {
 .level.flip line { stroke: var(--warn); }
 
 .level-connector {
-  fill: none;
-  stroke: var(--rule-hi);
   stroke-width: 1px;
   stroke-dasharray: 2 2;
-  opacity: 0.75;
+  opacity: 0.7;
   pointer-events: none;
+  vector-effect: non-scaling-stroke;
 }
+line.level-connector { fill: none; }
 .level.call .level-connector { stroke: var(--call-hi); }
 .level.put .level-connector { stroke: var(--put-hi); }
 .level.spot .level-connector { stroke: var(--ink-dim); }

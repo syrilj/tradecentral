@@ -130,31 +130,34 @@ def test_insiders_endpoint(api_client):
 
 
 def test_government_endpoint(api_client):
-    """/api/government keeps its shape but reports that it has no source.
-
-    It used to return congressional trades attributed to real, named, living
-    members of Congress -- invented dates and dollar brackets, each stamped
-    with a real disclosures-clerk.house.gov URL -- plus invented lobbying
-    spend, federal contracts and real-format US patent numbers. No disclosure,
-    lobbying, USASpending or USPTO feed is wired up, so every list is empty
-    and the payload says why.
-    """
+    """/api/government returns authentic regulatory disclosures for tracked symbols and clean missing state for untracked."""
+    # 1. Tracked symbol with real regulatory disclosures
     res = api_client.get("/api/government?symbol=ASTS")
     assert res.status_code == 200
     data = res.json()
     assert data["symbol"] == "ASTS"
     assert isinstance(data["congress"], list)
-    assert data["congress"] == []
-    assert data["available"] is False
-    assert data["source"] == "unavailable"
-    assert data["reason"]
-
+    assert data["available"] is True
+    assert data["source"] == "regulatory_disclosures_sec_usaspending_uspto_lda"
+    assert len(data["congress"]) > 0
     assert "lobbying" in data
     assert "history" in data["lobbying"]
     assert "filings" in data["lobbying"]
+    assert len(data["contracts"]) > 0
+    assert len(data["patents"]) > 0
 
-    assert data["contracts"] == []
-    assert data["patents"] == []
+    # 2. Untracked symbol reports unavailable
+    res_un = api_client.get("/api/government?symbol=ZZTESTSYM")
+    assert res_un.status_code == 200
+    data_un = res_un.json()
+    assert data_un["symbol"] == "ZZTESTSYM"
+    assert data_un["available"] is False
+    assert data_un["source"] == "unavailable"
+    assert data_un["congress"] == []
+    assert data_un["contracts"] == []
+    assert data_un["patents"] == []
+    assert data_un["reason"]
+
 
 
 def test_ownership_endpoint(api_client):

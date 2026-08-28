@@ -92,6 +92,9 @@ export function formatSourceLabel(source: string | null | undefined): string {
   if (s.includes('SYNTHETIC')) return 'SYNTHETIC BARS'
   if (s.includes('YFINANCE')) return 'EXCHANGE BARS'
   if (s.includes('POLYGON') || s.includes('ALPACA')) return 'REAL-TIME FEED'
+  if (s.includes('REGULATORY_DISCLOSURES') || s.includes('STOCK_ACT') || s.includes('USASPENDING') || s.includes('USPTO') || s.includes('LDA')) {
+    return 'REGULATORY DISCLOSURES (STOCK ACT / LDA / USASPENDING / USPTO)'
+  }
   return s.replace(/_/g, ' ')
 }
 

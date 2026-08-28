@@ -1,12 +1,15 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
-  name: string
-  size?: number
-  stroke?: number
-}>(), {
-  size: 18,
-  stroke: 1.7,
-})
+withDefaults(
+  defineProps<{
+    name: string
+    size?: number
+    stroke?: number
+  }>(),
+  {
+    size: 18,
+    stroke: 1.7,
+  },
+)
 </script>
 
 <template>
@@ -218,6 +221,13 @@ withDefaults(defineProps<{
     <template v-else-if="name === 'stack'">
       <path d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z" />
       <path d="M4 12h16M4 17.5h16" />
+    </template>
+    <template v-else-if="name === 'globe'">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17" />
+      <path
+        d="M12 3.5c2.4 2.2 3.7 5.2 3.7 8.5s-1.3 6.3-3.7 8.5c-2.4-2.2-3.7-5.2-3.7-8.5s1.3-6.3 3.7-8.5Z"
+      />
     </template>
     <template v-else>
       <circle cx="12" cy="12" r="8" />

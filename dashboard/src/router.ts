@@ -48,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/SentimentView.vue'),
     meta: { title: 'Pulse', index: '04' },
   },
+  {
+    path: '/macro',
+    name: 'macro',
+    component: () => import('@/views/MacroView.vue'),
+    meta: { title: 'Macro', index: '04' },
+  },
   /* Legacy path — structure + outliers now live on /sentiment */
   {
     path: '/anomalies',
@@ -126,9 +132,7 @@ const routes: RouteRecordRaw[] = [
         ...to.query,
         tab: 'financials',
         highlight: 'model-forecast',
-        symbol: typeof to.query.symbol === 'string' && to.query.symbol
-          ? to.query.symbol
-          : 'ASTS',
+        symbol: typeof to.query.symbol === 'string' && to.query.symbol ? to.query.symbol : 'ASTS',
       },
     }),
     meta: { title: 'Quantitative Research' },

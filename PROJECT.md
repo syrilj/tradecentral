@@ -1,85 +1,69 @@
-# Project: TradeCentral Dashboard Visual Redesign & Layout Overhaul
+# Project: TradeCentral Flow, Options, Squeeze & Recommendations Reconciliation
 
 ## Architecture
-TradeCentral is a high-performance Vue 3 + TypeScript quantitative market research and decision-support workstation for US equities and options.
-- **Frontend Stack**: Vue 3 (Composition API), Vite 6, TypeScript (`vue-tsc`), Vitest v3, `@clerk/vue`, Geist & Geist Mono fonts, GSAP, Three.js.
-- **Styling Paradigm**: Custom CSS Custom Properties (`src/styles/tokens.css`, `src/styles/base.css`), Scoped CSS, Strict Design Conformance (`design-conformance.test.ts`).
-- **Core Layout Architecture**: `src/App.vue` (top instrument strip `.strip`, collapsible sidebar rail `.rail`, stage `.stage`, footer `.foot`).
-- **Component Ecosystem**: Reusable UI components in `src/components/`, views in `src/views/`, composables in `src/composables/`, routes in `src/router.ts`.
+TradeCentral is a high-density financial workstation with a Python analytics/API backend (`daily_plays/`, `research/`, `tools/api_server.py`) and a Vue 3 + TypeScript frontend (`dashboard/`).
+This project reconciles metric calculations, squeeze screener logic, directional bias indicators, recommendation freshness, and zero-fallback UI rendering across Flow and Options interfaces.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        TradeCentral Workstation                        │
+├──────────────────────────────────┬─────────────────────────────────────┤
+│      Frontend (Vue 3 / TS)       │      Backend (Python 3.10)          │
+├──────────────────────────────────┼─────────────────────────────────────┤
+│ - FlowDashboard.vue              │ - daily_plays/options_intelligence  │
+│ - OptionsView.vue                │ - daily_plays/opportunity_scanner   │
+│ - OptionsFlowContext.vue         │ - daily_plays/flow_adapter          │
+│ - OptionsDirectionBrief.vue      │ - tools/api_server.py               │
+│ - OptionsConvictionBoard.vue     │ - research/                         │
+│ - SqueezeScreener.vue / calc     │                                     │
+│ - FlowSuggestionDrawer.vue       │                                     │
+│ - optionsDirection.ts / format.ts│                                     │
+└──────────────────────────────────┴─────────────────────────────────────┘
+```
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| 1 | Glassmorphism Design Tokens | Add `--glass-*` tokens (surfaces, multi-layer frosted borders, subtle specular highlights, blurs, shadows) compliant with `design-conformance.test.ts`. | M1 | ORIGINAL_REQUEST §R4 |
-| 2 | Aceternity UI Utility Classes | Add `.glass-panel`, `.glass-card`, `.glass-chip`, `.btn-glass`, `.input-glass` to `base.css` with responsive hover states and micro-interactions. | M1 | ORIGINAL_REQUEST §R4 |
-| 3 | Core UI Primitives Upgrade | Upgrade `Panel.vue`, `SearchPalette.vue`, `HelpTip.vue`, and `VerdictChip.vue` to leverage modern glassmorphic tokens. | M1 | ORIGINAL_REQUEST §R4 |
-| 4 | Frosted Top Navigation Bar | Sleek top bar (`.strip`) with frosted glass backdrop (`backdrop-filter: blur`), active market tape tickers (SPY/QQQ/DIA/XLE with sparklines), VIX context, Sector Rotation board, Fear/Greed gauge, session clock, and search trigger. | M2 | ORIGINAL_REQUEST §R1 |
-| 5 | Collapsible Side Navigation | Intuitive collapsible side rail (`.rail`) with smooth expanding/collapsing transitions, categorized tool groups (Core Desk, Market Analytics, Research Lab), glowing active route indicators, and tooltips. | M2 | ORIGINAL_REQUEST §R1 |
-| 6 | Preferences Composable | Create `src/composables/usePreferences.ts` managing density (`compact`/`comfortable`), accent theme, audio cues, and `localStorage` persistence. | M3 | ORIGINAL_REQUEST §R2 |
-| 7 | Operator Profile Drawer / Modal | Create `src/components/ProfileDrawer.vue` displaying authenticated operator info (Clerk), session telemetry, layout density toggles, theme preferences, and sign-out actions. | M3 | ORIGINAL_REQUEST §R2 |
-| 8 | Dual Profile Triggers | Connect Profile Drawer to both top-right header trigger in `.strip` and side navigation in `.rail`. | M3 | ORIGINAL_REQUEST §R2 |
-| 9 | Options Chain Multi-tiered Strike Grid | Redesign `views/OptionsView.vue` and `views/DriftView.vue` with dense, readable multi-tiered strike tables, call/put side-by-side grids, and clear visual hierarchy for bid/ask, volume, and open interest. | M4 | ORIGINAL_REQUEST §R3 |
-| 10 | Charm & Greeks Positioning Analytics | Revamp Black-Scholes charm $\partial\Delta/\partial t$ and Greeks positioning into interactive glassmorphic cards, smooth hover effects, clear heatmaps/sparklines, and streamlined strike/expiration controls. | M4 | ORIGINAL_REQUEST §R3 |
-| 11 | Supply Chain & Options Calculator Polish | Enhance `views/ChainView.vue`, `views/CalculatorView.vue`, and `components/OptionsCalculator.vue` with frosted glass aesthetics, risk-reward bounds, and payoff diagrams. | M4 | ORIGINAL_REQUEST §R3 |
-| 12 | End-to-End Build & Test Verification | Run full Vitest suite (all test files, 0 regressions) and verify `npm run build` (`vue-tsc --noEmit && vite build`) completes with 0 errors. | M5 | ORIGINAL_REQUEST §Acceptance Criteria |
+| 1 | Backend Flow Aggregation & API Parity | Reconcile summary totals, filter defaults (`min_premium`, `min_volume`), and endpoint parameters across `/api/options` and `/api/unusual-flow`. | M1 | R1, Survey 1 |
+| 2 | Level Source & Recommendation Engine Fixes | Correct `gamma_flip` attribution to `LEVEL_SOURCE_GEX`, propagate plan target/invalidation sources, expand stability observation window. | M1 | R3, Survey 2 |
+| 3 | Suggestion Cache Invalidation | Auto-invalidate `_FLOW_SUGGESTION_CACHE` upon fresh market flow arrival. | M1 | R3, Survey 2 |
+| 4 | Squeeze Direction Tie-Breaking Alignment | Reconcile `calculateFeaturedSetup` in `squeezeCalc.ts` to prioritize signed score / flow lean over geometric wall proximity. | M2 | R2, Survey 2 |
+| 5 | Conviction Board Pressure & GEX Decoupling | Decouple Net GEX from directional `pos`/`neg` green/red styling; remove unsigned activity imbalance fallback in pressure scoring. | M2 | R1, R2, Survey 1 & 2 |
+| 6 | Directional Drift & Conflict Indicators | Synchronize `OptionsDirectionBrief`, `SqueezeScreener`, and `PressureDriftChart` on mixed/conflicting flow state. | M2 | R2, Survey 2 |
+| 7 | Frontend Flow & Options Summary Parity | Use full backend session summaries in `OptionsFlowContext` rather than truncated tape slice; remove 24-row slice in `FlowDashboard`. | M3 | R1, Survey 1 |
+| 8 | Call/Put Dominance Threshold Transparency | Align and clarify dominance thresholds between Flow Tape Share (>=55%) and Institutional Activity Imbalance (>=58%). | M3 | R1, R2, Survey 3 |
+| 9 | Recommendation Drawer Live Refresh | Force live cache bypass on symbol change in `FlowSuggestionDrawer.vue` and `SuggestView.vue`. | M3 | R3, Survey 2 & 3 |
+| 10 | Zero-Fallback & Anti-Fabrication UI Remediation | Eliminate all 22 hardcoded fake zeros (`$0.00`, `0.00%`, `0.0%`, `+$0.0M`, `1.00x`, `+0.0`, `0D`) across `OptionsView.vue`, `OptionsFlowContext.vue`, `OptionsDirectionBrief.vue`, `OptionsConvictionBoard.vue`, `FintelView.vue`. | M4 | R4, Survey 3 |
+| 11 | Comprehensive E2E Test Suite (Tiers 1-4) | Requirement-driven test suites for Flow/Options parity, Squeeze alignment, Recommendation freshness, and Zero-Fallback conformance. | M5 | Acceptance Criteria, Survey 3 |
+| 12 | Adversarial Hardening (Tier 5) | Adversarial stress testing, edge-case coverage, and forensic integrity verification. | M5 | Acceptance Criteria, Survey 3 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | Glassmorphism & Aceternity Design System | `tokens.css`, `base.css`, `Panel.vue`, `SearchPalette.vue`, `VerdictChip.vue`, `HelpTip.vue` | None | DONE |
-| 2 | Unified Navigation Shell & Top Bar | `App.vue`, Top Bar (`.strip`), Collapsible Side Nav (`.rail`), tool groupings, session clock, market tickers | M1 | DONE |
-| 3 | Seamless Profile & Account Flow | `usePreferences.ts`, `ProfileDrawer.vue`, Header & Side Nav Profile triggers, density & preference controls | M1, M2 | DONE |
-| 4 | Options Chain & Charm / Greeks Positioning | `views/OptionsView.vue`, `views/DriftView.vue`, `views/ChainView.vue`, `components/OptionsCalculator.vue`, analytics cards | M1 | IN_PROGRESS |
-| 5 | Comprehensive Verification & Test Hardening | Vitest regression test suite, E2E test validation, design conformance check, production build check | M1, M2, M3, M4 | PLANNED |
+| M1 | Backend Calculations & Recommendation Engine Reconciliation | `daily_plays/options_intelligence.py`, `daily_plays/opportunity_scanner.py`, `tools/api_server.py` | none | DONE |
+| M2 | Squeeze Screener & Directional Bias Reconciliation | `dashboard/src/squeezeCalc.ts`, `dashboard/src/optionsDirection.ts`, `dashboard/src/components/OptionsConvictionBoard.vue`, `dashboard/src/components/OptionsDirectionBrief.vue`, `dashboard/src/components/SqueezeScreener.vue` | M1 | DONE |
+| M3 | Flow & Options Calculation Parity & Drawer Sync | `dashboard/src/components/FlowDashboard.vue`, `dashboard/src/components/OptionsFlowContext.vue`, `dashboard/src/components/FlowSuggestionDrawer.vue`, `dashboard/src/views/SuggestView.vue`, `dashboard/src/api.ts` | M1, M2 | IN_PROGRESS |
+| M4 | UI Zero-Fallback & Anti-Fabrication Remediation | `dashboard/src/views/OptionsView.vue`, `dashboard/src/components/OptionsFlowContext.vue`, `dashboard/src/components/OptionsDirectionBrief.vue`, `dashboard/src/components/OptionsConvictionBoard.vue`, `dashboard/src/views/FintelView.vue` | M2, M3 | PLANNED |
+| M5 | E2E Integration, Full Test Verification & Adversarial Hardening | Full frontend test suite (`npm test`), build (`npm run build`), Python test suite (`pytest eval`, `pytest tests/daily_plays`), and Tier 1-5 tests | M1, M2, M3, M4 | PLANNED |
 
 ## Interface Contracts
-### Design System ↔ UI Components
-- Semantic CSS variables in `src/styles/tokens.css` (Implemented & Verified):
-  - `--glass-base`: `rgba(18, 20, 26, 0.65)`
-  - `--glass-surface`: `rgba(18, 20, 26, 0.82)`
-  - `--glass-surface-hi`: `rgba(24, 27, 34, 0.88)`
-  - `--glass-overlay`: `rgba(8, 9, 12, 0.85)`
-  - `--glass-border`: `rgba(255, 255, 255, 0.08)`
-  - `--glass-border-hi`: `rgba(255, 255, 255, 0.16)`
-  - `--glass-specular`: `inset 0 1px 0 rgba(255, 255, 255, 0.10)`
-  - `--glass-shadow-sm`: `0 2px 8px rgba(0, 0, 0, 0.28)`
-  - `--glass-shadow-lg`: `0 16px 48px rgba(0, 0, 0, 0.85)`
-  - `--glass-blur-sm`: `blur(8px)`
-  - `--glass-blur-md`: `blur(16px)`
-  - `--glass-blur-lg`: `blur(24px)`
-- Global utility classes in `src/styles/base.css` (Implemented & Verified):
-  - `.glass-panel`, `.glass-card`, `.glass-chip`, `.btn-glass`, `.input-glass`
+### `daily_plays/opportunity_scanner.py` ↔ `tools/api_server.py` ↔ `dashboard/src/api.ts`
+- `setup_level_model` attributes `gamma_flip` to `LEVEL_SOURCE_GEX` ("options GEX").
+- `build_live_opportunities` preserves `plan_target_source` and `plan_invalidation_source` when levels exist.
+- `_FLOW_SUGGESTION_CACHE` actively purges updated symbols upon fresh unusual flow arrival and respects `force=True`.
+- `_CONTRACT_STABILITY_MAX_GAP_S = 2700.0s` (45 min) maintains stability counts across standard 5-10 min operator pauses.
 
-### Preferences Composable ↔ Shell & Profile Drawer
-- `src/composables/usePreferences.ts`:
-  ```ts
-  export type DensityMode = 'compact' | 'comfortable';
-  export interface UserPreferences {
-    density: DensityMode;
-    accent: string;
-    soundEnabled: boolean;
-    streamUpdates: boolean;
-  }
-  export function usePreferences(): {
-    preferences: Ref<UserPreferences>;
-    setDensity: (mode: DensityMode) => void;
-    toggleSound: () => void;
-    toggleStream: () => void;
-  };
-  ```
+### `dashboard/src/squeezeCalc.ts` ↔ `dashboard/src/components/SqueezeScreener.vue`
+- `calculateFeaturedSetup(props)` returns `{ side: 'bullish' | 'bearish' | 'neutral' | 'two_way', setup: Setup | null }`.
+- When signed score or flow direction is available, featured setup side aligns with market directional bias.
 
-### Profile Drawer Component Interface
-- `src/components/ProfileDrawer.vue`:
-  - Props: `modelValue: boolean`, `userEmail?: string`, `telemetry?: WorkstationTelemetry`
-  - Emits: `update:modelValue`, `signOut`, `updatePreferences`
+### `dashboard/src/format.ts` ↔ All UI Components
+- Missing/null data returns `DASH` (`—`), never fake zero numbers (`0.00`, `$0.00`, `0.00%`, `+$0.0M`, `1.00x`).
 
 ## Code Layout
-- `dashboard/src/styles/tokens.css`: Design system tokens and semantic color definitions.
-- `dashboard/src/styles/base.css`: Global base styles and reusable glassmorphism utility classes.
-- `dashboard/src/composables/usePreferences.ts`: Workstation preference management.
-- `dashboard/src/components/ProfileDrawer.vue`: Operator profile, density toggle, and preferences drawer.
-- `dashboard/src/App.vue`: Top navigation strip, collapsible side rail, route groupings, command palette.
-- `dashboard/src/views/OptionsView.vue`: Options drift workspace, qualified flow tape, GEX strike map.
-- `dashboard/src/views/DriftView.vue`: Charm $\partial\Delta/\partial t$ analytics, 3-factor breakdown cards, side-by-side Greeks strike table.
-- `dashboard/src/views/ChainView.vue`: Thematic supply chain & value cascade graph.
-- `dashboard/src/components/OptionsCalculator.vue`: Options pricing and Greeks sensitivity matrix.
+- Backend analytics: `daily_plays/`, `research/`, `tools/api_server.py`
+- Frontend components: `dashboard/src/components/`
+- Frontend views: `dashboard/src/views/`
+- Frontend logic & state: `dashboard/src/`
+- Frontend tests: `dashboard/src/__tests__/` and `dashboard/tests/`
+- Python tests: `tests/daily_plays/`, `eval/`

@@ -2405,6 +2405,75 @@ export interface SectorFlowPayload {
   market_context?: Record<string, number | boolean | string> | string
 }
 
+/* ----------------------------------------------------------------- macro ----
+   Macro trader surface. Everything here is already served by existing
+   endpoints; the view composes them into one cross-asset board:
+
+   · /api/quotes — index/ETF/commodity/fx-proxy marks (SPY, QQQ, IWM, DIA,
+     TLT, GLD, USO, UUP, EEM, HYG). Any ticker outside the local parquet
+     universe falls back to a short-TTL yfinance pull server-side.
+   · /api/cot — weekly CFTC spec positioning across ES/NQ/RTY/VX/ZN/GC/BTC.
+   · /api/sentiment — vol complex (VIX, term slope, skew) + composite.
+   · /api/sector-flow — rotation sleeve the equity tape sits in. */
+
+/** Cross-asset marks grouped by sleeve for the macro board. */
+export const MACRO_TAPE_SLEEVES: { sleeve: string; symbols: { sym: string; name: string }[] }[] = [
+  {
+    sleeve: 'Equity index',
+    symbols: [
+      { sym: 'SPY', name: 'S&P 500' },
+      { sym: 'QQQ', name: 'Nasdaq-100' },
+      { sym: 'IWM', name: 'Russell 2000' },
+      { sym: 'DIA', name: 'Dow 30' },
+    ],
+  },
+  {
+    sleeve: 'Rates & credit',
+    symbols: [
+      { sym: 'TLT', name: '20+ Yr Treasuries' },
+      { sym: 'HYG', name: 'High-yield credit' },
+      { sym: 'LQD', name: 'Investment-grade credit' },
+    ],
+  },
+  {
+    sleeve: 'Real assets & FX',
+    symbols: [
+      { sym: 'GLD', name: 'Gold' },
+      { sym: 'SLV', name: 'Silver' },
+      { sym: 'USO', name: 'WTI crude' },
+      { sym: 'UUP', name: 'US dollar index' },
+      { sym: 'EEM', name: 'Emerging markets' },
+    ],
+  },
+]
+
+/** All macro tape tickers, flattened — feeds api.quotes(). */
+export const MACRO_TAPE_SYMBOLS = MACRO_TAPE_SLEEVES.flatMap((s) => s.symbols.map((row) => row.sym))
+
+/** COT market rows relevant to the macro read (subset of CotMarket). */
+export interface MacroCotRow {
+  id: string
+  label: string
+  proxy?: string
+  asof?: string
+  noncomm_net?: number | null
+  comm_net?: number | null
+  open_interest?: number | null
+  noncomm_net_z_1y?: number | null
+  noncomm_net_pctile_1y?: number | null
+  bias?: string
+  lean?: 'LONG' | 'SHORT' | 'BALANCED' | 'UNKNOWN' | string
+}
+
+/** One vol-complex readout row from the sentiment payload. */
+export interface MacroVolReadout {
+  key: string
+  value: number | null
+  z_1y?: number | null
+  pctile_1y?: number | null
+  note?: string
+}
+
 export const api = {
   health: () => req<Health>('/api/health'),
   status: (depth?: ScanDepth) =>
@@ -2445,6 +2514,22 @@ export const api = {
     const qs = q.toString()
     return req<SentimentPayload>(`/api/sentiment${qs ? `?${qs}` : ''}`)
   },
+
+  /**
+   * CFTC Commitment of Traders block (`/api/cot`). Weekly spec positioning
+   * across index / vol / rates / metals / BTC futures. Cached server-side;
+   * pass force to refetch from the CFTC SODA API now.
+   */
+  cot: (opts?: { force?: boolean }) =>
+    req<{
+      quality: string
+      asof?: string | null
+      source?: string
+      lag_note?: string
+      markets?: CotMarket[]
+      errors?: string[]
+      fetched_at?: string
+    }>(opts?.force ? '/api/cot?force=1' : '/api/cot'),
 
   anomalies: (opts?: { limit?: number; symbol?: string }) => {
     const q = new URLSearchParams()
@@ -2615,7 +2700,10 @@ export const api = {
   liveOpportunities: (opts?: { limit?: number; force?: boolean }) => {
     const q = new URLSearchParams()
     if (opts?.limit != null) q.set('limit', String(opts.limit))
-    if (opts?.force) q.set('force', '1')
+    if (opts?.force) {
+      q.set('force', '1')
+      clearApiCache('/api/options/opportunities')
+    }
     const qs = q.toString()
     return req<LiveOpportunities>(`/api/options/opportunities${qs ? `?${qs}` : ''}`)
   },
@@ -2627,7 +2715,10 @@ export const api = {
   flowSuggestions: (opts?: { limit?: number; force?: boolean; symbol?: string }) => {
     const q = new URLSearchParams()
     if (opts?.limit != null) q.set('limit', String(opts.limit))
-    if (opts?.force) q.set('force', '1')
+    if (opts?.force) {
+      q.set('force', '1')
+      clearApiCache('/api/options/suggest')
+    }
     if (opts?.symbol) q.set('symbol', opts.symbol.trim().toUpperCase())
     const qs = q.toString()
     return req<LiveOpportunities>(`/api/options/suggest${qs ? `?${qs}` : ''}`)

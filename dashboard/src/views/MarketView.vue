@@ -3324,15 +3324,18 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">STOCK ACT DISCLOSURES</span>
-          <h3 class="unavail-title lab">Congressional Disclosures Not Connected</h3>
+          <h3 class="unavail-title lab">
+            {{ govData?.available ? 'No Congressional Disclosures on File' : 'Congressional Disclosures Not Connected' }}
+          </h3>
           <p class="unavail-desc">
             {{
-              govData?.reason ||
-              `No U.S. House or Senate financial disclosures found for ${symbol}.`
+              govData?.available
+                ? `No U.S. House or Senate financial disclosures recorded for ${symbol} in the active window.`
+                : (govData?.reason || `No U.S. House or Senate financial disclosures found for ${symbol}.`)
             }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>Not configured</strong></span>
+            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
           </div>
         </div>
       </Panel>
@@ -3369,12 +3372,18 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">LOBBYING DISCLOSURES</span>
-          <h3 class="unavail-title lab">Lobbying Disclosures Not Connected</h3>
+          <h3 class="unavail-title lab">
+            {{ govData?.available ? 'No Lobbying Filings on Record' : 'Lobbying Disclosures Not Connected' }}
+          </h3>
           <p class="unavail-desc">
-            {{ govData?.reason || `No LDA filings on record for ${symbol}.` }}
+            {{
+              govData?.available
+                ? `No LDA lobbying disclosures recorded for ${symbol} in the active window.`
+                : (govData?.reason || `No LDA filings on record for ${symbol}.`)
+            }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>Not configured</strong></span>
+            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
           </div>
         </div>
       </Panel>
@@ -3409,13 +3418,18 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">FEDERAL CONTRACTS</span>
-          <h3 class="unavail-title lab">Federal Contract Data Not Connected</h3>
+          <h3 class="unavail-title lab">
+            {{ govData?.available ? 'No Federal Contracts on Record' : 'Federal Contract Data Not Connected' }}
+          </h3>
           <p class="unavail-desc">
-            No prime agency awards or federal contract obligations recorded in the current fiscal
-            window.
+            {{
+              govData?.available
+                ? `No prime agency awards or federal contract obligations recorded for ${symbol} in the current fiscal window.`
+                : 'No prime agency awards or federal contract obligations recorded in the current fiscal window.'
+            }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>Not configured</strong></span>
+            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
           </div>
         </div>
       </Panel>
@@ -3448,12 +3462,18 @@ const finChartData = computed(() => {
         </div>
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">USPTO PATENTS</span>
-          <h3 class="unavail-title lab">USPTO Patent Data Not Connected</h3>
+          <h3 class="unavail-title lab">
+            {{ govData?.available ? 'No Patent Grants on Record' : 'USPTO Patent Data Not Connected' }}
+          </h3>
           <p class="unavail-desc">
-            No patent grants found assigned to the corporate entity in the USPTO open database.
+            {{
+              govData?.available
+                ? `No patent grants found assigned to the corporate entity for ${symbol} in the USPTO open database.`
+                : 'No patent grants found assigned to the corporate entity in the USPTO open database.'
+            }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>Not configured</strong></span>
+            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
           </div>
         </div>
       </Panel>
