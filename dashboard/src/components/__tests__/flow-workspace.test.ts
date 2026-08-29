@@ -20,6 +20,7 @@ describe('Standalone Flow workspace contract', () => {
     expect(flow).toContain('SWEEPS')
     expect(flow).toContain('BLOCKS')
     expect(flow).toContain('GOLDEN SWEEPS')
+    expect(flow).toContain('POWER ALERTS')
     expect(flow).toContain('WATCHLIST ALERTS')
     expect(flow).not.toContain('FlowStateView')
     expect(flow).not.toContain('OptionsConvictionBoard')
@@ -33,7 +34,7 @@ describe('Standalone Flow workspace contract', () => {
     expect(flow).toMatch(/FLOW_POLL_MS = 15_000/)
     expect(flow).toMatch(/intervalMs: FLOW_POLL_MS/)
     expect(flow).toMatch(/forceNext\.value = true/)
-    expect(flow).toMatch(/minPremium: BASE_FLOW_FLOOR/)
+    expect(flow).toMatch(/minPremium: (minPremium\.value|BASE_FLOW_FLOOR)/)
   })
 
   it('does not expose legacy routed-symbol or Deep-scan coverage', () => {
@@ -54,7 +55,12 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).toMatch(/putPremium \/ classifiedPremium/)
     expect(dashboard).toContain('Activity lean (bullish/bearish)')
     expect(dashboard).toContain('BULLISH ACTIVITY')
-    expect(dashboard).toContain('signed trade direction requires provider buy/sell')
+    // Whitespace-tolerant: prettier re-flows the template paragraph this
+    // disclosure lives in, so an exact toContain would break on reformat.
+    expect(dashboard).toMatch(/signed trade direction\s+requires provider buy\/sell/)
+    expect(dashboard).toContain('PowerAlertsBoard')
+    expect(dashboard).toContain('Pinned exclusions')
+    expect(dashboard).toContain('Saved layouts')
     expect(dashboard).not.toContain('Dark pool flow')
     expect(dashboard).not.toContain('NO ATS SOURCE')
   })
@@ -133,13 +139,19 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).toContain('New premium')
     expect(dashboard).toContain('Average expiry')
     expect(dashboard).toContain('RESET FILTERS')
-    expect(dashboard.indexOf('Where the major tape is concentrated')).toBeLessThan(dashboard.indexOf('Flow review filters'))
-    expect(dashboard.indexOf('Current threshold snapshot')).toBeLessThan(dashboard.indexOf('Where the major tape is concentrated'))
-    expect(dashboard.indexOf('Where the major tape is concentrated')).toBeLessThan(dashboard.indexOf('Book alerts'))
+    expect(dashboard.indexOf('Where the major tape is concentrated')).toBeLessThan(
+      dashboard.indexOf('Flow review filters'),
+    )
+    expect(dashboard.indexOf('Current threshold snapshot')).toBeLessThan(
+      dashboard.indexOf('Where the major tape is concentrated'),
+    )
+    expect(dashboard.indexOf('Where the major tape is concentrated')).toBeLessThan(
+      dashboard.indexOf('Book alerts'),
+    )
   })
 
   it('persists the prior provider window and collapses the default queue to its strongest rows', () => {
-    expect(dashboard).toContain("edge.flow.previous-window.v1")
+    expect(dashboard).toContain('edge.flow.previous-window.v1')
     expect(dashboard).toMatch(/sessionStorage\.setItem/)
     expect(dashboard).toMatch(/const DEFAULT_REVIEW_ROWS = 12/)
     expect(dashboard).toContain('LOWER-PRIORITY MATCHES COLLAPSED')
@@ -171,30 +183,15 @@ describe('Standalone Flow workspace contract', () => {
     expect(dashboard).toMatch(/@click="openSymbol\(row\.symbol\)"/)
   })
 
-  it('opens a symbol-specific live setup from Flow before chain navigation', () => {
-    const drawer = source('components/FlowSuggestionDrawer.vue')
-    expect(flow).toContain('FlowSuggestionDrawer')
+  it('focuses symbols across flow workspace analytics and routes directly to options chain', () => {
+    expect(flow).toContain(':focus-symbol="focusSymbol"')
     expect(flow).toContain('@open-symbol="openSymbol"')
-    expect(flow).toContain(':symbol="selectedSetup"')
-    expect(flow).toContain(':focus-symbol="selectedSetup"')
     expect(flow).toContain('queryTicker')
-    expect(flow).toContain("queryTicker('setup') || queryTicker('symbol')")
-    expect(flow).toContain("query: { ...route.query, setup: symbol, symbol }")
-    expect(flow).toContain('delete query.symbol')
+    expect(flow).toContain("queryTicker('symbol')")
+    expect(flow).toContain('query: { ...route.query, symbol }')
     expect(dashboard).toContain('focusSymbol')
     expect(dashboard).toContain('symbolQuery.value = next')
-    expect(drawer).toContain('api.flowSuggestions({ symbol: props.symbol')
-    expect(drawer).toContain('POLL_MS = 15_000')
-    expect(drawer).toContain('SetupRiskPanel')
-    expect(drawer).toContain('OPEN LIVE CHAIN →')
-    expect(drawer).toContain('CLOSED · PLANNING')
-    expect(drawer).toContain('Why live entry is not ready')
-    expect(drawer).toContain('Specific contract plan')
-    expect(drawer).toContain('Contract quote & risk map')
-    expect(drawer).toContain('Take-profit reference')
-    expect(drawer).toContain(':reference-debit="suggestion.contract_plan?.sizing_debit"')
-    expect(drawer).toContain('QUOTE REQUIRED')
-    expect(drawer).toContain('UNSIGNED {{ suggestion.bias_right.toUpperCase() }} BIAS · PAPER CANDIDATE · SIZING LOCKED')
+    expect(dashboard).toContain('VIEW {{ effectiveSelectedPrint.symbol }} OPTIONS CHAIN →')
   })
 
   it('puts major-index concentration and honest direction evidence ahead of the general queue', () => {

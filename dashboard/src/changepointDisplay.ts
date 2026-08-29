@@ -63,7 +63,13 @@ function num(v: number | null | undefined, dp = 0): string {
 export function insightFromRow(
   row: Pick<
     ChangepointRow,
-    'regime' | 'break_prob' | 'map_run_length' | 'days_since_break' | 'predictive_vol' | 'trailing_vol_20d' | 'vol_ratio'
+    | 'regime'
+    | 'break_prob'
+    | 'map_run_length'
+    | 'days_since_break'
+    | 'predictive_vol'
+    | 'trailing_vol_20d'
+    | 'vol_ratio'
   >,
   thresholds: Pick<ChangepointThresholds, 'break' | 'settling'> = {
     break: DEFAULT_BREAK_THRESHOLD,
@@ -106,7 +112,12 @@ export function insightFromRow(
           : `Break ${dsb} bars ago — regime has had time to stabilize.`,
     })
   } else {
-    lines.push({ label: 'Break age', value: '—', tone: 'dim', note: 'No break detected in this window.' })
+    lines.push({
+      label: 'Break age',
+      value: '—',
+      tone: 'dim',
+      note: 'No break detected in this window.',
+    })
   }
 
   if (predVol != null && trailVol != null && trailVol > 0) {
@@ -125,7 +136,12 @@ export function insightFromRow(
               : `Vol ratio ${num(vrNum, 2)} — model in line with recent realized vol. Regime appears stable.`,
     })
   } else {
-    lines.push({ label: 'Pred / Trail vol', value: '—', tone: 'dim', note: 'Insufficient data to compute vol ratio.' })
+    lines.push({
+      label: 'Pred / Trail vol',
+      value: '—',
+      tone: 'dim',
+      note: 'Insufficient data to compute vol ratio.',
+    })
   }
 
   const warnCut = breakCut * 0.5

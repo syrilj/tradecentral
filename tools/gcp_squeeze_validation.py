@@ -30,6 +30,13 @@ PACKAGE_INCLUDE = (
     "edge/research",
     "edge/tools/run_squeeze_validation.py",
     "edge/data/option_chains",
+    # Both price directories must ship. `1d` alone is stale (13 sessions behind
+    # `1d_wide` as of 2026-08-20) and `_load_price` now picks whichever candidate
+    # has the later last bar -- shipping only `1d` silently forces the remote run
+    # onto stale prices and was why forward-return columns came back empty.
+    # They are not interchangeable: `1d_wide` carries 558 symbols, but 19
+    # (SPY/QQQ/IWM/DIA/GLD/TLT, COIN, MSTR, TSM, ASML ...) exist only in `1d`.
+    "edge/data/1d_wide",
     "edge/data/1d",
 )
 SKIP_PARTS = {"__pycache__", ".pytest_cache", ".ipynb_checkpoints"}

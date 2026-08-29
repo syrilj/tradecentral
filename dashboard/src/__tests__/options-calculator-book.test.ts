@@ -30,18 +30,22 @@ describe('options book helpers', () => {
   it('maps query aliases and drops unusable legs before the API call', () => {
     expect(asStrategy('put')).toBe('long_put')
     expect(asStrategy('straddle')).toBe('long_straddle')
-    expect(usableLegs([
-      { id: 'leg-1', right: 'call', strike: 100, quantity: 1, premium: 2 },
-      { id: 'leg-2', right: 'put', strike: 0, quantity: 1, premium: 2 },
-      { id: 'leg-3', right: 'put', strike: 90, quantity: 0, premium: 2 },
-    ])).toEqual([{ right: 'call', strike: 100, quantity: 1, premium: 2 }])
+    expect(
+      usableLegs([
+        { id: 'leg-1', right: 'call', strike: 100, quantity: 1, premium: 2 },
+        { id: 'leg-2', right: 'put', strike: 0, quantity: 1, premium: 2 },
+        { id: 'leg-3', right: 'put', strike: 90, quantity: 0, premium: 2 },
+      ]),
+    ).toEqual([{ right: 'call', strike: 100, quantity: 1, premium: 2 }])
   })
 
   it('nets debit as premium × 100 × signed quantity', () => {
-    expect(netDebit([
-      { id: 'a', right: 'call', strike: 100, quantity: 1, premium: 5 },
-      { id: 'b', right: 'call', strike: 110, quantity: -1, premium: 2 },
-    ])).toBe(300)
+    expect(
+      netDebit([
+        { id: 'a', right: 'call', strike: 100, quantity: 1, premium: 5 },
+        { id: 'b', right: 'call', strike: 110, quantity: -1, premium: 2 },
+      ]),
+    ).toBe(300)
   })
 
   it('finds expiry breakevens where P/L crosses zero and samples the table', () => {
@@ -123,15 +127,15 @@ describe('options book helpers', () => {
   it('computes terminal price risk-neutral probabilities above, below, and target risk metrics', () => {
     // Spot = 100, Strike = 100 -> ATM is roughly 50%
     const pAtmAbove = probTerminalAbove(100, 100, 30, 30)
-    expect(pAtmAbove).toBeGreaterThan(0.40)
-    expect(pAtmAbove).toBeLessThan(0.60)
+    expect(pAtmAbove).toBeGreaterThan(0.4)
+    expect(pAtmAbove).toBeLessThan(0.6)
 
     const pAtmBelow = probTerminalBelow(100, 100, 30, 30)
     expect(pAtmAbove + pAtmBelow).toBeCloseTo(1.0, 5)
 
     // OTM Strike = 120 -> Prob above is significantly lower
     const pOtmAbove = probTerminalAbove(120, 100, 30, 30)
-    expect(pOtmAbove).toBeLessThan(0.20)
+    expect(pOtmAbove).toBeLessThan(0.2)
 
     // Target metrics
     const target = computeTargetRiskMetrics({
@@ -158,8 +162,8 @@ describe('options book helpers', () => {
       dteDays: 30,
       volPct: 30,
     })
-    expect(longCallPoP.pop).toBeGreaterThan(0.20)
-    expect(longCallPoP.pop).toBeLessThan(0.50)
+    expect(longCallPoP.pop).toBeGreaterThan(0.2)
+    expect(longCallPoP.pop).toBeLessThan(0.5)
     expect(longCallPoP.breakevens.length).toBeGreaterThanOrEqual(1)
     expect(longCallPoP.profitZoneDesc).toContain('Profitable above')
 
@@ -188,7 +192,7 @@ describe('options book helpers', () => {
       dteDays: 30,
       volPct: 30,
     })
-    expect(condorPoP.pop).toBeGreaterThan(0.40)
+    expect(condorPoP.pop).toBeGreaterThan(0.4)
     expect(condorPoP.profitZoneDesc).toContain('Profitable')
   })
 })

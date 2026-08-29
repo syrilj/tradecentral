@@ -19,7 +19,13 @@ describe('insider display', () => {
 
   it('normalizes Fintel insider rows and SEC filings', () => {
     const insiders = presentFintelInsiders([
-      { insider_name: 'Jane Doe', transaction_type: 'Buy', shares: 1200, price: 41.2, date: '2026-08-01' },
+      {
+        insider_name: 'Jane Doe',
+        transaction_type: 'Buy',
+        shares: 1200,
+        price: 41.2,
+        date: '2026-08-01',
+      },
       { name: 'John Roe', type: 'Sell', share_count: 400 },
     ])
     expect(insiders).toHaveLength(2)
@@ -30,7 +36,12 @@ describe('insider display', () => {
 
     const filings = presentSecFilings({
       filings: [
-        { form: '4', filed: '2026-08-02', description: 'Statement of changes', url: 'https://sec.gov/x' },
+        {
+          form: '4',
+          filed: '2026-08-02',
+          description: 'Statement of changes',
+          url: 'https://sec.gov/x',
+        },
         { form: '8-K', filed: '2026-08-03', description: 'Item 2.02' },
       ],
     })

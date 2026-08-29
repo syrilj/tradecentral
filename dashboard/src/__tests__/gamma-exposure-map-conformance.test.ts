@@ -55,10 +55,9 @@ describe('GammaExposureMap — VAL-DS-005 level badges do not clip long strike l
     // and a 56px minGap, so any label wider than 64px clipped and adjacent
     // badges overlapped. The badge width must be derived from the label text,
     // not a fixed constant.
-    expect(
-      src,
-      'GammaExposureMap.vue must not hardcode the level badge width to 64px',
-    ).not.toMatch(/width="64"/)
+    expect(src, 'GammaExposureMap.vue must not hardcode the level badge width to 64px').not.toMatch(
+      /width="64"/,
+    )
     expect(
       src,
       'GammaExposureMap.vue must not offset the badge by a fixed -32 from labelX',
@@ -90,8 +89,7 @@ describe('GammaExposureMap — VAL-DS-005 level badges do not clip long strike l
     // length.
     expect(
       src,
-      'GammaExposureMap.vue must not use a fixed 56px minGap that ignores ' +
-        'label width',
+      'GammaExposureMap.vue must not use a fixed 56px minGap that ignores ' + 'label width',
     ).not.toMatch(/minGap\s*=\s*56\b/)
   })
 })
@@ -122,7 +120,9 @@ describe('GammaExposureMap — desk color-conformance (guard re-assertion)', () 
     // semantic palette literals (call/put/etc.) are forbidden. The two prior
     // regime-zone rgba literals (#10b981 call / #f43f5e put) must be gone.
     const paletteLiterals = [
-      ...styleBlock.matchAll(/rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*[\d.]+\s*)?\)/g),
+      ...styleBlock.matchAll(
+        /rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*[\d.]+\s*)?\)/g,
+      ),
     ]
       .map((m) => m[0])
       .filter((lit) => {

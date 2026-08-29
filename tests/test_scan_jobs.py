@@ -349,3 +349,96 @@ def test_flow_aggregate_carries_latest_tape_underlying_price(monkeypatch):
     ]
     # Contract identity is independent from the print carrying underlying spot.
     assert payload["rows"][0]["flow_focus"]["put"]["strike"] == 265
+
+
+class TestContractStabilityGapPersistence:
+    """Verify stability observation counts persist across 5-minute (300-second) UI polling intervals."""
+
+    def _sample_payload(self, symbol="AAPL", right="call", occ_symbol="AAPL260918C00150000"):
+        return {
+            "rows": [{
+                "symbol": symbol,
+                "suggestion": {
+                    "right": right,
+                    "evidence_kind": "directional_context",
+                    "contract_plan": {
+                        "kind": "chain_selected_contract",
+                        "right": right,
+                        "occ_symbol": occ_symbol,
+                        "action": "BUY_TO_OPEN",
+                        "contract_stage": "entry_candidate",
+                        "sizing_eligible": True,
+                        "sizing_debit": 3.20,
+                        "reference_max_loss": 320,
+                        "take_profit_debit": 4.80,
+                        "review_exit_debit": 1.60,
+                        "rejection_reasons": [],
+                    },
+                },
+            }],
+        }
+
+    def test_observations_increment_across_consecutive_5_minute_gaps(self, monkeypatch, tmp_path):
+        """Polling at t=0s, t=300s (5m), and t=600s (10m) reaches stability (count=3) without resetting."""
+        state_path = tmp_path / "stability.json"
+        monkeypatch.setattr(api_server, "_STABILITY_STATE_PATH", state_path)
+        monkeypatch.setattr(api_server, "_STABILITY_STATE_LOADED", True)
+        api_server._CONTRACT_STABILITY_STATE.clear()
+        api_server._DIRECTION_STABILITY_STATE.clear()
+
+        base_time = 1_700_000_000.0
+
+        # T = 0s: Observation 1
+        monkeypatch.setattr(time, "time", lambda: base_time)
+        res1 = api_server._stabilize_contract_plans(copy.deepcopy(self._sample_payload()))
+        plan1 = res1["rows"][0]["suggestion"]["contract_plan"]
+        assert plan1["stability_observations"] == 1
+        assert plan1["stable"] is False
+        assert plan1["action"] == "WAIT_FOR_STABILITY"
+        assert plan1["sizing_debit"] is None
+
+        # T = 300s (5 minutes later): Observation 2
+        monkeypatch.setattr(time, "time", lambda: base_time + 300.0)
+        res2 = api_server._stabilize_contract_plans(copy.deepcopy(self._sample_payload()))
+        plan2 = res2["rows"][0]["suggestion"]["contract_plan"]
+        assert plan2["stability_observations"] == 2
+        assert plan2["stable"] is False
+        assert plan2["action"] == "WAIT_FOR_STABILITY"
+
+        # T = 600s (10 minutes later): Observation 3 -> Reaches Stability
+        monkeypatch.setattr(time, "time", lambda: base_time + 600.0)
+        res3 = api_server._stabilize_contract_plans(copy.deepcopy(self._sample_payload()))
+        plan3 = res3["rows"][0]["suggestion"]["contract_plan"]
+        assert plan3["stability_observations"] == 3
+        assert plan3["stable"] is True
+        assert plan3["action"] == "BUY_TO_OPEN"
+        assert plan3["sizing_debit"] == 3.20
+
+        # T = 900s (15 minutes later): Observation 4 -> Stays Stable at count 3
+        monkeypatch.setattr(time, "time", lambda: base_time + 900.0)
+        res4 = api_server._stabilize_contract_plans(copy.deepcopy(self._sample_payload()))
+        plan4 = res4["rows"][0]["suggestion"]["contract_plan"]
+        assert plan4["stability_observations"] == 3
+        assert plan4["stable"] is True
+        assert plan4["action"] == "BUY_TO_OPEN"
+
+    def test_stability_resets_only_when_gap_exceeds_max_gap_threshold(self, monkeypatch, tmp_path):
+        """When the gap between polls exceeds _CONTRACT_STABILITY_MAX_GAP_S (2700s), count resets to 1."""
+        state_path = tmp_path / "stability.json"
+        monkeypatch.setattr(api_server, "_STABILITY_STATE_PATH", state_path)
+        monkeypatch.setattr(api_server, "_STABILITY_STATE_LOADED", True)
+        api_server._CONTRACT_STABILITY_STATE.clear()
+        api_server._DIRECTION_STABILITY_STATE.clear()
+
+        base_time = 1_700_000_000.0
+
+        # Observation 1 at T=0
+        monkeypatch.setattr(time, "time", lambda: base_time)
+        api_server._stabilize_contract_plans(copy.deepcopy(self._sample_payload()))
+
+        # Observation 2 at T=2800s (> 2700s max gap threshold)
+        monkeypatch.setattr(time, "time", lambda: base_time + 2800.0)
+        res = api_server._stabilize_contract_plans(copy.deepcopy(self._sample_payload()))
+        plan = res["rows"][0]["suggestion"]["contract_plan"]
+        assert plan["stability_observations"] == 1  # cleanly reset to 1
+        assert plan["stable"] is False

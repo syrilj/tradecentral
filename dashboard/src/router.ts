@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { isLocalAuthMode } from './auth'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -47,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/SentimentView.vue'),
     meta: { title: 'Pulse', index: '04' },
   },
+  {
+    path: '/macro',
+    name: 'macro',
+    component: () => import('@/views/MacroView.vue'),
+    meta: { title: 'Macro', index: '04' },
+  },
   /* Legacy path — structure + outliers now live on /sentiment */
   {
     path: '/anomalies',
@@ -69,10 +76,34 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Drift', index: '05' },
   },
   {
+    path: '/regime',
+    name: 'regime',
+    component: () => import('@/views/RegimeView.vue'),
+    meta: { title: 'Regime', index: '05' },
+  },
+  {
+    path: '/microstructure-regime',
+    name: 'microstructure-regime',
+    component: () => import('@/views/MicrostructureRegimeView.vue'),
+    meta: { title: 'Microstructure Regime', index: '05' },
+  },
+  {
     path: '/flow',
     name: 'flow',
     component: () => import('@/views/FlowView.vue'),
     meta: { title: 'Market Flow', index: '06' },
+  },
+  {
+    path: '/absorption',
+    name: 'absorption',
+    component: () => import('@/views/AbsorptionView.vue'),
+    meta: { title: 'Absorption', index: '07' },
+  },
+  {
+    path: '/livestack',
+    name: 'livestack',
+    component: () => import('@/views/LiveStackView.vue'),
+    meta: { title: 'Live Stack', index: '07' },
   },
   {
     path: '/chain',
@@ -113,9 +144,7 @@ const routes: RouteRecordRaw[] = [
         ...to.query,
         tab: 'financials',
         highlight: 'model-forecast',
-        symbol: typeof to.query.symbol === 'string' && to.query.symbol
-          ? to.query.symbol
-          : 'ASTS',
+        symbol: typeof to.query.symbol === 'string' && to.query.symbol ? to.query.symbol : 'ASTS',
       },
     }),
     meta: { title: 'Quantitative Research' },
@@ -152,6 +181,12 @@ const routes: RouteRecordRaw[] = [
     name: 'changepoints',
     component: () => import('@/views/ChangepointsView.vue'),
     meta: { title: 'Breaks', index: '13' },
+  },
+  {
+    path: '/kalman',
+    name: 'kalman',
+    component: () => import('@/views/KalmanView.vue'),
+    meta: { title: 'Kalman', index: '14' },
   },
   {
     path: '/momentum',
@@ -194,7 +229,26 @@ export function safeRedirect(value: unknown, fallback = '/flow'): string {
   return value
 }
 
+/*
+ * EDGE_AUTH_MODE=local never installs the Clerk plugin (see main.ts), so
+ * AuthView's useClerk()/<SignIn> would throw and render a blank screen. There
+ * is no sign-in step in local mode — the operator is already the session — so
+ * send /auth straight to the requested desk surface instead.
+ */
+router.beforeEach((to) => {
+  if (to.name === 'auth' && isLocalAuthMode()) {
+    return safeRedirect(to.query.redirect, '/flow')
+  }
+  return true
+})
+
 router.afterEach((to) => {
   const t = to.meta.title as string | undefined
-  document.title = t ? `TradeCentral · ${t}` : 'TradeCentral · Research instrument'
+  const symRaw = to.query.symbol || to.query.setup
+  const sym = typeof symRaw === 'string' && symRaw ? symRaw.trim().toUpperCase() : ''
+  if (t) {
+    document.title = sym ? `TradeCentral · ${t} (${sym})` : `TradeCentral · ${t}`
+  } else {
+    document.title = 'TradeCentral · Research instrument'
+  }
 })

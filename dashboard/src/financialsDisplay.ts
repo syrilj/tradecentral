@@ -55,7 +55,13 @@ export function calculateGrowth(
   curr: number | null | undefined,
   prev: number | null | undefined,
 ): number | null {
-  if (curr == null || prev == null || prev === 0 || !Number.isFinite(curr) || !Number.isFinite(prev)) {
+  if (
+    curr == null ||
+    prev == null ||
+    prev === 0 ||
+    !Number.isFinite(curr) ||
+    !Number.isFinite(prev)
+  ) {
     return null
   }
   return ((curr - prev) / Math.abs(prev)) * 100
@@ -92,6 +98,15 @@ export function formatSourceLabel(source: string | null | undefined): string {
   if (s.includes('SYNTHETIC')) return 'SYNTHETIC BARS'
   if (s.includes('YFINANCE')) return 'EXCHANGE BARS'
   if (s.includes('POLYGON') || s.includes('ALPACA')) return 'REAL-TIME FEED'
+  if (
+    s.includes('REGULATORY_DISCLOSURES') ||
+    s.includes('STOCK_ACT') ||
+    s.includes('USASPENDING') ||
+    s.includes('USPTO') ||
+    s.includes('LDA')
+  ) {
+    return 'REGULATORY DISCLOSURES (STOCK ACT / LDA / USASPENDING / USPTO)'
+  }
   return s.replace(/_/g, ' ')
 }
 
@@ -101,7 +116,11 @@ export function getDerivedRatio(
   incRows: Array<{ key?: string; label?: string; values?: (number | null)[] }> | undefined,
   key: string,
 ): number | null {
-  if (ratios && (ratios as Record<string, unknown>)[key] != null && Number.isFinite((ratios as Record<string, number>)[key])) {
+  if (
+    ratios &&
+    (ratios as Record<string, unknown>)[key] != null &&
+    Number.isFinite((ratios as Record<string, number>)[key])
+  ) {
     return (ratios as Record<string, number>)[key]
   }
   if (!incRows || !incRows.length) return null
@@ -169,6 +188,14 @@ export interface ModelForecastPayload {
   spot_used?: number | null
   spot_source?: string | null
   lookthrough_growth?: number | null
+  sustainable_growth?: number | null
+  expected_return?: number | null
+  annualized_return?: number | null
+  cost_of_equity?: number | null
+  excess_annualized_return?: number | null
+  scenario_sigma?: number | null
+  observed_feature_count?: number | null
+  feature_count_total?: number | null
 }
 
 export interface ModelForecastCaseView {
@@ -184,6 +211,16 @@ export interface ModelForecastView {
   spotUsed: number | null
   spotSource: string | null
   lookthroughGrowth: number | null
+  sustainableGrowth: number | null
+  /** Total simple return implied by the mark over the horizon. */
+  expectedReturn: number | null
+  annualizedReturn: number | null
+  /** Hurdle the annualised return must clear before the name is interesting. */
+  costOfEquity: number | null
+  excessAnnualizedReturn: number | null
+  scenarioSigma: number | null
+  observedFeatureCount: number | null
+  featureCountTotal: number | null
   timeframe: string | null
   timeframeMonths: number | null
   factors: Array<{ label: string; display: string; tone: string }>
@@ -203,7 +240,10 @@ function finiteOrNull(val: number | null | undefined): number | null {
 
 const EMPTY_CASE: ModelForecastCaseView = { price: null, label: '', thesis: null }
 
-function presentCase(raw: ModelForecastCase | null | undefined, fallback: string): ModelForecastCaseView {
+function presentCase(
+  raw: ModelForecastCase | null | undefined,
+  fallback: string,
+): ModelForecastCaseView {
   if (!raw) return { ...EMPTY_CASE, label: fallback }
   const thesis = raw.thesis && raw.thesis.trim() && raw.thesis !== '0' ? raw.thesis : null
   return {
@@ -221,6 +261,14 @@ function emptyForecastView(status: ModelForecastStatus): ModelForecastView {
     spotUsed: null,
     spotSource: null,
     lookthroughGrowth: null,
+    sustainableGrowth: null,
+    expectedReturn: null,
+    annualizedReturn: null,
+    costOfEquity: null,
+    excessAnnualizedReturn: null,
+    scenarioSigma: null,
+    observedFeatureCount: null,
+    featureCountTotal: null,
     timeframe: null,
     timeframeMonths: null,
     factors: [],
@@ -263,6 +311,14 @@ export function presentModelForecast(
     spotUsed: finiteOrNull(raw.spot_used),
     spotSource: raw.spot_source || null,
     lookthroughGrowth: finiteOrNull(raw.lookthrough_growth),
+    sustainableGrowth: finiteOrNull(raw.sustainable_growth),
+    expectedReturn: finiteOrNull(raw.expected_return),
+    annualizedReturn: finiteOrNull(raw.annualized_return),
+    costOfEquity: finiteOrNull(raw.cost_of_equity),
+    excessAnnualizedReturn: finiteOrNull(raw.excess_annualized_return),
+    scenarioSigma: finiteOrNull(raw.scenario_sigma),
+    observedFeatureCount: finiteOrNull(raw.observed_feature_count),
+    featureCountTotal: finiteOrNull(raw.feature_count_total),
     timeframe,
     timeframeMonths: finiteOrNull(raw.timeframe_months),
     factors,
@@ -375,12 +431,13 @@ export function presentCaseRange(opts: {
 }): CaseRangeView | null {
   const scale = presentPriceScale([opts.spot, opts.bear, opts.base, opts.bull])
   if (!scale) return null
-  const raw: Array<{ key: CaseRangeMark['key']; label: string; price: number | null | undefined }> = [
-    { key: 'bear', label: 'Bear', price: opts.bear },
-    { key: 'spot', label: 'Mark', price: opts.spot },
-    { key: 'base', label: 'Base', price: opts.base },
-    { key: 'bull', label: 'Bull', price: opts.bull },
-  ]
+  const raw: Array<{ key: CaseRangeMark['key']; label: string; price: number | null | undefined }> =
+    [
+      { key: 'bear', label: 'Bear', price: opts.bear },
+      { key: 'spot', label: 'Mark', price: opts.spot },
+      { key: 'base', label: 'Base', price: opts.base },
+      { key: 'bull', label: 'Bull', price: opts.bull },
+    ]
   const marks: CaseRangeMark[] = []
   for (const row of raw) {
     const pct = scaleLeftPct(row.price, scale)
@@ -404,4 +461,3 @@ export function presentCaseRange(opts: {
     spanWidth: `${Math.max(2, right - left).toFixed(1)}%`,
   }
 }
-

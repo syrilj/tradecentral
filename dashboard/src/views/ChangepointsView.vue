@@ -108,7 +108,11 @@ const skippedInfo = computed(() => {
    field with a debounced dropdown over the same /api/search index, rather
    than inventing a new picker. */
 function cleanTicker(term: string): string {
-  return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  return term
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
 }
 
 const initialSymbol = typeof route.query.symbol === 'string' ? cleanTicker(route.query.symbol) : ''
@@ -199,10 +203,14 @@ function selectSymbol(): void {
 /* Only trust the payload when it matches the symbol currently selected —
    prevents painting the previous ticker's figure while a new load is
    in flight (same guard OptionsView uses). */
-const payloadMatches = computed(() => Boolean(detail.data.value && detail.data.value.symbol === symbol.value))
+const payloadMatches = computed(() =>
+  Boolean(detail.data.value && detail.data.value.symbol === symbol.value),
+)
 const d = computed(() => (payloadMatches.value ? detail.data.value : null))
 const detailAvailable = computed(() => d.value?.available === true)
-const detailLoading = computed(() => detail.loading.value || (Boolean(symbol.value) && !payloadMatches.value))
+const detailLoading = computed(
+  () => detail.loading.value || (Boolean(symbol.value) && !payloadMatches.value),
+)
 
 /* ---- shared x-axis (real calendar time, not bar index) -----------------
    The heatmap's columns are a downsampled stride of the same date range the
@@ -244,7 +252,9 @@ const xTicks = computed(() => {
   const count = 6
   const idxs = new Set<number>()
   for (let k = 0; k < count; k++) idxs.add(Math.round((k * (series.length - 1)) / (count - 1)))
-  return [...idxs].sort((a, b) => a - b).map((i) => ({ x: xOf(series[i].d), label: shortDate(series[i].d) }))
+  return [...idxs]
+    .sort((a, b) => a - b)
+    .map((i) => ({ x: xOf(series[i].d), label: shortDate(series[i].d) }))
 })
 
 /* ---- top panel: returns + predictive volatility envelope -----------------
@@ -282,7 +292,11 @@ const topChart = computed(() => {
 function hexToRgb(hex: string): [number, number, number] {
   const clean = hex.trim().replace('#', '')
   if (clean.length === 6) {
-    return [parseInt(clean.slice(0, 2), 16), parseInt(clean.slice(2, 4), 16), parseInt(clean.slice(4, 6), 16)]
+    return [
+      parseInt(clean.slice(0, 2), 16),
+      parseInt(clean.slice(2, 4), 16),
+      parseInt(clean.slice(4, 6), 16),
+    ]
   }
   if (clean.length === 3) {
     return [
@@ -319,7 +333,11 @@ onMounted(() => {
  * typically 0 — lands at the BOTTOM of the image, matching Fig. 3: after a
  * changepoint the ridge collapses to the bottom edge, not the top.
  */
-function buildHeatmapDataUrl(rl: ChangepointRunlength, phosphorRgb: [number, number, number], voidRgb: [number, number, number]): string {
+function buildHeatmapDataUrl(
+  rl: ChangepointRunlength,
+  phosphorRgb: [number, number, number],
+  voidRgb: [number, number, number],
+): string {
   if (typeof document === 'undefined' || !rl.n_rows || !rl.n_cols) return ''
   const canvas = document.createElement('canvas')
   canvas.width = rl.n_cols
@@ -353,7 +371,7 @@ function buildHeatmapDataUrl(rl: ChangepointRunlength, phosphorRgb: [number, num
         img.data[idx + 1] = Math.round(vg + (80 - vg) * u)
         img.data[idx + 2] = Math.round(vb + (80 - vb) * u)
       } else if (g < 0.75) {
-        const u = (g - 0.35) / 0.40
+        const u = (g - 0.35) / 0.4
         img.data[idx] = Math.round(24 + (pr - 24) * u)
         img.data[idx + 1] = Math.round(80 + (pg - 80) * u)
         img.data[idx + 2] = Math.round(pb + (80 - pb) * u)
@@ -390,7 +408,10 @@ const heatmap = computed(() => {
     .sort((a, b) => a - b)
     .map((i) => {
       const canvasRow = nRows - 1 - i
-      return { y: plotTop + ((canvasRow + 0.5) / nRows) * plotH, label: num(rl.run_values[i] ?? i, 0) }
+      return {
+        y: plotTop + ((canvasRow + 0.5) / nRows) * plotH,
+        label: num(rl.run_values[i] ?? i, 0),
+      }
     })
   return {
     url,
@@ -413,7 +434,8 @@ function nearestIndexByTime(series: ChangepointSeriesPoint[], ts: number): numbe
     if (parseUTC(series[mid].d) < ts) lo = mid + 1
     else hi = mid
   }
-  if (lo > 0 && Math.abs(parseUTC(series[lo - 1].d) - ts) < Math.abs(parseUTC(series[lo].d) - ts)) return lo - 1
+  if (lo > 0 && Math.abs(parseUTC(series[lo - 1].d) - ts) < Math.abs(parseUTC(series[lo].d) - ts))
+    return lo - 1
   return lo
 }
 
@@ -475,14 +497,22 @@ function setSort(key: SortKey): void {
 
 function sortValue(row: ChangepointRow, key: SortKey): number | string {
   switch (key) {
-    case 'symbol': return row.symbol
-    case 'break_prob': return row.break_prob
-    case 'map_run_length': return row.map_run_length
-    case 'days_since_break': return row.days_since_break ?? -Infinity
-    case 'predictive_vol': return row.predictive_vol
-    case 'trailing_vol_20d': return row.trailing_vol_20d
-    case 'vol_ratio': return row.vol_ratio ?? -Infinity
-    default: return 0
+    case 'symbol':
+      return row.symbol
+    case 'break_prob':
+      return row.break_prob
+    case 'map_run_length':
+      return row.map_run_length
+    case 'days_since_break':
+      return row.days_since_break ?? -Infinity
+    case 'predictive_vol':
+      return row.predictive_vol
+    case 'trailing_vol_20d':
+      return row.trailing_vol_20d
+    case 'vol_ratio':
+      return row.vol_ratio ?? -Infinity
+    default:
+      return 0
   }
 }
 
@@ -500,7 +530,8 @@ const tableRows = computed(() => {
   list.sort((a, b) => {
     const av = sortValue(a, key)
     const bv = sortValue(b, key)
-    if (typeof av === 'string' || typeof bv === 'string') return dir * String(av).localeCompare(String(bv))
+    if (typeof av === 'string' || typeof bv === 'string')
+      return dir * String(av).localeCompare(String(bv))
     return dir * (av - bv)
   })
   return list
@@ -528,7 +559,8 @@ const selectedRow = computed<ChangepointRow | null>(() => {
 const symbolInsight = computed(() => {
   const row = selectedRow.value
   if (!row) return null
-  const thresholds = d.value?.thresholds ?? boardData.value?.thresholds ?? { break: 0.5, settling: 10 }
+  const thresholds = d.value?.thresholds ??
+    boardData.value?.thresholds ?? { break: 0.5, settling: 10 }
   return insightFromRow(row, thresholds)
 })
 </script>
@@ -538,9 +570,11 @@ const symbolInsight = computed(() => {
     <Panel
       label="Bayesian regime breaks"
       index="13"
-      :meta="boardData?.asof
-        ? `asof ${boardData.asof} · ${age(boardData.generated_at)} ago${boardStale ? ' · STALE ARTIFACT' : ''}`
-        : 'diagnostics only'"
+      :meta="
+        boardData?.asof
+          ? `asof ${boardData.asof} · ${age(boardData.generated_at)} ago${boardStale ? ' · STALE ARTIFACT' : ''}`
+          : 'diagnostics only'
+      "
       class="w-full"
     >
       <template #action>
@@ -568,8 +602,8 @@ const symbolInsight = computed(() => {
             <code>break_prob</code> = P(r<sub>t</sub> ≤ 5 | x<sub>1:t</sub>) summarises that: the
             probability a break happened within the last 5 bars. A high break_prob means the
             variance just changed — it is not a forecast of direction and it does not authorise a
-            trade. Only the repo's own gate modules
-            (see <RouterLink :to="{ name: 'gates' }">Gates</RouterLink>) do that.
+            trade. Only the repo's own gate modules (see
+            <RouterLink :to="{ name: 'gates' }">Gates</RouterLink>) do that.
             <HelpTip
               label="Run-length posterior"
               text="r_t = bars since the last changepoint. P(r_t | x_1:t) is inferred online via Adams & MacKay's exact recursion (eq. 3): grow-or-reset at every bar, weighted by a constant hazard H = 1/lambda_gap. r_t collapsing toward 0 across bars is the model discarding the old variance estimate — a break. break_prob = P(r_t <= 5 | x_1:t) reads that off directly, and break_prob_20 does the same at a 20-bar lookback. This view is diagnostic; it never authorises capital."
@@ -577,12 +611,26 @@ const symbolInsight = computed(() => {
           </span>
         </div>
         <div class="counts">
-          <Readout label="In BREAK" :value="String(breakCount)" :sub="`break_prob ≥ ${breakThresholdLabel}`" :tone="breakCount > 0 ? 'neg' : 'pos'" />
-          <Readout label="Settling" :value="String(settlingCount)" :sub="`map run ≤ ${settlingThresholdLabel}`" tone="flat" />
-          <Readout label="Universe" :value="num(boardData?.n_symbols, 0)" :sub="`${num(boardData?.lookback_days, 0)}d lookback`" />
+          <Readout
+            label="In BREAK"
+            :value="String(breakCount)"
+            :sub="`break_prob ≥ ${breakThresholdLabel}`"
+            :tone="breakCount > 0 ? 'neg' : 'pos'"
+          />
+          <Readout
+            label="Settling"
+            :value="String(settlingCount)"
+            :sub="`map run ≤ ${settlingThresholdLabel}`"
+            tone="flat"
+          />
+          <Readout
+            label="Universe"
+            :value="num(boardData?.n_symbols, 0)"
+            :sub="`${num(boardData?.lookback_days, 0)}d lookback`"
+          />
         </div>
         <p class="model-line fig">{{ modelLine }}</p>
-        <p class="dims" v-if="boardData?.source">{{ boardData.source }}</p>
+        <p v-if="boardData?.source" class="dims">{{ boardData.source }}</p>
         <p v-if="boardStale" class="note stale-board">
           Cross-section artifact is {{ boardAgeDays }}d old (asof {{ boardData?.asof }}).
           Selected-symbol detail below is live BOCPD on current bars — not this board.
@@ -593,7 +641,10 @@ const symbolInsight = computed(() => {
       </template>
 
       <div v-else class="empty">
-        <p class="note">No changepoint artifact yet{{ boardData?.reason ? ` — ${boardData.reason}` : '' }}. Build one:</p>
+        <p class="note">
+          No changepoint artifact yet{{ boardData?.reason ? ` — ${boardData.reason}` : '' }}. Build
+          one:
+        </p>
         <ul class="cmds">
           <li>
             <code>edge/.venv-qlib/bin/python edge/tools/build_changepoints.py</code>
@@ -660,15 +711,33 @@ const symbolInsight = computed(() => {
             class="seg label"
             :class="{ on: win === w }"
             @click="win = w"
-          >{{ w.toUpperCase() }}</button>
+          >
+            {{ w.toUpperCase() }}
+          </button>
         </div>
         <div v-if="cursorPoint" class="cursor-readout">
-          <span class="label cr-tag" :class="{ live: cursorIsLive }">{{ cursorIsLive ? 'LATEST' : 'CURSOR' }}</span>
-          <span class="cr-item"><span class="label">Date</span><span class="fig">{{ cursorPoint.d }}</span></span>
-          <span class="cr-item"><span class="label">Ret</span><span class="fig">{{ signedFrac(cursorPoint.ret) }}</span></span>
-          <span class="cr-item"><span class="label">break 5d</span><span class="fig">{{ pctFrac(cursorPoint.break_prob, 1) }}</span></span>
-          <span class="cr-item"><span class="label">MAP run</span><span class="fig">{{ num(cursorPoint.map_run, 0) }}</span></span>
-          <span class="cr-item"><span class="label">Pred vol</span><span class="fig">{{ pctFrac(cursorPoint.pred_vol, 2) }}</span></span>
+          <span class="label cr-tag" :class="{ live: cursorIsLive }">{{
+            cursorIsLive ? 'LATEST' : 'CURSOR'
+          }}</span>
+          <span class="cr-item"
+            ><span class="label">Date</span><span class="fig">{{ cursorPoint.d }}</span></span
+          >
+          <span class="cr-item"
+            ><span class="label">Ret</span
+            ><span class="fig">{{ signedFrac(cursorPoint.ret) }}</span></span
+          >
+          <span class="cr-item"
+            ><span class="label">break 5d</span
+            ><span class="fig">{{ pctFrac(cursorPoint.break_prob, 1) }}</span></span
+          >
+          <span class="cr-item"
+            ><span class="label">MAP run</span
+            ><span class="fig">{{ num(cursorPoint.map_run, 0) }}</span></span
+          >
+          <span class="cr-item"
+            ><span class="label">Pred vol</span
+            ><span class="fig">{{ pctFrac(cursorPoint.pred_vol, 2) }}</span></span
+          >
         </div>
       </div>
 
@@ -676,10 +745,20 @@ const symbolInsight = computed(() => {
       <div v-if="selectedRow && symbolInsight" class="sym-insight">
         <div class="si-header">
           <span class="si-sym fig">{{ selectedRow.symbol }}</span>
-          <span class="regime-chip label" :class="regimeClass(selectedRow.regime)">{{ selectedRow.regime }}</span>
+          <span class="regime-chip label" :class="regimeClass(selectedRow.regime)">{{
+            selectedRow.regime
+          }}</span>
           <span class="si-nav">
-            <RouterLink :to="{ name: 'options', query: { symbol: selectedRow.symbol } }" class="si-link label">→ Options</RouterLink>
-            <RouterLink :to="{ name: 'market', query: { symbol: selectedRow.symbol } }" class="si-link label">→ Market</RouterLink>
+            <RouterLink
+              :to="{ name: 'options', query: { symbol: selectedRow.symbol } }"
+              class="si-link label"
+              >→ Options</RouterLink
+            >
+            <RouterLink
+              :to="{ name: 'market', query: { symbol: selectedRow.symbol } }"
+              class="si-link label"
+              >→ Market</RouterLink
+            >
           </span>
         </div>
         <div class="si-rows">
@@ -698,120 +777,169 @@ const symbolInsight = computed(() => {
       </div>
       <div v-else-if="!detailAvailable" class="empty pad">
         <p class="note">
-          No posterior for <b class="fig">{{ symbol }}</b>{{ d?.reason ? ` — ${d.reason}` : '' }}.
-          Minimum 60 bars are required to compute a run-length posterior.
+          No posterior for <b class="fig">{{ symbol }}</b
+          >{{ d?.reason ? ` — ${d.reason}` : '' }}. Minimum 60 bars are required to compute a
+          run-length posterior.
         </p>
       </div>
 
       <template v-else>
-        <div ref="figureHost" class="figure-stack" @mousemove="onFigureMove" @mouseleave="onFigureLeave">
+        <div
+          ref="figureHost"
+          class="figure-stack"
+          @mousemove="onFigureMove"
+          @mouseleave="onFigureLeave"
+        >
           <div class="fig-axis-row">
             <span class="fig-ylab label">{{ CHANGEPOINT_FIGURE_LABELS.yTop }}</span>
             <svg
-            :viewBox="`0 0 ${W} ${TOP_H}`"
-            class="chart top-chart"
-            preserveAspectRatio="none"
-            role="img"
-            :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yTop} with predictive volatility envelope`"
-          >
-            <template v-if="topChart">
-              <g class="axis">
+              :viewBox="`0 0 ${W} ${TOP_H}`"
+              class="chart top-chart"
+              preserveAspectRatio="none"
+              role="img"
+              :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yTop} with predictive volatility envelope`"
+            >
+              <template v-if="topChart">
+                <g class="axis">
+                  <line
+                    v-for="t in topChart.yTicks"
+                    :key="`ty-${t}`"
+                    :x1="PAD_L"
+                    :x2="W - PAD_R"
+                    :y1="topChart.yRet(t)"
+                    :y2="topChart.yRet(t)"
+                    class="gridline"
+                  />
+                  <text
+                    v-for="t in topChart.yTicks"
+                    :key="`tyl-${t}`"
+                    :x="PAD_L - 8"
+                    :y="topChart.yRet(t) + 3"
+                    text-anchor="end"
+                    class="tick-label"
+                  >
+                    {{ pctFrac(t, 1) }}
+                  </text>
+                </g>
+
+                <path :d="topChart.band2" class="vol-band-outer" />
+                <path :d="topChart.band" class="vol-band" />
                 <line
-                  v-for="t in topChart.yTicks"
-                  :key="`ty-${t}`"
-                  :x1="PAD_L" :x2="W - PAD_R"
-                  :y1="topChart.yRet(t)" :y2="topChart.yRet(t)"
-                  class="gridline"
+                  :x1="PAD_L"
+                  :x2="W - PAD_R"
+                  :y1="topChart.zeroY"
+                  :y2="topChart.zeroY"
+                  class="zero"
                 />
-                <text
-                  v-for="t in topChart.yTicks"
-                  :key="`tyl-${t}`"
-                  :x="PAD_L - 8" :y="topChart.yRet(t) + 3"
-                  text-anchor="end" class="tick-label"
-                >{{ pctFrac(t, 1) }}</text>
-              </g>
 
-              <path :d="topChart.band2" class="vol-band-outer" />
-              <path :d="topChart.band" class="vol-band" />
-              <line :x1="PAD_L" :x2="W - PAD_R" :y1="topChart.zeroY" :y2="topChart.zeroY" class="zero" />
+                <g class="needles">
+                  <line
+                    v-for="p in topChart.series"
+                    :key="`ret-${p.d}`"
+                    :x1="xOf(p.d)"
+                    :x2="xOf(p.d)"
+                    :y1="topChart.zeroY"
+                    :y2="topChart.yRet(p.ret)"
+                    :class="['needle', p.ret >= 0 ? 'up' : 'down']"
+                  />
+                </g>
+              </template>
 
-              <g class="needles">
-                <line
-                  v-for="p in topChart.series"
-                  :key="`ret-${p.d}`"
-                  :x1="xOf(p.d)" :x2="xOf(p.d)"
-                  :y1="topChart.zeroY" :y2="topChart.yRet(p.ret)"
-                  :class="['needle', p.ret >= 0 ? 'up' : 'down']"
-                />
-              </g>
-            </template>
+              <line
+                v-for="b in breakMarks"
+                :key="`brk-top-${b.date}`"
+                :x1="b.x"
+                :x2="b.x"
+                :y1="TOP_PAD_T"
+                :y2="TOP_H - TOP_PAD_B"
+                class="break-line"
+              />
 
-            <line
-              v-for="b in breakMarks" :key="`brk-top-${b.date}`"
-              :x1="b.x" :x2="b.x" :y1="TOP_PAD_T" :y2="TOP_H - TOP_PAD_B"
-              class="break-line"
-            />
-
-            <line
-              v-if="crosshairX != null"
-              :x1="crosshairX" :x2="crosshairX" :y1="0" :y2="TOP_H"
-              class="crosshair"
-            />
-          </svg>
+              <line
+                v-if="crosshairX != null"
+                :x1="crosshairX"
+                :x2="crosshairX"
+                :y1="0"
+                :y2="TOP_H"
+                class="crosshair"
+              />
+            </svg>
           </div>
 
           <div class="fig-axis-row">
             <span class="fig-ylab label">{{ CHANGEPOINT_FIGURE_LABELS.yBottom }}</span>
             <svg
-            :viewBox="`0 0 ${W} ${BOT_H}`"
-            class="chart bottom-chart"
-            preserveAspectRatio="none"
-            role="img"
-            :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yBottom}: ${CHANGEPOINT_FIGURE_LABELS.heatmap}`"
-          >
-            <template v-if="heatmap">
-              <image
-                :href="heatmap.url"
-                :x="heatmap.x" :y="heatmap.y"
-                :width="heatmap.width" :height="heatmap.height"
-                preserveAspectRatio="none"
-                class="heat-image"
+              :viewBox="`0 0 ${W} ${BOT_H}`"
+              class="chart bottom-chart"
+              preserveAspectRatio="none"
+              role="img"
+              :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yBottom}: ${CHANGEPOINT_FIGURE_LABELS.heatmap}`"
+            >
+              <template v-if="heatmap">
+                <image
+                  :href="heatmap.url"
+                  :x="heatmap.x"
+                  :y="heatmap.y"
+                  :width="heatmap.width"
+                  :height="heatmap.height"
+                  preserveAspectRatio="none"
+                  class="heat-image"
+                />
+                <g class="axis">
+                  <text
+                    v-for="t in heatmap.yTicks"
+                    :key="`ry-${t.y}`"
+                    :x="PAD_L - 8"
+                    :y="t.y + 3"
+                    text-anchor="end"
+                    class="tick-label"
+                  >
+                    {{ t.label }}
+                  </text>
+                </g>
+              </template>
+              <rect
+                v-else
+                :x="PAD_L"
+                :y="BOT_PAD_T"
+                :width="W - PAD_L - PAD_R"
+                :height="BOT_H - BOT_PAD_T - BOT_PAD_B"
+                class="heat-empty"
               />
-              <g class="axis">
-                <text
-                  v-for="t in heatmap.yTicks"
-                  :key="`ry-${t.y}`"
-                  :x="PAD_L - 8" :y="t.y + 3"
-                  text-anchor="end" class="tick-label"
-                >{{ t.label }}</text>
+              <text :x="PAD_L - 40" :y="BOT_PAD_T - 8" class="axis-title">run r</text>
+
+              <g v-for="t in xTicks" :key="`xt-${t.x}`">
+                <text :x="t.x" :y="BOT_H - BOT_PAD_B + 16" text-anchor="middle" class="tick-label">
+                  {{ t.label }}
+                </text>
               </g>
-            </template>
-            <rect
-              v-else
-              :x="PAD_L" :y="BOT_PAD_T" :width="W - PAD_L - PAD_R" :height="BOT_H - BOT_PAD_T - BOT_PAD_B"
-              class="heat-empty"
-            />
-            <text :x="PAD_L - 40" :y="BOT_PAD_T - 8" class="axis-title">run r</text>
 
-            <g v-for="t in xTicks" :key="`xt-${t.x}`">
-              <text :x="t.x" :y="BOT_H - BOT_PAD_B + 16" text-anchor="middle" class="tick-label">{{ t.label }}</text>
-            </g>
+              <g v-for="b in breakMarks" :key="`brk-bot-${b.date}`">
+                <line
+                  :x1="b.x"
+                  :x2="b.x"
+                  :y1="BOT_PAD_T"
+                  :y2="BOT_H - BOT_PAD_B"
+                  class="break-line"
+                />
+                <text :x="b.x + 3" :y="BOT_PAD_T - 6" class="break-label">
+                  {{ shortDate(b.date) }} · brk {{ pctFrac(b.break_prob, 0) }}
+                </text>
+              </g>
 
-            <g v-for="b in breakMarks" :key="`brk-bot-${b.date}`">
-              <line :x1="b.x" :x2="b.x" :y1="BOT_PAD_T" :y2="BOT_H - BOT_PAD_B" class="break-line" />
-              <text :x="b.x + 3" :y="BOT_PAD_T - 6" class="break-label">
-                {{ shortDate(b.date) }} · brk {{ pctFrac(b.break_prob, 0) }}
-              </text>
-            </g>
-
-            <line
-              v-if="crosshairX != null"
-              :x1="crosshairX" :x2="crosshairX" :y1="0" :y2="BOT_H"
-              class="crosshair"
-            />
-          </svg>
+              <line
+                v-if="crosshairX != null"
+                :x1="crosshairX"
+                :x2="crosshairX"
+                :y1="0"
+                :y2="BOT_H"
+                class="crosshair"
+              />
+            </svg>
           </div>
-          <div class="fig-xlab label">{{ CHANGEPOINT_FIGURE_LABELS.x }} · {{ CHANGEPOINT_FIGURE_LABELS.heatmap }}</div>
+          <div class="fig-xlab label">
+            {{ CHANGEPOINT_FIGURE_LABELS.x }} · {{ CHANGEPOINT_FIGURE_LABELS.heatmap }}
+          </div>
           <div class="fig-legend label">
             <span>low P</span>
             <span class="leg-scale" aria-hidden="true"><i /><i /><i /><i /><i /></span>
@@ -824,42 +952,75 @@ const symbolInsight = computed(() => {
           <span v-for="b in breakMarks" :key="`bl-${b.date}`" class="break-chip">
             <span class="fig">{{ shortDate(b.date) }}</span>
             <span class="label">brk {{ pctFrac(b.break_prob, 0) }}</span>
-            <span class="label dim">vol {{ pctFrac(b.pred_vol_before, 2) }} → {{ pctFrac(b.pred_vol_after, 2) }}</span>
+            <span class="label dim"
+              >vol {{ pctFrac(b.pred_vol_before, 2) }} → {{ pctFrac(b.pred_vol_after, 2) }}</span
+            >
           </span>
         </div>
       </template>
     </Panel>
 
-    <Panel label="Cross-section" index="—" :meta="`${tableRows.length}/${boardData?.symbols?.length ?? 0} names`" :delay="80">
-      <LoadingState v-if="board.loading.value && !boardData" label="loading cross-section" compact />
+    <Panel
+      label="Cross-section"
+      index="—"
+      :meta="`${tableRows.length}/${boardData?.symbols?.length ?? 0} names`"
+      :delay="80"
+    >
+      <LoadingState
+        v-if="board.loading.value && !boardData"
+        label="loading cross-section"
+        compact
+      />
       <p v-else-if="board.error.value" class="err">{{ board.error.value }}</p>
       <div v-else-if="!boardAvailable" class="empty">
-        <p class="note">No cross-section available{{ boardData?.reason ? ` — ${boardData.reason}` : '' }}.</p>
+        <p class="note">
+          No cross-section available{{ boardData?.reason ? ` — ${boardData.reason}` : '' }}.
+        </p>
       </div>
 
       <template v-else>
         <div class="regime-filter">
           <button
-            v-for="f in (['ALL', 'BREAK', 'SETTLING', 'STABLE'] as RegimeFilter[])"
+            v-for="f in ['ALL', 'BREAK', 'SETTLING', 'STABLE'] as RegimeFilter[]"
             :key="f"
             type="button"
             class="rf-chip label"
             :class="[{ on: regimeFilter === f }, f !== 'ALL' ? regimeClass(f) : '']"
             @click="regimeFilter = f"
-          >{{ f }}{{ f !== 'ALL' ? ` · ${regimeCounts[f] ?? 0}` : '' }}</button>
+          >
+            {{ f }}{{ f !== 'ALL' ? ` · ${regimeCounts[f] ?? 0}` : '' }}
+          </button>
         </div>
 
         <div class="table-scroll">
           <table class="grid">
             <thead>
               <tr>
-                <th class="label sortable" @click="setSort('symbol')">Symbol {{ sortArrow('symbol') }}</th>
-                <th class="label num sortable" @click="setSort('break_prob')" title="P(break in last 5 bars) · quieter figure is the 20-bar lookback">Break 5d {{ sortArrow('break_prob') }}</th>
-                <th class="label num sortable" @click="setSort('map_run_length')">MAP run {{ sortArrow('map_run_length') }}</th>
-                <th class="label num sortable" @click="setSort('days_since_break')">Days since brk {{ sortArrow('days_since_break') }}</th>
-                <th class="label num sortable" @click="setSort('predictive_vol')">Pred vol {{ sortArrow('predictive_vol') }}</th>
-                <th class="label num sortable" @click="setSort('trailing_vol_20d')">Trail 20d {{ sortArrow('trailing_vol_20d') }}</th>
-                <th class="label num sortable" @click="setSort('vol_ratio')">Vol ratio {{ sortArrow('vol_ratio') }}</th>
+                <th class="label sortable" @click="setSort('symbol')">
+                  Symbol {{ sortArrow('symbol') }}
+                </th>
+                <th
+                  class="label num sortable"
+                  title="P(break in last 5 bars) · quieter figure is the 20-bar lookback"
+                  @click="setSort('break_prob')"
+                >
+                  Break 5d {{ sortArrow('break_prob') }}
+                </th>
+                <th class="label num sortable" @click="setSort('map_run_length')">
+                  MAP run {{ sortArrow('map_run_length') }}
+                </th>
+                <th class="label num sortable" @click="setSort('days_since_break')">
+                  Days since brk {{ sortArrow('days_since_break') }}
+                </th>
+                <th class="label num sortable" @click="setSort('predictive_vol')">
+                  Pred vol {{ sortArrow('predictive_vol') }}
+                </th>
+                <th class="label num sortable" @click="setSort('trailing_vol_20d')">
+                  Trail 20d {{ sortArrow('trailing_vol_20d') }}
+                </th>
+                <th class="label num sortable" @click="setSort('vol_ratio')">
+                  Vol ratio {{ sortArrow('vol_ratio') }}
+                </th>
                 <th class="label">Regime</th>
               </tr>
             </thead>
@@ -872,18 +1033,32 @@ const symbolInsight = computed(() => {
               >
                 <td class="fig sym">{{ row.symbol }}</td>
                 <td class="fig num break-cell">
-                  <span class="break-bar"><i :style="{ width: `${Math.min(100, Math.max(0, row.break_prob * 100))}%` }" /></span>
+                  <span class="break-bar"
+                    ><i :style="{ width: `${Math.min(100, Math.max(0, row.break_prob * 100))}%` }"
+                  /></span>
                   <span class="break-primary">{{ pctFrac(row.break_prob, 1) }}</span>
-                  <span class="break-secondary dim" title="break_prob_20 — same statistic at a 20-bar lookback">/{{ pctFrac(row.break_prob_20, 0) }}</span>
+                  <span
+                    class="break-secondary dim"
+                    title="break_prob_20 — same statistic at a 20-bar lookback"
+                    >/{{ pctFrac(row.break_prob_20, 0) }}</span
+                  >
                 </td>
                 <td class="fig num">{{ num(row.map_run_length, 0) }}</td>
-                <td class="fig num dim">{{ row.days_since_break == null ? DASH : num(row.days_since_break, 0) }}</td>
+                <td class="fig num dim">
+                  {{ row.days_since_break == null ? DASH : num(row.days_since_break, 0) }}
+                </td>
                 <td class="fig num">{{ pctFrac(row.predictive_vol, 2) }}</td>
                 <td class="fig num dim">{{ pctFrac(row.trailing_vol_20d, 2) }}</td>
                 <td class="fig num">{{ row.vol_ratio == null ? DASH : num(row.vol_ratio, 2) }}</td>
-                <td><span class="regime-chip label" :class="regimeClass(row.regime)">{{ row.regime }}</span></td>
+                <td>
+                  <span class="regime-chip label" :class="regimeClass(row.regime)">{{
+                    row.regime
+                  }}</span>
+                </td>
               </tr>
-              <tr v-if="!tableRows.length"><td colspan="8" class="note pad">No rows match this filter.</td></tr>
+              <tr v-if="!tableRows.length">
+                <td colspan="8" class="note pad">No rows match this filter.</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -922,8 +1097,13 @@ const symbolInsight = computed(() => {
   line-height: 1.45;
   color: var(--ink-soft);
 }
-.banner-text code { font-family: var(--font-data); color: var(--ink); }
-.banner-text a { font-weight: 600; }
+.banner-text code {
+  font-family: var(--font-data);
+  color: var(--ink);
+}
+.banner-text a {
+  font-weight: 600;
+}
 
 .counts {
   display: grid;
@@ -935,16 +1115,53 @@ const symbolInsight = computed(() => {
   font-size: var(--t-small);
   color: var(--ink-soft);
 }
-.dims { margin-top: var(--s1); font-size: var(--t-tiny); color: var(--ink-faint); font-family: var(--font-data); }
-.skipped-note { cursor: help; text-decoration: underline dotted var(--ink-ghost); text-underline-offset: 3px; }
+.dims {
+  margin-top: var(--s1);
+  font-size: var(--t-tiny);
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+}
+.skipped-note {
+  cursor: help;
+  text-decoration: underline dotted var(--ink-ghost);
+  text-underline-offset: 3px;
+}
 
-.empty.pad, .err.pad { padding: var(--s3) var(--s2); }
-.note { font-size: var(--t-small); color: var(--ink-dim); }
-.err { font-size: var(--t-small); color: var(--short); }
-.cmds { list-style: none; display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s3); }
-.cmds li { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: baseline; }
-.cmds code { font-family: var(--font-data); font-size: var(--t-tiny); padding: 2px var(--s1); background: var(--panel-raise); color: var(--ink-soft); }
-.dim { color: var(--ink-faint); }
+.empty.pad,
+.err.pad {
+  padding: var(--s3) var(--s2);
+}
+.note {
+  font-size: var(--t-small);
+  color: var(--ink-dim);
+}
+.err {
+  font-size: var(--t-small);
+  color: var(--short);
+}
+.cmds {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+.cmds li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  align-items: baseline;
+}
+.cmds code {
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  padding: 2px var(--s1);
+  background: var(--panel-raise);
+  color: var(--ink-soft);
+}
+.dim {
+  color: var(--ink-faint);
+}
 
 /* ---- figure controls --------------------------------------------------- */
 .figure-controls {
@@ -955,13 +1172,16 @@ const symbolInsight = computed(() => {
   padding: var(--s2) var(--s3);
   border-bottom: var(--hair) solid var(--rule);
 }
-.symbol-form { position: relative; flex: 0 0 auto; }
+.symbol-form {
+  position: relative;
+  flex: 0 0 auto;
+}
 .symbol-input {
   width: 100px;
   height: 28px;
   padding: 0 8px;
   font: 600 0.85rem var(--font-data);
-  letter-spacing: .05em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   border: var(--hair) solid var(--rule-hi);
   background: var(--void-lift);
@@ -975,12 +1195,15 @@ const symbolInsight = computed(() => {
   border: var(--hair) solid var(--phosphor-dim);
   background: var(--phosphor-wash);
 }
-.load-btn:disabled { opacity: .5; cursor: wait; }
+.load-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
 .search-hits {
   position: absolute;
   top: calc(100% + 2px);
   left: 0;
-  z-index: 40;
+  z-index: var(--z-popover); /* was 40, tied --z-strip and fell to paint order */
   min-width: 180px;
   margin: 0;
   padding: 0;
@@ -1000,13 +1223,33 @@ const symbolInsight = computed(() => {
   color: var(--ink-dim);
   border-bottom: var(--hair) solid var(--rule);
 }
-.search-hits li:hover, .search-hits li.on { background: var(--phosphor-wash); color: var(--ink); }
-.search-hits .tier { color: var(--ink-ghost); font-size: 9px; }
+.search-hits li:hover,
+.search-hits li.on {
+  background: var(--phosphor-wash);
+  color: var(--ink);
+}
+.search-hits .tier {
+  color: var(--ink-ghost);
+  font-size: 9px;
+}
 
-.segment { display: flex; flex: 0 0 auto; border: var(--hair) solid var(--rule-hi); }
-.seg { padding: 5px 9px; color: var(--ink-dim); border-right: var(--hair) solid var(--rule); }
-.seg:last-child { border-right: none; }
-.seg.on { color: var(--phosphor); background: var(--phosphor-wash); }
+.segment {
+  display: flex;
+  flex: 0 0 auto;
+  border: var(--hair) solid var(--rule-hi);
+}
+.seg {
+  padding: 5px 9px;
+  color: var(--ink-dim);
+  border-right: var(--hair) solid var(--rule);
+}
+.seg:last-child {
+  border-right: none;
+}
+.seg.on {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+}
 
 .cursor-readout {
   display: flex;
@@ -1021,10 +1264,23 @@ const symbolInsight = computed(() => {
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-faint);
 }
-.cr-tag.live { color: var(--phosphor); border-color: var(--phosphor-dim); }
-.cr-item { display: flex; flex-direction: column; gap: 1px; align-items: flex-start; }
-.cr-item .label { font-size: 9px; }
-.cr-item .fig { font-size: var(--t-small); color: var(--ink); }
+.cr-tag.live {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+}
+.cr-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+}
+.cr-item .label {
+  font-size: 9px;
+}
+.cr-item .fig {
+  font-size: var(--t-small);
+  color: var(--ink);
+}
 
 .cp-refresh-btn {
   display: inline-flex;
@@ -1056,11 +1312,15 @@ const symbolInsight = computed(() => {
   line-height: 1;
 }
 .refresh-icon.spinning {
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ---- figure charts ------------------------------------------------------ */
@@ -1112,37 +1372,108 @@ const symbolInsight = computed(() => {
   display: block;
   height: 100%;
 }
-.leg-scale i:nth-child(1) { background: var(--void-lift); }
-.leg-scale i:nth-child(2) { background: color-mix(in srgb, var(--phosphor) 25%, var(--void)); }
-.leg-scale i:nth-child(3) { background: color-mix(in srgb, var(--phosphor) 50%, var(--void)); }
-.leg-scale i:nth-child(4) { background: color-mix(in srgb, var(--phosphor) 75%, var(--void)); }
-.leg-scale i:nth-child(5) { background: var(--phosphor); }
-.stale-board { color: var(--warn); }
-.chart { display: block; width: 100%; }
-.top-chart { height: 200px; border-bottom: var(--hair) solid var(--rule-faint); }
-.bottom-chart { height: 400px; }
+.leg-scale i:nth-child(1) {
+  background: var(--void-lift);
+}
+.leg-scale i:nth-child(2) {
+  background: color-mix(in srgb, var(--phosphor) 25%, var(--void));
+}
+.leg-scale i:nth-child(3) {
+  background: color-mix(in srgb, var(--phosphor) 50%, var(--void));
+}
+.leg-scale i:nth-child(4) {
+  background: color-mix(in srgb, var(--phosphor) 75%, var(--void));
+}
+.leg-scale i:nth-child(5) {
+  background: var(--phosphor);
+}
+.stale-board {
+  color: var(--warn);
+}
+.chart {
+  display: block;
+  width: 100%;
+}
+.top-chart {
+  height: 200px;
+  border-bottom: var(--hair) solid var(--rule-faint);
+}
+.bottom-chart {
+  height: 400px;
+}
 
-.gridline { stroke: var(--grid); stroke-width: 1; }
-.zero { stroke: var(--rule-hi); stroke-width: 1; }
-.tick-label { font-family: var(--font-data); font-size: 11px; fill: var(--ink-dim); }
-.axis-title { font-family: var(--font-data); font-size: 11px; fill: var(--ink-soft); }
+.gridline {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+.zero {
+  stroke: var(--rule-hi);
+  stroke-width: 1;
+}
+.tick-label {
+  font-family: var(--font-data);
+  font-size: 11px;
+  fill: var(--ink-dim);
+}
+.axis-title {
+  font-family: var(--font-data);
+  font-size: 11px;
+  fill: var(--ink-soft);
+}
 
-.vol-band-outer { fill: var(--phosphor-wash); stroke: color-mix(in srgb, var(--phosphor) 22%, transparent); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
-.vol-band { fill: var(--phosphor-wash); stroke: var(--phosphor-dim); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.vol-band-outer {
+  fill: var(--phosphor-wash);
+  stroke: color-mix(in srgb, var(--phosphor) 22%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.vol-band {
+  fill: var(--phosphor-wash);
+  stroke: var(--phosphor-dim);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
 
-.needle { stroke-width: 1.3; vector-effect: non-scaling-stroke; }
-.needle.up { stroke: var(--long); }
-.needle.down { stroke: var(--short); }
+.needle {
+  stroke-width: 1.3;
+  vector-effect: non-scaling-stroke;
+}
+.needle.up {
+  stroke: var(--long);
+}
+.needle.down {
+  stroke: var(--short);
+}
 
-.heat-image { image-rendering: pixelated; }
-.heat-empty { fill: var(--void-lift); }
+.heat-image {
+  image-rendering: pixelated;
+}
+.heat-empty {
+  fill: var(--void-lift);
+}
 
-.break-line { stroke: var(--warn); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
-.break-label { font-family: var(--font-data); font-size: 8px; fill: var(--warn); }
+.break-line {
+  stroke: var(--warn);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+.break-label {
+  font-family: var(--font-data);
+  font-size: 8px;
+  fill: var(--warn);
+}
 
 /* var(--ink), not phosphor — the heatmap ridge is already phosphor-coloured,
    so a phosphor crosshair disappears exactly where it crosses the ridge. */
-.crosshair { stroke: var(--ink); stroke-width: 1; opacity: .85; vector-effect: non-scaling-stroke; pointer-events: none; }
+.crosshair {
+  stroke: var(--ink);
+  stroke-width: 1;
+  opacity: 0.85;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
 
 .break-list {
   display: flex;
@@ -1152,7 +1483,9 @@ const symbolInsight = computed(() => {
   padding: var(--s2) var(--s3);
   border-top: var(--hair) solid var(--rule-faint);
 }
-.bl-title { color: var(--ink-faint); }
+.bl-title {
+  color: var(--ink-faint);
+}
 .break-chip {
   display: flex;
   align-items: baseline;
@@ -1161,40 +1494,126 @@ const symbolInsight = computed(() => {
   border: var(--hair) solid var(--rule);
   color: var(--ink-soft);
 }
-.break-chip .fig { color: var(--ink); font-size: var(--t-small); }
+.break-chip .fig {
+  color: var(--ink);
+  font-size: var(--t-small);
+}
 
 /* ---- cross-section table -------------------------------------------------- */
-.regime-filter { display: flex; gap: var(--s2); padding: 0 var(--s2) var(--s3); }
-.rf-chip { padding: 4px 9px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); }
-.rf-chip.on { color: var(--ink); background: var(--panel-hi); }
-.rf-chip.r-break.on { color: var(--no-go); border-color: var(--no-go); background: var(--short-wash); }
-.rf-chip.r-settling.on { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.rf-chip.r-stable.on { color: var(--go); border-color: var(--go); background: var(--long-wash); }
+.regime-filter {
+  display: flex;
+  gap: var(--s2);
+  padding: 0 var(--s2) var(--s3);
+}
+.rf-chip {
+  padding: 4px 9px;
+  border: var(--hair) solid var(--rule-hi);
+  color: var(--ink-dim);
+}
+.rf-chip.on {
+  color: var(--ink);
+  background: var(--panel-hi);
+}
+.rf-chip.r-break.on {
+  color: var(--no-go);
+  border-color: var(--no-go);
+  background: var(--short-wash);
+}
+.rf-chip.r-settling.on {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+.rf-chip.r-stable.on {
+  color: var(--go);
+  border-color: var(--go);
+  background: var(--long-wash);
+}
 
-.table-scroll { max-height: 480px; overflow: auto; }
-.sortable { cursor: pointer; user-select: none; }
-.sortable:hover { color: var(--ink); }
-.sym { font-weight: 600; letter-spacing: .03em; }
+.table-scroll {
+  max-height: 480px;
+  overflow: auto;
+}
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.sortable:hover {
+  color: var(--ink);
+}
+.sym {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
 
-.break-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.break-bar { display: block; width: 44px; height: 4px; background: var(--rule); overflow: hidden; flex: 0 0 auto; }
-.break-bar i { display: block; height: 100%; background: var(--phosphor); }
-.break-primary { min-width: 3.5ch; text-align: right; }
-.break-secondary { font-size: 0.85em; }
+.break-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.break-bar {
+  display: block;
+  width: 44px;
+  height: 4px;
+  background: var(--rule);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.break-bar i {
+  display: block;
+  height: 100%;
+  background: var(--phosphor);
+}
+.break-primary {
+  min-width: 3.5ch;
+  text-align: right;
+}
+.break-secondary {
+  font-size: 0.85em;
+}
 
-.regime-chip { display: inline-flex; align-items: center; padding: 2px 7px; border: var(--hair) solid currentColor; letter-spacing: .06em; }
-.r-break { color: var(--no-go); background: var(--short-wash); }
-.r-settling { color: var(--warn); background: var(--warn-wash); }
-.r-stable { color: var(--go); background: var(--long-wash); }
-.r-unknown { color: var(--unknown); }
+.regime-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border: var(--hair) solid currentColor;
+  letter-spacing: 0.06em;
+}
+.r-break {
+  color: var(--no-go);
+  background: var(--short-wash);
+}
+.r-settling {
+  color: var(--warn);
+  background: var(--warn-wash);
+}
+.r-stable {
+  color: var(--go);
+  background: var(--long-wash);
+}
+.r-unknown {
+  color: var(--unknown);
+}
 
-.grid tbody tr { cursor: pointer; }
-.grid tbody tr:hover { background: var(--panel-hi); }
-.grid tbody tr.active { background: var(--phosphor-wash); box-shadow: inset 2px 0 0 var(--phosphor); }
+.grid tbody tr {
+  cursor: pointer;
+}
+.grid tbody tr:hover {
+  background: var(--panel-hi);
+}
+.grid tbody tr.active {
+  background: var(--phosphor-wash);
+  box-shadow: inset 2px 0 0 var(--phosphor);
+}
 
 @media (max-width: 960px) {
-  .counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .cursor-readout { margin-left: 0; }
+  .counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cursor-readout {
+    margin-left: 0;
+  }
 }
 
 /* ---- symbol insight card ----------------------------------------------- */
@@ -1232,7 +1651,9 @@ const symbolInsight = computed(() => {
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-dim);
   text-decoration: none;
-  transition: color 0.12s, border-color 0.12s;
+  transition:
+    color 0.12s,
+    border-color 0.12s;
 }
 .si-link:hover {
   color: var(--phosphor);
@@ -1253,9 +1674,14 @@ const symbolInsight = computed(() => {
   padding: var(--s2) var(--s4);
   border-bottom: var(--hair) solid var(--rule);
 }
-.si-row:last-child { border-bottom: none; }
+.si-row:last-child {
+  border-bottom: none;
+}
 
-.si-lbl { color: var(--ink-ghost); font-size: var(--t-micro); }
+.si-lbl {
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+}
 
 .si-val {
   font-size: var(--t-small);
@@ -1270,12 +1696,24 @@ const symbolInsight = computed(() => {
 }
 
 /* Tone colours — match the severity of the reading */
-.si-hot  { color: var(--short); }
-.si-warn { color: var(--warn); }
-.si-ok   { color: var(--long); }
-.si-dim  { color: var(--ink-faint); }
+.si-hot {
+  color: var(--short);
+}
+.si-warn {
+  color: var(--warn);
+}
+.si-ok {
+  color: var(--long);
+}
+.si-dim {
+  color: var(--ink-faint);
+}
 
 /* Notes inherit muted color unless overridden */
-.si-row:has(.si-hot) .si-note  { color: color-mix(in srgb, var(--short) 70%, var(--ink-dim)); }
-.si-row:has(.si-warn) .si-note { color: color-mix(in srgb, var(--warn) 60%, var(--ink-dim)); }
+.si-row:has(.si-hot) .si-note {
+  color: color-mix(in srgb, var(--short) 70%, var(--ink-dim));
+}
+.si-row:has(.si-warn) .si-note {
+  color: color-mix(in srgb, var(--warn) 60%, var(--ink-dim));
+}
 </style>

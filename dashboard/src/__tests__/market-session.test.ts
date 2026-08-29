@@ -27,7 +27,9 @@ describe('market session mapping (shipped)', () => {
 
   it('formats a countdown from a present next_transition payload', () => {
     const now = Date.parse('2026-08-13T14:00:00Z')
-    expect(formatMarketCountdown('2026-08-13T20:00:00Z', 'regular_closes', now)).toBe('CLOSE IN 06:00:00')
+    expect(formatMarketCountdown('2026-08-13T20:00:00Z', 'regular_closes', now)).toBe(
+      'CLOSE IN 06:00:00',
+    )
     expect(formatMarketCountdown(null, 'regular_closes', now)).toBe('NEXT n/a')
     expect(formatMarketCountdown('2026-08-13T20:00:00Z', null, now)).toBe('NEXT n/a')
   })

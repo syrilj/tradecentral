@@ -11,6 +11,23 @@ export interface OperatorIdentity {
   email: string
 }
 
+/** `EDGE_AUTH_MODE=local` runs the desk on a zero-credential workstation
+ * session: the SPA never initializes Clerk (no publishable key required) and
+ * the API stays isolated by its loopback bind. Anything else keeps the Clerk
+ * operator session. Mirrored server-side in tools/api_server.py. */
+export type OperatorAuthMode = 'clerk' | 'local'
+
+export function operatorAuthMode(): OperatorAuthMode {
+  const raw = String(import.meta.env.VITE_EDGE_AUTH_MODE ?? '')
+    .trim()
+    .toLowerCase()
+  return raw === 'local' ? 'local' : 'clerk'
+}
+
+export function isLocalAuthMode(): boolean {
+  return operatorAuthMode() === 'local'
+}
+
 export function allowedOperatorEmails(): string[] {
   return String(import.meta.env.VITE_EDGE_ALLOWED_EMAILS ?? '')
     .split(',')

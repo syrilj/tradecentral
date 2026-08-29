@@ -1,0 +1,172 @@
+/**
+ * Rule of 16 Expected Move & Volatility Boundary Calculations.
+ *
+ * The Rule of 16 states:
+ *   1-Day Expected Move (EM_1d) = Spot * (IV / 16)
+ *   Since sqrt(252) ≈ 15.87 ≈ 16 trading days in a standard year.
+ *
+ * Horizons:
+ *   - 1-Day:   Spot * (IV / 16)
+ *   - 1-Week:  Spot * (IV / 16) * sqrt(5) ≈ Spot * (IV / 7.155)
+ *   - 1-Month: Spot * (IV / sqrt(12)) ≈ Spot * (IV / 3.464)
+ */
+
+export interface ExpectedMoveMetrics {
+  spot: number
+  ivAnnualPct: number
+  em1dDollars: number
+  em1dPct: number
+  em1dLow: number
+  em1dHigh: number
+  em1wDollars: number
+  em1wPct: number
+  em1wLow: number
+  em1wHigh: number
+  em1mDollars: number
+  em1mPct: number
+  em1mLow: number
+  em1mHigh: number
+  vixRef?: number | null
+}
+
+export function computeRuleOf16ExpectedMove(
+  spot: number | null | undefined,
+  ivOrVix: number | null | undefined,
+  vixRef?: number | null,
+): ExpectedMoveMetrics | null {
+  if (!spot || spot <= 0) return null
+
+  // If IV is passed as a fraction (e.g. 0.22) vs percentage (22.0)
+  let rawIv = Number(ivOrVix)
+  if (!Number.isFinite(rawIv) || rawIv <= 0) {
+    if (vixRef && Number.isFinite(vixRef) && vixRef > 0) {
+      rawIv = vixRef
+    } else {
+      return null
+    }
+  }
+
+  const ivDec = rawIv > 1.5 ? rawIv / 100.0 : rawIv
+  const ivAnnualPct = ivDec * 100.0
+
+  // 1-Day Move (Rule of 16)
+  const em1dDollars = spot * (ivDec / 16.0)
+  const em1dPct = (ivDec / 16.0) * 100.0
+  const em1dLow = Math.max(0, spot - em1dDollars)
+  const em1dHigh = spot + em1dDollars
+
+  // 1-Week Move (5 trading days: sqrt(5/252) ≈ 1/7.10)
+  const sqrt5Factor = Math.sqrt(5.0) / 15.8745 // ≈ 0.1408
+  const em1wDollars = spot * (ivDec * sqrt5Factor)
+  const em1wPct = ivDec * sqrt5Factor * 100.0
+  const em1wLow = Math.max(0, spot - em1wDollars)
+  const em1wHigh = spot + em1wDollars
+
+  // 1-Month Move (21 trading days / sqrt(12))
+  const sqrtMonthFactor = 1.0 / Math.sqrt(12.0) // ≈ 0.2887
+  const em1mDollars = spot * (ivDec * sqrtMonthFactor)
+  const em1mPct = ivDec * sqrtMonthFactor * 100.0
+  const em1mLow = Math.max(0, spot - em1mDollars)
+  const em1mHigh = spot + em1mDollars
+
+  return {
+    spot,
+    ivAnnualPct,
+    em1dDollars,
+    em1dPct,
+    em1dLow,
+    em1dHigh,
+    em1wDollars,
+    em1wPct,
+    em1wLow,
+    em1wHigh,
+    em1mDollars,
+    em1mPct,
+    em1mLow,
+    em1mHigh,
+    vixRef,
+  }
+}
+
+export interface ExcursionAssessment {
+  ratio: number
+  status: 'within_normal' | 'expansion' | 'abnormal_breakout'
+  label: string
+  colorVar: string
+}
+
+export function assessMoveExcursion(
+  dayChangeDollars: number,
+  em1dDollars: number,
+): ExcursionAssessment {
+  if (!em1dDollars || em1dDollars <= 0) {
+    return {
+      ratio: 0,
+      status: 'within_normal',
+      label: 'Normal Implied Range',
+      colorVar: 'var(--ink-dim)',
+    }
+  }
+
+  const ratio = Math.abs(dayChangeDollars) / em1dDollars
+
+  if (ratio <= 0.8) {
+    return {
+      ratio,
+      status: 'within_normal',
+      label: `${(ratio * 100).toFixed(0)}% of 1D EM · Consolidation within 1σ`,
+      colorVar: 'var(--ink-dim)',
+    }
+  } else if (ratio <= 1.2) {
+    return {
+      ratio,
+      status: 'expansion',
+      label: `${(ratio * 100).toFixed(0)}% of 1D EM · Testing 1σ Boundary`,
+      colorVar: 'var(--warn)',
+    }
+  } else {
+    return {
+      ratio,
+      status: 'abnormal_breakout',
+      label: `${ratio.toFixed(2)}x 1D EM · Abnormal Volatility Breakout (>1σ)`,
+      colorVar: 'var(--call-hi)',
+    }
+  }
+}
+
+export interface WallSpatialStatus {
+  callWallInside1d: boolean
+  putWallInside1d: boolean
+  callWallDistEmRatio: number | null
+  putWallDistEmRatio: number | null
+}
+
+export function assessWallAlignment(
+  callWall: number | null | undefined,
+  putWall: number | null | undefined,
+  spot: number,
+  em1dDollars: number,
+): WallSpatialStatus {
+  const result: WallSpatialStatus = {
+    callWallInside1d: false,
+    putWallInside1d: false,
+    callWallDistEmRatio: null,
+    putWallDistEmRatio: null,
+  }
+
+  if (!em1dDollars || em1dDollars <= 0 || !spot || spot <= 0) return result
+
+  if (callWall && callWall > spot) {
+    const dist = callWall - spot
+    result.callWallDistEmRatio = dist / em1dDollars
+    result.callWallInside1d = callWall <= spot + em1dDollars
+  }
+
+  if (putWall && putWall < spot) {
+    const dist = spot - putWall
+    result.putWallDistEmRatio = dist / em1dDollars
+    result.putWallInside1d = putWall >= spot - em1dDollars
+  }
+
+  return result
+}

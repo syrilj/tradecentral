@@ -1,32 +1,103 @@
 <script setup lang="ts">
-import { computed, nextTick, provide, ref, onMounted, onUnmounted, watch } from 'vue'
+import {
+  computed,
+  defineComponent,
+  nextTick,
+  provide,
+  ref,
+  onMounted,
+  onUnmounted,
+  watch,
+} from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ClerkLoaded, ClerkLoading, UserButton, useAuth, useClerk, useUser } from '@clerk/vue'
-import { api, configureApiAuth, type StatusPayload, type Readiness, type MarketClock, type ComparePayload, type ScanDepth, type SectorFlowPayload, type SentimentPayload } from '@/api'
-import { isAllowedOperatorEmail } from '@/auth'
-import { formatMarketCountdown, marketSessionClass as sessionClassOf, marketSessionLabel as sessionLabelOf } from '@/marketSession'
+import {
+  api,
+  configureApiAuth,
+  type StatusPayload,
+  type Readiness,
+  type MarketClock,
+  type ComparePayload,
+  type ScanDepth,
+  type SectorFlowPayload,
+  type SentimentPayload,
+} from '@/api'
+import { isAllowedOperatorEmail, isLocalAuthMode } from '@/auth'
+import {
+  formatMarketCountdown,
+  marketSessionClass as sessionClassOf,
+  marketSessionLabel as sessionLabelOf,
+} from '@/marketSession'
 import { placeToolsMenuStyle, type ToolsMenuStyle } from '@/toolsMenu'
 import { useResource } from '@/composables/useResource'
 import { num, age, signedPct, tone, usd } from '@/format'
+import { usePreferences } from '@/composables/usePreferences'
 import AppIcon from '@/components/AppIcon.vue'
+import ProfileDrawer from '@/components/ProfileDrawer.vue'
 import SearchPalette from '@/components/SearchPalette.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { getToken, isLoaded, isSignedIn } = useAuth()
-const clerk = useClerk()
-const { user } = useUser()
+/* EDGE_AUTH_MODE=local runs a zero-credential workstation session: no Clerk
+   plugin is installed (its composables throw outside it), so every Clerk
+   touchpoint below is guarded by localMode and resolves to a local operator
+   identity instead. One shell markup serves both modes: the Clerk wrappers are
+   swapped for a passthrough component here, so the template keeps its
+   <ClerkLoading>/<ClerkLoaded> structure verbatim. */
+const localMode = isLocalAuthMode()
+const Passthrough = defineComponent({
+  name: 'AuthModePassthrough',
+  setup(_props, { slots }) {
+    return () => (slots.default ? slots.default() : null)
+  },
+})
+/* Local mode has no async provider to await: the boot gate passes content
+   straight through, and the load gate renders nothing (a permanent
+   "loading operator session" splash would otherwise sit over the desk). */
+const HiddenGate = defineComponent({
+  name: 'AuthModeHiddenGate',
+  setup() {
+    return () => null
+  },
+})
+const BootGate = localMode ? Passthrough : ClerkLoaded
+const LoadGate = localMode ? HiddenGate : ClerkLoading
+const { getToken, isLoaded, isSignedIn } = localMode
+  ? { getToken: computed(() => async () => null), isLoaded: ref(true), isSignedIn: ref(true) }
+  : useAuth()
+const clerk = localMode ? ref(null) : useClerk()
+const { user } = localMode ? { user: ref<null>(null) } : useUser()
+const { preferences } = usePreferences()
+const profileDrawerOpen = ref(false)
 const publicRoute = computed(() => route.meta.public === true)
-const operatorEmail = computed(() => user.value?.primaryEmailAddress?.emailAddress ?? '')
+const operatorEmail = computed(() =>
+  localMode
+    ? String(import.meta.env.VITE_EDGE_ALLOWED_EMAILS ?? '')
+        .split(',')[0]
+        ?.trim() || 'local-operator'
+    : (user.value?.primaryEmailAddress?.emailAddress ?? ''),
+)
 const operatorAllowed = computed(() => isAllowedOperatorEmail(operatorEmail.value))
 const signingOut = ref(false)
+
+const SIDEBAR_STORAGE_KEY = 'edge.sidebar.collapsed.v1'
+const sidebarCollapsed = ref(false)
+
+function toggleSidebar(): void {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, sidebarCollapsed.value ? 'true' : 'false')
+  } catch {
+    /* ignore storage failure */
+  }
+}
 
 async function signOut(): Promise<void> {
   if (signingOut.value) return
   signingOut.value = true
   try {
-    await clerk.value?.signOut()
+    if (!localMode) await clerk.value?.signOut()
     await router.replace({ name: 'landing' })
   } finally {
     signingOut.value = false
@@ -34,6 +105,7 @@ async function signOut(): Promise<void> {
 }
 
 configureApiAuth(async () => {
+  if (localMode) return null // loopback API needs no bearer in local mode
   if (!isLoaded.value || !isSignedIn.value || !operatorAllowed.value) return null
   return getToken.value()
 })
@@ -42,18 +114,24 @@ configureApiAuth(async () => {
    poller for status beats four views each opening their own. */
 const authEnabled = () => isSignedIn.value === true && operatorAllowed.value
 const lastStatusDepth = ref<ScanDepth | undefined>(undefined)
-const status = useResource<StatusPayload>(
-  () => api.status(lastStatusDepth.value),
-  { intervalMs: 60_000, enabled: authEnabled },
-)
+const status = useResource<StatusPayload>(() => api.status(lastStatusDepth.value), {
+  intervalMs: 60_000,
+  enabled: authEnabled,
+})
 watch(
   () => status.data.value?.scan_summary?.depth,
   (depth) => {
     if (depth === 'deep' || depth === 'quick') lastStatusDepth.value = depth
   },
 )
-const readiness = useResource<Readiness>(() => api.readiness(), { intervalMs: 120_000, enabled: authEnabled })
-const marketClock = useResource<MarketClock>(() => api.marketClock(), { intervalMs: 30_000, enabled: authEnabled })
+const readiness = useResource<Readiness>(() => api.readiness(), {
+  intervalMs: 120_000,
+  enabled: authEnabled,
+})
+const marketClock = useResource<MarketClock>(() => api.marketClock(), {
+  intervalMs: 30_000,
+  enabled: authEnabled,
+})
 /** Benchmark tape for the strip — SPY, Nasdaq (QQQ), Dow (DIA), Oil/energy (XLE). */
 const tapeMarks = useResource<ComparePayload>(
   () => api.compare(['SPY', 'QQQ', 'DIA', 'XLE'], '1m'),
@@ -72,23 +150,20 @@ const sectorFlowRes = useResource<SectorFlowPayload>(
   { intervalMs: 180_000, enabled: authEnabled },
 )
 /** Desk structure composite — shown as a fear/greed gauge. Not CNN. */
-const sentimentRes = useResource<SentimentPayload>(
-  () => api.sentiment(),
-  { intervalMs: 300_000, enabled: authEnabled },
-)
+const sentimentRes = useResource<SentimentPayload>(() => api.sentiment(), {
+  intervalMs: 300_000,
+  enabled: authEnabled,
+})
 
 async function refreshSectorFlow(opts?: { force?: boolean; clear?: boolean }): Promise<void> {
   if (opts?.force) sectorForceNext.value = true
   await sectorFlowRes.refresh({ clear: opts?.clear })
 }
 
-watch(
-  [() => sectorFlowRes.data.value, () => status.data.value],
-  ([flow, board]) => {
-    if (!flow || !board || board.sector_flow === flow) return
-    status.data.value = { ...board, sector_flow: flow }
-  },
-)
+watch([() => sectorFlowRes.data.value, () => status.data.value], ([flow, board]) => {
+  if (!flow || !board || board.sector_flow === flow) return
+  status.data.value = { ...board, sector_flow: flow }
+})
 
 watch(isSignedIn, (signedIn) => {
   if (signedIn && operatorAllowed.value) {
@@ -113,6 +188,7 @@ watch(isSignedIn, (signedIn) => {
 watch(
   [isLoaded, isSignedIn, operatorAllowed, () => route.name, () => route.fullPath],
   () => {
+    if (localMode) return // the local operator session never redirects to /auth
     if (!isLoaded.value) return
     if (isSignedIn.value && !operatorAllowed.value && route.name !== 'auth') {
       void router.replace({ name: 'auth' })
@@ -140,37 +216,166 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
+/** Seven operator destinations. Everything else lives in Tools. */
 const primaryNav = [
-  { name: 'desk', idx: '01', title: 'Desk', hint: 'Posture · queue · arena', icon: 'desk' },
-  { name: 'plays', idx: '02', title: 'Plays', hint: 'Today\'s decision funnel', icon: 'radar' },
-  { name: 'market', idx: '03', title: 'Market', hint: 'Symbol research', icon: 'market' },
-  { name: 'options', idx: '04', title: 'Options', hint: 'One underlier', icon: 'options' },
-  { name: 'drift', idx: '05', title: 'Drift', hint: 'Buying vs selling pressure', icon: 'drift' },
-  { name: 'flow', idx: '06', title: 'Flow', hint: 'Market-wide options tape', icon: 'flow' },
-  { name: 'chain', idx: '07', title: 'Chain', hint: 'Value chain & growth', icon: 'chain' },
-  { name: 'suggest', idx: '08', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
+  {
+    name: 'flow',
+    title: 'Flow',
+    hint: 'Market-wide options tape',
+    icon: 'flow',
+    tab: true,
+  },
+  {
+    name: 'options',
+    title: 'Options',
+    hint: 'One underlier',
+    icon: 'options',
+    tab: true,
+  },
+  {
+    name: 'regime',
+    title: 'Regime',
+    hint: 'Dealer gamma · live',
+    icon: 'regime',
+    tab: true,
+  },
+  {
+    name: 'drift',
+    title: 'Drift',
+    hint: 'Charm · hedge pressure',
+    icon: 'drift',
+    tab: true,
+  },
+  {
+    name: 'desk',
+    title: 'Desk',
+    hint: 'Posture · queue · arena',
+    icon: 'desk',
+    tab: true,
+  },
+  {
+    name: 'chain',
+    title: 'Chain',
+    hint: 'Value chain & growth',
+    icon: 'chain',
+    tab: true,
+  },
+  {
+    name: 'market',
+    title: 'Market',
+    hint: 'Symbol research',
+    icon: 'market',
+    tab: true,
+  },
+] as const
+
+const deskTools = [
+  {
+    name: 'plays',
+    idx: 'D1',
+    title: 'Plays',
+    hint: "Today's decision funnel",
+    icon: 'radar',
+  },
+  {
+    name: 'absorption',
+    idx: 'D2',
+    title: 'Absorption',
+    hint: 'Heavy flow, held level',
+    icon: 'absorption',
+  },
+  {
+    name: 'livestack',
+    idx: 'LS',
+    title: 'Live Stack',
+    hint: 'All lenses, one tape',
+    icon: 'stack',
+  },
+  { name: 'suggest', idx: 'D4', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
 ] as const
 
 const marketTools = [
-  { name: 'sectors', idx: 'M1', title: 'Sectors', hint: 'Rotation and leadership', icon: 'sectors' },
+  {
+    name: 'sectors',
+    idx: 'M1',
+    title: 'Sectors',
+    hint: 'Rotation and leadership',
+    icon: 'sectors',
+  },
   { name: 'sentiment', idx: 'M2', title: 'Pulse', hint: 'Structure and outliers', icon: 'pulse' },
   { name: 'momentum', idx: 'M3', title: 'Momentum', hint: 'Five pillars scan', icon: 'momentum' },
   { name: 'fintel', idx: 'M4', title: 'Fintel', hint: 'Short, borrow, owners', icon: 'fintel' },
-  { name: 'insiders', idx: 'M5', title: 'Insiders', hint: 'Form 4 · Fintel tape', icon: 'insiders' },
-  { name: 'calculator', idx: 'M6', title: 'Calculator', hint: 'Spot · strike · P/L', icon: 'calculator' },
+  {
+    name: 'insiders',
+    idx: 'M5',
+    title: 'Insiders',
+    hint: 'Form 4 · Fintel tape',
+    icon: 'insiders',
+  },
+  {
+    name: 'calculator',
+    idx: 'M6',
+    title: 'Calculator',
+    hint: 'Spot · strike · P/L',
+    icon: 'calculator',
+  },
 ] as const
 
 const researchTools = [
-  { name: 'research', idx: 'R1', title: 'Research', hint: 'IC decay · quantile spread', icon: 'research' },
+  {
+    name: 'research',
+    idx: 'R1',
+    title: 'Research',
+    hint: 'IC decay · quantile spread',
+    icon: 'research',
+  },
   { name: 'gates', idx: 'R2', title: 'Gates', hint: 'Pre-registered verdicts', icon: 'gate' },
   { name: 'evolution', idx: 'R3', title: 'Evolution', hint: 'GA survivors lab', icon: 'evolution' },
-  { name: 'adaptive', idx: 'R4', title: 'Live Blend', hint: 'Regime multi-stream', icon: 'adaptive' },
+  {
+    name: 'adaptive',
+    idx: 'R4',
+    title: 'Live Blend',
+    hint: 'Regime multi-stream',
+    icon: 'adaptive',
+  },
   { name: 'graph', idx: 'R5', title: 'Graph', hint: 'Knowledge graph', icon: 'graph' },
-  { name: 'changepoints', idx: 'R6', title: 'Breaks', hint: 'Bayesian regime breaks', icon: 'changepoints' },
+  {
+    name: 'changepoints',
+    idx: 'R6',
+    title: 'Breaks',
+    hint: 'Bayesian regime breaks',
+    icon: 'changepoints',
+  },
   { name: 'cloud', idx: 'R7', title: 'Cloud', hint: 'Vertex AI training', icon: 'cloud' },
+  {
+    name: 'kalman',
+    idx: 'R8',
+    title: 'Kalman',
+    hint: 'Constant-velocity trend',
+    icon: 'kalman',
+  },
 ] as const
 
-const secondaryNav = [...marketTools, ...researchTools] as const
+const macroTools = [
+  {
+    name: 'macro',
+    idx: 'G1',
+    title: 'Macro',
+    hint: 'Cross-asset regime board',
+    icon: 'globe',
+  },
+] as const
+
+const overflowNav = [...deskTools, ...marketTools, ...macroTools, ...researchTools] as const
+
+function isTabDest(item: { name: string; tab?: boolean }): boolean {
+  return item.tab === true
+}
+
+function openSearchFromTools(): void {
+  moreOpen.value = false
+  paletteOpen.value = true
+}
 
 const moreOpen = ref(false)
 const moreWrap = ref<HTMLDivElement | null>(null)
@@ -196,7 +401,10 @@ const topRotations = computed(() => {
   const sorted = ranked.sort((a, b) => Number(b.flow_score ?? 0) - Number(a.flow_score ?? 0))
   return {
     in: sorted.filter((s) => Number(s.flow_score ?? 0) > 0).slice(0, 2),
-    out: sorted.filter((s) => Number(s.flow_score ?? 0) < 0).slice(-2).reverse(),
+    out: sorted
+      .filter((s) => Number(s.flow_score ?? 0) < 0)
+      .slice(-2)
+      .reverse(),
   }
 })
 
@@ -233,11 +441,13 @@ function sparklinePath(points: { cum: number }[] | undefined): string {
   const lo = Math.min(...values)
   const hi = Math.max(...values)
   const span = Math.max(hi - lo, Math.abs(hi) * 0.0005, 0.0001)
-  return values.map((value, index) => {
-    const x = (index / (values.length - 1)) * 48
-    const y = 14 - ((value - lo) / span) * 12
-    return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
+  return values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * 48
+      const y = 14 - ((value - lo) / span) * 12
+      return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
 }
 
 const tapeRows = computed(() => {
@@ -251,11 +461,12 @@ const tapeRows = computed(() => {
     const chgWin = typeof s?.chg_window_pct === 'number' ? s.chg_window_pct : null
     const asof = typeof s?.asof === 'string' ? s.asof : null
     const ageDays = typeof s?.age_days === 'number' ? s.age_days : observedAgeDays(asof)
-    const quality = price == null
-      ? 'missing'
-      : s?.quality === 'stale' || ageDays == null || ageDays > 3
-        ? 'stale'
-        : 'current'
+    const quality =
+      price == null
+        ? 'missing'
+        : s?.quality === 'stale' || ageDays == null || ageDays > 3
+          ? 'stale'
+          : 'current'
     return {
       ...t,
       price,
@@ -300,13 +511,14 @@ const fearGreed = computed(() => {
   const score = composite?.score
   const asof = payload?.generated_at ?? null
   const rawQuality = composite?.quality
-  const quality = rawQuality === 'ok'
-    ? 'current'
-    : rawQuality === 'stale' || rawQuality === 'degraded'
-      ? 'stale'
-      : sentimentRes.loading.value && !payload
-        ? 'missing'
-        : 'missing'
+  const quality =
+    rawQuality === 'ok'
+      ? 'current'
+      : rawQuality === 'stale' || rawQuality === 'degraded'
+        ? 'stale'
+        : sentimentRes.loading.value && !payload
+          ? 'missing'
+          : 'missing'
   if (score == null || !Number.isFinite(score)) {
     return {
       value: null as number | null,
@@ -321,15 +533,16 @@ const fearGreed = computed(() => {
     }
   }
   const greed = Math.round((1 - Math.max(0, Math.min(1, score))) * 100)
-  const band: FearGreedBand = greed <= 20
-    ? 'extreme-fear'
-    : greed <= 40
-      ? 'fear'
-      : greed <= 60
-        ? 'neutral'
-        : greed <= 80
-          ? 'greed'
-          : 'extreme-greed'
+  const band: FearGreedBand =
+    greed <= 20
+      ? 'extreme-fear'
+      : greed <= 40
+        ? 'fear'
+        : greed <= 60
+          ? 'neutral'
+          : greed <= 80
+            ? 'greed'
+            : 'extreme-greed'
   const label = {
     'extreme-fear': 'EXTREME FEAR',
     fear: 'FEAR',
@@ -379,15 +592,16 @@ function navAlert(name: string): boolean {
     } catch {
       bookHits = 0
     }
-    return volAlert.value || bookHits > 0 || Boolean(top && Math.abs(Number(top.flow_score ?? 0)) > 0.02)
+    return (
+      volAlert.value || bookHits > 0 || Boolean(top && Math.abs(Number(top.flow_score ?? 0)) > 0.02)
+    )
   }
   if (name === 'options') return volAlert.value
   return false
 }
 
-const secondaryActive = computed(() =>
-  secondaryNav.some((n) => route.name === n.name)
-)
+const overflowActiveItem = computed(() => overflowNav.find((n) => route.name === n.name) ?? null)
+const secondaryActive = computed(() => overflowActiveItem.value != null)
 function gaugeTone(): string {
   const v = vol.value?.VIX ?? 0
   if (v >= 25) return 'hot'
@@ -406,7 +620,9 @@ function utcNow(): string {
 }
 
 const marketSessionLabel = computed(() =>
-  sessionLabelOf(marketClock.data.value?.market_session, { error: Boolean(marketClock.error.value) }),
+  sessionLabelOf(marketClock.data.value?.market_session, {
+    error: Boolean(marketClock.error.value),
+  }),
 )
 
 const marketSessionClass = computed(() => sessionClassOf(marketClock.data.value?.market_session))
@@ -430,10 +646,12 @@ const marketClockTitle = computed(() => {
 const paletteOpen = ref(false)
 
 function isTypingTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement
-    || target instanceof HTMLTextAreaElement
-    || target instanceof HTMLSelectElement
-    || (target instanceof HTMLElement && target.isContentEditable)
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  )
 }
 
 function onKey(e: KeyboardEvent): void {
@@ -498,19 +716,30 @@ function onMoreMenuKey(e: KeyboardEvent): void {
   if (!items.length) return
   e.preventDefault()
   const current = items.indexOf(document.activeElement as HTMLElement)
-  const next = e.key === 'Home'
-    ? 0
-    : e.key === 'End'
-      ? items.length - 1
-      : e.key === 'ArrowUp'
-        ? (current <= 0 ? items.length - 1 : current - 1)
-        : (current + 1) % items.length
+  const next =
+    e.key === 'Home'
+      ? 0
+      : e.key === 'End'
+        ? items.length - 1
+        : e.key === 'ArrowUp'
+          ? current <= 0
+            ? items.length - 1
+            : current - 1
+          : (current + 1) % items.length
   items[next]?.focus()
 }
 
 onMounted(() => {
-  /* Default density stays compact; no user toggle — layout is fixed. */
-  document.documentElement.dataset.density = 'compact'
+  /* Dynamic density initialization handled by usePreferences */
+  document.documentElement.dataset.density = preferences.value.density
+  try {
+    const savedSidebar = localStorage.getItem(SIDEBAR_STORAGE_KEY)
+    if (savedSidebar === 'true') {
+      sidebarCollapsed.value = true
+    }
+  } catch {
+    /* ignore */
+  }
   tick = window.setInterval(() => (clock.value = utcNow()), 1000)
   window.addEventListener('keydown', onKey)
   document.addEventListener('pointerdown', onOutsidePointer)
@@ -521,15 +750,22 @@ onUnmounted(() => {
   document.removeEventListener('pointerdown', onOutsidePointer)
 })
 
-watch(() => route.fullPath, async () => {
-  moreOpen.value = false
-  await nextTick()
-  stage.value?.focus({ preventScroll: true })
-})
+watch(
+  () => route.fullPath,
+  async () => {
+    moreOpen.value = false
+    await nextTick()
+    stage.value?.focus({ preventScroll: true })
+  },
+)
 
 function openSymbol(sym: string): void {
   paletteOpen.value = false
-  const clean = sym.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  const clean = sym
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
   if (!clean) return
   const currentName = String(route.name || '')
   /* Flow is market-wide; a symbol search belongs on Options for one underlier. */
@@ -542,7 +778,16 @@ function openSymbol(sym: string): void {
     return
   }
   /* Always land on Market for symbol research when not already on a symbol workspace. */
-  const symbolViews = new Set(['market', 'options', 'drift', 'changepoints', 'sentiment', 'momentum', 'fintel'])
+  const symbolViews = new Set([
+    'market',
+    'options',
+    'drift',
+    'regime',
+    'changepoints',
+    'sentiment',
+    'momentum',
+    'fintel',
+  ])
   const targetRouteName = symbolViews.has(currentName) ? currentName : 'market'
   void router.push({ name: targetRouteName, query: { symbol: clean } })
 }
@@ -562,359 +807,498 @@ function openVol(): void {
 function openFearGreed(): void {
   void router.push({ name: 'sentiment' })
 }
-
 </script>
 
 <template>
-  <ClerkLoading>
+  <LoadGate>
     <div class="clerk-boot" role="status">
       <TradeCentralMark :size="40" />
       <strong class="clerk-boot-word">TradeCentral</strong>
       <span class="label">Loading operator session…</span>
     </div>
-  </ClerkLoading>
+  </LoadGate>
 
-  <ClerkLoaded>
-    <div v-if="!publicRoute && (!isSignedIn || !operatorAllowed)" class="clerk-redirect" role="status">
+  <BootGate>
+    <div
+      v-if="!publicRoute && (!isSignedIn || !operatorAllowed)"
+      class="clerk-redirect"
+      role="status"
+    >
       <span class="label">Opening operator access…</span>
     </div>
 
-    <div v-else class="shell">
-    <a class="skip-link" href="#main-content">Skip to workspace</a>
-    <!-- ── left rail ────────────────────────────────────────────────────── -->
-    <nav class="rail" aria-label="TradeCentral workspaces">
-      <RouterLink to="/" class="mark" aria-label="TradeCentral overview">
-        <TradeCentralMark :size="28" />
-        <span class="mark-word" aria-hidden="true">
-          <strong>Trade</strong>
-          <strong>Central</strong>
-        </span>
-        <span class="mark-rule" aria-hidden="true" />
-      </RouterLink>
+    <div
+      v-else
+      class="shell"
+      :class="{ 'rail-collapsed': sidebarCollapsed, 'rail-expanded': !sidebarCollapsed }"
+      :style="{ '--rail-w': sidebarCollapsed ? '72px' : '236px' }"
+    >
+      <a class="skip-link" href="#main-content">Skip to workspace</a>
 
-      <ul class="nav">
-        <li v-for="n in primaryNav" :key="n.name">
-          <RouterLink
-            :to="{ name: n.name }"
-            class="nav-item"
-            :class="{ on: route.name === n.name, alert: navAlert(n.name) }"
-            :title="navAlert(n.name)
-              ? `${n.title} [${n.idx}] · ${n.hint} · attention`
-              : `${n.title} [${n.idx}] · ${n.hint}`"
-          >
-            <span class="nav-idx fig" aria-hidden="true">{{ n.idx }}</span>
-            <AppIcon class="nav-icon" :name="n.icon" :size="18" />
-            <span class="nav-title label">{{ n.title }}</span>
-            <span v-if="navAlert(n.name)" class="nav-pulse" aria-hidden="true" />
+      <!-- ── left rail ────────────────────────────────────────────────────── -->
+      <nav
+        class="rail"
+        :class="{ 'is-collapsed': sidebarCollapsed, 'is-expanded': !sidebarCollapsed }"
+        aria-label="TradeCentral workspaces"
+      >
+        <div class="rail-header">
+          <RouterLink to="/" class="mark" aria-label="TradeCentral overview">
+            <TradeCentralMark :size="22" />
+            <span class="mark-word" aria-hidden="true">
+              <strong>Trade</strong>
+              <strong>Central</strong>
+            </span>
           </RouterLink>
-        </li>
-      </ul>
 
-      <div class="rail-foot">
-      <!-- More: secondary views dropdown -->
-      <div ref="moreWrap" class="more-wrap">
-        <button
-          ref="moreButton"
-          type="button"
-          class="more-btn nav-item"
-          :class="{ on: secondaryActive || moreOpen }"
-          :aria-expanded="moreOpen"
-          aria-haspopup="menu"
-          aria-controls="workspace-tools-menu"
-          :title="moreOpen ? 'Close tools' : 'Open market and research tools'"
-          @click="moreOpen = !moreOpen"
-          @keydown.down.prevent="openToolsMenu('first')"
-          @keydown.up.prevent="openToolsMenu('last')"
-        >
-          <span class="nav-idx fig" aria-hidden="true">TOOLS</span>
-          <AppIcon class="nav-icon" name="more" :size="18" />
-          <span class="nav-title label">Tools</span>
-        </button>
-        <Teleport to="body">
-        <div
-          v-if="moreOpen"
-          id="workspace-tools-menu"
-          ref="morePanel"
-          class="more-panel"
-          :style="morePanelStyle"
-          role="menu"
-          aria-label="Market and research tools"
-          @keydown="onMoreMenuKey"
-        >
-          <button class="more-search" type="button" role="menuitem" @click="moreOpen = false; paletteOpen = true">
-            <AppIcon name="search" :size="16" />
-            <span class="more-title label">Search symbol</span>
-            <span class="more-idx fig">⌘K</span>
+          <button
+            type="button"
+            class="rail-toggle-btn"
+            :title="sidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'"
+            :aria-label="
+              sidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'
+            "
+            @click="toggleSidebar"
+          >
+            <AppIcon :name="sidebarCollapsed ? 'arrow-right' : 'arrow-left'" :size="13" />
           </button>
-          <RouterLink
-            to="/"
-            class="more-item"
-            :class="{ on: route.name === 'landing' }"
-            title="Instrument overview and readiness"
-            role="menuitem"
-            @click="moreOpen = false"
-          >
-            <AppIcon name="home" :size="16" />
-            <span class="more-title label">Overview</span>
-            <span class="more-idx fig">HOME</span>
-          </RouterLink>
-          <div class="more-group label">Market</div>
-          <RouterLink
-            v-for="n in marketTools"
-            :key="n.name"
-            :to="{ name: n.name }"
-            class="more-item"
-            :class="{ on: route.name === n.name }"
-            :title="n.hint"
-            role="menuitem"
-            @click="moreOpen = false"
-          >
-            <AppIcon :name="n.icon" :size="16" />
-            <span class="more-title label">{{ n.title }}</span>
-            <span class="more-idx fig">{{ n.idx }}</span>
-          </RouterLink>
-          <div class="more-group label">Research</div>
-          <RouterLink
-            v-for="n in researchTools"
-            :key="n.name"
-            :to="{ name: n.name }"
-            class="more-item"
-            :class="{ on: route.name === n.name }"
-            :title="n.hint"
-            role="menuitem"
-            @click="moreOpen = false"
-          >
-            <AppIcon :name="n.icon" :size="16" />
-            <span class="more-title label">{{ n.title }}</span>
-            <span class="more-idx fig">{{ n.idx }}</span>
-          </RouterLink>
         </div>
-        </Teleport>
-      </div>
 
-      <div class="clerk-user" :title="operatorEmail ? `Operator: ${operatorEmail} · Account and sign out` : 'Account and sign out'">
-        <div class="operator-status" aria-hidden="true">
-          <span class="operator-lamp" />
-          <span class="operator-badge label">OP</span>
-        </div>
-        <div class="operator-avatar-frame">
-          <UserButton after-sign-out-url="/" />
-        </div>
-        <span class="nav-title label">Account</span>
-        <button
-          type="button"
-          class="account-signout label"
-          :disabled="signingOut"
-          :title="signingOut ? 'Signing out…' : 'Sign out of operator session'"
-          aria-label="Sign out"
-          @click="void signOut()"
-        >
-          <AppIcon name="signout" :size="10" class="signout-icon" />
-          <span>{{ signingOut ? 'EXITING' : 'SIGN OUT' }}</span>
-        </button>
-      </div>
-      </div>
-
-    </nav>
-
-    <!-- ── instrument strip ─────────────────────────────────────────────── -->
-    <header class="strip">
-      <div class="gauges" aria-label="Benchmark tape and sector rotation">
-        <button
-          type="button"
-          class="gauge gauge-btn gauge-vol"
-          :class="[gaugeTone(), `quality-${volQuality}`]"
-          :title="`VIX ${num(vol?.VIX, 2)} · observed ${volAsOf || 'date unavailable'} · open volatility context`"
-          @click="openVol"
-        >
-          <span class="g-head">
-            <span class="label g-symbol">VIX</span>
-            <span class="label g-date" :class="volQuality">{{ compactBarDate(volAsOf) }}</span>
-          </span>
-          <span class="g-body">
-            <span class="fig g-val">{{ num(vol?.VIX, 2) }}</span>
-            <span class="label g-context" :class="volQuality">{{ volQuality === 'stale' ? 'STALE' : 'VOL' }}</span>
-          </span>
-        </button>
-        <button
-          v-for="m in tapeRows"
-          :key="m.sym"
-          type="button"
-          class="gauge gauge-btn gauge-mark"
-          :class="[
-            `quality-${m.quality}`,
-            `mark-${m.sym.toLowerCase()}`,
-            { loading: m.loading, fault: m.fault, 'primary-mark': m.sym === 'SPY' },
-          ]"
-          :title="`${m.label} (${m.sym}) · observed ${m.asof || 'date unavailable'} · ${m.source || 'source unavailable'} · open in Market`"
-          @click="openMark(m.sym)"
-        >
-          <span class="g-head">
-            <span class="label g-symbol">{{ m.sym }}</span>
-            <span class="label g-name">{{ m.label }}</span>
-            <span class="label g-date" :class="m.quality">
-              {{ m.quality === 'stale' ? `${m.asofLabel} · STALE` : m.asofLabel }}
-            </span>
-          </span>
-          <span class="g-body">
-            <span class="fig g-val">
-              <template v-if="m.price != null">{{ usd(m.price) }}</template>
-              <template v-else-if="m.loading">SYNC</template>
-              <template v-else>NO DATA</template>
-            </span>
-            <svg v-if="m.spark" class="g-spark" :class="chgTone(m.chg)" viewBox="0 0 48 16" preserveAspectRatio="none" aria-hidden="true">
-              <path :d="m.spark" />
-            </svg>
-            <span class="fig g-chg" :class="chgTone(m.chg)">{{ signedPct(m.chg, 2) }}</span>
-            <span class="label g-basis">{{ m.changeBasis }}</span>
-          </span>
-        </button>
-        <button
-          type="button"
-          class="gauge gauge-btn gauge-rot"
-          :class="`quality-${rotationQuality}`"
-          :title="topRotations.in.length || topRotations.out.length
-            ? `Top sector rotation · observed ${rotationAsOf || 'date unavailable'} · in ${topRotations.in.map((s) => s.etf).join(' ')} · out ${topRotations.out.map((s) => s.etf).join(' ')} · open rotation workspace`
-            : 'Sector rotation unavailable until status scan finishes'"
-          @click="openRotation"
-        >
-          <span class="g-head">
-            <span class="label g-symbol">ROTATION</span>
-            <span class="label g-date" :class="rotationQuality">{{ rotationFreshness }}</span>
-          </span>
-          <span v-if="topRotations.in.length || topRotations.out.length" class="rot-board">
-            <span class="rot-col rot-in">
-              <span class="rot-col-h label">IN</span>
-              <span class="rot-legs">
-                <span v-for="s in topRotations.in" :key="`in-${s.etf}`" class="rot-leg">
-                  <span class="fig">{{ s.etf }}</span>
-                  <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
-                </span>
-              </span>
-            </span>
-            <span class="rot-col rot-out">
-              <span class="rot-col-h label">OUT</span>
-              <span class="rot-legs">
-                <span v-for="s in topRotations.out" :key="`out-${s.etf}`" class="rot-leg">
-                  <span class="fig">{{ s.etf }}</span>
-                  <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
-                </span>
-              </span>
-            </span>
-          </span>
-          <span v-else class="fig g-val">NO ROTATION DATA</span>
-        </button>
-        <button
-          type="button"
-          class="gauge gauge-btn gauge-fg"
-          :class="[`quality-${fearGreed.quality}`, `band-${fearGreed.band}`]"
-          :title="fearGreed.title"
-          @click="openFearGreed"
-        >
-          <span class="g-head">
-            <span class="label g-symbol">FEAR / GREED</span>
-            <span class="label g-date" :class="fearGreed.quality">{{ fearGreed.asofLabel }}</span>
-          </span>
-          <span class="fg-body">
-            <span class="fig g-val" :class="fearGreed.band">{{ fearGreed.value == null ? fearGreed.label : fearGreed.value }}</span>
-            <span
-              class="fg-track"
-              role="meter"
-              :aria-valuemin="0"
-              :aria-valuemax="100"
-              :aria-valuenow="fearGreed.value ?? undefined"
-              :aria-valuetext="fearGreed.label"
-              :aria-label="fearGreed.title"
+        <ul class="nav">
+          <li v-for="n in primaryNav" :key="n.name" :class="{ 'tab-dest-li': isTabDest(n) }">
+            <RouterLink
+              :to="{ name: n.name }"
+              class="nav-item"
+              :class="{
+                on: route.name === n.name,
+                alert: navAlert(n.name),
+                'tab-dest': isTabDest(n),
+              }"
+              :title="
+                navAlert(n.name) ? `${n.title} · ${n.hint} · attention` : `${n.title} · ${n.hint}`
+              "
             >
-              <span class="fg-spectrum" aria-hidden="true"><i /><i /><i /><i /><i /></span>
-              <i class="fg-ticks" aria-hidden="true" />
-              <span v-if="fearGreed.value != null" class="fg-thumb" :class="fearGreed.band" :style="{ left: `${fearGreed.value}%` }" />
+              <AppIcon class="nav-icon" :name="n.icon" :size="16" />
+              <div class="nav-label-wrap">
+                <span class="nav-title label">{{ n.title }}</span>
+                <span class="nav-hint">{{ n.hint }}</span>
+              </div>
+              <span v-if="navAlert(n.name)" class="nav-pulse" aria-hidden="true" />
+            </RouterLink>
+          </li>
+        </ul>
+
+        <div class="rail-foot">
+          <!-- More: secondary views dropdown -->
+          <div ref="moreWrap" class="more-wrap">
+            <button
+              ref="moreButton"
+              type="button"
+              class="more-btn nav-item"
+              :class="{ on: secondaryActive || moreOpen }"
+              :aria-expanded="moreOpen"
+              aria-haspopup="menu"
+              aria-controls="workspace-tools-menu"
+              :title="moreOpen ? 'Close tools' : 'Open remaining workspaces'"
+              @click="moreOpen = !moreOpen"
+              @keydown.down.prevent="openToolsMenu('first')"
+              @keydown.up.prevent="openToolsMenu('last')"
+            >
+              <AppIcon class="nav-icon" name="more" :size="16" />
+              <div class="nav-label-wrap">
+                <span class="nav-title label">Tools</span>
+                <span class="nav-hint">{{
+                  overflowActiveItem ? overflowActiveItem.title : 'More workspaces'
+                }}</span>
+              </div>
+            </button>
+            <Teleport to="body">
+              <div
+                v-if="moreOpen"
+                id="workspace-tools-menu"
+                ref="morePanel"
+                class="more-panel"
+                :style="morePanelStyle"
+                role="menu"
+                aria-label="More workspaces"
+                @keydown="onMoreMenuKey"
+              >
+                <button
+                  class="more-search"
+                  type="button"
+                  role="menuitem"
+                  @click="openSearchFromTools"
+                >
+                  <AppIcon name="search" :size="16" />
+                  <span class="more-title label">Search symbol</span>
+                  <span class="more-idx fig">⌘K</span>
+                </button>
+                <RouterLink
+                  to="/"
+                  class="more-item"
+                  :class="{ on: route.name === 'landing' }"
+                  title="Instrument overview and readiness"
+                  role="menuitem"
+                  @click="moreOpen = false"
+                >
+                  <AppIcon name="home" :size="16" />
+                  <span class="more-title label">Overview</span>
+                  <span class="more-idx fig">HOME</span>
+                </RouterLink>
+                <div class="more-group label">Desk</div>
+                <RouterLink
+                  v-for="n in deskTools"
+                  :key="n.name"
+                  :to="{ name: n.name }"
+                  class="more-item"
+                  :class="{ on: route.name === n.name }"
+                  :title="n.hint"
+                  role="menuitem"
+                  @click="moreOpen = false"
+                >
+                  <AppIcon :name="n.icon" :size="16" />
+                  <span class="more-title label">{{ n.title }}</span>
+                  <span class="more-idx fig">{{ n.idx }}</span>
+                </RouterLink>
+                <div class="more-group label">Market</div>
+                <RouterLink
+                  v-for="n in marketTools"
+                  :key="n.name"
+                  :to="{ name: n.name }"
+                  class="more-item"
+                  :class="{ on: route.name === n.name }"
+                  :title="n.hint"
+                  role="menuitem"
+                  @click="moreOpen = false"
+                >
+                  <AppIcon :name="n.icon" :size="16" />
+                  <span class="more-title label">{{ n.title }}</span>
+                  <span class="more-idx fig">{{ n.idx }}</span>
+                </RouterLink>
+                <div class="more-group label">Macro</div>
+                <RouterLink
+                  v-for="n in macroTools"
+                  :key="n.name"
+                  :to="{ name: n.name }"
+                  class="more-item"
+                  :class="{ on: route.name === n.name }"
+                  :title="n.hint"
+                  role="menuitem"
+                  @click="moreOpen = false"
+                >
+                  <AppIcon :name="n.icon" :size="16" />
+                  <span class="more-title label">{{ n.title }}</span>
+                  <span class="more-idx fig">{{ n.idx }}</span>
+                </RouterLink>
+                <div class="more-group label">Research</div>
+                <RouterLink
+                  v-for="n in researchTools"
+                  :key="n.name"
+                  :to="{ name: n.name }"
+                  class="more-item"
+                  :class="{ on: route.name === n.name }"
+                  :title="n.hint"
+                  role="menuitem"
+                  @click="moreOpen = false"
+                >
+                  <AppIcon :name="n.icon" :size="16" />
+                  <span class="more-title label">{{ n.title }}</span>
+                  <span class="more-idx fig">{{ n.idx }}</span>
+                </RouterLink>
+              </div>
+            </Teleport>
+          </div>
+
+          <div
+            class="clerk-user"
+            :title="
+              operatorEmail
+                ? `Operator: ${operatorEmail} · Account and settings`
+                : 'Account and settings'
+            "
+            @click="profileDrawerOpen = true"
+          >
+            <div class="operator-avatar-frame">
+              <UserButton v-if="!localMode" after-sign-out-url="/" />
+              <span
+                v-else
+                class="local-operator-avatar fig"
+                title="Local operator session"
+                aria-hidden="true"
+                >OP</span
+              >
+            </div>
+            <div class="operator-meta">
+              <span class="nav-title label">Account</span>
+              <span class="operator-mail">{{ operatorEmail || 'Local operator' }}</span>
+            </div>
+            <button
+              type="button"
+              class="account-signout label"
+              :disabled="signingOut"
+              :title="signingOut ? 'Signing out…' : 'Sign out of operator session'"
+              aria-label="Sign out"
+              @click.stop="void signOut()"
+            >
+              <AppIcon name="signout" :size="10" class="signout-icon" />
+              <span>{{ signingOut ? 'EXITING' : 'SIGN OUT' }}</span>
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      <!-- ── instrument strip ─────────────────────────────────────────────── -->
+      <header class="strip">
+        <div class="gauges" aria-label="Benchmark tape and sector rotation">
+          <button
+            type="button"
+            class="gauge gauge-btn gauge-vol"
+            :class="[gaugeTone(), `quality-${volQuality}`]"
+            :title="`VIX ${num(vol?.VIX, 2)} · observed ${volAsOf || 'date unavailable'} · open volatility context`"
+            @click="openVol"
+          >
+            <span class="g-head">
+              <span class="label g-symbol">VIX</span>
+              <span class="label g-date" :class="volQuality">{{ compactBarDate(volAsOf) }}</span>
             </span>
-            <span class="label g-context" :class="fearGreed.band">{{ fearGreed.label }}</span>
+            <span class="g-body">
+              <span class="fig g-val">{{ num(vol?.VIX, 2) }}</span>
+              <span class="label g-context" :class="volQuality">{{
+                volQuality === 'stale' ? 'STALE' : 'VOL'
+              }}</span>
+            </span>
+          </button>
+          <button
+            v-for="m in tapeRows"
+            :key="m.sym"
+            type="button"
+            class="gauge gauge-btn gauge-mark"
+            :class="[
+              `quality-${m.quality}`,
+              `mark-${m.sym.toLowerCase()}`,
+              { loading: m.loading, fault: m.fault, 'primary-mark': m.sym === 'SPY' },
+            ]"
+            :title="`${m.label} (${m.sym}) · observed ${m.asof || 'date unavailable'} · ${m.source || 'source unavailable'} · open in Market`"
+            @click="openMark(m.sym)"
+          >
+            <span class="g-head">
+              <span class="label g-symbol">{{ m.sym }}</span>
+              <span class="label g-name">{{ m.label }}</span>
+              <span class="label g-date" :class="m.quality">
+                {{ m.quality === 'stale' ? `${m.asofLabel} · STALE` : m.asofLabel }}
+              </span>
+            </span>
+            <span class="g-body">
+              <span class="fig g-val">
+                <template v-if="m.price != null">{{ usd(m.price) }}</template>
+                <template v-else-if="m.loading">SYNC</template>
+                <template v-else>NO DATA</template>
+              </span>
+              <svg
+                v-if="m.spark"
+                class="g-spark"
+                :class="chgTone(m.chg)"
+                viewBox="0 0 48 16"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
+                <path :d="m.spark" />
+              </svg>
+              <span class="fig g-chg" :class="chgTone(m.chg)">{{ signedPct(m.chg, 2) }}</span>
+              <span class="label g-basis">{{ m.changeBasis }}</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            class="gauge gauge-btn gauge-rot"
+            :class="`quality-${rotationQuality}`"
+            :title="
+              topRotations.in.length || topRotations.out.length
+                ? `Top sector rotation · observed ${rotationAsOf || 'date unavailable'} · in ${topRotations.in.map((s) => s.etf).join(' ')} · out ${topRotations.out.map((s) => s.etf).join(' ')} · open rotation workspace`
+                : 'Sector rotation unavailable until status scan finishes'
+            "
+            @click="openRotation"
+          >
+            <span class="g-head">
+              <span class="label g-symbol">ROTATION</span>
+              <span class="label g-date" :class="rotationQuality">{{ rotationFreshness }}</span>
+            </span>
+            <span v-if="topRotations.in.length || topRotations.out.length" class="rot-board">
+              <span class="rot-col rot-in">
+                <span class="rot-col-h label">IN</span>
+                <span class="rot-legs">
+                  <span v-for="s in topRotations.in" :key="`in-${s.etf}`" class="rot-leg">
+                    <span class="fig">{{ s.etf }}</span>
+                    <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
+                  </span>
+                </span>
+              </span>
+              <span class="rot-col rot-out">
+                <span class="rot-col-h label">OUT</span>
+                <span class="rot-legs">
+                  <span v-for="s in topRotations.out" :key="`out-${s.etf}`" class="rot-leg">
+                    <span class="fig">{{ s.etf }}</span>
+                    <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
+                  </span>
+                </span>
+              </span>
+            </span>
+            <span v-else class="fig g-val">NO ROTATION DATA</span>
+          </button>
+          <button
+            type="button"
+            class="gauge gauge-btn gauge-fg"
+            :class="[`quality-${fearGreed.quality}`, `band-${fearGreed.band}`]"
+            :title="fearGreed.title"
+            @click="openFearGreed"
+          >
+            <span class="g-head">
+              <span class="label g-symbol">FEAR / GREED</span>
+              <span class="label g-date" :class="fearGreed.quality">{{ fearGreed.asofLabel }}</span>
+            </span>
+            <span class="fg-body">
+              <span class="fig g-val" :class="fearGreed.band">{{
+                fearGreed.value == null ? fearGreed.label : fearGreed.value
+              }}</span>
+              <span
+                class="fg-track"
+                role="meter"
+                :aria-valuemin="0"
+                :aria-valuemax="100"
+                :aria-valuenow="fearGreed.value ?? undefined"
+                :aria-valuetext="fearGreed.label"
+                :aria-label="fearGreed.title"
+              >
+                <span class="fg-spectrum" aria-hidden="true"><i /><i /><i /><i /><i /></span>
+                <i class="fg-ticks" aria-hidden="true" />
+                <span
+                  v-if="fearGreed.value != null"
+                  class="fg-thumb"
+                  :class="fearGreed.band"
+                  :style="{ left: `${fearGreed.value}%` }"
+                />
+              </span>
+              <span class="label g-context" :class="fearGreed.band">{{ fearGreed.label }}</span>
+            </span>
+          </button>
+        </div>
+
+        <div v-if="stripWarning" class="strip-warn" :title="stripWarning">
+          <AppIcon name="alert" :size="14" />
+          <span class="label">{{ stripWarning }}</span>
+        </div>
+
+        <div
+          class="market-clock"
+          :class="[
+            marketSessionClass,
+            {
+              early: marketClock.data.value?.is_early_close,
+              mapped: Boolean(marketClock.data.value?.market_session),
+            },
+          ]"
+          :title="marketClockTitle"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="label market-state">
+            {{ marketSessionLabel }}
+            <template v-if="marketClock.data.value?.is_early_close"> · EARLY CLOSE</template>
           </span>
+          <span class="fig market-next">{{ marketTransition }}</span>
+        </div>
+
+        <button
+          type="button"
+          class="strip-search"
+          title="Search symbols and workspaces (⌘K)"
+          aria-label="Search symbols and workspaces"
+          @click="paletteOpen = true"
+        >
+          <AppIcon name="search" :size="15" />
+          <span class="label">SEARCH</span>
+          <kbd class="fig">⌘K</kbd>
         </button>
-      </div>
 
-      <div
-        v-if="stripWarning"
-        class="strip-warn"
-        :title="stripWarning"
-      >
-        <AppIcon name="alert" :size="14" />
-        <span class="label">{{ stripWarning }}</span>
-      </div>
-
-      <div
-        class="market-clock"
-        :class="[marketSessionClass, { early: marketClock.data.value?.is_early_close, mapped: Boolean(marketClock.data.value?.market_session) }]"
-        :title="marketClockTitle"
-        role="status"
-        aria-live="polite"
-      >
-        <span class="label market-state">
+        <span
+          class="mobile-market-state label"
+          :class="marketSessionClass"
+          :title="marketClockTitle"
+        >
           {{ marketSessionLabel }}
-          <template v-if="marketClock.data.value?.is_early_close"> · EARLY CLOSE</template>
         </span>
-        <span class="fig market-next">{{ marketTransition }}</span>
-      </div>
 
-      <button
-        type="button"
-        class="strip-search"
-        title="Search symbols and workspaces (⌘K)"
-        aria-label="Search symbols and workspaces"
-        @click="paletteOpen = true"
-      >
-        <AppIcon name="search" :size="15" />
-        <span class="label">SEARCH</span>
-        <kbd class="fig">⌘K</kbd>
-      </button>
+        <div class="clock">
+          <span class="fig clock-val">{{ clock }}</span>
+          <span class="label">UTC</span>
+        </div>
 
-      <span
-        class="mobile-market-state label"
-        :class="marketSessionClass"
-        :title="marketClockTitle"
-      >
-        {{ marketSessionLabel }}
-      </span>
+        <button
+          type="button"
+          class="strip-profile-btn"
+          :title="
+            operatorEmail
+              ? `Operator: ${operatorEmail} · Workstation preferences`
+              : 'Operator profile & settings'
+          "
+          aria-label="Operator profile and workstation settings"
+          :aria-expanded="profileDrawerOpen"
+          @click="profileDrawerOpen = true"
+        >
+          <div class="strip-profile-avatar">
+            <img v-if="user?.imageUrl" :src="user.imageUrl" alt="" class="strip-avatar-img" />
+            <span v-else class="strip-avatar-initials fig">{{
+              (operatorEmail || 'OP').slice(0, 2).toUpperCase()
+            }}</span>
+            <span class="strip-operator-lamp" aria-hidden="true" />
+          </div>
+          <span class="strip-profile-badge label">OP</span>
+        </button>
+      </header>
 
-      <div class="clock">
-        <span class="fig clock-val">{{ clock }}</span>
-        <span class="label">UTC</span>
-      </div>
-    </header>
+      <!-- ── content ──────────────────────────────────────────────────────── -->
+      <main id="main-content" ref="stage" class="stage" tabindex="-1">
+        <RouterView v-slot="{ Component }">
+          <component :is="Component" />
+        </RouterView>
+      </main>
 
-    <!-- ── content ──────────────────────────────────────────────────────── -->
-    <main id="main-content" ref="stage" class="stage" tabindex="-1">
-      <RouterView v-slot="{ Component }">
-        <component :is="Component" />
-      </RouterView>
-    </main>
+      <!-- ── status footer — always visible ─────────────────────────────────── -->
+      <footer class="foot">
+        <span class="foot-label label">Feed</span>
+        <span
+          class="foot-state label"
+          :class="{ ok: !status.error.value, stale: !!status.error.value }"
+          :title="status.error.value ?? 'Backend status feed'"
+        >
+          {{ status.loading.value ? 'SYNC' : status.error.value ? 'FAULT' : 'OK' }}
+          <template v-if="status.fetchedAt.value"> · {{ age(status.fetchedAt.value) }}</template>
+        </span>
+        <span class="foot-div" aria-hidden="true" />
+        <span class="foot-label label">UTC</span>
+        <span class="fig foot-clock">{{ clock }}</span>
+      </footer>
 
-    <!-- ── status footer — always visible ─────────────────────────────────── -->
-    <footer class="foot">
-      <span class="foot-label label">Feed</span>
-      <span
-        class="foot-state label"
-        :class="{ ok: !status.error.value, stale: !!status.error.value }"
-        :title="status.error.value ?? 'Backend status feed'"
-      >
-        {{ status.loading.value ? 'SYNC' : status.error.value ? 'FAULT' : 'OK' }}
-        <template v-if="status.fetchedAt.value"> · {{ age(status.fetchedAt.value) }}</template>
-      </span>
-      <span class="foot-div" aria-hidden="true" />
-      <span class="foot-label label">UTC</span>
-      <span class="fig foot-clock">{{ clock }}</span>
-    </footer>
+      <SearchPalette
+        v-if="paletteOpen"
+        :symbol-count="status.data.value?.searchable_symbol_count"
+        @close="paletteOpen = false"
+        @select="openSymbol"
+      />
 
-    <SearchPalette
-      v-if="paletteOpen"
-      :symbol-count="status.data.value?.searchable_symbol_count"
-      @close="paletteOpen = false"
-      @select="openSymbol"
-    />
+      <ProfileDrawer
+        v-model="profileDrawerOpen"
+        :user-email="operatorEmail"
+        :user-name="localMode ? 'Local operator' : (user?.fullName ?? user?.firstName ?? '')"
+        :user-avatar="user?.imageUrl ?? ''"
+        :telemetry="{
+          apiStatus: status.error.value ? 'fault' : status.loading.value ? 'sync' : 'ok',
+          activeRoute: String(route.name || route.path),
+          feedFreshness: status.fetchedAt.value ? age(status.fetchedAt.value) : 'live',
+        }"
+        @sign-out="void signOut()"
+      />
     </div>
-  </ClerkLoaded>
+  </BootGate>
 </template>
 
 <style scoped>
@@ -932,11 +1316,9 @@ function openFearGreed(): void {
     'rail stage'
     'rail foot';
   height: 100%;
-  /* Defense in depth, matching body's promise below: a grid item's intrinsic
-     min-content size can otherwise force this box (and the document with it)
-     taller than the viewport — see .rail's min-height/overflow for the actual
-     fix. This just guarantees nothing can silently repeat that upward. */
+  /* Defense in depth: grid item min-height / overflow protection */
   overflow: hidden;
+  transition: grid-template-columns var(--dur) var(--ease-out);
 }
 
 .skip-link {
@@ -951,81 +1333,162 @@ function openFearGreed(): void {
   font: 700 var(--t-small) var(--font-display);
   text-decoration: none;
 }
-.skip-link:focus { transform: none; }
+.skip-link:focus {
+  transform: none;
+}
 
-/* ---- rail ---------------------------------------------------------------- */
+/* ---- rail ----------------------------------------------------------------
+   Functional-layer chrome: Liquid Glass over the canvas. Translucent fill +
+   saturate/blur so content visually passes beneath; monochromatic ink;
+   exactly one accent reserved for the active destination. */
 .rail {
   grid-area: rail;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: var(--s2);
-  padding: var(--s3) 0 0;
-  border-right: var(--hair) solid var(--rule);
-  background: var(--void-lift);
+  gap: 4px;
+  padding: 4px 0 0;
+  border-right: var(--hair) solid var(--glass-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 120px),
+    var(--glass-base);
+  backdrop-filter: var(--chrome-optics-lg);
+  -webkit-backdrop-filter: var(--chrome-optics-lg);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
   z-index: var(--z-rail);
-  /* .rail spans all three grid rows as one item, so its automatic minimum
-     size (min-content height) would otherwise force the shared 1fr row —
-     and with it #app/.shell/the whole document — to grow past the viewport
-     whenever the 13 nav items + logo + find button don't fit. min-height: 0
-     opts out of that; the nav list scrolls so Account stays pinned. */
   min-height: 0;
   overflow: hidden;
   user-select: none;
+  transition: width var(--dur) var(--ease-out);
 }
+
+@media (prefers-reduced-transparency: reduce) {
+  .rail {
+    background: var(--void-lift);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+.rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 2px 6px;
+  min-height: 36px;
+  min-width: 0;
+}
+.rail.is-collapsed .rail-header {
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 4px;
+}
+
+.rail-toggle-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-xs);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--ink-dim);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.rail-toggle-btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+.rail-toggle-btn:hover {
+  background: var(--panel-hi);
+  border-color: var(--glass-border-hi);
+  color: var(--ink);
+}
+
 .nav {
   list-style: none;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  padding: 0 6px;
+}
+.rail.is-collapsed .nav {
   padding: 0 4px;
 }
+
 .rail-foot {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   margin-top: auto;
-  padding: 0 4px 4px;
+  padding: 0 6px 6px;
   overflow: visible;
+  border-top: var(--hair) solid var(--rule-faint);
+}
+.rail.is-collapsed .rail-foot {
+  padding: 0 4px 4px;
 }
 
 .mark {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 2px 4px var(--s3);
+  gap: 7px;
+  min-width: 0;
+  padding: 2px 2px;
   color: var(--ink);
   text-decoration: none;
   transition: color var(--dur-fast) var(--ease-out);
+  overflow: hidden;
 }
-.mark:hover { color: var(--phosphor); text-decoration: none; }
-.mark:hover .mark-rule { background: var(--phosphor); }
+.rail.is-collapsed .mark {
+  justify-content: center;
+  padding: 2px 0;
+}
+.mark:hover {
+  color: var(--phosphor);
+  text-decoration: none;
+}
 
 .mark-word {
   display: flex;
   flex-direction: column;
-  align-items: center;
   font-family: var(--font-display);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 750;
   line-height: 0.95;
   letter-spacing: 0.055em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
-.mark-word strong:last-child { color: var(--ink-dim); }
-.mark:hover .mark-word strong:last-child { color: currentColor; }
-
-.mark-rule {
-  width: 22px;
-  height: var(--hair);
-  background: var(--rule-hi);
-  transition: background var(--dur-fast) var(--ease-out);
+.rail.is-collapsed .mark-word {
+  display: none;
+}
+.mark-word strong:last-child {
+  color: var(--ink-dim);
+}
+.mark:hover .mark-word strong:last-child {
+  color: currentColor;
 }
 
 /* ---- nav ------------------------------------------------------------------ */
@@ -1033,59 +1496,91 @@ function openFearGreed(): void {
 .nav-item {
   position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 3px;
-  min-height: 52px;
-  padding: 6px 4px;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 8px;
   color: var(--ink-dim);
-  border-radius: var(--r-sm);
+  border: var(--hair) solid transparent;
+  border-radius: var(--r-capsule);
   text-decoration: none;
-  transition: color var(--dur-fast) var(--ease-out),
-              background var(--dur-fast) var(--ease-out),
-              transform var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
-.nav-item:hover { color: var(--ink); background: var(--panel-hi); text-decoration: none; }
-
-.nav-idx {
-  font-family: var(--font-data);
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: var(--ink-ghost);
-  opacity: 0.85;
-  line-height: 1;
-  transition: color var(--dur-fast) var(--ease-out);
+.rail.is-collapsed .nav-item {
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  padding: 4px 2px;
+  gap: 2px;
 }
-.nav-item:hover .nav-idx { color: var(--ink-dim); }
+.nav-item:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+  border-color: var(--glass-border);
+  text-decoration: none;
+}
 
 .nav-item.on {
   color: var(--ink);
-  background: var(--panel-hi);
-  border: var(--hair) solid var(--rule);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+  border: var(--hair) solid var(--glass-border);
+  box-shadow:
+    var(--glass-specular-subtle),
+    0 1px 4px rgba(0, 0, 0, 0.35);
   font-weight: 600;
 }
-.nav-item.on .nav-idx {
+.nav-item.on .nav-icon {
   color: var(--phosphor);
 }
 
-/* The active marker is a phosphor bar on the inner edge */
+/* The active marker is a phosphor capsule edge on the leading side */
 .nav-item.on::after {
   content: '';
   position: absolute;
-  left: 0;
-  top: 18%;
-  bottom: 18%;
-  width: 2px;
-  border-radius: 1px;
+  left: -1px;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: var(--r-capsule);
   background: var(--phosphor);
+}
+
+.nav-label-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+.rail.is-collapsed .nav-label-wrap {
+  align-items: center;
+}
+.rail.is-collapsed .nav-label-wrap .nav-hint {
+  display: none;
+}
+
+.nav-hint {
+  font-family: var(--font-data);
+  font-size: 8px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.1;
 }
 
 .nav-item.alert {
   color: var(--warn);
 }
-.nav-item.alert.on { color: var(--phosphor); }
+.nav-item.alert.on {
+  color: var(--phosphor);
+}
 .nav-pulse {
   position: absolute;
   top: 6px;
@@ -1094,64 +1589,99 @@ function openFearGreed(): void {
   height: 6px;
   border-radius: 50%;
   background: var(--warn);
-  animation: pulse-lamp 2s ease-in-out infinite;
+  animation: pulse-lamp var(--dur-pulse) ease-in-out infinite;
 }
 
-.nav-icon { color: currentColor; }
+.nav-icon {
+  color: currentColor;
+  flex: 0 0 auto;
+}
 .nav-title {
   color: inherit;
   font-family: var(--font-ui);
   font-size: var(--t-micro);
   font-weight: 600;
-  line-height: 1.1;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- more dropdown ------------------------------------------------------- */
 .more-wrap {
   position: relative;
   margin-bottom: 4px;
+  margin-top: 4px;
 }
 .clerk-user {
   position: relative;
   width: 100%;
-  min-height: 84px;
+  min-height: 44px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-top: var(--hair) solid var(--rule-faint);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.rail.is-collapsed .clerk-user {
+  flex-direction: column;
   justify-content: center;
-  gap: 3px;
-  padding: 8px 4px 6px;
-  border-top: var(--hair) solid var(--rule);
-  border-radius: var(--r-sm);
-  background: var(--void-lift);
+  padding: 6px 2px;
+  min-height: 44px;
+  gap: 4px;
 }
 
-.operator-status {
+.operator-meta {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 2px;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
 }
-.operator-lamp {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--phosphor);
+.rail.is-collapsed .operator-meta {
+  display: none;
 }
-.operator-badge {
+.rail.is-collapsed .account-signout span {
+  display: none;
+}
+.rail.is-collapsed .account-signout {
+  margin-left: 0;
+  padding: 2px 4px;
+}
+.operator-mail {
   color: var(--ink-ghost);
   font-family: var(--font-data);
-  font-size: 7.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-size: 8px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .operator-avatar-frame {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1px;
+  flex: 0 0 auto;
+  padding: 0;
   border-radius: var(--r-xs);
+}
+.local-operator-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--ink);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
+  background: var(--panel-hi);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
 }
 .clerk-user :deep(.cl-avatarBox),
 .clerk-user :deep(.cl-userButtonAvatarBox) {
@@ -1170,10 +1700,11 @@ function openFearGreed(): void {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 2px 5px;
-  min-height: 18px;
-  margin-top: 2px;
-  color: var(--ink-ghost);
+  padding: 2px 6px;
+  min-height: 26px;
+  margin-top: 0;
+  margin-left: auto;
+  color: var(--ink-dim);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xs);
   background: var(--panel);
@@ -1182,9 +1713,10 @@ function openFearGreed(): void {
   font-weight: 600;
   letter-spacing: 0.06em;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out),
-              border-color var(--dur-fast) var(--ease-out),
-              background var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
 .account-signout .signout-icon {
   color: inherit;
@@ -1212,7 +1744,10 @@ function openFearGreed(): void {
   color: var(--ink-dim);
   background: var(--void);
 }
-.clerk-boot-word { color: var(--ink); font: 600 var(--t-display) var(--font-display); }
+.clerk-boot-word {
+  color: var(--ink);
+  font: 600 var(--t-display) var(--font-display);
+}
 .more-btn {
   width: 100%;
   border: none;
@@ -1222,9 +1757,11 @@ function openFearGreed(): void {
 .more-panel {
   position: fixed;
   z-index: var(--z-overlay);
-  background: var(--panel);
-  border: var(--hair) solid var(--rule-hi);
-  border-radius: var(--r-lg);
+  background: var(--glass-overlay);
+  backdrop-filter: var(--chrome-optics-xl);
+  -webkit-backdrop-filter: var(--chrome-optics-xl);
+  border: var(--hair) solid var(--glass-border-hi);
+  border-radius: var(--r-xl);
   min-width: 220px;
   max-height: min(72vh, 540px);
   overflow-x: hidden;
@@ -1233,7 +1770,14 @@ function openFearGreed(): void {
   display: flex;
   flex-direction: column;
   padding: 4px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85);
+  box-shadow: var(--glass-shadow-lg), var(--glass-specular);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .more-panel {
+    background: var(--panel);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 .more-item {
   display: flex;
@@ -1245,7 +1789,9 @@ function openFearGreed(): void {
   border-radius: var(--r-sm);
   color: var(--ink-dim);
   text-decoration: none;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
   white-space: nowrap;
 }
 .more-search {
@@ -1260,19 +1806,45 @@ function openFearGreed(): void {
   border: var(--hair) solid var(--rule);
   background: var(--void-lift);
   text-align: left;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
-.more-search:hover { color: var(--phosphor); background: var(--phosphor-wash); border-color: var(--phosphor-dim); }
-.more-item:hover { background: var(--panel-hi); color: var(--ink); }
-.more-item.on { color: var(--phosphor); background: var(--phosphor-wash); font-weight: 600; }
-.more-idx { font-family: var(--font-data); font-size: var(--t-micro); opacity: 0.85; font-weight: 600; min-width: 2.5ch; margin-left: auto; color: var(--ink-ghost); text-align: right; }
-.more-title { font-family: var(--font-ui); font-size: var(--t-micro); font-weight: 600; }
+.more-search:hover {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border-color: var(--phosphor-dim);
+}
+.more-item:hover {
+  background: var(--panel-hi);
+  color: var(--ink);
+}
+.more-item.on {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  font-weight: 600;
+}
+.more-idx {
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  opacity: 0.85;
+  font-weight: 600;
+  min-width: 2.5ch;
+  margin-left: auto;
+  color: var(--ink-dim);
+  text-align: right;
+}
+.more-title {
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: 600;
+}
 .more-group {
   padding: var(--s2) var(--s3) var(--s1);
-  color: var(--ink-ghost);
+  color: var(--ink-dim);
   font-family: var(--font-data);
   font-size: 8.5px;
-  font-weight: 700;
+  font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   border-top: var(--hair) solid var(--rule-faint);
@@ -1287,11 +1859,17 @@ function openFearGreed(): void {
   align-items: center;
   gap: var(--s3);
   padding: 0 var(--s4);
-  border-bottom: var(--hair) solid var(--rule);
-  background: color-mix(in srgb, var(--void-lift) 88%, transparent);
-  backdrop-filter: blur(12px);
+  border-bottom: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+  box-shadow: var(--glass-specular-subtle), var(--glass-shadow-sm);
   z-index: var(--z-strip);
   min-width: 0;
+  /* The rail can expand or collapse independently of the viewport. Size the
+     strip's disclosure rules from its real available width, not just from a
+     viewport breakpoint. */
+  container: instrument-strip / inline-size;
 }
 
 .gauges {
@@ -1315,7 +1893,7 @@ function openFearGreed(): void {
   min-width: 0;
   flex: 1 1 132px;
   padding: 7px 12px;
-  border-right: var(--hair) solid var(--rule);
+  border-right: var(--hair) solid var(--glass-border);
 }
 .gauge::after {
   content: '';
@@ -1327,35 +1905,76 @@ function openFearGreed(): void {
   background: var(--rule-hi);
   opacity: 0.45;
 }
-.gauge.quality-current::after { background: var(--phosphor-dim); opacity: 0.8; }
-.gauge.quality-stale::after { background: var(--warn); opacity: 0.9; }
+.gauge.quality-current::after {
+  background: var(--phosphor-dim);
+  opacity: 0.8;
+}
+.gauge.quality-stale::after {
+  background: var(--warn);
+  opacity: 0.9;
+}
 .gauge.quality-missing::after,
-.gauge.fault::after { background: var(--short); opacity: 0.75; }
-.gauge-vol { flex: 0 0 104px; }
-.gauge-rot { flex: 1.6 1 240px; }
-.gauge-fg { flex: 1.2 1 200px; }
-.gauge:last-child { border-right: none; }
+.gauge.fault::after {
+  background: var(--short);
+  opacity: 0.75;
+}
+.gauge-vol {
+  flex: 0 0 104px;
+}
+.gauge-mark {
+  min-width: 118px;
+}
+.gauge-rot {
+  flex: 1.6 1 240px;
+  min-width: 196px;
+}
+.gauge-fg {
+  flex: 1.2 1 200px;
+  min-width: 176px;
+}
+.gauge:last-child {
+  border-right: none;
+}
 .gauge-btn {
   border: none;
   background: transparent;
   cursor: pointer;
   text-align: left;
   color: inherit;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
-.gauge-btn:hover { background: var(--panel-hi); }
-.gauge-btn:hover::after { height: 2px; background: var(--phosphor); opacity: 1; }
-.gauge-btn:hover .g-val { color: var(--phosphor); }
-.gauge-btn.loading .g-val { color: var(--ink-dim); }
-.gauge-btn.fault .g-val { color: var(--warn); }
+.gauge-btn:hover {
+  background: var(--glass-surface-hi);
+}
+.gauge-btn:hover::after {
+  height: 2px;
+  background: var(--phosphor);
+  opacity: 1;
+}
+.gauge-btn:hover .g-val {
+  color: var(--phosphor);
+}
+.gauge-btn.loading .g-val {
+  color: var(--ink-dim);
+}
+.gauge-btn.fault .g-val {
+  color: var(--warn);
+}
 .g-head,
 .g-body {
   display: flex;
   align-items: center;
   min-width: 0;
 }
-.g-head { gap: 6px; }
-.g-body { gap: 7px; align-self: end; }
+.g-head {
+  gap: 6px;
+}
+.g-body {
+  gap: 7px;
+  align-self: end;
+}
 .gauge .label,
 .strip-search .label {
   color: var(--ink-dim);
@@ -1365,35 +1984,99 @@ function openFearGreed(): void {
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
-.g-symbol { color: var(--ink) !important; }
-.g-name { overflow: hidden; color: var(--ink-ghost) !important; font-size: 8px !important; text-overflow: ellipsis; }
-.g-date {
+.g-symbol {
+  flex: 0 0 auto;
+  color: var(--ink) !important;
+  white-space: nowrap;
+}
+/* Name, date and spark absorb every pixel of shrink so the symbol, price and
+   change never collapse into unreadable slivers. */
+.g-name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
-  margin-left: auto;
-  color: var(--ink-ghost) !important;
+  color: var(--ink-dim) !important;
   font-size: 8px !important;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.g-date.stale { color: var(--warn) !important; }
-.g-date.missing { color: var(--short) !important; }
-.g-val { flex: 0 0 auto; color: var(--ink); font-size: var(--t-small); font-weight: 600; line-height: 1.15; white-space: nowrap; }
-.g-chg { margin-left: auto; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
-.g-chg.pos { color: var(--long); }
-.g-chg.neg { color: var(--short); }
-.g-chg.flat { color: var(--ink-dim); }
-.g-basis { color: var(--ink-ghost) !important; font-size: 8px !important; }
-.g-context { margin-left: auto; color: var(--ink-ghost) !important; font-size: 8px !important; }
-.g-context.stale { color: var(--warn) !important; }
+.g-date {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--ink-dim) !important;
+  font-size: 8px !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.g-date.stale {
+  color: var(--warn) !important;
+}
+.g-date.missing {
+  color: var(--short) !important;
+}
+.g-val {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-size: var(--t-small);
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.g-chg {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.g-chg.pos {
+  color: var(--long);
+}
+.g-chg.neg {
+  color: var(--short);
+}
+.g-chg.flat {
+  color: var(--ink-dim);
+}
+.g-basis {
+  flex: 0 0 auto;
+  color: var(--ink-dim) !important;
+  font-size: 8px !important;
+  white-space: nowrap;
+}
+.g-context {
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
+  color: var(--ink-dim) !important;
+  font-size: 8px !important;
+}
+.g-context.stale {
+  color: var(--warn) !important;
+}
 .g-spark {
+  flex: 0 1 48px;
   width: 48px;
+  min-width: 0;
   height: 16px;
   overflow: visible;
   color: var(--ink-dim);
 }
-.g-spark path { fill: none; stroke: currentColor; stroke-width: 1.35; vector-effect: non-scaling-stroke; }
-.g-spark.pos { color: var(--long); }
-.g-spark.neg { color: var(--short); }
+.g-spark path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  vector-effect: non-scaling-stroke;
+}
+.g-spark.pos {
+  color: var(--long);
+}
+.g-spark.neg {
+  color: var(--short);
+}
 .rot-board {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1409,7 +2092,7 @@ function openFearGreed(): void {
   min-width: 0;
 }
 .rot-col-h {
-  color: var(--ink-ghost) !important;
+  color: var(--ink-dim) !important;
   font-size: 8px !important;
   letter-spacing: 0.08em;
 }
@@ -1420,10 +2103,23 @@ function openFearGreed(): void {
   min-width: 0;
   overflow: hidden;
 }
-.rot-leg { display: flex; align-items: baseline; gap: 4px; min-width: 0; font-weight: 600; white-space: nowrap; }
-.rot-leg small { font-size: 8px; }
-.rot-in { color: var(--long); }
-.rot-out { color: var(--short); }
+.rot-leg {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.rot-leg small {
+  font-size: 8px;
+}
+.rot-in {
+  color: var(--long);
+}
+.rot-out {
+  color: var(--short);
+}
 .fg-body {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1439,6 +2135,7 @@ function openFearGreed(): void {
   min-width: 0;
   background: var(--void);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs);
 }
 .fg-spectrum {
   display: flex;
@@ -1450,11 +2147,21 @@ function openFearGreed(): void {
   display: block;
   height: 100%;
 }
-.fg-spectrum i:nth-child(1) { background: var(--short); }
-.fg-spectrum i:nth-child(2) { background: color-mix(in srgb, var(--short) 55%, var(--warn)); }
-.fg-spectrum i:nth-child(3) { background: var(--ink-faint); }
-.fg-spectrum i:nth-child(4) { background: color-mix(in srgb, var(--long) 55%, var(--warn)); }
-.fg-spectrum i:nth-child(5) { background: var(--long); }
+.fg-spectrum i:nth-child(1) {
+  background: var(--short);
+}
+.fg-spectrum i:nth-child(2) {
+  background: color-mix(in srgb, var(--short) 55%, var(--warn));
+}
+.fg-spectrum i:nth-child(3) {
+  background: var(--ink-faint);
+}
+.fg-spectrum i:nth-child(4) {
+  background: color-mix(in srgb, var(--long) 55%, var(--warn));
+}
+.fg-spectrum i:nth-child(5) {
+  background: var(--long);
+}
 .fg-ticks {
   position: absolute;
   inset: 0;
@@ -1478,22 +2185,38 @@ function openFearGreed(): void {
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.28);
 }
 .fg-thumb.extreme-fear,
-.fg-thumb.fear { background: var(--short); }
+.fg-thumb.fear {
+  background: var(--short);
+}
 .fg-thumb.greed,
-.fg-thumb.extreme-greed { background: var(--long); }
+.fg-thumb.extreme-greed {
+  background: var(--long);
+}
 .g-val.extreme-fear,
 .g-val.fear,
 .g-context.extreme-fear,
-.g-context.fear { color: var(--short) !important; }
+.g-context.fear {
+  color: var(--short) !important;
+}
 .g-val.greed,
 .g-val.extreme-greed,
 .g-context.greed,
-.g-context.extreme-greed { color: var(--long) !important; }
+.g-context.extreme-greed {
+  color: var(--long) !important;
+}
 .g-val.neutral,
-.g-context.neutral { color: var(--ink-dim) !important; }
-.g-val.missing { color: var(--ink-ghost) !important; }
-.gauge.warm .g-val { color: var(--warn); }
-.gauge.hot .g-val { color: var(--short); }
+.g-context.neutral {
+  color: var(--ink-dim) !important;
+}
+.g-val.missing {
+  color: var(--ink-dim) !important;
+}
+.gauge.warm .g-val {
+  color: var(--warn);
+}
+.gauge.hot .g-val {
+  color: var(--short);
+}
 
 .strip-warn {
   display: flex;
@@ -1522,36 +2245,69 @@ function openFearGreed(): void {
   flex: 0 0 auto;
   min-width: 108px;
   padding-left: var(--s4);
-  border-left: var(--hair) solid var(--rule);
+  border-left: var(--hair) solid var(--glass-border);
 }
-.market-clock.mapped .market-next { color: var(--ink); }
-.market-state { color: var(--ink-dim); font-family: var(--font-data); font-weight: 600; font-size: var(--t-micro); }
-.market-next { color: var(--ink); font-size: var(--t-small); font-weight: 600; }
-.market-clock.regular .market-state { color: var(--phosphor); }
+.market-clock.mapped .market-next {
+  color: var(--ink);
+}
+.market-state {
+  color: var(--ink-dim);
+  font-family: var(--font-data);
+  font-weight: 600;
+  font-size: var(--t-micro);
+}
+.market-next {
+  color: var(--ink);
+  font-size: var(--t-small);
+  font-weight: 600;
+}
+.market-clock.regular .market-state {
+  color: var(--phosphor);
+}
 .market-clock.premarket .market-state,
-.market-clock.after_hours .market-state { color: var(--ink-soft); }
+.market-clock.after_hours .market-state {
+  color: var(--ink-soft);
+}
 .market-clock.closed .market-state,
 .market-clock.early .market-state,
-.market-clock.unknown .market-state { color: var(--warn); }
-.mobile-market-state { display: none; }
+.market-clock.unknown .market-state {
+  color: var(--warn);
+}
+.mobile-market-state {
+  display: none;
+}
 
 .strip-search {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
-  padding: 2px 8px;
-  border-radius: var(--r-sm);
+  min-height: 44px;
+  padding: 2px 12px;
+  border-radius: var(--r-capsule);
   color: var(--ink-dim);
-  border: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  box-shadow: var(--glass-specular-subtle);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
-.strip-search:hover { color: var(--ink); background: var(--panel-hi); border-color: var(--rule-hi); }
-.strip-search .label { color: inherit; }
+.strip-search:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+  border-color: var(--glass-border-hi);
+  box-shadow: var(--glass-specular);
+}
+.strip-search .label {
+  color: inherit;
+}
 .strip-search kbd {
   padding: 1px 4px;
-  color: var(--ink-ghost);
+  color: var(--ink-dim);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xs);
   background: var(--panel);
@@ -1559,14 +2315,87 @@ function openFearGreed(): void {
   font-size: 8px;
 }
 
-/* feed moved to .foot */
-
-.clock { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
 .clock-val {
   font-size: var(--t-small);
   color: var(--ink);
   font-weight: 600;
   letter-spacing: 0.04em;
+}
+
+.strip-profile-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 2px 10px 2px 4px;
+  border-radius: var(--r-capsule);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: var(--chrome-optics-sm);
+  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  box-shadow: var(--glass-specular-subtle);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.strip-profile-btn:hover {
+  background: var(--panel-hi);
+  border-color: var(--glass-border-hi);
+  box-shadow: var(--glass-specular);
+  color: var(--ink);
+}
+.strip-profile-avatar {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-xs);
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule-hi);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+.strip-avatar-img {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-xs);
+  object-fit: cover;
+}
+.strip-avatar-initials {
+  font-family: var(--font-data);
+  font-size: 8.5px;
+  font-weight: 700;
+  color: var(--phosphor);
+}
+.strip-operator-lamp {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--phosphor);
+  border: 1px solid var(--void);
+}
+.strip-profile-badge {
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--ink-dim);
+  letter-spacing: 0.06em;
+}
+.strip-profile-btn:hover .strip-profile-badge {
+  color: var(--phosphor);
 }
 
 /* ---- stage --------------------------------------------------------------- */
@@ -1586,15 +2415,25 @@ function openFearGreed(): void {
   gap: var(--s4);
   padding: 0 var(--s5);
   height: 28px;
-  border-top: var(--hair) solid var(--rule);
+  border-top: var(--hair) solid var(--glass-border);
   background: var(--void-lift);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
   z-index: var(--z-strip);
 }
 
-.foot-label { color: var(--ink-ghost); }
-.foot-state { font-weight: 700; }
-.foot-state.ok { color: var(--long); }
-.foot-state.stale { color: var(--short); }
+.foot-label {
+  color: var(--ink-dim);
+}
+.foot-state {
+  font-weight: 700;
+}
+.foot-state.ok {
+  color: var(--long);
+}
+.foot-state.stale {
+  color: var(--short);
+}
 
 .foot-div {
   width: var(--hair);
@@ -1610,26 +2449,82 @@ function openFearGreed(): void {
   letter-spacing: 0.04em;
 }
 
+/* The strip sheds tape detail, then whole gauges, as width runs out — a gauge
+   is dropped rather than squeezed below the width its figures need to read. */
+@media (max-width: 1900px) {
+  .g-name,
+  .g-spark,
+  .g-basis {
+    display: none;
+  }
+}
+@media (max-width: 1560px) {
+  .mark-xle {
+    display: none;
+  }
+}
+@media (max-width: 1460px) {
+  .mark-dia {
+    display: none;
+  }
+}
 @media (max-width: 1320px) {
-  .gauge-rot { flex: 1.2 1 200px; }
-  .rot-leg:nth-child(n + 2) { display: none; }
+  .gauge-rot {
+    display: none;
+  }
+  .rot-leg:nth-child(n + 2) {
+    display: none;
+  }
 }
 @media (max-width: 1180px) {
-  .gauge-rot { display: none; }
-  .strip-search { min-width: 34px; padding: 0 8px; }
+  .mark-qqq {
+    display: none;
+  }
+  .strip-search {
+    min-width: 34px;
+    padding: 0 8px;
+  }
   .strip-search .label,
-  .strip-search kbd { display: none; }
+  .strip-search kbd {
+    display: none;
+  }
 }
 @media (max-width: 1080px) {
   .mark-dia,
-  .mark-xle { display: none; }
-  .strip-warn { display: none; }
+  .mark-xle {
+    display: none;
+  }
+  .strip-warn {
+    display: none;
+  }
+}
+
+/* Header information has an intentional reading order: the live benchmark
+   tape remains first, then market state, search and operator controls. The
+   broader sentiment and duplicate UTC clock yield before any gauge is allowed
+   to be partially painted beneath the controls. Container queries keep this
+   correct whether the operator has the rail expanded or collapsed. */
+@container instrument-strip (max-width: 920px) {
+  .gauge-fg {
+    display: none;
+  }
+}
+
+@container instrument-strip (max-width: 700px) {
+  .clock {
+    display: none;
+  }
+
+  .market-clock {
+    min-width: 98px;
+    padding-left: var(--s2);
+  }
 }
 
 @media (max-width: 780px) {
   .shell {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 52px minmax(0, 1fr) 64px;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: 52px minmax(0, 1fr) calc(64px + env(safe-area-inset-bottom, 0px));
     grid-template-areas:
       'strip'
       'stage'
@@ -1640,70 +2535,184 @@ function openFearGreed(): void {
     align-items: stretch;
     gap: 0;
     padding: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     border-top: var(--hair) solid var(--rule-hi);
     border-right: 0;
     overflow-x: auto;
     overflow-y: hidden;
+    width: auto !important;
+    min-height: calc(64px + env(safe-area-inset-bottom, 0px));
   }
-  .mark { display: none; }
-  .nav li:nth-child(5) { display: none; }
-  .nav { flex: 1 1 auto; flex-direction: row; gap: 0; min-width: 0; overflow-x: auto; padding: 0; }
-  .nav li { display: flex; flex: 1 0 52px; }
-  .nav-idx { display: none; }
-  .nav-item {
+  .rail-header {
+    display: none;
+  }
+  .mark {
+    display: none;
+  }
+  .nav {
     flex: 1 1 auto;
+    flex-direction: row;
+    gap: 0;
+    min-width: 0;
+    overflow-x: auto;
+    padding: 0;
+  }
+  .nav li {
+    display: none;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .nav li.tab-dest-li {
+    display: flex;
+  }
+  .nav-hint {
+    display: none !important;
+  }
+  .nav-item {
+    /* Every destination owns exactly one slot in the bottom rail. Without a
+       definite width, the longer "Options" label uses its intrinsic width
+       and paints over its neighbouring destination on narrow phones. */
+    flex: 1 1 0;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
     min-height: 64px;
     height: 64px;
     justify-content: center;
-    padding: 6px 3px;
+    padding: 6px 2px;
+    gap: 2px;
     border-radius: 0;
   }
-  .nav-item.on::after { top: auto; right: 18%; bottom: 0; left: 18%; width: auto; height: 2px; }
-  .nav-pulse { top: 8px; right: calc(50% - 15px); }
-  .rail-foot { flex-direction: row; margin-top: 0; padding: 0; }
-  .more-wrap { flex: 0 0 52px; width: 52px; margin-top: 0; margin-bottom: 0; }
-  .clerk-user {
-    display: flex;
-    flex: 0 0 52px;
-    width: 52px;
+  .nav-label-wrap {
+    align-items: center;
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .nav-item.on::after {
+    top: auto;
+    right: 18%;
+    bottom: 0;
+    left: 18%;
+    width: auto;
+    height: 2px;
+  }
+  .nav-pulse {
+    top: 8px;
+    right: calc(50% - 15px);
+  }
+  .rail-foot {
+    flex-direction: row;
     margin-top: 0;
+    padding: 0;
+    border-top: none;
+  }
+  .more-wrap {
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  .clerk-user {
+    display: none;
+  }
+  .account-signout {
+    display: none;
+  }
+  .more-btn {
     min-height: 64px;
     height: 64px;
-    padding: 6px 3px;
-    border-top: 0;
     border-radius: 0;
-    border-left: var(--hair) solid var(--rule-faint);
   }
-  .operator-status { display: none; }
-  .account-signout { display: none; }
-  .more-btn { min-height: 64px; height: 64px; border-radius: 0; }
-  .foot { display: none; }
-  .gauges { display: flex; flex: 1 1 auto; }
+  .foot {
+    display: none;
+  }
+  .gauges {
+    display: flex;
+    flex: 1 1 auto;
+  }
   .gauge-vol,
   .gauge-rot,
   .gauge-fg,
-  .gauge-mark:not(.primary-mark) { display: none; }
-  .gauge-mark.primary-mark { display: grid; flex: 1 1 auto; max-width: 178px; padding: 0 9px; border-right: 0; }
+  .gauge-mark:not(.primary-mark) {
+    display: none;
+  }
+  .gauge-mark.primary-mark {
+    display: grid;
+    flex: 1 1 auto;
+    max-width: 178px;
+    padding: 0 9px;
+    border-right: 0;
+  }
   .gauge-mark.primary-mark .g-date,
-  .gauge-mark.primary-mark .g-name { display: none; }
-  .gauge-mark.primary-mark .g-basis { display: none; }
-  .gauge-mark.primary-mark .g-body { gap: 5px; }
-  .gauge-mark.primary-mark .g-spark { width: 40px; }
-  .stage { padding: var(--s3); }
-  .nav-title { font-size: 8px; }
-  .clock { display: none; }
-  .strip-warn { display: none; }
-  .strip { gap: var(--s2); padding: 0 var(--s3); overflow: hidden; }
-  .market-clock { display: none; }
-  .strip-search { min-width: 34px; padding: 0 8px; border-left: 0; }
+  .gauge-mark.primary-mark .g-name {
+    display: none;
+  }
+  .gauge-mark.primary-mark .g-basis {
+    display: none;
+  }
+  .gauge-mark.primary-mark .g-body {
+    gap: 5px;
+  }
+  .gauge-mark.primary-mark .g-spark {
+    width: 40px;
+  }
+  .stage {
+    padding: var(--s3);
+  }
+  .nav-title {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+  .more-btn .nav-title {
+    font-size: 10px;
+  }
+  .more-btn .nav-hint {
+    display: none;
+  }
+  .clock {
+    display: none;
+  }
+  .strip-warn {
+    display: none;
+  }
+  .strip {
+    gap: var(--s2);
+    padding: 0 var(--s3);
+    overflow: hidden;
+  }
+  .market-clock {
+    display: none;
+  }
+  .strip-search {
+    min-width: 34px;
+    padding: 0 8px;
+    border-left: 0;
+  }
   .strip-search .label,
-  .strip-search kbd { display: none; }
+  .strip-search kbd {
+    display: none;
+  }
+  .strip-profile-btn {
+    padding: 2px 4px;
+    min-width: 44px;
+    min-height: 44px;
+    height: 44px;
+  }
+  .strip-profile-badge {
+    display: none;
+  }
   .mobile-market-state {
     display: block;
     margin-left: auto;
     color: var(--phosphor);
   }
   .mobile-market-state.closed,
-  .mobile-market-state.unknown { color: var(--warn); }
+  .mobile-market-state.unknown {
+    color: var(--warn);
+  }
 }
 </style>

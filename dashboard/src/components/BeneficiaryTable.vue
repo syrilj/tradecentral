@@ -132,15 +132,21 @@ function navMarket(symbol: string) {
             <th class="col-tier">TIER</th>
             <th class="col-sortable col-num" @click="toggleSort('elasticity')">
               ELASTICITY SCORE
-              <span class="sort-indicator">{{ sortBy === 'elasticity' ? (sortAsc ? '▲' : '▼') : '' }}</span>
+              <span class="sort-indicator">{{
+                sortBy === 'elasticity' ? (sortAsc ? '▲' : '▼') : ''
+              }}</span>
             </th>
             <th class="col-sortable col-num" @click="toggleSort('sensitivity')">
               CAPEX SENS.
-              <span class="sort-indicator">{{ sortBy === 'sensitivity' ? (sortAsc ? '▲' : '▼') : '' }}</span>
+              <span class="sort-indicator">{{
+                sortBy === 'sensitivity' ? (sortAsc ? '▲' : '▼') : ''
+              }}</span>
             </th>
             <th class="col-sortable col-num" @click="toggleSort('concentration')">
               REV CONC. %
-              <span class="sort-indicator">{{ sortBy === 'concentration' ? (sortAsc ? '▲' : '▼') : '' }}</span>
+              <span class="sort-indicator">{{
+                sortBy === 'concentration' ? (sortAsc ? '▲' : '▼') : ''
+              }}</span>
             </th>
             <th class="col-sortable col-num" @click="toggleSort('pe')">
               FWD P/E
@@ -195,7 +201,9 @@ function navMarket(symbol: string) {
             </td>
 
             <td class="col-num font-mono">
-              <span class="sens-val">{{ formatCapExSensitivity(n.metrics?.capex_sensitivity) }}</span>
+              <span class="sens-val">{{
+                formatCapExSensitivity(n.metrics?.capex_sensitivity)
+              }}</span>
             </td>
 
             <td class="col-num font-mono">
@@ -204,7 +212,9 @@ function navMarket(symbol: string) {
                 <div class="conc-mini-bar">
                   <div
                     class="conc-mini-fill"
-                    :style="{ width: `${Math.min(100, (n.metrics?.revenue_concentration_pct ?? 0) * 1.5)}%` }"
+                    :style="{
+                      width: `${Math.min(100, (n.metrics?.revenue_concentration_pct ?? 0) * 1.5)}%`,
+                    }"
                   />
                 </div>
               </div>

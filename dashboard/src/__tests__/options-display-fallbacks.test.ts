@@ -8,6 +8,7 @@ import {
   optCompact,
   optUsd,
   optGex,
+  optSignedGex,
   num,
   pct,
   pctFrac,
@@ -17,29 +18,19 @@ import {
   compact,
   DASH,
 } from '@/format'
-import {
-  computeVolOiRatio,
-  formatDteBadge,
-  formatMoneyness,
-} from '@/flowDisplay'
+import { computeVolOiRatio, formatDteBadge, formatMoneyness } from '@/flowDisplay'
 import { calculateFeaturedSetup, calculateRingOffset, RING_CIRCUMFERENCE } from '@/squeezeCalc'
 
-describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimination', () => {
+describe('Milestone 4: Options & Squeeze Formatters Honour the No-Fake-Zero Rule', () => {
   describe('1. optNum Formatter', () => {
-    it('returns clean "0.00" on null, undefined, NaN, and non-finite values by default', () => {
-      expect(optNum(null)).toBe('0.00')
-      expect(optNum(undefined)).toBe('0.00')
-      expect(optNum(NaN)).toBe('0.00')
-      expect(optNum(Infinity)).toBe('0.00')
-      expect(optNum(-Infinity)).toBe('0.00')
-      expect(optNum('')).toBe('0.00')
-      expect(optNum('not-a-number')).toBe('0.00')
-    })
-
-    it('respects decimal precision for fallbacks', () => {
-      expect(optNum(null, 0)).toBe('0')
-      expect(optNum(null, 1)).toBe('0.0')
-      expect(optNum(null, 3)).toBe('0.000')
+    it('returns DASH on null, undefined, NaN, and non-finite values', () => {
+      expect(optNum(null)).toBe(DASH)
+      expect(optNum(undefined)).toBe(DASH)
+      expect(optNum(NaN)).toBe(DASH)
+      expect(optNum(Infinity)).toBe(DASH)
+      expect(optNum(-Infinity)).toBe(DASH)
+      expect(optNum('')).toBe(DASH)
+      expect(optNum('not-a-number')).toBe(DASH)
     })
 
     it('formats valid numbers with commas and fixed precision', () => {
@@ -50,11 +41,11 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
   })
 
   describe('2. optPct Formatter', () => {
-    it('returns "0.00%" on missing inputs', () => {
-      expect(optPct(null)).toBe('0.00%')
-      expect(optPct(undefined)).toBe('0.00%')
-      expect(optPct(NaN)).toBe('0.00%')
-      expect(optPct(null, 1)).toBe('0.0%')
+    it('returns DASH on missing inputs', () => {
+      expect(optPct(null)).toBe(DASH)
+      expect(optPct(undefined)).toBe(DASH)
+      expect(optPct(NaN)).toBe(DASH)
+      expect(optPct(null, 1)).toBe(DASH)
     })
 
     it('formats valid percentages', () => {
@@ -65,10 +56,10 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
   })
 
   describe('3. optPctFrac Formatter', () => {
-    it('returns "0.00%" or "0.0%" on missing inputs', () => {
-      expect(optPctFrac(null, 2)).toBe('0.00%')
-      expect(optPctFrac(undefined, 1)).toBe('0.0%')
-      expect(optPctFrac(NaN)).toBe('0.00%')
+    it('returns DASH on missing inputs', () => {
+      expect(optPctFrac(null, 2)).toBe(DASH)
+      expect(optPctFrac(undefined, 1)).toBe(DASH)
+      expect(optPctFrac(NaN)).toBe(DASH)
     })
 
     it('multiplies fractional input by 100 and formats as percent', () => {
@@ -79,13 +70,13 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
   })
 
   describe('4. optSignedPct Formatter', () => {
-    it('returns "+0.00%" or "+0.0%" with explicit plus on missing inputs', () => {
-      expect(optSignedPct(null, 2)).toBe('+0.00%')
-      expect(optSignedPct(undefined, 1)).toBe('+0.0%')
-      expect(optSignedPct(NaN)).toBe('+0.00%')
+    it('returns DASH on missing inputs', () => {
+      expect(optSignedPct(null, 2)).toBe(DASH)
+      expect(optSignedPct(undefined, 1)).toBe(DASH)
+      expect(optSignedPct(NaN)).toBe(DASH)
     })
 
-    it('formats signed percentages with explicit direction', () => {
+    it('formats signed percentages with explicit direction, + on zero', () => {
       expect(optSignedPct(5.25, 2)).toBe('+5.25%')
       expect(optSignedPct(0, 1)).toBe('+0.0%')
       expect(optSignedPct(-3.5, 1)).toBe('-3.5%')
@@ -93,14 +84,14 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
   })
 
   describe('5. optSigned Formatter', () => {
-    it('returns "+0.00" or "+0.0" with explicit plus on missing inputs', () => {
-      expect(optSigned(null, 2)).toBe('+0.00')
-      expect(optSigned(undefined, 1)).toBe('+0.0')
-      expect(optSigned(NaN)).toBe('+0.00')
-      expect(optSigned(null, 0)).toBe('+0')
+    it('returns DASH on missing inputs', () => {
+      expect(optSigned(null, 2)).toBe(DASH)
+      expect(optSigned(undefined, 1)).toBe(DASH)
+      expect(optSigned(NaN)).toBe(DASH)
+      expect(optSigned(null, 0)).toBe(DASH)
     })
 
-    it('formats signed numbers with explicit plus', () => {
+    it('formats signed numbers with explicit plus, + on zero', () => {
       expect(optSigned(45.6, 1)).toBe('+45.6')
       expect(optSigned(0, 1)).toBe('+0.0')
       expect(optSigned(-12.34, 2)).toBe('-12.34')
@@ -108,10 +99,10 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
   })
 
   describe('6. optCompact Formatter', () => {
-    it('returns "0" on missing inputs without em-dash', () => {
-      expect(optCompact(null)).toBe('0')
-      expect(optCompact(undefined)).toBe('0')
-      expect(optCompact(NaN)).toBe('0')
+    it('returns DASH on missing inputs', () => {
+      expect(optCompact(null)).toBe(DASH)
+      expect(optCompact(undefined)).toBe(DASH)
+      expect(optCompact(NaN)).toBe(DASH)
     })
 
     it('formats large values into compact representations', () => {
@@ -123,11 +114,11 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
   })
 
   describe('7. optUsd Formatter', () => {
-    it('returns "$0.00" on missing inputs without em-dash', () => {
-      expect(optUsd(null)).toBe('$0.00')
-      expect(optUsd(undefined)).toBe('$0.00')
-      expect(optUsd(NaN)).toBe('$0.00')
-      expect(optUsd(null, 0)).toBe('$0')
+    it('returns DASH on missing inputs', () => {
+      expect(optUsd(null)).toBe(DASH)
+      expect(optUsd(undefined)).toBe(DASH)
+      expect(optUsd(NaN)).toBe(DASH)
+      expect(optUsd(null, 0)).toBe(DASH)
     })
 
     it('formats valid currency values', () => {
@@ -137,12 +128,15 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
     })
   })
 
-  describe('8. optGex Formatter', () => {
-    it('returns "$0.0M" on missing inputs without em-dash', () => {
-      expect(optGex(null)).toBe('$0.0M')
-      expect(optGex(undefined)).toBe('$0.0M')
-      expect(optGex(NaN)).toBe('$0.0M')
-      expect(optGex(null, 2)).toBe('$0.00M')
+  describe('8. optGex / optSignedGex Formatters', () => {
+    it('returns DASH on missing inputs', () => {
+      expect(optGex(null)).toBe(DASH)
+      expect(optGex(undefined)).toBe(DASH)
+      expect(optGex(NaN)).toBe(DASH)
+      expect(optGex(null, 2)).toBe(DASH)
+      expect(optSignedGex(null)).toBe(DASH)
+      expect(optSignedGex(undefined)).toBe(DASH)
+      expect(optSignedGex(NaN)).toBe(DASH)
     })
 
     it('formats GEX magnitude in millions and billions with dollar sign', () => {
@@ -151,6 +145,13 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
       expect(optGex(2500)).toBe('$2.5B')
       expect(optGex(-1800)).toBe('-$1.8B')
       expect(optGex(0)).toBe('$0.0M')
+    })
+
+    it('formats signed GEX with sign preceding the dollar symbol, + on zero', () => {
+      expect(optSignedGex(12.4)).toBe('+$12.4M')
+      expect(optSignedGex(-5.2)).toBe('-$5.2M')
+      expect(optSignedGex(2500)).toBe('+$2.5B')
+      expect(optSignedGex(0)).toBe('+$0.0M')
     })
   })
 
@@ -215,6 +216,24 @@ describe('Milestone 4: Options & Squeeze Clean Numeric Fallbacks & Em-Dash Elimi
       expect(signed(null)).toBe(DASH)
       expect(signedPct(null)).toBe(DASH)
       expect(compact(null)).toBe(DASH)
+    })
+  })
+
+  describe('12. Options/Squeeze Formatters Are Honest About Missing Data (regression)', () => {
+    const badInputs = [null, undefined, NaN, Infinity, -Infinity, '', 'not-a-number']
+
+    it('every opt* formatter returns DASH for every non-finite/missing input shape', () => {
+      for (const bad of badInputs) {
+        expect(optNum(bad)).toBe(DASH)
+        expect(optPct(bad)).toBe(DASH)
+        expect(optPctFrac(bad)).toBe(DASH)
+        expect(optSignedPct(bad)).toBe(DASH)
+        expect(optSigned(bad)).toBe(DASH)
+        expect(optCompact(bad)).toBe(DASH)
+        expect(optUsd(bad)).toBe(DASH)
+        expect(optGex(bad)).toBe(DASH)
+        expect(optSignedGex(bad)).toBe(DASH)
+      }
     })
   })
 })

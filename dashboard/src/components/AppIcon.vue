@@ -1,12 +1,15 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
-  name: string
-  size?: number
-  stroke?: number
-}>(), {
-  size: 18,
-  stroke: 1.7,
-})
+withDefaults(
+  defineProps<{
+    name: string
+    size?: number
+    stroke?: number
+  }>(),
+  {
+    size: 18,
+    stroke: 1.7,
+  },
+)
 </script>
 
 <template>
@@ -44,6 +47,13 @@ withDefaults(defineProps<{
     </template>
     <template v-else-if="name === 'flow'">
       <path d="M3 12h3l2.2-6 4 12 2.4-7 1.7 4H21" />
+    </template>
+    <template v-else-if="name === 'regime'">
+      <!-- A distribution sitting across a threshold: the flip line, and mass
+           on either side of it. -->
+      <path d="M3 13h18" stroke-dasharray="3 2.5" />
+      <path d="M3 19c4 0 3.5-13 9-13s5 13 9 13" />
+      <path d="M12 3v3" />
     </template>
     <template v-else-if="name === 'drift'">
       <path d="M3 12h18" />
@@ -114,6 +124,11 @@ withDefaults(defineProps<{
     <template v-else-if="name === 'changepoints'">
       <path d="M3 18h18M5 15l4-4 3 2M15 10l4-5" />
       <path d="M13.5 4v14" stroke-dasharray="2 2" />
+    </template>
+    <template v-else-if="name === 'kalman'">
+      <path d="M3 17.5c3.5 0 4-9 7.5-9s4 9 7.5 9" />
+      <path d="M3 20.5h18" />
+      <path d="M3.5 13.5 8 11l4 3.5 7-8" />
     </template>
     <template v-else-if="name === 'cloud'">
       <path d="M7 18h10a4 4 0 0 0 .7-7.9A6 6 0 0 0 6.2 9 4.5 4.5 0 0 0 7 18Z" />
@@ -209,6 +224,23 @@ withDefaults(defineProps<{
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="4" />
       <path d="M12 12 18.5 5.5M12 3v2M21 12h-2M12 21v-2M3 12h2" />
+    </template>
+    <template v-else-if="name === 'stack'">
+      <path d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z" />
+      <path d="M4 12h16M4 17.5h16" />
+    </template>
+    <template v-else-if="name === 'globe'">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17" />
+      <path
+        d="M12 3.5c2.4 2.2 3.7 5.2 3.7 8.5s-1.3 6.3-3.7 8.5c-2.4-2.2-3.7-5.2-3.7-8.5s1.3-6.3 3.7-8.5Z"
+      />
+    </template>
+    <template v-else-if="name === 'absorption'">
+      <path d="M4 19h16" />
+      <path d="M4 12h16" stroke-dasharray="2 2" />
+      <path d="m8 6 4 4 4-4" />
+      <path d="M12 2v8" />
     </template>
     <template v-else>
       <circle cx="12" cy="12" r="8" />

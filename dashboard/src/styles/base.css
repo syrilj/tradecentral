@@ -9,11 +9,13 @@
 @import '@fontsource/ibm-plex-mono/latin-400.css';
 @import '@fontsource/ibm-plex-mono/latin-500.css';
 @import '@fontsource/ibm-plex-mono/latin-600.css';
-/* Serif accent for the public paper surfaces (landing/auth) only. */
-@import '@fontsource/lora/latin-400.css';
-@import '@fontsource/lora/latin-500.css';
-@import '@fontsource/lora/latin-600.css';
-@import '@fontsource/lora/latin-400-italic.css';
+/* Public paper surface (landing/auth) follows the editorial system: Inter
+   Tight for display, Inter for body, Space Mono for eyebrows and data
+   labels. No component consumes Lora anymore, so its faces are not bundled. */
+@import '@fontsource-variable/inter-tight';
+@import '@fontsource-variable/inter';
+@import '@fontsource/space-mono/latin-400.css';
+@import '@fontsource/space-mono/latin-700.css';
 
 *,
 *::before,
@@ -83,6 +85,36 @@ body::before {
   max-width: 100%;
 }
 
+/*
+ * .label truncates by design: it is the utility for short chrome captions in
+ * tight grid cells. Sentences that carry meaning must never be silently cut,
+ * so opt them into wrapping with .label.wraps.
+ */
+.label.wraps {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Dense desk chrome intentionally paints compact controls. .hit-28 restores a
+ * 28px pointer target underneath one without changing a pixel of its painted
+ * size or the surrounding layout.
+ */
+.hit-28 {
+  position: relative;
+}
+.hit-28::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 28px);
+  height: max(100%, 28px);
+  transform: translate(-50%, -50%);
+}
+
 /* Global overflow safety for dense instrument panels */
 .panel,
 .kpi-card,
@@ -110,9 +142,15 @@ table .feat,
   font-variant-numeric: tabular-nums;
 }
 
-.pos { color: var(--long); }
-.neg { color: var(--short); }
-.flat { color: var(--ink-dim); }
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
+.flat {
+  color: var(--ink-dim);
+}
 
 /* ---- focus: visible, phosphor, never removed ---------------------------- */
 :focus-visible {
@@ -129,37 +167,54 @@ select {
   border: none;
 }
 
-button { cursor: pointer; }
+button {
+  cursor: pointer;
+}
 
 a {
   color: var(--phosphor);
   text-decoration: none;
 }
-a:hover { text-decoration: underline; }
+a:hover {
+  text-decoration: underline;
+}
 
 /* ---- scrollbars: thin, part of the instrument --------------------------- */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--rule-hi) transparent;
 }
-*::-webkit-scrollbar { width: 8px; height: 8px; }
-*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
 *::-webkit-scrollbar-thumb {
   background: var(--rule);
   border-radius: var(--r-sm);
   border: 2px solid var(--void);
 }
-*::-webkit-scrollbar-thumb:hover { background: var(--rule-hi); }
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--rule-hi);
+}
 
-/* ---- shared panel chrome (Mistral AI Clean Boxes) ----------------------- */
-
+/* ---- shared panel chrome -------------------------------------------------
+   Standard content-layer material (NOT Liquid Glass): opaque fill, hairline
+   rule, one specular line along the top edge for curvature, soft ambient
+   shadow. Glass is reserved for floating chrome per the two-layer model. */
 .ticked {
   position: relative;
-  background: var(--panel);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 34px), var(--panel);
   border: var(--hair) solid var(--rule);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 
 .ticked:hover {
@@ -175,8 +230,14 @@ a:hover { text-decoration: underline; }
 /* ---- staggered entrance -------------------------------------------------
    One orchestrated page load. Panels resolve in sequence cleanly. */
 @keyframes rise {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .rise {
@@ -184,19 +245,36 @@ a:hover { text-decoration: underline; }
 }
 
 @keyframes sweep {
-  0%   { transform: translateY(-100%); opacity: 0; }
-  40%  { opacity: 1; }
-  100% { transform: translateY(100%); opacity: 0; }
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
 }
 
 @keyframes pulse-lamp {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.35; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 @keyframes trace-in {
-  from { stroke-dashoffset: var(--trace-len, 2000); }
-  to   { stroke-dashoffset: 0; }
+  from {
+    stroke-dashoffset: var(--trace-len, 2000);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -259,7 +337,9 @@ td.num {
   font-size: var(--t-tiny);
   font-weight: 600;
   letter-spacing: 0.02em;
-  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--phosphor-dim);
@@ -311,7 +391,9 @@ td.num {
 .cl-userButtonPopoverActionButton {
   color: var(--ink-soft) !important;
   border-radius: 2px !important;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out) !important;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out) !important;
 }
 
 .cl-userButtonPopoverActionButton:hover {
@@ -346,3 +428,114 @@ td.num {
   border: var(--hair) solid var(--rule-hi) !important;
 }
 
+/* ---- Liquid Glass utility classes (functional layer only) ---------------- */
+
+.glass-panel {
+  background: var(--glass-surface);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+}
+
+.glass-panel-interactive {
+  background: var(--glass-surface);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+  transition:
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
+}
+.glass-panel-interactive:hover {
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-hi);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular);
+}
+
+.glass-card {
+  background: var(--glass-surface);
+  border: var(--hair) solid var(--glass-border-subtle);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+}
+
+.glass-chip {
+  background: var(--glass-surface);
+  border: var(--hair) solid var(--glass-border-subtle);
+  box-shadow: var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+}
+
+.btn-glass {
+  background: var(--glass-surface);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
+}
+.btn-glass:hover:not(:disabled) {
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-hi);
+}
+.btn-glass:active:not(:disabled) {
+  transform: scale(0.97);
+  background: var(--glass-base);
+}
+
+.input-glass {
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  transition:
+    border-color var(--dur-fast) ease,
+    outline-color var(--dur-fast) ease;
+}
+/* Focus reads as a soft phosphor halo via outline (never a box-shadow
+   ring — the desk guard forbids 0-offset glow shadows). */
+.input-glass:focus {
+  border-color: var(--glass-border-hi);
+  outline: 3px solid color-mix(in srgb, var(--phosphor) 18%, transparent);
+  outline-offset: -1px;
+}
+
+/* ---- material accessibility fallbacks -------------------------------------
+   The settings that change the material (Apple: Reduce Transparency /
+   Increase Contrast). Standard components adapt; ours must too. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-panel,
+  .glass-panel-interactive,
+  .glass-card,
+  .glass-chip,
+  .btn-glass {
+    background: var(--panel);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .input-glass {
+    background: var(--void-lift);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .glass-panel,
+  .glass-panel-interactive,
+  .glass-card,
+  .glass-chip,
+  .btn-glass {
+    border-color: var(--rule-hi);
+  }
+}

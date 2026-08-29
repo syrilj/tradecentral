@@ -70,7 +70,11 @@ function setTab(next: 'stream' | 'symbol'): void {
 }
 
 function applySymbol(): void {
-  const s = draft.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 12)
+  const s = draft.value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 12)
   draft.value = s
   symbol.value = s || 'AAPL'
   void router.replace({
@@ -215,8 +219,14 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
       <p class="quota-body">{{ quotaMessage }}</p>
       <ul class="notes">
         <li>This is a Fintel plan limit, not an EDGE bug. Key is valid; weight budget is empty.</li>
-        <li>Owners / insiders / options use more weight — default symbol depth is now <code>core</code> only (price, short %, borrow).</li>
-        <li>Auto-poll is off. Use <strong>Refresh</strong> sparingly after the quota resets or you upgrade.</li>
+        <li>
+          Owners / insiders / options use more weight — default symbol depth is now
+          <code>core</code> only (price, short %, borrow).
+        </li>
+        <li>
+          Auto-poll is off. Use <strong>Refresh</strong> sparingly after the quota resets or you
+          upgrade.
+        </li>
         <li>
           Check usage / upgrade:
           <a href="https://fintel.io/u/dev" target="_blank" rel="noopener">fintel.io/u/dev</a>
@@ -252,20 +262,10 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
     </Panel>
 
     <div class="tabs">
-      <button
-        type="button"
-        class="tab"
-        :class="{ on: tab === 'stream' }"
-        @click="setTab('stream')"
-      >
+      <button type="button" class="tab" :class="{ on: tab === 'stream' }" @click="setTab('stream')">
         Market stream
       </button>
-      <button
-        type="button"
-        class="tab"
-        :class="{ on: tab === 'symbol' }"
-        @click="setTab('symbol')"
-      >
+      <button type="button" class="tab" :class="{ on: tab === 'symbol' }" @click="setTab('symbol')">
         Symbol intel
       </button>
       <form class="sym-form" @submit.prevent="applySymbol">
@@ -282,7 +282,10 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
 
     <!-- ── market stream ─────────────────────────────────────────────── -->
     <section v-if="tab === 'stream'" class="grid">
-      <LoadingState v-if="stream.loading.value && !stream.data.value" label="Loading Fintel boards…" />
+      <LoadingState
+        v-if="stream.loading.value && !stream.data.value"
+        label="Loading Fintel boards…"
+      />
       <p v-else-if="stream.error.value" class="err">{{ stream.error.value }}</p>
       <template v-else>
         <Panel
@@ -321,7 +324,10 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
               </tr>
               <tr v-if="!squeezeRows.length">
                 <td colspan="3" class="muted">
-                  {{ friendlySliceError(streamErrors.short_squeeze) || 'No rows (key, plan, or empty board)' }}
+                  {{
+                    friendlySliceError(streamErrors.short_squeeze) ||
+                    'No rows (key, plan, or empty board)'
+                  }}
                 </td>
               </tr>
             </tbody>
@@ -434,14 +440,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
                   </button>
                 </td>
                 <td class="fig">
-                  {{
-                    rowMetric(r, [
-                      'trading_volume_shares',
-                      'volume',
-                      'value',
-                      'metric_value',
-                    ])
-                  }}
+                  {{ rowMetric(r, ['trading_volume_shares', 'volume', 'value', 'metric_value']) }}
                 </td>
               </tr>
               <tr v-if="!volumeRows.length">
@@ -468,13 +467,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
                 </td>
                 <td class="muted">
                   {{
-                    rowMetric(r, [
-                      'report_date',
-                      'earnings_date',
-                      'date',
-                      'period',
-                      'metric_value',
-                    ])
+                    rowMetric(r, ['report_date', 'earnings_date', 'date', 'period', 'metric_value'])
                   }}
                 </td>
               </tr>
@@ -506,7 +499,9 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
             <Readout
               label="SI % float"
               :value="
-                metrics.short_pct_float != null ? `${num(Number(metrics.short_pct_float), 2)}%` : '0.00%'
+                metrics.short_pct_float != null
+                  ? `${num(Number(metrics.short_pct_float), 2)}%`
+                  : '0.00%'
               "
             />
             <Readout
@@ -518,12 +513,16 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
             <Readout
               label="Borrow fee %"
               :value="
-                metrics.borrow_fee_pct != null ? `${num(Number(metrics.borrow_fee_pct), 2)}%` : '0.00%'
+                metrics.borrow_fee_pct != null
+                  ? `${num(Number(metrics.borrow_fee_pct), 2)}%`
+                  : '0.00%'
               "
             />
             <Readout
               label="Last"
-              :value="metrics.last_price != null ? `$${num(Number(metrics.last_price), 2)}` : '$0.00'"
+              :value="
+                metrics.last_price != null ? `$${num(Number(metrics.last_price), 2)}` : '$0.00'
+              "
             />
             <Readout
               label="Unu. opts"
@@ -552,12 +551,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
               <tr v-for="(r, i) in owners" :key="'o' + i">
                 <td class="muted">
                   {{
-                    r.owner_name ||
-                    r.holder_name ||
-                    r.name ||
-                    r.institution ||
-                    r.filer_name ||
-                    DASH
+                    r.owner_name || r.holder_name || r.name || r.institution || r.filer_name || DASH
                   }}
                 </td>
                 <td class="fig">
@@ -603,15 +597,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
                   {{ r.transaction_type || r.type || r.transactionType || DASH }}
                 </td>
                 <td class="fig">
-                  {{
-                    rowMetric(r, [
-                      'shares',
-                      'share_count',
-                      'transaction_date',
-                      'date',
-                      'price',
-                    ])
-                  }}
+                  {{ rowMetric(r, ['shares', 'share_count', 'transaction_date', 'date', 'price']) }}
                 </td>
               </tr>
               <tr v-if="!insiders.length">
@@ -649,15 +635,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
                   }}
                 </td>
                 <td class="fig">
-                  {{
-                    rowMetric(r, [
-                      'premium',
-                      'premium_usd',
-                      'size',
-                      'volume',
-                      'notional',
-                    ])
-                  }}
+                  {{ rowMetric(r, ['premium', 'premium_usd', 'size', 'volume', 'notional']) }}
                 </td>
               </tr>
               <tr v-if="!unusual.length">
@@ -681,7 +659,8 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
         >
           <ul class="notes">
             <li v-for="(err, key) in blockErrors" :key="key">
-              <code>{{ key }}</code>: {{ err }}
+              <code>{{ key }}</code
+              >: {{ err }}
             </li>
           </ul>
         </Panel>

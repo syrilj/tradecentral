@@ -1,8 +1,4 @@
-import type {
-  RelationshipType,
-  SupplyChainNode,
-  SupplyTier,
-} from './api'
+import type { RelationshipType, SupplyChainNode, SupplyTier } from './api'
 
 export function tierBadgeLabel(tier: SupplyTier | string | undefined): string {
   switch (tier) {
@@ -148,34 +144,111 @@ export function rankBeneficiaries(
     list = list.filter((n) => {
       const text = `${n.sub_industry} ${n.sector} ${n.name}`.toLowerCase()
       if (filterKey === 'space') {
-        return text.includes('space') || text.includes('satellite') || text.includes('cell') || text.includes('lunar') || text.includes('launch') || text.includes('orbit') || text.includes('aerospace') || text.includes('broadband') || text.includes('payload')
+        return (
+          text.includes('space') ||
+          text.includes('satellite') ||
+          text.includes('cell') ||
+          text.includes('lunar') ||
+          text.includes('launch') ||
+          text.includes('orbit') ||
+          text.includes('aerospace') ||
+          text.includes('broadband') ||
+          text.includes('payload')
+        )
       }
       if (filterKey === 'glp1') {
-        return text.includes('glp') || text.includes('incretin') || text.includes('injector') || text.includes('fill-finish') || text.includes('sterile') || text.includes('cdmo') || text.includes('syringe') || text.includes('metabolic')
+        return (
+          text.includes('glp') ||
+          text.includes('incretin') ||
+          text.includes('injector') ||
+          text.includes('fill-finish') ||
+          text.includes('sterile') ||
+          text.includes('cdmo') ||
+          text.includes('syringe') ||
+          text.includes('metabolic')
+        )
       }
       if (filterKey === 'robotics') {
-        return text.includes('robot') || text.includes('humanoid') || text.includes('vision') || text.includes('sensor') || text.includes('warehouse') || text.includes('automation') || text.includes('optimus')
+        return (
+          text.includes('robot') ||
+          text.includes('humanoid') ||
+          text.includes('vision') ||
+          text.includes('sensor') ||
+          text.includes('warehouse') ||
+          text.includes('automation') ||
+          text.includes('optimus')
+        )
       }
       if (filterKey === 'quantum') {
-        return text.includes('quantum') || text.includes('qubit') || text.includes('photonic') || text.includes('trapped-ion') || text.includes('superconducting')
+        return (
+          text.includes('quantum') ||
+          text.includes('qubit') ||
+          text.includes('photonic') ||
+          text.includes('trapped-ion') ||
+          text.includes('superconducting')
+        )
       }
       if (filterKey === 'optic') {
-        return text.includes('optic') || text.includes('photon') || text.includes('laser') || text.includes('transceiver') || text.includes('retimer')
+        return (
+          text.includes('optic') ||
+          text.includes('photon') ||
+          text.includes('laser') ||
+          text.includes('transceiver') ||
+          text.includes('retimer')
+        )
       }
       if (filterKey === 'memory') {
-        return text.includes('memory') || text.includes('storage') || text.includes('nand') || text.includes('dram') || text.includes('hbm') || text.includes('flash') || text.includes('hdd')
+        return (
+          text.includes('memory') ||
+          text.includes('storage') ||
+          text.includes('nand') ||
+          text.includes('dram') ||
+          text.includes('hbm') ||
+          text.includes('flash') ||
+          text.includes('hdd')
+        )
       }
       if (filterKey === 'cooling') {
-        return text.includes('cooling') || text.includes('thermal') || text.includes('chiller') || text.includes('heat')
+        return (
+          text.includes('cooling') ||
+          text.includes('thermal') ||
+          text.includes('chiller') ||
+          text.includes('heat')
+        )
       }
       if (filterKey === 'power') {
-        return text.includes('power') || text.includes('nuclear') || text.includes('grid') || text.includes('utility') || text.includes('transmission') || text.includes('smr') || text.includes('switchgear')
+        return (
+          text.includes('power') ||
+          text.includes('nuclear') ||
+          text.includes('grid') ||
+          text.includes('utility') ||
+          text.includes('transmission') ||
+          text.includes('smr') ||
+          text.includes('switchgear')
+        )
       }
       if (filterKey === 'foundry') {
-        return text.includes('foundry') || text.includes('packaging') || text.includes('metrology') || text.includes('litho') || text.includes('etch') || text.includes('deposition') || text.includes('equipment') || text.includes('inspection') || text.includes('probe')
+        return (
+          text.includes('foundry') ||
+          text.includes('packaging') ||
+          text.includes('metrology') ||
+          text.includes('litho') ||
+          text.includes('etch') ||
+          text.includes('deposition') ||
+          text.includes('equipment') ||
+          text.includes('inspection') ||
+          text.includes('probe')
+        )
       }
       if (filterKey === 'software') {
-        return text.includes('software') || text.includes('data') || text.includes('vector') || text.includes('security') || text.includes('ontology') || text.includes('cloud')
+        return (
+          text.includes('software') ||
+          text.includes('data') ||
+          text.includes('vector') ||
+          text.includes('security') ||
+          text.includes('ontology') ||
+          text.includes('cloud')
+        )
       }
       return text.includes(filterKey)
     })
@@ -183,5 +256,7 @@ export function rankBeneficiaries(
   if (minElasticity != null && minElasticity > 0) {
     list = list.filter((n) => (n.metrics?.elasticity_score ?? 0) >= minElasticity)
   }
-  return list.sort((a, b) => (b.metrics?.elasticity_score ?? 0) - (a.metrics?.elasticity_score ?? 0))
+  return list.sort(
+    (a, b) => (b.metrics?.elasticity_score ?? 0) - (a.metrics?.elasticity_score ?? 0),
+  )
 }

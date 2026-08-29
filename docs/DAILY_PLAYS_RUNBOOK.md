@@ -28,6 +28,48 @@ quote timestamps.
 
 For a controlled test output location, add `--output-root /path/to/output`. Do not point it at a directory containing secrets.
 
+## Pullback flow engine (technical-screen fallback)
+
+When the calibrated-model path produces no actionable ticket (the normal live outcome while no
+promoted directional calibration exists), the pipeline runs the pullback flow engine
+(`daily_plays/pullback_flow_engine.py`, currently v3.3.0) over the routed target list and merges
+its tickets into the same run. The model funnel's decisions, candidates, and research board are
+preserved; engine tickets fill `plays` when nothing else reached execution validation. The run
+manifest records `engine: pullback_flow_engine` and `engine_version`, surfaced through
+`/api/plays` and shown as a badge in the dashboard.
+
+The engine screens two-sided chart setups against options flow:
+
+- `pullback_bounce`: higher-timeframe uptrend intact, 20-day pullback within tolerance,
+  RSI not oversold; trades a long call toward the call wall / max-pain zone.
+- `breakdown_roll`: trend break with distribution; trades a long put below the put wall.
+- Per symbol the stronger sleeve wins; PCR volume, walls, max pain, and top-of-chain volume act
+  as evidence and gates, never as direction by themselves.
+
+Honesty rules the engine keeps:
+
+- Quote timestamps come from each chain snapshot's own `captured_utc`, never from the run clock;
+  legs without a capture stamp cannot ENTER (`chain_capture_time_missing`).
+- Greeks are Black-Scholes delta/gamma/theta/charm computed from cached IV. When IV is missing or
+  implausible, Greeks are omitted rather than guessed (`missing_nbbo_quote`,
+  `spread_unmeasured`).
+- Chain snapshots older than the freshness window block ENTER but keep the row as WATCH with
+  `chain_snapshot_not_current`.
+- Any ENTER candidate failing a gate at build time is downgraded to WATCH and flagged with
+  `enter_downgraded_to_watch`; demotion counts appear in `execution_health_warnings`.
+
+Expiry and contract selection is liquidity-ranked: tightest near-spot spread among in-window
+expiries first, then policy-floor contracts, then spread, then moneyness. The scan is threaded
+(≤12 workers) and completes the full universe in seconds; profiling shows the remaining runtime
+is dominated by parquet I/O and pandas/numpy math, so a compiled rewrite would buy little.
+
+Keep `data/option_chains/` current for this path to produce ENTER tickets on live sessions —
+for example by scheduling the existing backfill tool:
+
+```bash
+python3 -m edge.tools.backfill_option_oi --universe
+```
+
 ## Replay and checks
 
 The offline replay suite has no network dependency:
@@ -38,7 +80,7 @@ python3 -m pytest edge/tests/daily_plays -q
 
 An `ENTER` is possible only when a calibrated internal fixture/model, fresh primary-LSE quotes, exact listed OCC identity, liquidity/spread/DTE gates, and the account risk budget all pass. Ordinal confidence, delayed/degraded feeds, stale data, missing legs, and provider failures cannot enter.
 
-The normal terminal output lists only `ENTER` tickets. If nothing passes every gate, it prints `NO_PLAY`, the actual scan funnel, and a causal reason summary; `WATCH`, `ABSTAIN`, and research-only rows are never presented as plays. The funnel distinguishes sector books, routed targets, promoted-model domain, successful model scans, directional setups, and option-chain requests/snapshots. JSON callers receive actionable tickets in `plays`, with non-actionable decisions separated into `watchlist`, `rejections`, and `research_board`.
+The normal terminal output lists only `ENTER` tickets. If nothing passes every gate, it prints `NO_PLAY`, the actual scan funnel, and a causal reason summary; `WATCH`, `ABSTAIN`, and research-only rows are never presented as plays. The funnel distinguishes sector books, routed targets, promoted-model domain, successful model scans, directional setups, and option-chain requests/snapshots; engine runs additionally report bounce/breakdown sleeve counts. JSON callers receive actionable tickets in `plays`, with non-actionable decisions separated into `watchlist`, `rejections`, and `research_board`. Engine tickets carry their full scanner evidence (setup kind, pullback depth, RSI, PCR volume, call/put walls, max pain), quote age, measured Greeks, and chain-freshness status so an operator can independently verify every number.
 
 ## Audit artifacts
 

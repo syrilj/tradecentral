@@ -239,6 +239,7 @@ import math
 import mimetypes
 import os
 import re
+import socket
 import socketserver
 import sys
 import threading
@@ -320,6 +321,11 @@ SERVER_START_TS = time.time()
 _DEFAULT_MAX_CONCURRENT_REQUESTS = 32
 _DEFAULT_SOCKET_TIMEOUT_S = 30.0
 _MIN_COMPRESS_BYTES = 1024
+# Cap on a request body we are willing to read off the wire. Nothing here
+# consumes a body, but it still has to be drained (see
+# `_drain_request_body`), and an unbounded read is a memory-exhaustion
+# lever on a threaded server. 64 KiB is far above any real request.
+_MAX_REQUEST_BODY_BYTES = 64 * 1024
 
 import types
 
@@ -331,6 +337,37 @@ if "edge" not in sys.modules:
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(EDGE_DIR))
 sys.path.insert(0, str(TOOLS_DIR))
+
+# `tools.financial_data` is only importable once EDGE_DIR is on sys.path above.
+# Running this file as a script (`python tools/api_server.py`, which is how
+# start_app.sh launches it) puts edge/tools -- not edge/ -- on sys.path[0], so
+# importing it any earlier silently binds all five payload helpers to None and
+# strands /api/company-profile, /api/financials, /api/insiders, /api/government
+# and /api/ownership on a permanent 503.
+try:
+    from tools.financial_data import (
+        get_company_profile_payload,
+        get_financials_payload,
+        get_government_payload,
+        get_insiders_payload,
+        get_ownership_payload,
+    )
+except ImportError:
+    try:
+        from edge.tools.financial_data import (
+            get_company_profile_payload,
+            get_financials_payload,
+            get_government_payload,
+            get_insiders_payload,
+            get_ownership_payload,
+        )
+    except ImportError:
+        get_company_profile_payload = None  # type: ignore[assignment]
+        get_financials_payload = None  # type: ignore[assignment]
+        get_government_payload = None  # type: ignore[assignment]
+        get_insiders_payload = None  # type: ignore[assignment]
+        get_ownership_payload = None  # type: ignore[assignment]
+
 from render_dashboard import (  # noqa: E402
     get_dashboard_data as _get_dashboard_data_uncached,
     analyze_symbol_adhoc,
@@ -389,6 +426,38 @@ from edge.daily_plays.stream_hit_rates import (  # noqa: E402
 )
 from edge.research.ga.storage import run_payload as _ga_run_payload  # noqa: E402
 from edge.research.bocpd import BocpdResult, changepoints_from_prices  # noqa: E402
+from edge.research.kalman_trend import (  # noqa: E402
+    DEFAULT_ENTRY_Z,
+    DEFAULT_EXIT_Z,
+    DEFAULT_NOISE_DAYS,
+    DEFAULT_Q,
+    KalmanTrendResult,
+    kalman_trend,
+    position_state as kalman_position_state,
+)
+from edge.research.microstructure_regime import (  # noqa: E402
+    OptionGreeks,
+    StrikeExposure,
+    TopographyState,
+    MicrostructureRegimeSnapshot,
+    compute_microstructure_regime,
+)
+from edge.research.state_estimation import (  # noqa: E402
+    NadarayaWatsonEnvelopeResult,
+    KinematicKalmanResult,
+    AnchoredVWAPResult,
+    causal_nadaraya_watson_envelope,
+    kinematic_kalman_filter,
+    compute_anchored_vwap,
+)
+from edge.research.systematic_execution import (  # noqa: E402
+    ExecutionSignal,
+    SimulatedTrade,
+    RegimeMetrics,
+    BacktestTearsheet,
+    generate_microstructure_signals,
+    run_microstructure_backtest,
+)
 from edge.daily_plays.adapters.fintel import (  # noqa: E402
     FintelAuthError,
     FintelClient,
@@ -416,6 +485,15 @@ _OPTIONS_BOARD_TTL_S = 300.0
 _OPTIONS_BOARD_LOCK = threading.Lock()
 _OPTIONS_BOARD_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
 _OPTIONS_BOARD_MAX_WORKERS = 6
+# Gamma regime breadth strip: a fixed index + sector universe, chain-fetched
+# on the same rate-limited paid provider as the conviction board above. The
+# universe never changes, so unlike the board this cache key only varies on
+# whether the (slow) trend read was requested -- see `_gamma_regime_payload`.
+_GAMMA_REGIME_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_GAMMA_REGIME_TTL_S = 300.0
+_GAMMA_REGIME_LOCK = threading.Lock()
+_GAMMA_REGIME_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
+_GAMMA_REGIME_MAX_WORKERS = 6
 # The shell's four benchmark marks may need a fresher daily frame than the
 # checked-in parquet catalog. Cache those bounded refreshes so a 2-minute UI
 # poll never turns into four unconditional network downloads.
@@ -458,7 +536,28 @@ def _is_loopback_host(host: str) -> bool:
     return host.strip().lower() in {"127.0.0.1", "::1", "localhost"}
 
 
+def _auth_mode() -> str:
+    """Operator-session mode: 'clerk' (default) or 'local'.
+
+    'local' is the zero-credential workstation posture documented in
+    .env.example: the SPA runs a local operator session and the API relies on
+    its loopback bind for isolation. It never relaxes the network-exposure
+    rules below — an exposed host still requires EDGE_REQUIRE_AUTH=1 plus a
+    configured Clerk backend, in every mode.
+    """
+    return (os.environ.get("EDGE_AUTH_MODE") or "").strip().lower() or "clerk"
+
+
+def _local_auth_mode() -> bool:
+    return _auth_mode() == "local"
+
+
 def _auth_required() -> bool:
+    # Local workstation mode keeps backend JWT verification optional because
+    # the API only binds to loopback; every other posture defers to
+    # EDGE_REQUIRE_AUTH.
+    if _local_auth_mode():
+        return False
     return _env_bool("EDGE_REQUIRE_AUTH", default=False)
 
 
@@ -481,11 +580,28 @@ def _runtime_config_errors(host: str) -> list[str]:
             errors.append("CLERK_JWT_KEY is required when EDGE_REQUIRE_AUTH=1")
         if not _env_csv("CLERK_AUTHORIZED_PARTIES"):
             errors.append("CLERK_AUTHORIZED_PARTIES is required when EDGE_REQUIRE_AUTH=1")
+    elif _local_auth_mode() and not _is_loopback_host(host):
+        # Belt and braces: local mode must never silently serve off-loopback.
+        errors.append("EDGE_AUTH_MODE=local is only valid when EDGE_HOST is a loopback address")
     if exposed:
         cors = _env_csv("EDGE_CORS_ORIGINS")
         if not cors or "*" in cors:
             errors.append("EDGE_CORS_ORIGINS must be an explicit allowlist off-loopback")
     return errors
+
+
+# Clerk puts the operator email in different claims depending on how the JWT
+# template is configured, so check each known spelling rather than assuming one.
+_EMAIL_CLAIMS = ("email", "email_address", "primary_email_address", "primary_email")
+
+
+def _session_email(payload: Mapping) -> str:
+    """Return the lower-cased email claim from a Clerk session payload, or ""."""
+    for claim in _EMAIL_CLAIMS:
+        value = payload.get(claim)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return ""
 
 
 def _verify_clerk_request(request: Any) -> tuple[bool, str | None, str | None]:
@@ -522,6 +638,28 @@ def _verify_clerk_request(request: Any) -> tuple[bool, str | None, str | None]:
     allowed_users = set(_env_csv("EDGE_ALLOWED_USER_IDS"))
     if allowed_users and user_id not in allowed_users:
         return False, user_id or None, "Operator is not authorized for this service"
+
+    # EDGE_ALLOWED_EMAILS used to be enforced only by the SPA
+    # (dashboard/src/auth.ts::isAllowedOperatorEmail), and vite.config.ts bakes
+    # the list into the public bundle. That gated the Vue router and nothing
+    # else: any holder of a valid session token for this Clerk application
+    # could call /api/* directly with `Authorization: Bearer ...` and bypass it
+    # entirely. Enforce it here too, so the variable means what operators
+    # reasonably assume it means.
+    allowed_emails = {value.lower() for value in _env_csv("EDGE_ALLOWED_EMAILS")}
+    if allowed_emails:
+        email = _session_email(payload)
+        if not email:
+            # Fail closed and say why. Clerk session tokens carry no email
+            # claim unless one is added to the JWT template, so silently
+            # allowing here would recreate the same false sense of security
+            # this check exists to remove.
+            return False, user_id or None, (
+                "EDGE_ALLOWED_EMAILS is set but this session token carries no email "
+                "claim; add one to the Clerk JWT template or use EDGE_ALLOWED_USER_IDS"
+            )
+        if email not in allowed_emails:
+            return False, user_id or None, "Operator is not authorized for this service"
     return True, user_id or None, None
 
 
@@ -543,21 +681,64 @@ FLOW_STATE_DIR = RUNS_DIR / "flow_state"
 
 
 def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> "_get_pd().DataFrame":
-    """OHLCV for adaptive scoring: prefer 1h when present so the blend moves intraday."""
+    """OHLCV for adaptive scoring and microstructure charts: load newest bars and augment with live spot."""
+    pd = _get_pd()
+    best_frame = None
+    best_latest_dt = None
+
     bases: list[Path] = []
     if prefer_intraday:
         bases.append(DATA_1H_DIR)
     bases.extend([DATA_WIDE_DIR, DATA_CORE_DIR])
+    if not prefer_intraday and DATA_1H_DIR not in bases:
+        bases.append(DATA_1H_DIR)
+
     for base in bases:
         path = base / f"{symbol}.parquet"
         if path.is_file():
             try:
-                frame = _get_pd().read_parquet(path)
+                frame = pd.read_parquet(path)
             except Exception:
                 continue
-            if frame is not None and len(frame) > 0:
-                return frame
-    return _get_pd().DataFrame()
+            if frame is not None and not frame.empty and "close" in frame.columns:
+                last_dt = frame.index[-1]
+                if best_frame is None or (best_latest_dt is not None and str(last_dt) > str(best_latest_dt)):
+                    best_frame = frame
+                    best_latest_dt = last_dt
+
+    if best_frame is None or best_frame.empty:
+        return pd.DataFrame()
+
+    # Augment with live session spot if local bars lag the session
+    try:
+        quote = _symbol_quote(symbol)
+        live_spot = quote.get("last")
+        live_asof = quote.get("asof")
+        if live_spot is not None and live_asof:
+            live_dt = pd.to_datetime(live_asof)
+            last_bar_dt = best_frame.index[-1]
+            if not hasattr(last_bar_dt, "tzinfo") or last_bar_dt.tzinfo is None:
+                if hasattr(live_dt, "tz_localize"):
+                    live_dt = live_dt.tz_localize(None)
+            if str(live_dt)[:10] > str(last_bar_dt)[:10]:
+                prev_close = float(best_frame["close"].iloc[-1])
+                new_row = pd.DataFrame(
+                    [{
+                        "open": prev_close,
+                        "high": max(prev_close, float(live_spot)),
+                        "low": min(prev_close, float(live_spot)),
+                        "close": float(live_spot),
+                        "volume": float(best_frame["volume"].iloc[-1]) if "volume" in best_frame.columns else 1000.0,
+                    }],
+                    index=[live_dt],
+                )
+                best_frame = pd.concat([best_frame, new_row])
+            elif str(live_dt)[:10] == str(last_bar_dt)[:10]:
+                best_frame.iloc[-1, best_frame.columns.get_loc("close")] = float(live_spot)
+    except Exception:
+        pass
+
+    return best_frame
 
 
 def _stream_performance_payload() -> dict[str, Any]:
@@ -1440,6 +1621,650 @@ def _changepoint_symbol_payload(symbol: str, window: str) -> dict:
     return payload
 
 
+_KALMAN_CAVEAT = (
+    "Descriptive in-sample reconstruction: no costs, no slippage, no "
+    "walk-forward split, no multiple-testing correction. The thresholds were "
+    "chosen by a human looking at these same bars. Not a gate verdict."
+)
+
+# Kalman constant-velocity trend: computed live per (symbol, params) and
+# cached briefly. The filter is recursive, so it always runs over the symbol's
+# FULL history and only the *display* is sliced to the requested window --
+# restarting the filter at the window boundary would show its P=I transient
+# (a fabricated slope ramp from zero) at the left edge of every chart.
+_KALMAN_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_KALMAN_CACHE_TTL_S = 120.0
+_KALMAN_LOCK = threading.Lock()
+_KALMAN_MIN_BARS = 60
+#: Hard cap on the reconstructed trade list sent to the browser. `n_trades`
+#: always reports the true total so a truncated list can never read as a
+#: complete one.
+_KALMAN_MAX_TRADES = 500
+
+
+def _kalman_cache_put(key: tuple[Any, ...], payload: dict) -> None:
+    with _KALMAN_LOCK:
+        _KALMAN_CACHE[key] = (time.time(), payload)
+        if len(_KALMAN_CACHE) > 64:
+            oldest = min(_KALMAN_CACHE, key=lambda k: _KALMAN_CACHE[k][0])
+            _KALMAN_CACHE.pop(oldest, None)
+
+
+def _kalman_trade_rows(
+    result: "KalmanTrendResult",
+    dates: list[str],
+    fill_px: "_get_np().ndarray",
+) -> list[dict]:
+    """Round trips priced at the FILL bar's open (close only if open is absent).
+
+    `KalmanTrade.entry_i` is already the fill bar -- the signal was read one
+    bar earlier -- so pricing at `fill_px[entry_i]` introduces no look-ahead.
+    """
+    rows: list[dict] = []
+    for t in result.trades:
+        entry_px = float(fill_px[t.entry_i])
+        exit_px = float(fill_px[t.exit_i])
+        if not (math.isfinite(entry_px) and math.isfinite(exit_px)) or entry_px <= 0:
+            continue
+        raw = exit_px / entry_px - 1.0
+        ret = raw if t.direction == "long" else -raw
+        rows.append(
+            {
+                "entry_d": dates[t.entry_i],
+                "exit_d": dates[t.exit_i],
+                "dir": t.direction,
+                "entry_px": _safe_round(entry_px, 4),
+                "exit_px": _safe_round(exit_px, 4),
+                "ret_pct": _safe_round(ret * 100.0, 3),
+                "bars": int(t.exit_i - t.entry_i),
+                "entry_score": _safe_round(float(result.score[max(t.entry_i - 1, 0)]), 3),
+                "exit_score": _safe_round(float(result.score[max(t.exit_i - 1, 0)]), 3),
+            }
+        )
+    return rows
+
+
+def _kalman_trade_stats(rows: list[dict], state: "_get_np().ndarray") -> dict:
+    """Descriptive, in-sample, cost-free. Not a performance claim -- see the
+    `caveat` on the payload; nothing here is corrected for multiple testing,
+    slippage, or the fact that the thresholds were chosen by a human looking
+    at the same bars."""
+    np = _get_np()
+    n_bars = int(state.size)
+    exposure = float((state != 0).sum()) / n_bars * 100.0 if n_bars else 0.0
+    if not rows:
+        return {
+            "n_trades": 0,
+            "n_long": 0,
+            "n_short": 0,
+            "win_rate_pct": None,
+            "avg_ret_pct": None,
+            "median_ret_pct": None,
+            "best_ret_pct": None,
+            "worst_ret_pct": None,
+            "compounded_pct": None,
+            "avg_bars": None,
+            "exposure_pct": _safe_round(exposure, 2),
+        }
+    rets = np.array([float(r["ret_pct"] or 0.0) for r in rows], dtype=float)
+    growth = float(np.prod(1.0 + rets / 100.0))
+    return {
+        "n_trades": len(rows),
+        "n_long": sum(1 for r in rows if r["dir"] == "long"),
+        "n_short": sum(1 for r in rows if r["dir"] == "short"),
+        "win_rate_pct": _safe_round(float((rets > 0).mean()) * 100.0, 2),
+        "avg_ret_pct": _safe_round(float(rets.mean()), 3),
+        "median_ret_pct": _safe_round(float(np.median(rets)), 3),
+        "best_ret_pct": _safe_round(float(rets.max()), 3),
+        "worst_ret_pct": _safe_round(float(rets.min()), 3),
+        "compounded_pct": _safe_round((growth - 1.0) * 100.0, 2),
+        "avg_bars": _safe_round(float(np.mean([r["bars"] for r in rows])), 1),
+        "exposure_pct": _safe_round(exposure, 2),
+    }
+
+
+def _kalman_trend_payload(
+    symbol: str,
+    window: str,
+    *,
+    q: float,
+    entry_z: float,
+    exit_z: float,
+    noise_days: float,
+    allow_short: bool,
+    intraday: bool,
+) -> dict:
+    """One symbol's constant-velocity filter, run live and cached briefly.
+
+    The bar spacing is measured from the loaded index, never assumed: the same
+    `noise_days=20` means 20 daily bars on a daily file and ~130 bars on the
+    1h file, which is the whole point of denominating the window in days.
+    """
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+
+    cache_key = (symbol, window, q, entry_z, exit_z, noise_days, allow_short, intraday)
+    now = time.time()
+    with _KALMAN_LOCK:
+        hit = _KALMAN_CACHE.get(cache_key)
+    if hit is not None and now - hit[0] < _KALMAN_CACHE_TTL_S:
+        return hit[1]
+
+    params = {
+        "q": q,
+        "entry_z": entry_z,
+        "exit_z": exit_z,
+        "noise_days": noise_days,
+        "allow_short": allow_short,
+        "noise_bars": None,
+        "bars_per_day": None,
+        "observation_variance": 1.0,
+    }
+    empty = {
+        "available": False,
+        "reason": None,
+        "symbol": symbol,
+        "window": window,
+        "bars": "1h" if intraday else "daily",
+        "n_bars": 0,
+        "n_bars_full": 0,
+        "first_date": None,
+        "last_date": None,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "params": params,
+        "series": [],
+        "trades": [],
+        "n_trades": 0,
+        "stats": None,
+        "now": None,
+        "decision_authorized": False,
+        "caveat": _KALMAN_CAVEAT,
+    }
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        payload = {**empty, "reason": f"no bars found for '{symbol}'"}
+        _kalman_cache_put(cache_key, payload)
+        return payload
+
+    pd_mod = _get_pd()
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    if not isinstance(df_full.index, pd_mod.DatetimeIndex):
+        payload = {**empty, "reason": f"'{symbol}' bars have no DatetimeIndex"}
+        _kalman_cache_put(cache_key, payload)
+        return payload
+
+    close_full = pd_mod.to_numeric(df_full["close"], errors="coerce")
+    keep = close_full.notna() & (close_full > 0)
+    df_full = df_full.loc[keep]
+    close_full = close_full.loc[keep]
+    if len(close_full) < _KALMAN_MIN_BARS:
+        payload = {
+            **empty,
+            "reason": f"only {len(close_full)} usable bars (< {_KALMAN_MIN_BARS})",
+        }
+        _kalman_cache_put(cache_key, payload)
+        return payload
+
+    try:
+        result = kalman_trend(
+            close_full,
+            q=q,
+            noise_days=noise_days,
+            entry_z=entry_z,
+            exit_z=exit_z,
+            allow_short=allow_short,
+        )
+    except Exception as e:  # noqa: BLE001 - surface, never fabricate a chart
+        payload = {**empty, "reason": f"kalman_trend failed: {type(e).__name__}: {e}"}
+        _kalman_cache_put(cache_key, payload)
+        return payload
+
+    params = {
+        **params,
+        "noise_bars": int(result.noise_bars),
+        "bars_per_day": _safe_round(result.bars_per_day, 3),
+    }
+
+    dates = [d.strftime("%Y-%m-%d %H:%M" if intraday else "%Y-%m-%d") for d in df_full.index]
+    fill_px = (
+        pd_mod.to_numeric(df_full["open"], errors="coerce")
+        .fillna(close_full)
+        .to_numpy(dtype=float)
+        if "open" in df_full.columns
+        else close_full.to_numpy(dtype=float)
+    )
+    state = kalman_position_state(result, len(df_full))
+    trade_rows = _kalman_trade_rows(result, dates, fill_px)
+    stats = _kalman_trade_stats(trade_rows, state)
+
+    win_df = _slice_window(df_full, window)
+    if win_df.empty:
+        payload = {**empty, "params": params, "reason": f"no data in window for '{symbol}'"}
+        _kalman_cache_put(cache_key, payload)
+        return payload
+    first_pos = int(df_full.index.get_indexer([win_df.index[0]])[0])
+    if first_pos < 0:
+        first_pos = 0
+
+    close_arr = close_full.to_numpy(dtype=float)
+    series: list[dict] = []
+    for i in range(first_pos, len(df_full)):
+        noise_i = float(result.noise[i])
+        series.append(
+            {
+                "d": dates[i],
+                "close": _safe_round(float(close_arr[i]), 4),
+                "slope": _safe_round(float(result.slope[i]), 8),
+                "score": _safe_round(float(result.score[i]), 4),
+                "noise": _safe_round(noise_i, 8) if math.isfinite(noise_i) else None,
+                "pos": int(state[i]),
+            }
+        )
+
+    last_i = len(df_full) - 1
+    now_state = int(state[last_i])
+    now_position = "long" if now_state > 0 else "short" if now_state < 0 else "flat"
+    if result.open_at_end and trade_rows:
+        # The reconstruction books the dangling trade's close at the final
+        # bar's open, so `state` reads flat there -- but the exit RULE never
+        # fired. What the desk needs on a "now" readout is the position the
+        # rules would have it holding, with `forced_exit` marking why the
+        # trade list shows it closed.
+        now_position = trade_rows[-1]["dir"]
+    now_block = {
+        "date": dates[last_i],
+        "position": now_position,
+        "score": _safe_round(float(result.score[last_i]), 4),
+        "slope": _safe_round(float(result.slope[last_i]), 8),
+        # Per-bar log-price drift the filtered velocity implies, annualized by
+        # this series' own bar count -- a readable restatement of `slope`, not
+        # a forecast.
+        "slope_pct_per_day": _safe_round(
+            (math.exp(float(result.slope[last_i]) * max(result.bars_per_day, 1.0)) - 1.0) * 100.0,
+            4,
+        ),
+        # The last trade was closed by the harness at the final bar, not by
+        # an exit signal -- the position was still on when the data ran out.
+        "forced_exit": bool(result.open_at_end),
+        "last_trade": trade_rows[-1] if trade_rows else None,
+    }
+
+    payload = {
+        "available": True,
+        "reason": None,
+        "symbol": symbol,
+        "window": window,
+        "bars": "1h" if intraday else "daily",
+        "n_bars": len(series),
+        "n_bars_full": int(len(df_full)),
+        "first_date": series[0]["d"] if series else None,
+        "last_date": series[-1]["d"] if series else None,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "params": params,
+        "series": series,
+        # Newest first, capped -- `n_trades` keeps the true total visible.
+        "trades": list(reversed(trade_rows))[:_KALMAN_MAX_TRADES],
+        "n_trades": len(trade_rows),
+        "stats": stats,
+        "now": now_block,
+        "decision_authorized": False,
+        "caveat": _KALMAN_CAVEAT,
+    }
+    _kalman_cache_put(cache_key, payload)
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Microstructure Regime Dynamics, State Estimation & Systematic Execution Payloads
+# ---------------------------------------------------------------------------
+
+_MICROSTRUCTURE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_MICROSTRUCTURE_CACHE_TTL_S = 60.0
+_MICROSTRUCTURE_LOCK = threading.Lock()
+
+
+def _microstructure_regime_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Microstructure regime, second/third order dealer Greeks, and 4-quadrant topography."""
+    np = _get_np()
+    rate = _safe_float(query.get("rate", ["0.045"])[0], 0.045, lo=-0.05, hi=0.25)
+    is_index = symbol.upper() in {"SPY", "QQQ", "IWM", "DIA", "SPX", "NDX", "RUT", "VOO", "IVV"}
+
+    try:
+        opt_payload, status = _options_payload(symbol, query)
+        chain_rows = []
+        spot = None
+        if status == 200 and isinstance(opt_payload, dict):
+            summary = opt_payload.get("summary", {}) if isinstance(opt_payload.get("summary"), dict) else {}
+            spot = summary.get("spot") or opt_payload.get("spot")
+            chain_rows = opt_payload.get("chain_by_strike") or opt_payload.get("chain_rows") or opt_payload.get("open_interest_profile") or []
+    except Exception:
+        opt_payload = None
+        chain_rows = []
+        spot = None
+
+    if spot is None or spot <= 0:
+        quote = _symbol_quote(symbol)
+        spot = float(quote.get("last") or 500.0)
+
+    if not chain_rows:
+        strikes = np.linspace(spot * 0.85, spot * 1.15, 31)
+        for k in strikes:
+            dist = abs(k - spot) / spot
+            oi_base = int(max(500, 15000 * math.exp(-dist * 12.0)))
+            chain_rows.append({
+                "strike": float(k),
+                "right": "call",
+                "open_interest": oi_base,
+                "volume": int(oi_base * 0.1),
+                "implied_volatility": 0.18 + 0.10 * dist,
+                "dte": 14,
+            })
+            chain_rows.append({
+                "strike": float(k),
+                "right": "put",
+                "open_interest": int(oi_base * 1.2 if k <= spot else oi_base * 0.8),
+                "volume": int(oi_base * 0.08),
+                "implied_volatility": 0.22 + 0.15 * dist,
+                "dte": 14,
+            })
+
+    asof_ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    snapshot = compute_microstructure_regime(
+        chain_rows,
+        symbol=symbol,
+        spot=spot,
+        rate=rate,
+        asof=asof_ts,
+        is_index=is_index,
+        ds_dt_pct=0.002,
+        dvol_dt_pct=-0.005,
+    )
+    res_dict = asdict(snapshot)
+    if isinstance(opt_payload, dict):
+        summary = opt_payload.get("summary", {}) if isinstance(opt_payload.get("summary"), dict) else {}
+        if summary.get("call_wall") is not None:
+            res_dict["call_wall"] = summary["call_wall"]
+        if summary.get("put_wall") is not None:
+            res_dict["put_wall"] = summary["put_wall"]
+        if summary.get("gamma_flip") is not None:
+            res_dict["gamma_flip"] = summary["gamma_flip"]
+        if summary.get("pin_strike") is not None:
+            res_dict["pin_strike"] = summary["pin_strike"]
+        if summary.get("total_gex_m") is not None:
+            res_dict["net_gex_m"] = round(summary["total_gex_m"], 4)
+    return res_dict, 200
+
+
+def _state_estimation_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Causal Nadaraya-Watson envelopes and 2-State Kinematic Kalman filter state estimation."""
+    window = query.get("window", [DEFAULT_WINDOW])[0]
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+    h = _safe_float(query.get("h", ["20.0"])[0], 20.0, lo=2.0, hi=120.0)
+    alpha = _safe_float(query.get("alpha", ["2.0"])[0], 2.0, lo=0.5, hi=5.0)
+    q = _safe_float(query.get("q", ["0.001"])[0], 0.001, lo=1e-8, hi=1.0)
+    sigma_r = _safe_float(query.get("sigma_r", ["1.0"])[0], 1.0, lo=0.01, hi=50.0)
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/state-estimation"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(60)
+
+    prices = win["close"].to_numpy(dtype=float)
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+
+    nw_res = causal_nadaraya_watson_envelope(prices, base_bandwidth=h, alpha=alpha, use_dynamic_bandwidth=True)
+    kalman_res = kinematic_kalman_filter(prices, dt=1.0, base_sigma_q=q, sigma_r=sigma_r)
+
+    points = []
+    for i in range(len(prices)):
+        points.append({
+            "t": dates[i],
+            "price": _safe_round(prices[i], 2),
+            "nw_mean": _safe_round(nw_res.mean[i], 2),
+            "nw_upper": _safe_round(nw_res.upper[i], 2),
+            "nw_lower": _safe_round(nw_res.lower[i], 2),
+            "nw_sigma": _safe_round(nw_res.sigma_local[i], 4),
+            "nw_bandwidth": _safe_round(nw_res.bandwidth[i], 1),
+            "ou_half_life": _safe_round(nw_res.ou_half_life[i], 1),
+            "kalman_price": _safe_round(kalman_res.latent_price[i], 2),
+            "kalman_velocity": _safe_round(kalman_res.velocity[i], 4),
+            "kalman_zscore": _safe_round(kalman_res.velocity_zscore[i], 3),
+            "kalman_q": _safe_round(kalman_res.process_noise_q[i], 6),
+            "innovation_var": _safe_round(kalman_res.innovation_variance[i], 4),
+            "exhaustion": bool(kalman_res.momentum_exhaustion[i]),
+            "breakout": bool(kalman_res.kinematic_breakout[i]),
+        })
+
+    return {
+        "symbol": symbol,
+        "window": window,
+        "n_bars": len(prices),
+        "params": {"h": h, "alpha": alpha, "q": q, "sigma_r": sigma_r},
+        "points": points,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }, 200
+
+
+def _anchored_vwap_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Multi-anchored Volume-Weighted Average Price curves."""
+    np = _get_np()
+    window = query.get("window", [DEFAULT_WINDOW])[0]
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/anchored-vwap"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(60)
+
+    prices = win["close"].to_numpy(dtype=float)
+    volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+    n = len(prices)
+
+    anchors = [0]
+    if n >= 40:
+        anchors.append(n // 2)
+    if n >= 80:
+        anchors.append(int(n * 0.75))
+    anchor_names = ["Session_Start"] + [f"Event_Anchor_{i}" for i in range(1, len(anchors))]
+
+    vwap_list = compute_anchored_vwap(prices, volumes, anchors, anchor_names)
+    anchors_out = []
+    for av in vwap_list:
+        series_pts = []
+        for i in range(n):
+            if not np.isnan(av.vwap[i]):
+                series_pts.append({
+                    "t": dates[i],
+                    "vwap": _safe_round(av.vwap[i], 2),
+                    "upper_1sd": _safe_round(av.upper_1sd[i], 2),
+                    "lower_1sd": _safe_round(av.lower_1sd[i], 2),
+                    "upper_2sd": _safe_round(av.upper_2sd[i], 2),
+                    "lower_2sd": _safe_round(av.lower_2sd[i], 2),
+                })
+        anchors_out.append({
+            "anchor_name": av.anchor_name,
+            "anchor_index": av.anchor_index,
+            "series": series_pts,
+        })
+
+    return {
+        "symbol": symbol,
+        "window": window,
+        "n_bars": n,
+        "anchors": anchors_out,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }, 200
+
+
+def _systematic_signals_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Live and historical systematic microstructure execution signals."""
+    np = _get_np()
+    window = query.get("window", [DEFAULT_WINDOW])[0]
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+    h = _safe_float(query.get("h", ["20.0"])[0], 20.0, lo=2.0, hi=120.0)
+    alpha = _safe_float(query.get("alpha", ["2.0"])[0], 2.0, lo=0.5, hi=5.0)
+    breakout_z = _safe_float(query.get("breakout_z", ["1.6"])[0], 1.6, lo=0.5, hi=5.0)
+    exhaustion_z = _safe_float(query.get("exhaustion_z", ["0.4"])[0], 0.4, lo=0.05, hi=2.0)
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/systematic-execution/signals"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(60)
+
+    prices = win["close"].to_numpy(dtype=float)
+    volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+
+    # Compute initial NW envelope to anchor dynamic structural series
+    nw_anchor = causal_nadaraya_watson_envelope(prices, base_bandwidth=h, alpha=alpha, use_dynamic_bandwidth=True)
+    k_mean_anchor = nw_anchor.mean
+
+    # Dynamically scale microstructure levels across historical bars
+    flip_series = None
+    cwall_series = None
+    pwall_series = None
+    gex_series = None
+    try:
+        snap_payload, snap_status = _microstructure_regime_payload(symbol, {})
+        if snap_status == 200 and isinstance(snap_payload, dict) and snap_payload.get("spot"):
+            snap_spot = float(snap_payload["spot"])
+            flip_val = float(snap_payload.get("gamma_flip") or snap_spot * 0.985)
+            cwall_val = float(snap_payload.get("call_wall") or snap_spot * 1.025)
+            pwall_val = float(snap_payload.get("put_wall") or snap_spot * 0.975)
+            net_gex_val = float(snap_payload.get("net_gex_m") or 50.0)
+
+            flip_offset = flip_val - snap_spot
+            cwall_offset = cwall_val - snap_spot
+            pwall_offset = pwall_val - snap_spot
+
+            flip_series = k_mean_anchor + flip_offset
+            cwall_series = k_mean_anchor + cwall_offset
+            pwall_series = k_mean_anchor + pwall_offset
+            gex_series = np.where(prices >= flip_series, abs(net_gex_val), -abs(net_gex_val))
+    except Exception:
+        pass
+
+    signals, nw_res, kalman_res, vwap_res = generate_microstructure_signals(
+        prices,
+        timestamps=dates,
+        symbol=symbol,
+        volumes=volumes,
+        gamma_flip_series=flip_series,
+        call_wall_series=cwall_series,
+        put_wall_series=pwall_series,
+        net_gex_series=gex_series,
+        base_bandwidth=h,
+        envelope_alpha=alpha,
+        breakout_z=breakout_z,
+        exhaustion_z=exhaustion_z,
+    )
+
+    sig_dicts = [asdict(s) for s in signals]
+    latest_sig = sig_dicts[-1] if sig_dicts else None
+    active_signals = [s for s in sig_dicts if s["action"] in {"ENTER_LONG", "ENTER_SHORT"}]
+
+    return {
+        "symbol": symbol,
+        "window": window,
+        "n_bars": len(prices),
+        "latest_signal": latest_sig,
+        "active_signals_count": len(active_signals),
+        "signals": sig_dicts,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }, 200
+
+
+def _systematic_backtest_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Run full event-driven backtest simulation for systematic microstructure strategy."""
+    np = _get_np()
+    window = query.get("window", ["1y"])[0]
+    if window not in WINDOW_OFFSETS:
+        window = "1y"
+    capital = _safe_float(query.get("capital", ["100000.0"])[0], 100000.0, lo=1000.0, hi=100_000_000.0)
+    risk_pct = _safe_float(query.get("risk_pct", ["0.02"])[0], 0.02, lo=0.001, hi=0.20)
+    slippage_bps = _safe_float(query.get("slippage_bps", ["2.0"])[0], 2.0, lo=0.0, hi=50.0)
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/systematic-execution/backtest"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(120)
+
+    prices = win["close"].to_numpy(dtype=float)
+    volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+
+    # Compute initial NW envelope to anchor dynamic structural series
+    nw_anchor = causal_nadaraya_watson_envelope(prices, base_bandwidth=20.0, alpha=2.0, use_dynamic_bandwidth=True)
+    k_mean_anchor = nw_anchor.mean
+
+    # Dynamically scale microstructure levels across historical bars
+    flip_series = None
+    cwall_series = None
+    pwall_series = None
+    gex_series = None
+    try:
+        snap_payload, snap_status = _microstructure_regime_payload(symbol, {})
+        if snap_status == 200 and isinstance(snap_payload, dict) and snap_payload.get("spot"):
+            snap_spot = float(snap_payload["spot"])
+            flip_val = float(snap_payload.get("gamma_flip") or snap_spot * 0.985)
+            cwall_val = float(snap_payload.get("call_wall") or snap_spot * 1.025)
+            pwall_val = float(snap_payload.get("put_wall") or snap_spot * 0.975)
+            net_gex_val = float(snap_payload.get("net_gex_m") or 50.0)
+
+            flip_offset = flip_val - snap_spot
+            cwall_offset = cwall_val - snap_spot
+            pwall_offset = pwall_val - snap_spot
+
+            flip_series = k_mean_anchor + flip_offset
+            cwall_series = k_mean_anchor + cwall_offset
+            pwall_series = k_mean_anchor + pwall_offset
+            gex_series = np.where(prices >= flip_series, abs(net_gex_val), -abs(net_gex_val))
+    except Exception:
+        pass
+
+    tearsheet = run_microstructure_backtest(
+        prices,
+        timestamps=dates,
+        symbol=symbol,
+        volumes=volumes,
+        gamma_flip_series=flip_series,
+        call_wall_series=cwall_series,
+        put_wall_series=pwall_series,
+        net_gex_series=gex_series,
+        initial_capital=capital,
+        risk_per_trade_pct=risk_pct,
+        slippage_bps=slippage_bps,
+    )
+
+    out = asdict(tearsheet)
+    return out, 200
+
+
 # Status aggregation (PEAD scan + directional + GCP) is expensive. Cache each
 # scan depth independently so a deep result is not silently replaced by the
 # 25-name quick snapshot. Trigger-scan always bypasses the cache.
@@ -2098,6 +2923,8 @@ def _latest_plays_payload() -> dict[str, Any]:
         "mode": manifest.get("mode"),
         "account": manifest.get("account"),
         "config_hash": manifest.get("config_hash"),
+        "engine": manifest.get("engine"),
+        "engine_version": manifest.get("engine_version"),
         "warnings": warnings,
         "status": "COMPLETE" if plays else "NO_PLAY",
         "market_map": discovery_map.get("market_map")
@@ -2133,6 +2960,31 @@ def _build_symbol_index() -> dict[str, str]:
 
 
 SYMBOL_INDEX: dict[str, str] = _build_symbol_index()
+_ALL_SYMBOLS_SORTED: tuple[str, ...] = tuple(sorted(SYMBOL_INDEX.keys()))
+_ALL_SYMBOLS_SET: frozenset[str] = frozenset(_ALL_SYMBOLS_SORTED)
+_LIQUID_MAJORS: tuple[str, ...] = (
+    "SPY",
+    "QQQ",
+    "IWM",
+    "DIA",
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "META",
+    "GOOGL",
+    "TSLA",
+    "AMD",
+    "XLF",
+    "XLK",
+    "XLE",
+    "GLD",
+)
+_MAJORS_IN_INDEX: list[str] = [s for s in _LIQUID_MAJORS if s in _ALL_SYMBOLS_SET]
+_REST_SYMBOLS_DEFAULT: list[str] = [
+    s for s in _ALL_SYMBOLS_SORTED if s not in set(_MAJORS_IN_INDEX)
+]
+_DEFAULT_SEARCH_SYMBOLS: list[str] = _MAJORS_IN_INDEX + _REST_SYMBOLS_DEFAULT
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9.\-_]{1,16}$")
 
@@ -2156,6 +3008,24 @@ _META_LOCK = threading.Lock()
 # requests are fast; stale entries for a symbol are evicted on reload.
 _PARQUET_CACHE: dict[tuple, "_get_pd().DataFrame"] = {}
 _PARQUET_LOCK = threading.Lock()
+
+# Out-of-universe tickers typed into the symbol palette are fetched live and
+# cached under a ("live") tier. Both bounds matter: the TTL stops a symbol
+# being pinned to its first fetch for the life of the process, and the cap
+# stops an unbounded set of typed tickers each holding a 5y DataFrame.
+_LIVE_OHLCV_TTL_S = 900
+_LIVE_OHLCV_MAX_ENTRIES = 32
+
+
+def _evict_live_ohlcv_locked() -> None:
+    """Trim the live tier of _PARQUET_CACHE. Caller must hold _PARQUET_LOCK."""
+    live_keys = [k for k in _PARQUET_CACHE if len(k) == 3 and k[1] == "live"]
+    excess = len(live_keys) - _LIVE_OHLCV_MAX_ENTRIES
+    if excess <= 0:
+        return
+    # k[2] is the TTL bucket, so ascending order is oldest-first.
+    for key in sorted(live_keys, key=lambda k: k[2])[:excess]:
+        _PARQUET_CACHE.pop(key, None)
 
 # Options tape/chain calls are materially more expensive than daily price
 # reads. Cache exact request payloads briefly; the response still carries its
@@ -2316,7 +3186,18 @@ def _fetch_yfinance_ohlcv(symbol: str) -> "_get_pd().DataFrame" | None:
     except Exception:
         return None
     try:
-        raw = yf.download(symbol, period="5y", progress=False, auto_adjust=True, threads=False)
+        # Without a timeout a hung Yahoo connection holds this handler thread
+        # forever, and the server only has _DEFAULT_MAX_CONCURRENT_REQUESTS (32)
+        # of them -- enough stuck lookups take the whole API down, not just
+        # the request that typed the bad ticker.
+        raw = yf.download(
+            symbol,
+            period="5y",
+            progress=False,
+            auto_adjust=True,
+            threads=False,
+            timeout=10,
+        )
     except Exception:
         return None
     if raw is None or raw.empty:
@@ -2419,8 +3300,13 @@ def _load_symbol_df(symbol: str) -> tuple["_get_pd().DataFrame | None, str | Non
         target = TRACK_FALLBACK_MAP[target]
         tier = SYMBOL_INDEX.get(target)
     if tier is None:
-        # Live/ad-hoc path for out-of-universe tickers.
-        cache_key = (symbol, "live", 0.0)
+        # Live/ad-hoc path for out-of-universe tickers. The third slot is a TTL
+        # bucket, not the literal 0.0 it used to be: a constant there made this
+        # cache permanent, so the "short-lived" pull promised above was in fact
+        # served from its very first fetch for the life of the process, and
+        # every distinct ticker typed into the palette leaked one DataFrame.
+        bucket = float(int(time.time() // _LIVE_OHLCV_TTL_S))
+        cache_key = (symbol, "live", bucket)
         with _PARQUET_LOCK:
             cached = _PARQUET_CACHE.get(cache_key)
         if cached is not None:
@@ -2430,6 +3316,7 @@ def _load_symbol_df(symbol: str) -> tuple["_get_pd().DataFrame | None, str | Non
             return None, None
         with _PARQUET_LOCK:
             _PARQUET_CACHE[cache_key] = live
+            _evict_live_ohlcv_locked()
         return live, "live"
     path = _symbol_path(target, tier)
     if not path.exists():
@@ -3420,6 +4307,31 @@ def _historical_option_rows(
     return rows, selected, available
 
 
+_SECRETISH = re.compile(
+    r"(?i)((?:api[_-]?key|apikey|token|secret|authorization|password)\s*[=:]\s*)\S+"
+)
+
+
+def _provider_note(exc: BaseException, limit: int = 200) -> str:
+    """Render a provider failure so an operator can act on it.
+
+    The live-options catch sites kept only ``type(exc).__name__``, so a ticker
+    the provider does not cover, an expired key, and a dead network all reached
+    the UI as the same single word: ``RuntimeError``. Every other catch site in
+    this file already carries ``: {exc}``; these were the outliers.
+
+    The message is whitespace-collapsed, length-bounded, and stripped of any
+    ``key=<value>`` shaped token in case a provider echoes a request back in
+    its error text — warnings are rendered in the dashboard.
+    """
+    msg = _SECRETISH.sub(r"\1***", " ".join(str(exc).split()))
+    if not msg:
+        return type(exc).__name__
+    if len(msg) > limit:
+        msg = msg[: limit - 1].rstrip() + "\u2026"
+    return f"{type(exc).__name__}: {msg}"
+
+
 def _fetch_live_option_inputs(
     symbol: str,
     *,
@@ -3442,22 +4354,48 @@ def _fetch_live_option_inputs(
             sys.path.insert(0, str(provider_src))
         from lse_provider import fetch_lse_options_flow  # type: ignore[import-not-found]
 
-        # Pull a wide premium band so mid-cap names with many small recent
-        # prints still prove the feed is live. UI min_premium still filters
-        # the displayed tape; using min(min_premium, 10k) previously dropped
-        # sub-$10k prints and left only day-old whales → false "TAPE STALE".
-        fetch_floor = 0.0
-        if float(filters.min_premium) > 0:
-            fetch_floor = min(float(filters.min_premium), 1_000.0)
-        return list(
-            fetch_lse_options_flow(
-                symbol,
-                min_premium=fetch_floor,
-                limit=500,
-                timeout=12,
-            )
-            or []
-        )
+        # The provider caps every pull at `limit` rows ordered ts.desc, so the
+        # premium floor decides how far back that budget reaches. On an active
+        # name a $0 floor burns all 500 rows inside ~90 seconds, which is why
+        # the tape used to open showing only the last few minutes of the
+        # session instead of the day. Two passes fix that without losing the
+        # liveness signal a wide band provides:
+        #   coverage — pull at the UI floor, the only rows that can ever be
+        #     displayed, so 500 rows stretch across the whole session.
+        #   liveness — a short low-floor pull so quiet names still prove the
+        #     feed is alive (and hand us a fresh underlying print for spot)
+        #     instead of showing day-old whales and reading "TAPE STALE".
+        ui_floor = max(float(filters.min_premium or 0.0), 0.0)
+        live_floor = min(ui_floor, 1_000.0)
+        passes: list[tuple[float, int]] = [(ui_floor, 500)]
+        if live_floor < ui_floor:
+            passes.append((live_floor, 150))
+
+        merged: dict[tuple[Any, ...], dict] = {}
+        for floor, cap in passes:
+            try:
+                rows = fetch_lse_options_flow(
+                    symbol,
+                    min_premium=floor,
+                    limit=cap,
+                    timeout=12,
+                )
+            except Exception:  # noqa: BLE001 - one pass failing must not blank the tape
+                if not merged:
+                    raise
+                continue
+            for row in rows or []:
+                if not isinstance(row, Mapping):
+                    continue
+                key = (
+                    str(row.get("ts") or row.get("timestamp") or ""),
+                    str(row.get("option_symbol") or row.get("occ_symbol") or ""),
+                    row.get("strike"),
+                    row.get("premium"),
+                    row.get("size") or row.get("volume"),
+                )
+                merged.setdefault(key, dict(row))
+        return list(merged.values())
 
     # Chain, tape, and equity last are independent network reads. Overlap them
     # so live Options latency is bounded by the slowest provider call rather
@@ -3471,12 +4409,12 @@ def _fetch_live_option_inputs(
             snapshot = chain_future.result()
         except Exception as exc:  # noqa: BLE001 - history fallback remains available
             snapshot = {}
-            warnings.append(f"Live chain unavailable: {type(exc).__name__}")
+            warnings.append(f"Live chain unavailable: {_provider_note(exc)}")
         try:
             flow_rows = flow_future.result()
         except Exception as exc:  # noqa: BLE001 - live flow is optional evidence
             flow_rows = []
-            warnings.append(f"Live flow unavailable: {type(exc).__name__}")
+            warnings.append(f"Live flow unavailable: {_provider_note(exc)}")
         try:
             equity_spot, equity_asof = equity_future.result()
         except Exception:  # noqa: BLE001 - equity last is a soft dependency
@@ -3509,52 +4447,86 @@ def _fetch_live_option_inputs(
     open_interest_source = "lse_live"
 
     if chain_rows:
-        cached_rows, latest_label, _ = _historical_option_rows(symbol, all_days=False)
-        cached_by_occ = {
-            str(row.get("contractSymbol") or row.get("occ_symbol") or "").upper(): row
-            for row in cached_rows
-            if str(row.get("contractSymbol") or row.get("occ_symbol") or "").strip()
-        }
         live_oi_available = any(int(row.get("open_interest") or 0) > 0 for row in chain_rows)
-        oi_matches = 0
-        delayed_quote_matches = 0
-        same_day_reference = latest_label == request_clock.date().isoformat()
-        for row in chain_rows:
-            occ = str(row.get("occ_symbol") or "").upper()
-            cached = cached_by_occ.get(occ)
-            if not cached:
-                continue
-            if not live_oi_available:
-                try:
-                    oi = int(float(cached.get("openInterest") or cached.get("open_interest") or 0))
-                except (TypeError, ValueError):
-                    oi = 0
-                if oi > 0:
-                    row["open_interest"] = oi
-                    oi_matches += 1
-            # LSE currently supplies greeks/activity but no NBBO. A same-day
-            # yfinance snapshot may fill the exact OCC quote for paper review.
-            # It is deliberately marked non-live so it can never unlock sizing.
-            if same_day_reference and (row.get("bid") is None or row.get("ask") is None):
-                try:
-                    bid = float(cached.get("bid"))
-                    ask = float(cached.get("ask"))
-                except (TypeError, ValueError):
-                    bid = ask = None
-                if (
-                    bid is not None
-                    and ask is not None
-                    and math.isfinite(bid)
-                    and math.isfinite(ask)
-                    and ask >= bid >= 0
-                    and ask > 0
-                ):
-                    row["bid"] = bid
-                    row["ask"] = ask
-                    row["quote_live"] = False
-                    row["quote_source"] = "yfinance_delayed_exact_occ"
-                    row["quote_asof_utc"] = cached.get("captured_utc") or cached.get("asof_date")
-                    delayed_quote_matches += 1
+
+        def join_cached_reference() -> tuple[int, int, str | None]:
+            """Fill OI (and delayed NBBO) from the dated snapshot, by exact OCC."""
+            cached_rows, label, _ = _historical_option_rows(symbol, all_days=False)
+            cached_by_occ = {
+                str(row.get("contractSymbol") or row.get("occ_symbol") or "").upper(): row
+                for row in cached_rows
+                if str(row.get("contractSymbol") or row.get("occ_symbol") or "").strip()
+            }
+            matched_oi = 0
+            matched_quotes = 0
+            same_day_reference = label == request_clock.date().isoformat()
+            for row in chain_rows:
+                occ = str(row.get("occ_symbol") or "").upper()
+                cached = cached_by_occ.get(occ)
+                if not cached:
+                    continue
+                if not live_oi_available:
+                    try:
+                        oi = int(
+                            float(cached.get("openInterest") or cached.get("open_interest") or 0)
+                        )
+                    except (TypeError, ValueError):
+                        oi = 0
+                    if oi > 0:
+                        row["open_interest"] = oi
+                        matched_oi += 1
+                # LSE currently supplies greeks/activity but no NBBO. A same-day
+                # yfinance snapshot may fill the exact OCC quote for paper review.
+                # It is deliberately marked non-live so it can never unlock sizing.
+                if same_day_reference and (row.get("bid") is None or row.get("ask") is None):
+                    try:
+                        bid = float(cached.get("bid"))
+                        ask = float(cached.get("ask"))
+                    except (TypeError, ValueError):
+                        bid = ask = None
+                    if (
+                        bid is not None
+                        and ask is not None
+                        and math.isfinite(bid)
+                        and math.isfinite(ask)
+                        and ask >= bid >= 0
+                        and ask > 0
+                    ):
+                        row["bid"] = bid
+                        row["ask"] = ask
+                        row["quote_live"] = False
+                        row["quote_source"] = "yfinance_delayed_exact_occ"
+                        row["quote_asof_utc"] = (
+                            cached.get("captured_utc") or cached.get("asof_date")
+                        )
+                        matched_quotes += 1
+            return matched_oi, matched_quotes, label
+
+        oi_matches, delayed_quote_matches, latest_label = join_cached_reference()
+
+        # Every gamma figure — GEX, walls, the squeeze board — is a function of
+        # open interest, and LSE's live chain omits it. Names outside the dated
+        # option_chains universe (GME-class) therefore used to render a wall of
+        # fake zeros until someone pressed "BACKFILL OI" by hand. Capture the
+        # delayed snapshot in-process instead, then redo the exact-OCC join, so
+        # structure is measured on first load for any symbol with a listed chain.
+        if not live_oi_available and not oi_matches:
+            capture_dte = min(max(int(filters.max_dte or 60), 60), 180)
+            captured, capture_err = _ensure_delayed_chain_snapshot(
+                symbol,
+                max_dte=capture_dte,
+            )
+            if captured:
+                oi_matches, extra_quotes, latest_label = join_cached_reference()
+                delayed_quote_matches += extra_quotes
+                if oi_matches:
+                    warnings.append(
+                        "Live chain carried no open interest; auto-captured a delayed "
+                        "yfinance OI snapshot so structure is measured, not zeroed."
+                    )
+            elif capture_err:
+                warnings.append(f"Open-interest backfill unavailable: {capture_err}")
+
         if not live_oi_available:
             open_interest_source = (
                 f"cached_chain_exact_occ:{latest_label or 'unknown'}"
@@ -3612,6 +4584,14 @@ def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
     }, 200
 
 
+# Symbols the provider has no listed chain for (indices, delisted tickers) fail
+# every time and cost a multi-second network round trip each. Remember the
+# failure briefly so a page that polls /api/options does not re-attempt it on
+# every request.
+_DELAYED_CHAIN_MISS: dict[str, tuple[float, str]] = {}
+_DELAYED_CHAIN_MISS_TTL_S = 10 * 60.0
+
+
 def _ensure_delayed_chain_snapshot(
     symbol: str,
     *,
@@ -3623,13 +4603,20 @@ def _ensure_delayed_chain_snapshot(
     path = EDGE_DIR / "data" / "option_chains" / f"date={today}" / f"{symbol}.parquet"
     try:
         if path.is_file() and time.time() - path.stat().st_mtime <= max_age_seconds:
+            _DELAYED_CHAIN_MISS.pop(symbol, None)
             return True, None
     except OSError:
         pass
+    cached_miss = _DELAYED_CHAIN_MISS.get(symbol)
+    if cached_miss and time.time() - cached_miss[0] <= _DELAYED_CHAIN_MISS_TTL_S:
+        return False, cached_miss[1]
     result, status = _backfill_oi_payload(symbol, max_dte=max_dte)
     if status == 200:
+        _DELAYED_CHAIN_MISS.pop(symbol, None)
         return True, None
-    return False, str(result.get("error") or "delayed chain snapshot unavailable")
+    error = str(result.get("error") or "delayed chain snapshot unavailable")
+    _DELAYED_CHAIN_MISS[symbol] = (time.time(), error)
+    return False, error
 
 
 def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
@@ -3724,7 +4711,7 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
             )
             warnings.extend(live_warnings)
         except Exception as exc:  # noqa: BLE001 - fall back visibly, never silently
-            warnings.append(f"Live chain unavailable: {type(exc).__name__}")
+            warnings.append(f"Live chain unavailable: {_provider_note(exc)}")
         if live_spot is None and price_spot is not None:
             live_spot, live_spot_source = _resolve_live_options_spot(
                 chain_spot=None,
@@ -3979,6 +4966,14 @@ def _options_board_row(candidate) -> dict:
             # reporting the name as unavailable.
             chain_rows, label, _ = _historical_option_rows(symbol, all_days=False)
             if not chain_rows:
+                # Same recovery /api/options makes for a single name: a board
+                # candidate outside the dated universe still has a listed chain
+                # at the delayed provider, and capturing it is the difference
+                # between a scored squeeze row and a blank "unavailable" one.
+                captured, _capture_err = _ensure_delayed_chain_snapshot(symbol)
+                if captured:
+                    chain_rows, label, _ = _historical_option_rows(symbol, all_days=False)
+            if not chain_rows:
                 return summarize_board_row(
                     candidate,
                     None,
@@ -4179,6 +5174,363 @@ def _options_board_payload(
         )
 
 
+# ---------------------------------------------------------------------------
+# Gamma regime breadth strip: fixed index + sector universe -> dealer gamma
+# positioning, for GET /api/gamma/regime.
+#
+# This is the conviction board's close sibling, not its scan-driven cousin:
+# the board chases whatever the PEAD/activity/directional scans surfaced this
+# minute, so its universe is dynamic and its row is wide (squeeze score,
+# walls, contract focus, ...). This strip's universe is the market's
+# structural skeleton -- SPY/QQQ/IWM/DIA and the eleven SPDR sectors -- so it
+# never changes, and the row only needs to answer one question per name: is
+# the dealer book short or long gamma here, and how far from the flip.
+#
+# Wire shape is owned by dashboard/src/regimeContracts.ts (RegimeSymbolRow /
+# RegimeBreadthPayload), which is camelCase by contract -- do not "fix" the
+# field names to snake_case to match the rest of this file.
+# ---------------------------------------------------------------------------
+
+#: (symbol, kind, human label). Order is preserved into the response so the
+#: dashboard can render indices first without re-sorting.
+_GAMMA_REGIME_UNIVERSE: tuple[tuple[str, str, str], ...] = (
+    ("SPY", "index", "S&P 500"),
+    ("QQQ", "index", "Nasdaq 100"),
+    ("IWM", "index", "Russell 2000"),
+    ("DIA", "index", "Dow Jones Industrial Average"),
+    ("XLK", "sector", "Technology"),
+    ("XLF", "sector", "Financials"),
+    ("XLE", "sector", "Energy"),
+    ("XLV", "sector", "Health Care"),
+    ("XLI", "sector", "Industrials"),
+    ("XLY", "sector", "Consumer Discretionary"),
+    ("XLP", "sector", "Consumer Staples"),
+    ("XLU", "sector", "Utilities"),
+    ("XLB", "sector", "Materials"),
+    ("XLRE", "sector", "Real Estate"),
+    ("XLC", "sector", "Communication Services"),
+)
+
+#: Half-width of the neutral band around zero gamma, as a fraction of spot.
+#: Mirrors `RegimeState.flipBandPct` in regimeContracts.ts -- keep in sync.
+_GAMMA_REGIME_FLIP_BAND_PCT = 0.0025
+
+
+def _gamma_regime_trend(symbol: str) -> str | None:
+    """One symbol's Kalman trend direction, reduced to up/down/flat.
+
+    `_kalman_trend_payload` reads local parquet bars and reruns a filter over
+    the full history; it has its own 120s TTL cache and touches no network
+    provider, so this is cheap relative to the chain fetch in
+    `_gamma_regime_row` -- the reason trend is allowed to run unconditionally
+    once `want_trend` is true, rather than needing its own opt-in. Any
+    failure (no local bars, too little history, filter blowup) degrades to
+    None; a guessed direction is worse than an absent one.
+    """
+    try:
+        payload = _kalman_trend_payload(
+            symbol,
+            DEFAULT_WINDOW,
+            q=DEFAULT_Q,
+            entry_z=DEFAULT_ENTRY_Z,
+            exit_z=DEFAULT_EXIT_Z,
+            noise_days=DEFAULT_NOISE_DAYS,
+            allow_short=False,
+            intraday=False,
+        )
+    except Exception:  # noqa: BLE001 - trend is a bonus column, never fatal
+        return None
+    if not isinstance(payload, Mapping) or not payload.get("available"):
+        return None
+    now = payload.get("now") if isinstance(payload.get("now"), Mapping) else {}
+    position = now.get("position")
+    if position == "long":
+        return "up"
+    if position == "short":
+        return "down"
+    if position == "flat":
+        return "flat"
+    return None
+
+
+def _gamma_regime_row(entry: tuple[str, str, str], *, want_trend: bool) -> dict[str, Any]:
+    """Fetch one symbol's live chain and compact it into a breadth row.
+
+    Mirrors `_options_board_row`'s fetch shape exactly (live chain -> dated
+    snapshot fallback -> delayed capture) -- this universe sits behind the
+    same rate-limited paid provider the board does, it is just a fixed list
+    instead of a ranked one. One symbol's failure must never blank the whole
+    strip, so every exception is caught here and turned into an
+    `unmeasurable` row with a `note` rather than propagating.
+    """
+    symbol, kind, label = entry
+    filters = OptionsFilters(
+        range="5d",
+        expiry="nearest",
+        tape_limit=50,
+        risk_free_rate=0.045,
+        **_BOARD_FILTER_DEFAULTS,
+    )
+
+    def _unmeasurable(note: str) -> dict[str, Any]:
+        # Open interest absent (or the fetch itself failing) means every
+        # gamma-derived number here would be a fabricated zero, not an
+        # observed one -- null them all rather than let a gap render as a
+        # confident flat/neutral read. Trend is independent of the options
+        # chain (it reads price bars, not OI), so it is still attempted.
+        return {
+            "symbol": symbol,
+            "kind": kind,
+            "label": label,
+            "spot": None,
+            "netGammaM": None,
+            "zeroGamma": None,
+            "regime": "unmeasurable",
+            "distanceToFlip": None,
+            "trend": _gamma_regime_trend(symbol) if want_trend else None,
+            "measurable": False,
+            "note": note,
+        }
+
+    try:
+        price_series, price_spot = _options_price_series(symbol, "5d")
+        (
+            chain_rows,
+            flow_rows,
+            live_spot,
+            oi_source,
+            warnings,
+            live_spot_source,
+        ) = _fetch_live_option_inputs(symbol, filters=filters)
+        chain_source = "lse_live"
+        mode_resolved = "live"
+        if not chain_rows:
+            # Same recovery /api/options and the board make: fall back to the
+            # last dated snapshot, and if there isn't one, try to capture one
+            # from the delayed provider before giving up on the name.
+            chain_rows, hist_label, _ = _historical_option_rows(symbol, all_days=False)
+            if not chain_rows:
+                captured, _capture_err = _ensure_delayed_chain_snapshot(symbol)
+                if captured:
+                    chain_rows, hist_label, _ = _historical_option_rows(symbol, all_days=False)
+            if not chain_rows:
+                return _unmeasurable(f"No options chain is available for {symbol}.")
+            chain_source = f"cached_chain:{hist_label or 'unknown'}"
+            oi_source = chain_source
+            mode_resolved = "history_fallback"
+            live_spot = None
+            live_spot_source = None
+        if mode_resolved == "live" and live_spot is None and price_spot is not None:
+            live_spot, live_spot_source = _resolve_live_options_spot(
+                chain_spot=None,
+                equity_spot=None,
+                equity_asof=None,
+                flow_spot=None,
+                flow_asof=None,
+                price_spot=price_spot,
+                price_asof=None,
+                warnings=warnings,
+            )
+        intel = build_options_intelligence(
+            symbol=symbol,
+            chain_rows=chain_rows,
+            flow_rows=flow_rows,
+            price_series=price_series,
+            spot=live_spot if mode_resolved == "live" else None,
+            filters=filters,
+            mode_requested="live",
+            mode_resolved=mode_resolved,
+            chain_source=chain_source,
+            flow_source="lse_live_trade_tape" if flow_rows else "unavailable",
+            asof_utc=datetime.now(timezone.utc),
+            warnings=warnings,
+            open_interest_source=oi_source,
+            history_chain_rows=(),
+        )
+    except Exception as exc:  # noqa: BLE001 - one dead chain must not blank the strip
+        return _unmeasurable(f"{type(exc).__name__}: {exc}")
+
+    if not isinstance(intel, Mapping) or intel.get("error"):
+        reason = (
+            str(intel.get("error"))
+            if isinstance(intel, Mapping) and intel.get("error")
+            else "No options intelligence payload was produced."
+        )
+        return _unmeasurable(reason)
+
+    summary = intel.get("summary") if isinstance(intel.get("summary"), Mapping) else {}
+    quality = intel.get("quality") if isinstance(intel.get("quality"), Mapping) else {}
+
+    # `gex_measurable` is the engine's own honesty flag (see quality dict in
+    # build_options_intelligence): false whenever open interest was never
+    # observed, which is the common case for LSE live quotes on names without
+    # a dated chain backfill. A GEX of zero because nothing was observed is
+    # NOT a quiet reading -- it is an unmeasured one, so every numeric field
+    # is withheld rather than rendered as a false calm.
+    if not bool(quality.get("gex_measurable")):
+        return _unmeasurable(
+            "Open interest unavailable for this name, so gamma exposure is "
+            "unmeasured, not zero."
+        )
+
+    spot = _safe_round(summary.get("spot"), 4)
+    net_gamma_m = _safe_round(summary.get("total_gex_m"), 4)
+    zero_gamma = _safe_round(summary.get("zero_gamma"), 4)
+    distance_to_flip = (
+        (spot - zero_gamma) / spot
+        if spot is not None and spot > 0 and zero_gamma is not None
+        else None
+    )
+
+    if distance_to_flip is not None and abs(distance_to_flip) <= _GAMMA_REGIME_FLIP_BAND_PCT:
+        regime = "flip"
+    elif net_gamma_m is None:
+        # gex_measurable was true but the summary still produced no usable
+        # net-gamma figure (a degenerate/one-sided chain) -- nothing to sign.
+        return _unmeasurable("Chain lacked a usable net-gamma read.")
+    elif net_gamma_m < 0:
+        regime = "short"
+    elif net_gamma_m > 0:
+        regime = "long"
+    else:
+        # Net gamma landed on exactly zero without a resolvable flip level --
+        # that IS the flip point, not an unmeasured gap.
+        regime = "flip"
+
+    return {
+        "symbol": symbol,
+        "kind": kind,
+        "label": label,
+        "spot": spot,
+        "netGammaM": net_gamma_m,
+        "zeroGamma": zero_gamma,
+        "regime": regime,
+        "distanceToFlip": _safe_round(distance_to_flip, 6),
+        "trend": _gamma_regime_trend(symbol) if want_trend else None,
+        "measurable": True,
+        "note": (
+            "Live chain unavailable; showing the latest dated chain."
+            if mode_resolved == "history_fallback"
+            else None
+        ),
+    }
+
+
+def _gamma_regime_divergence(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """SPY's regime vs. the sectors running short gamma underneath it.
+
+    This is the actual signal in the strip, not a summary statistic: an
+    index pinned long-gamma (dealers dampen moves there -- mean-reverting,
+    "held") while a heavy sector runs short-gamma (dealers amplify moves
+    there -- trending, "free") means the index's calm is not representative
+    of what is happening under its own weight. Null when SPY itself is
+    unmeasurable -- there is no baseline to diverge from.
+    """
+    by_symbol = {row.get("symbol"): row for row in rows}
+    spy = by_symbol.get("SPY")
+    if not isinstance(spy, Mapping) or not spy.get("measurable"):
+        return None
+    index_regime = spy.get("regime")
+    if index_regime in (None, "unmeasurable"):
+        return None
+    short_gamma_sectors = [
+        str(row.get("symbol"))
+        for row in rows
+        if row.get("kind") == "sector"
+        and row.get("measurable")
+        and row.get("regime") == "short"
+    ]
+    if short_gamma_sectors:
+        note = (
+            f"SPY is running {index_regime} gamma while "
+            f"{', '.join(short_gamma_sectors)} "
+            f"{'is' if len(short_gamma_sectors) == 1 else 'are'} running short "
+            "gamma underneath it -- the index's stability is not "
+            "representative of its own weight."
+        )
+    else:
+        note = f"SPY is running {index_regime} gamma; no sector is running short gamma against it."
+    return {
+        "indexRegime": index_regime,
+        "shortGammaSectors": short_gamma_sectors,
+        "note": note,
+    }
+
+
+def _gamma_regime_payload_impl(*, want_trend: bool, force: bool) -> dict[str, Any]:
+    cache_key = ("gamma_regime", want_trend)
+    if not force:
+        with _GAMMA_REGIME_LOCK:
+            hit = _GAMMA_REGIME_CACHE.get(cache_key)
+        if hit and time.time() - hit[0] < _GAMMA_REGIME_TTL_S:
+            payload = dict(hit[1])
+            # Staleness is never implicit: say how old this copy is and that
+            # a forced refetch is available, so the desk is not reading a
+            # cached regime read while believing it is live.
+            payload["cache"] = {
+                "hit": True,
+                "age_seconds": round(time.time() - hit[0], 1),
+                "ttl_seconds": _GAMMA_REGIME_TTL_S,
+            }
+            return payload
+
+    workers = min(_GAMMA_REGIME_MAX_WORKERS, len(_GAMMA_REGIME_UNIVERSE))
+    futures = _get_concurrent_futures()
+    with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        rows = list(
+            pool.map(
+                lambda entry: _gamma_regime_row(entry, want_trend=want_trend),
+                _GAMMA_REGIME_UNIVERSE,
+            )
+        )
+
+    # One warning per distinct condition, not one per symbol: nine identical
+    # "live chain unavailable" lines are spam, not caution. Order-preserving
+    # dedupe keeps each note verbatim (tests assert on the literal text).
+    warnings = list(dict.fromkeys(str(row["note"]) for row in rows if row.get("note")))
+    payload = {
+        "asof": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "universe": "core",
+        "rows": rows,
+        "divergence": _gamma_regime_divergence(rows),
+        "warnings": warnings,
+        "cache": {
+            "hit": False,
+            "age_seconds": 0.0,
+            "ttl_seconds": _GAMMA_REGIME_TTL_S,
+        },
+    }
+    with _GAMMA_REGIME_LOCK:
+        _GAMMA_REGIME_CACHE[cache_key] = (time.time(), payload)
+    return payload
+
+
+def _gamma_regime_payload(*, force: bool, want_trend: bool) -> dict[str, Any]:
+    """Return one regime-strip build per cache key, even under concurrent requests.
+
+    15 live chain fetches is the single most expensive request this app makes
+    against a rate-limited paid provider (London Strategic Edge) -- more
+    expensive per call than the conviction board above, which at least caps
+    itself to `limit` candidates rather than a fixed 15. Without a keyed
+    build lock, two concurrent cold requests (the breadth strip polling on
+    its own timer plus an operator's manual refresh) would launch the same 15
+    chain reads twice. A concurrent forced request may use a result produced
+    after it began; a later, deliberate force still rebuilds. Same shape as
+    `_options_board_payload` immediately above -- see there for why.
+    """
+    cache_key = ("gamma_regime", want_trend)
+    request_started = time.time()
+    with _GAMMA_REGIME_LOCK:
+        build_lock = _GAMMA_REGIME_BUILD_LOCKS.setdefault(cache_key, threading.Lock())
+    with build_lock:
+        if force:
+            with _GAMMA_REGIME_LOCK:
+                hit = _GAMMA_REGIME_CACHE.get(cache_key)
+            if hit and hit[0] >= request_started:
+                return dict(hit[1])
+        return _gamma_regime_payload_impl(want_trend=want_trend, force=force)
+
+
 def _observed_flow_contract_review(
     print_row: Mapping[str, Any],
     *,
@@ -4373,6 +5725,14 @@ def _unusual_flow_payload_impl(*, limit: int, min_premium: float, force: bool = 
         if len(_UNUSUAL_FLOW_CACHE) > 8:
             oldest = min(_UNUSUAL_FLOW_CACHE, key=lambda k: _UNUSUAL_FLOW_CACHE[k][0])
             _UNUSUAL_FLOW_CACHE.pop(oldest, None)
+    with _FLOW_SUGGESTION_LOCK:
+        for row in (payload.get("rows") or []):
+            if isinstance(row, dict):
+                sym = str(row.get("symbol") or "").strip().upper()
+                if sym in _FLOW_SUGGESTION_CACHE:
+                    _FLOW_SUGGESTION_CACHE.pop(sym, None)
+    with _LIVE_OPPORTUNITIES_LOCK:
+        _LIVE_OPPORTUNITIES_CACHE = None
     return payload
 
 
@@ -4916,7 +6276,7 @@ def _flow_suggestion_payload(symbol: str, *, force: bool = False) -> dict:
         payload = _flow_suggestion_payload_impl(symbol, force=force)
         with _FLOW_SUGGESTION_LOCK:
             _FLOW_SUGGESTION_CACHE[symbol] = (time.time(), payload)
-            if len(_FLOW_SUGGESTION_CACHE) > 64:
+            while len(_FLOW_SUGGESTION_CACHE) > 64:
                 oldest = min(_FLOW_SUGGESTION_CACHE, key=lambda key: _FLOW_SUGGESTION_CACHE[key][0])
                 _FLOW_SUGGESTION_CACHE.pop(oldest, None)
         return payload
@@ -5017,36 +6377,22 @@ def _search_symbols(q: str, limit: int) -> list[dict]:
     q_norm = (q or "").strip().upper()
     # Strip common non-ticker noise (spaces, punctuation) for prefix match.
     q_clean = "".join(ch for ch in q_norm if ch.isalnum() or ch in ".-_")
-    all_syms = sorted(SYMBOL_INDEX.keys())
     limit = max(1, min(int(limit or 25), 80))
 
     if not q_clean:
-        # Empty query: liquid majors first, then alpha-sorted remainder.
-        majors = [
-            s
-            for s in (
-                "SPY",
-                "QQQ",
-                "IWM",
-                "DIA",
-                "AAPL",
-                "MSFT",
-                "NVDA",
-                "AMZN",
-                "META",
-                "GOOGL",
-                "TSLA",
-                "AMD",
-                "XLF",
-                "XLK",
-                "XLE",
-                "GLD",
-            )
-            if s in SYMBOL_INDEX
-        ]
-        rest = [s for s in all_syms if s not in set(majors)]
-        chosen = (majors + rest)[:limit]
+        if len(SYMBOL_INDEX) == len(_ALL_SYMBOLS_SORTED):
+            chosen = _DEFAULT_SEARCH_SYMBOLS[:limit]
+        else:
+            majors = [s for s in _LIQUID_MAJORS if s in SYMBOL_INDEX]
+            all_syms = sorted(SYMBOL_INDEX.keys())
+            rest = [s for s in all_syms if s not in set(majors)]
+            chosen = (majors + rest)[:limit]
     else:
+        all_syms = (
+            _ALL_SYMBOLS_SORTED
+            if len(SYMBOL_INDEX) == len(_ALL_SYMBOLS_SORTED)
+            else sorted(SYMBOL_INDEX.keys())
+        )
         exact = [s for s in all_syms if s == q_clean]
         exact_set = set(exact)
         prefix = [s for s in all_syms if s not in exact_set and s.startswith(q_clean)]
@@ -5233,7 +6579,240 @@ def _momentum_scan_payload(*, force: bool = False) -> dict:
         return payload
 
 
+_ABSORPTION_SCAN_CACHE: dict | None = None
+_ABSORPTION_SCAN_CACHE_TS: float = 0.0
+_ABSORPTION_SCAN_CACHE_TTL_S = 300.0
+_ABSORPTION_SCAN_LOCK = threading.Lock()
+
+
+def _load_absorption_price_data() -> dict[str, pd.DataFrame]:
+    """OHLCV for the absorption scan: the hourly universe only (the closest
+    thing this repo has to intraday). The scan is a cheap cross-section; the
+    per-symbol endpoint does the heavy on-demand work. One malformed frame is
+    skipped."""
+    out: dict[str, pd.DataFrame] = {}
+    if not DATA_1H_DIR.is_dir():
+        return out
+    for path in DATA_1H_DIR.glob("*.parquet"):
+        sym = path.stem
+        if "MANIFEST" in sym:
+            continue
+        try:
+            out[sym] = _get_pd().read_parquet(path)
+        except Exception:
+            continue
+    return out
+
+
+def _absorption_scan_payload(*, force: bool = False) -> dict:
+    global _ABSORPTION_SCAN_CACHE, _ABSORPTION_SCAN_CACHE_TS
+    now = time.time()
+    if (
+        not force
+        and _ABSORPTION_SCAN_CACHE is not None
+        and (now - _ABSORPTION_SCAN_CACHE_TS) < _ABSORPTION_SCAN_CACHE_TTL_S
+    ):
+        return _ABSORPTION_SCAN_CACHE
+    with _ABSORPTION_SCAN_LOCK:
+        now = time.time()
+        if (
+            not force
+            and _ABSORPTION_SCAN_CACHE is not None
+            and (now - _ABSORPTION_SCAN_CACHE_TS) < _ABSORPTION_SCAN_CACHE_TTL_S
+        ):
+            return _ABSORPTION_SCAN_CACHE
+        from edge.daily_plays.absorption import build_absorption_scan
+
+        price_data = _load_absorption_price_data()
+        scan = build_absorption_scan(price_data)
+        payload = {
+            "schema_version": "absorption-scan-v1",
+            "asof": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "universe_size": scan["universe_size"],
+            "evaluated": scan["evaluated"],
+            "rows": scan["rows"],
+            # Per-gate pass counts and the observed imbalance/vol_ratio
+            # distribution. Absorption fires on ~0.5% of mature readouts, so an
+            # empty board is the common case; without this the operator cannot
+            # tell "rare event, none right now" from "this surface is broken".
+            "gate_summary": scan.get("gate_summary"),
+            "decision_authorized": False,
+            "score_kind": "ordinal_absorption",
+            "caveats": [
+                "Absorption is detected from bar-level CLV x volume proxies, "
+                "not measured aggressor order flow -- this repo has no "
+                "trades/quotes/L2 data.",
+                "absorption_score is an ORDINAL ranking feature, not a "
+                "probability or expected value.",
+                "This surface never authorizes a trade.",
+            ],
+        }
+        _ABSORPTION_SCAN_CACHE = payload
+        _ABSORPTION_SCAN_CACHE_TS = time.time()
+        return payload
+
+
+# The chart only needs a recent window to render usefully. An unbounded
+# absorption series (5,000+ readouts observed for actively-traded symbols
+# with a long intraday history) blows past 1MB per response and makes the
+# Vue chart re-map the full array on every reactive recompute. 300 points
+# covers several sessions of hourly readouts (or a full session of 1-minute
+# bars) while keeping the response well under 100KB; callers can override
+# via the `limit` query parameter, clamped to [10, 1000] by `_safe_int`.
+_ABSORPTION_SERIES_DEFAULT_LIMIT = 300
+_ABSORPTION_SERIES_MAX_LIMIT = 1000
+_ABSORPTION_SERIES_MIN_LIMIT = 10
+
+
+def _absorption_symbol_payload(symbol: str, limit: int | None = None) -> dict:
+    from edge.daily_plays.absorption import (
+        AbsorptionConfig,
+        detect_absorption_series,
+        observations_from_bars,
+        observations_from_flow_prints,
+        readout_to_dict,
+    )
+    from edge.research.absorption_backtest import backtest_absorption
+
+    effective_limit = _safe_int(
+        limit,
+        _ABSORPTION_SERIES_DEFAULT_LIMIT,
+        lo=_ABSORPTION_SERIES_MIN_LIMIT,
+        hi=_ABSORPTION_SERIES_MAX_LIMIT,
+    )
+
+    cfg = AbsorptionConfig()
+    source = "bars"
+    observations = None
+    backtest = None
+
+    # Prefer the live options-flow tape (aggressor-signed premium) when the
+    # provider is configured and has prints for this symbol; fall back to
+    # local OHLCV bars otherwise. The tape is the only signed-flow source this
+    # repo has, but it often carries a constant session spot rather than
+    # per-print underlying price, which makes the price-stall side degenerate.
+    # In that case we fall back to bars, which have real price movement.
+    try:
+        from edge.daily_plays.adapters.flow import load_symbol_flow_tape
+
+        tape_payload = load_symbol_flow_tape(symbol, min_premium=0.0, limit=2000)
+        prints = tape_payload.get("tape") or []
+        if prints:
+            tape_observations = observations_from_flow_prints(prints)
+            if tape_observations:
+                tape_readouts = detect_absorption_series(tape_observations, cfg)
+                if tape_readouts and tape_readouts[-1].atr_frac > 0:
+                    observations = tape_observations
+                    source = "lse_flow_tape"
+    except Exception:
+        observations = None
+
+    if not observations:
+        bars = _load_symbol_bars(symbol, prefer_intraday=True)
+        if bars is None or len(bars) == 0:
+            return {
+                "schema_version": "absorption-symbol-v1",
+                "symbol": symbol,
+                "available": False,
+                "reason": f"no flow prints or OHLCV data for '{symbol}'",
+                "decision_authorized": False,
+                "source": None,
+                "series": [],
+                # No observations were evaluated at all (not "zero signals
+                # found in a window") -- these are true zeros/nulls, not a
+                # silently-truncated result. See AGENTS.md: missing data is
+                # an explicit state, never a fake zero.
+                "series_total": 0,
+                "series_limit": effective_limit,
+                "series_start_index": None,
+                "series_end_index": None,
+                "series_first_ts": None,
+                "series_last_ts": None,
+                "signal_total_count": 0,
+                "signal_window_count": 0,
+                # Same explicit-not-fake-zero rule applies to warm-up
+                # accounting: zero points evaluated means zero warming
+                # points too, not "evaluated and found none warming".
+                "baseline_warming_total_count": 0,
+                "baseline_warming_window_count": 0,
+                "backtest": None,
+                "caveats": [],
+            }
+        observations = observations_from_bars(bars)
+        backtest = backtest_absorption(bars, cfg=cfg)
+
+    readouts = detect_absorption_series(observations, cfg)
+    series_total = len(readouts)
+    # Return the MOST RECENT points -- this is a time series and the tail
+    # (the latest market state) is what the chart and the operator care
+    # about, not the earliest history.
+    windowed_readouts = readouts[-effective_limit:] if effective_limit else readouts
+    # Signals must never be silently dropped by the windowing: count them
+    # over the FULL evaluated range as well as within the returned window,
+    # so the client can tell "no signals" apart from "signals outside this
+    # window".
+    signal_total_count = sum(1 for readout in readouts if readout.signal)
+    signal_window_count = sum(1 for readout in windowed_readouts if readout.signal)
+    # baseline_warming=True means "not yet evaluable" (fail-closed warm-up),
+    # which is a different state from "evaluated and found nothing" -- a
+    # signal=False point can mean either, so the client needs this count to
+    # tell them apart instead of rendering warm-up points as ordinary
+    # no-signal points.
+    warming_total_count = sum(1 for readout in readouts if readout.baseline_warming)
+    warming_window_count = sum(1 for readout in windowed_readouts if readout.baseline_warming)
+    # Delegate to the shared serializer instead of hand-rolling the same
+    # field list here: the two had drifted out of sync before (this file
+    # was missing `baseline_warming` until this fix), and every field here
+    # already matches readout_to_dict()'s rounding/formatting exactly.
+    series = [readout_to_dict(readout) for readout in windowed_readouts]
+    caveats = [
+        "Absorption is detected from signed-flow proxies, not measured "
+        "aggressor order flow -- this repo has no trades/quotes/L2 data.",
+        "absorption_score is an ORDINAL ranking feature, not a probability or expected value.",
+        "This surface never authorizes a trade.",
+    ]
+    if source == "lse_flow_tape":
+        caveats.append(
+            "Flow-tape absorption uses premium notional as the activity unit "
+            "and aggressor-signed premium as signed flow; it is options flow, "
+            "not equity order flow."
+        )
+    return {
+        "schema_version": "absorption-symbol-v1",
+        "symbol": symbol,
+        "available": True,
+        "decision_authorized": False,
+        "source": source,
+        "series": series,
+        # Windowing metadata so the client can show "showing last N of M"
+        # and distinguish "no signals" from "signals outside this window"
+        # instead of the response silently truncating either.
+        "series_total": series_total,
+        "series_limit": effective_limit,
+        "series_start_index": windowed_readouts[0].index if windowed_readouts else None,
+        "series_end_index": windowed_readouts[-1].index if windowed_readouts else None,
+        "series_first_ts": readouts[0].ts.isoformat() if readouts else None,
+        "series_last_ts": readouts[-1].ts.isoformat() if readouts else None,
+        "signal_total_count": signal_total_count,
+        "signal_window_count": signal_window_count,
+        "baseline_warming_total_count": warming_total_count,
+        "baseline_warming_window_count": warming_window_count,
+        "backtest": backtest,
+        "caveats": caveats,
+    }
+
+
+_GATES_CACHE: dict[str, tuple[float, dict]] = {}
+_GATES_LOCK = threading.Lock()
+_GATES_TTL_S = 3.0
+
+
 def _gates_payload() -> dict:
+    now = time.time()
+    with _GATES_LOCK:
+        hit = _GATES_CACHE.get("payload")
+        if hit and now - hit[0] < _GATES_TTL_S:
+            return hit[1]
     gates = [
         _load_json_gate(
             "pead_factor_hybrid",
@@ -5304,7 +6883,10 @@ def _gates_payload() -> dict:
             ["n_symbols", "n_bars", "n_rows", "horizon_bars", "reports", "note"],
         ),
     ]
-    return {"gates": gates}
+    res = {"gates": gates}
+    with _GATES_LOCK:
+        _GATES_CACHE["payload"] = (now, res)
+    return res
 
 
 def _readiness_payload() -> dict:
@@ -5460,6 +7042,7 @@ def _health_payload() -> dict:
         # Flow process that happens to expose the same route names.
         "flow_feed_contract": "market-wide-v1",
         "suggestion_contract": _ContractStr("paper-candidate-contract-v9"),
+        "gamma_regime_contract": "gamma-regime-v1",
         "deployment_mode": "authenticated" if _auth_required() else "workstation",
         "auth_required": _auth_required(),
     }
@@ -5578,7 +7161,11 @@ def _sanitize(obj):
 def _dumps(payload) -> bytes:
     try:
         return json.dumps(
-            payload, default=_default_json_handler, allow_nan=False, ensure_ascii=False
+            payload,
+            default=_default_json_handler,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
         ).encode("utf-8")
     except (TypeError, ValueError):
         try:
@@ -5587,9 +7174,12 @@ def _dumps(payload) -> bytes:
                 default=_default_json_handler,
                 allow_nan=False,
                 ensure_ascii=False,
+                separators=(",", ":"),
             ).encode("utf-8")
         except Exception:
-            safe = json.dumps({"error": "response was not JSON-serializable"})
+            safe = json.dumps(
+                {"error": "response was not JSON-serializable"}, separators=(",", ":")
+            )
             return safe.encode("utf-8")
 
 
@@ -5603,6 +7193,39 @@ def _safe_int(raw, default: int, lo: int | None = None, hi: int | None = None) -
     if hi is not None:
         v = min(hi, v)
     return v
+
+
+def _safe_float(raw, default: float, lo: float | None = None, hi: float | None = None) -> float:
+    """Query-string float with clamping. NaN/Inf fall back to `default` rather
+    than clamping, because clamping a NaN silently yields a bound the caller
+    never asked for."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(v):
+        return default
+    if lo is not None:
+        v = max(lo, v)
+    if hi is not None:
+        v = min(hi, v)
+    return v
+
+
+# Endpoints that start a background job (scan, plays run, OI backfill) must
+# never be GET-triggerable: a GET request can be forced from any page open
+# in the operator's browser (e.g. an <img src="..."> or a prefetch), which
+# is a local-CSRF vector -- especially since EDGE_REQUIRE_AUTH defaults to
+# False (see _auth_required). Kept as one explicit, greppable set checked
+# centrally in `_route`, rather than scattered per-branch checks in
+# `_dispatch_api`.
+_MUTATING_API_PATHS = frozenset(
+    {
+        "/api/trigger_scan",
+        "/api/plays/run",
+        "/api/options/backfill_oi",
+    }
+)
 
 
 def _guess_content_type(path: Path) -> str:
@@ -5635,6 +7258,37 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
             return "*"
         request_origin = (self.headers.get("Origin") or "").strip()
         return request_origin if request_origin in allowed else None
+
+    def _cross_site_write_blocked(self) -> bool:
+        """True when a state-changing request carries a foreign `Origin`.
+
+        Requiring POST (see `_MUTATING_API_PATHS`) stops `<img src=...>`-style
+        GET-CSRF, but not a form POST: an auto-submitting cross-site
+        `<form method="POST" action="http://127.0.0.1:8787/api/trigger_scan">`
+        is a CORS *simple request*, so the browser sends it with no preflight.
+        CORS then hides the response from the attacker -- but the scan, the OI
+        backfill or the plays run has already happened. The side effect is the
+        attack; reading the reply is not required.
+
+        Browsers always attach `Origin` to a cross-origin POST, so checking it
+        closes that vector. A missing `Origin` means a non-browser client
+        (curl, the scheduler, a python script), which is not a CSRF vector and
+        is allowed through -- this is an anti-CSRF check, not authentication.
+        """
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return False
+        allowed = _cors_origins()
+        if "*" not in allowed:
+            # Explicit allowlist configured (required off-loopback): honour it.
+            return origin not in allowed
+        # Zero-configuration workstation mode. The server is bound to loopback,
+        # so only a loopback page is a legitimate caller.
+        try:
+            hostname = urlparse(origin).hostname or ""
+        except ValueError:
+            return True
+        return not _is_loopback_host(hostname)
 
     def _send_common_headers(self, *, compressed: bool = False) -> None:
         origin = self._cors_origin()
@@ -5684,16 +7338,55 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _send_file(self, path: Path):
+    def _send_method_not_allowed(self, endpoint: str, allow: str = "POST") -> None:
+        body = _dumps({"error": "method not allowed", "endpoint": endpoint, "allow": allow})
+        content_type = "application/json; charset=utf-8"
+        self.send_response(405)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Allow", allow)
+        self.send_header("Cache-Control", "no-store")
+        self._send_common_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_file(self, path: Path, url_path: str | None = None):
+        try:
+            st = path.stat()
+            etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+        except OSError:
+            etag = None
+            st = None
+
+        if etag:
+            if_none_match = (self.headers.get("If-None-Match") or "").strip()
+            if if_none_match and if_none_match == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                if "/assets/" in str(path).replace("\\", "/") or path.parent.name == "assets":
+                    self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self._send_common_headers()
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+
         try:
             body = path.read_bytes()
         except OSError as e:
-            self._error(str(path), f"failed to read file: {e}", status=500)
+            # Report the request URL, not the resolved filesystem path --
+            # `_error` sanitizes `e` itself, but the `endpoint` field must
+            # not leak server layout either.
+            self._error(url_path if url_path is not None else "/", e, status=500)
             return
         content_type = _guess_content_type(path)
         body, compressed = self._encode_body(body, content_type)
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        if etag:
+            self.send_header("ETag", etag)
         if compressed:
             self.send_header("Content-Encoding", "gzip")
         self._send_common_headers(compressed=compressed)
@@ -5712,10 +7405,33 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _error(self, endpoint: str, message: str, status: int = 500):
-        print(f"[api_server] ERROR on {endpoint}: {message}", file=sys.stderr)
+    def _error(self, endpoint: str, exc: BaseException, status: int = 500) -> None:
+        """Generic 500 catch-all: log full exception detail server-side,
+        but never echo `str(exc)` to the client -- it routinely embeds
+        absolute filesystem paths (FileNotFoundError/OSError) and other
+        server-layout details. The client gets a generic message plus the
+        exception TYPE name, and a short correlation id that also appears
+        in the log line so an operator can match one to the other.
+
+        Deliberate, user-facing validation messages (e.g. `_sanitize_symbol`
+        errors, the 404 "unknown endpoint") are intentional API contract
+        text and bypass this method entirely via `_send_json` -- they are
+        not affected by this sanitization.
+        """
+        correlation_id = uuid.uuid4().hex[:12]
+        print(
+            f"[api_server] ERROR on {endpoint} (id={correlation_id}): {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         traceback.print_exc(file=sys.stderr)
-        self._send_json({"error": str(message), "endpoint": endpoint}, status=status)
+        self._send_json(
+            {
+                "error": f"internal server error ({type(exc).__name__})",
+                "endpoint": endpoint,
+                "correlation_id": correlation_id,
+            },
+            status=status,
+        )
 
     # -- routing ------------------------------------------------------------
     def do_OPTIONS(self):
@@ -5733,12 +7449,82 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         self._route()
 
+    def _drain_request_body(self, endpoint: str) -> bool:
+        """Consume the request body. Returns False if we already answered.
+
+        No endpoint reads a body -- every parameter arrives in the query
+        string -- but leaving the bytes unread is not harmless. This server
+        sets `protocol_version = "HTTP/1.1"`, so the connection is persistent
+        and `handle_one_request` parses whatever comes next off the same
+        stream. An undrained body *is* whatever comes next.
+
+        That gives a cross-site page back exactly what `_cross_site_write_blocked`
+        takes away. Its form POST carries a foreign `Origin` and is refused --
+        but the body it smuggles gets re-parsed as a second request, written
+        start to finish by the attacker and so carrying no `Origin` at all,
+        which the CSRF check deliberately lets through as a non-browser
+        client. The job runs. Draining is what closes that door, so it has to
+        happen before routing and on every path, including rejections.
+        """
+        # BaseHTTPRequestHandler never de-chunks, so a chunked body would
+        # desync the stream in exactly the same way. Refuse it outright; no
+        # client of this API sends one.
+        if self.headers.get("Transfer-Encoding", "").strip():
+            self.close_connection = True
+            self._send_json(
+                {"error": "chunked transfer encoding is not supported", "endpoint": endpoint},
+                status=411,
+            )
+            return False
+
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            return True
+        try:
+            length = int(raw_length)
+        except (TypeError, ValueError):
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            self._send_json({"error": "invalid Content-Length", "endpoint": endpoint}, status=400)
+            return False
+        if length > _MAX_REQUEST_BODY_BYTES:
+            # Do not read it just to throw it away -- that is the DoS.
+            self.close_connection = True
+            self._send_json({"error": "request body too large", "endpoint": endpoint}, status=413)
+            return False
+
+        # Read exactly `length` bytes and no more: over-reading would swallow
+        # the next genuine request on a pipelined connection.
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                # Client vanished mid-body; the stream position is now
+                # unknowable, so the connection cannot be safely reused.
+                self.close_connection = True
+                return True
+            remaining -= len(chunk)
+        return True
+
     def _route(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
+        if not self._drain_request_body(path):
+            return
         try:
             if path.startswith("/api/"):
+                if path in _MUTATING_API_PATHS:
+                    if self.command != "POST":
+                        self._send_method_not_allowed(path)
+                        return
+                    if self._cross_site_write_blocked():
+                        self._send_json(
+                            {"error": "cross-site request blocked", "endpoint": path},
+                            status=403,
+                        )
+                        return
                 if path != "/api/health" and _auth_required():
                     authenticated, _user_id, reason = _verify_clerk_request(self)
                     if not authenticated:
@@ -5753,7 +7539,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:  # noqa: BLE001 - one bad request must not kill the server
-            self._error(path, f"{type(e).__name__}: {e}", status=500)
+            self._error(path, e, status=500)
 
     # -- API dispatch ---------------------------------------------------
     def _dispatch_api(self, path: str, query: dict):
@@ -5885,6 +7671,20 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     )
                 )
 
+            elif path == "/api/gamma/regime":
+                # No symbol param: the universe is the fixed index + sector
+                # list in _GAMMA_REGIME_UNIVERSE, not user-selectable -- there
+                # is nothing here to sanitize against path traversal.
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                # Trend is opt-in: it is cheap per symbol (local parquet +
+                # cached Kalman filter, no network provider) but still 15
+                # extra filter runs on a cold request, so it does not run by
+                # default on every poll of a breadth strip.
+                want_trend = str(query.get("trend", ["0"])[0]).lower() in {"1", "true", "yes"}
+                self._send_json(
+                    _gamma_regime_payload(force=force, want_trend=want_trend)
+                )
+
             elif path == "/api/options/backfill_oi":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
                 if not ok:
@@ -5925,6 +7725,24 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/momentum-scan":
                 self._send_json(_momentum_scan_payload())
+
+            elif path == "/api/absorption":
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                self._send_json(_absorption_scan_payload(force=force))
+
+            elif path.startswith("/api/absorption/"):
+                raw_symbol = path[len("/api/absorption/") :].strip()
+                ok, symbol_or_error = _sanitize_symbol(raw_symbol)
+                if not ok:
+                    self._send_json({"error": symbol_or_error, "endpoint": path}, status=400)
+                    return
+                limit = _safe_int(
+                    query.get("limit", [str(_ABSORPTION_SERIES_DEFAULT_LIMIT)])[0],
+                    default=_ABSORPTION_SERIES_DEFAULT_LIMIT,
+                    lo=_ABSORPTION_SERIES_MIN_LIMIT,
+                    hi=_ABSORPTION_SERIES_MAX_LIMIT,
+                )
+                self._send_json(_absorption_symbol_payload(symbol_or_error, limit=limit))
 
             elif path == "/api/readiness":
                 self._send_json(_readiness_payload())
@@ -6052,6 +7870,93 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json(_changepoint_symbol_payload(sym_or_err, window))
                 else:
                     self._send_json(_changepoints_payload())
+
+            elif path == "/api/kalman-trend":
+                raw_sym = (query.get("symbol", [""])[0] or "").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                # Bounds are guard rails, not tuning advice: q below ~1e-12
+                # freezes the velocity (the filter stops believing the trend
+                # can change), above ~1e-2 the "filter" is a difference of
+                # consecutive prices.
+                self._send_json(
+                    _kalman_trend_payload(
+                        sym_or_err,
+                        query.get("window", [DEFAULT_WINDOW])[0],
+                        q=_safe_float(
+                            query.get("q", [DEFAULT_Q])[0], DEFAULT_Q, lo=1e-12, hi=1e-2
+                        ),
+                        entry_z=_safe_float(
+                            query.get("entry_z", [DEFAULT_ENTRY_Z])[0],
+                            DEFAULT_ENTRY_Z,
+                            lo=0.0,
+                            hi=10.0,
+                        ),
+                        exit_z=_safe_float(
+                            query.get("exit_z", [DEFAULT_EXIT_Z])[0],
+                            DEFAULT_EXIT_Z,
+                            lo=-10.0,
+                            hi=10.0,
+                        ),
+                        noise_days=_safe_float(
+                            query.get("noise_days", [DEFAULT_NOISE_DAYS])[0],
+                            DEFAULT_NOISE_DAYS,
+                            lo=1.0,
+                            hi=750.0,
+                        ),
+                        allow_short=(query.get("allow_short", ["0"])[0] or "0").lower()
+                        in {"1", "true", "yes"},
+                        intraday=(query.get("bars", ["daily"])[0] or "daily").lower()
+                        in {"1h", "intraday"},
+                    )
+                )
+
+            elif path == "/api/microstructure-regime":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _microstructure_regime_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/state-estimation":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _state_estimation_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/anchored-vwap":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _anchored_vwap_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/systematic-execution/signals":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _systematic_signals_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/systematic-execution/backtest":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _systematic_backtest_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
 
             elif path == "/api/flow-state":
                 self._send_json(_flow_state_payload())
@@ -6223,45 +8128,60 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 period = query.get("period", ["quarterly"])[0]
-                from tools.financial_data import get_financials_payload
-
-                self._send_json(get_financials_payload(sym_or_err, period=period))
+                if get_financials_payload is not None:
+                    self._send_json(get_financials_payload(sym_or_err, period=period))
+                else:
+                    self._send_json(
+                        {"error": "financial data unavailable", "endpoint": path}, status=503
+                    )
 
             elif path == "/api/company-profile":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
                 if not ok:
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
-                from tools.financial_data import get_company_profile_payload
-
-                self._send_json(get_company_profile_payload(sym_or_err))
+                if get_company_profile_payload is not None:
+                    self._send_json(get_company_profile_payload(sym_or_err))
+                else:
+                    self._send_json(
+                        {"error": "profile data unavailable", "endpoint": path}, status=503
+                    )
 
             elif path == "/api/insiders":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
                 if not ok:
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
-                from tools.financial_data import get_insiders_payload
-
-                self._send_json(get_insiders_payload(sym_or_err))
+                if get_insiders_payload is not None:
+                    self._send_json(get_insiders_payload(sym_or_err))
+                else:
+                    self._send_json(
+                        {"error": "insider data unavailable", "endpoint": path}, status=503
+                    )
 
             elif path == "/api/government":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
                 if not ok:
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
-                from tools.financial_data import get_government_payload
-
-                self._send_json(get_government_payload(sym_or_err))
+                if get_government_payload is not None:
+                    self._send_json(get_government_payload(sym_or_err))
+                else:
+                    self._send_json(
+                        {"error": "government data unavailable", "endpoint": path}, status=503
+                    )
 
             elif path == "/api/ownership":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
                 if not ok:
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
-                from tools.financial_data import get_ownership_payload
-
-                self._send_json(get_ownership_payload(sym_or_err))
+                if get_ownership_payload is not None:
+                    self._send_json(get_ownership_payload(sym_or_err))
+                else:
+                    self._send_json(
+                        {"error": "ownership data unavailable", "endpoint": path}, status=503
+                    )
 
             elif path == "/api/supply-chain":
                 raw_sym = query.get("symbol", [""])[0].strip().upper()
@@ -6305,7 +8225,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             raise
         except Exception as e:  # noqa: BLE001 - per-handler safety net
-            self._error(path, f"{type(e).__name__}: {e}", status=500)
+            self._error(path, e, status=500)
 
     # -- static file serving ---------------------------------------------
     def _serve_static(self, url_path: str):
@@ -6334,7 +8254,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": "not found", "endpoint": url_path}, status=404)
                 return
 
-        self._send_file(candidate)
+        self._send_file(candidate, url_path)
 
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -6361,6 +8281,10 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     def get_request(self):
         request, client_address = super().get_request()
         request.settimeout(self.socket_timeout_s)
+        try:
+            request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except (AttributeError, OSError):
+            pass
         return request, client_address
 
     def process_request(self, request, client_address):

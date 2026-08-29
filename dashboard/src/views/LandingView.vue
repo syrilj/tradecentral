@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, inject, onMounted, onUnmounted, ref } from 'vue'
 import gsap from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import { api, type MarketClock, type Readiness, type StatusPayload } from '@/api'
@@ -8,35 +8,43 @@ import { age, DASH, num, shortDate, usd, signedPct, tone } from '@/format'
 
 import EvidenceLayerVisual from '@/components/EvidenceLayerVisual.vue'
 import AppIcon from '@/components/AppIcon.vue'
+import BsLab from '@/components/BsLab.vue'
 import GexFlowVisual from '@/components/GexFlowVisual.vue'
 import LiveStateVisual from '@/components/LiveStateVisual.vue'
-import Panel from '@/components/Panel.vue'
+import McLiveHero from '@/components/McLiveHero.vue'
 import Readout from '@/components/Readout.vue'
 import ResearchLoopVisual from '@/components/ResearchLoopVisual.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
-import {
-  gexProfile,
-  gexBarsSvg,
-  mcPathsSvg,
-  monteCarlo,
-  histogramSvg,
-  volSurface,
-  volSurfaceMeshSvg,
-  lognormalDensitySvg,
-  impliedRange,
-} from '@/charts/landing-math'
+// VolSurfaceCanvas statically imports three.js, so importing it here made the
+// 514 kB three chunk a hard dependency of `/` -- the public landing route, and
+// the heaviest page in the app to first paint -- for a decorative WebGL figure
+// that sits below the fold. Loading it on demand matches how the operator desk
+// already treats three (see ProbabilityDensityChart.vue).
+const VolSurfaceCanvas = defineAsyncComponent(() => import('@/components/VolSurfaceCanvas.vue'))
+
+import { impliedRange, volSurface } from '@/charts/landing-math'
 
 gsap.registerPlugin(ScrollTrigger)
 
 /**
- * Public product overview.
+ * Public product overview — editorial "paper" system.
+ *
+ * The page follows a warm off-white, hairline-framed editorial layout: a
+ * bordered masthead, a railroad frame of 1px vertical rules around the
+ * content column, oversized tight grotesque headlines, near-black buttons
+ * with pixel arrows, orange/yellow accents, and navy bands for the evidence
+ * and closing sections. Blocks fall into place; the headline decodes.
  *
  * Market figures shown here come from the same loopback resources as the
  * operator shell. Product diagrams carry only labels and system boundaries;
  * there are no illustrative quotes, returns, or invented model scores.
  *
- * All entrance/scroll animation is driven by GSAP. No mockup images — the
- * hero visual is a purpose-built animated SVG instrument diagram.
+ * The hero is a LIVE Monte Carlo simulation (McLiveHero): GBM paths draw in
+ * batch by batch while their terminal histogram accumulates against the
+ * closed-form lognormal density. Below, an interactive Black-Scholes
+ * workbench (BsLab) lets a visitor drag volatility/expiry/strike and watch
+ * real Greeks respond. Scroll animation is driven by GSAP; the scramble and
+ * fall-in entrances are rAF/IntersectionObserver. No mockup images anywhere.
  */
 const status = inject<Resource<StatusPayload>>('status')!
 const readiness = inject<Resource<Readiness>>('readiness')!
@@ -90,10 +98,13 @@ const apiDown = computed(() => Boolean(status.error.value && !status.data.value)
 const apiStale = computed(() => Boolean(status.error.value && status.data.value))
 const contacting = computed(() => status.loading.value && !status.data.value && !status.error.value)
 
-/* ── Rotating word in the hero lede ──────────────────────────────────────────
-   Cycles one real product concept. The visual transition is CSS; GSAP
-   handles the larger entrance timeline. */
-const ROTATING_WORDS = ['positioning', 'flow', 'gamma structure', 'research evidence'] as const
+/* ── Rotating word in the hero lede ────────────────────────────────────────── */
+const ROTATING_WORDS = [
+  'positioning',
+  'signed flow',
+  'gamma structure',
+  'research evidence',
+] as const
 const rotatingIndex = ref(0)
 let rotateTimer: number | undefined
 function startRotating(): void {
@@ -108,37 +119,63 @@ function stopRotating(): void {
   }
 }
 
-/* ── Magnetic CTA buttons (GSAP quickTo for buttery following) ─────────────── */
-const magneticRefs = ref<HTMLElement[]>([])
-let xTo: ((v: number) => void) | undefined
-let yTo: ((v: number) => void) | undefined
+/* ── Hero headline scramble-decode (settles left to right) ───────────────────
+   Deterministic charset, rAF-driven, second line trails the first. The final
+   headline always lives in the h1's aria-label; the animated spans are
+   aria-hidden so assistive tech never reads the churn. */
+const HERO_LINES = ['Frontier market research.', 'In your hands.'] as const
+const heroAriaLabel = HERO_LINES.join(' ')
+const SCRAMBLE_CHARS = '01<>/[]{}#$%&*+=~ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+const scrambledLines = ref<string[]>([...HERO_LINES])
+let scrambleRaf = 0
 
-function onMagneticMove(e: MouseEvent): void {
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
-  xTo?.((e.clientX - cx) * 0.3)
-  yTo?.((e.clientY - cy) * 0.3)
-}
-function onMagneticLeave(): void {
-  xTo?.(0)
-  yTo?.(0)
+function runScramble(): void {
+  const started = performance.now()
+  const churnMs = 850
+  const staggerMs = 380
+  const step = (now: number): void => {
+    let settledAll = true
+    scrambledLines.value = HERO_LINES.map((target, li) => {
+      const elapsed = now - started - li * staggerMs
+      const progress = Math.min(1, Math.max(0, elapsed / churnMs))
+      if (progress >= 1) return target
+      settledAll = false
+      const settled = Math.floor(progress * target.length)
+      let out = target.slice(0, settled)
+      for (let i = settled; i < target.length; i += 1) {
+        out +=
+          target[i] === ' '
+            ? ' '
+            : SCRAMBLE_CHARS[(settled * 31 + i * 17 + Math.floor(now / 45)) % SCRAMBLE_CHARS.length]
+      }
+      return out
+    })
+    if (!settledAll) scrambleRaf = requestAnimationFrame(step)
+  }
+  scrambleRaf = requestAnimationFrame(step)
 }
 
-/* ── Card spotlight (mouse-following top-border highlight) ────────────────── */
-function onCardMove(e: MouseEvent, event: 'enter' | 'move' | 'leave'): void {
-  const target = e.currentTarget as HTMLElement
-  if (event === 'leave') {
-    target.style.setProperty('--card-x', '50%')
-    target.style.setProperty('--card-y', '0%')
+/* ── Fall-in entrance for bento blocks (IntersectionObserver gated) ────────── */
+let fallObserver: IntersectionObserver | undefined
+
+function wireFallIns(reducedMotion: boolean): void {
+  const blocks = document.querySelectorAll('.fall-in')
+  if (reducedMotion) {
+    blocks.forEach((el) => el.classList.add('in-view'))
     return
   }
-  const rect = target.getBoundingClientRect()
-  const x = ((e.clientX - rect.left) / rect.width) * 100
-  const y = ((e.clientY - rect.top) / rect.height) * 100
-  target.style.setProperty('--card-x', `${x}%`)
-  target.style.setProperty('--card-y', `${y}%`)
+  fallObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in-view')
+          fallObserver?.unobserve(entry.target)
+        }
+      }
+    },
+    { threshold: 0.15, rootMargin: '0px 0px -6% 0px' },
+  )
+  blocks.forEach((el) => fallObserver?.observe(el))
 }
 
 /* ── Content data ──────────────────────────────────────────────────────────── */
@@ -146,35 +183,47 @@ const capabilities = [
   {
     kind: 'market' as const,
     icon: 'radar',
-    index: '01',
+    area: 'market',
     title: 'Market structure',
     copy: 'Search a broad US equity universe, compare trajectories, inspect sector rotation, and keep source freshness visible.',
     detail: 'Price · regimes · sectors · outliers',
     stat: 'Broad universe',
     statValue: () => universe.value,
-    span: 'wide',
   },
   {
     kind: 'options' as const,
     icon: 'options',
-    index: '02',
+    area: 'options',
     title: 'Options & flow',
     copy: 'Read positioning, gamma topology, implied ranges, unusual activity, and signed-flow coverage without collapsing them into one score.',
     detail: 'GEX · flow · ranges · contract context',
     stat: 'Gates cleared',
     statValue: () => num(gates.value?.go, 0),
-    span: 'tall',
   },
   {
     kind: 'governance' as const,
     icon: 'gate',
-    index: '03',
+    area: 'governance',
     title: 'Research governance',
     copy: 'Trace every claim back to point-in-time tests, pre-registered gates, run artifacts, and explicit shadow evidence.',
     detail: 'Methods · diagnostics · gates · ledgers',
     stat: 'Shadow sessions',
     statValue: () => shadow.value,
-    span: 'normal',
+  },
+] as const
+
+const bentoChips = [
+  {
+    area: 'lab',
+    title: 'Model lab',
+    copy: 'A real Black-Scholes workbench running in the browser.',
+    tone: 'sq-yellow',
+  },
+  {
+    area: 'work',
+    title: 'Workspaces',
+    copy: 'A research path that hands context forward, not a menu.',
+    tone: 'sq-blue',
   },
 ] as const
 
@@ -238,115 +287,46 @@ const pipelineSteps = [
   },
 ] as const
 
-/* ── Math-driven hero instrument diagram ─────────────────────────────────────
-   All geometry is computed from named financial models, not hand-picked
-   decorative shapes. Parameters are structural and labelled as illustrative
-   anatomy — live values appear only after sign-in.
+const boundaryColumns = [
+  {
+    title: 'Research only',
+    copy: 'The checked-in pipeline is a decision-support instrument. Outputs are research evidence with explicit provenance — never a recommendation.',
+  },
+  {
+    title: 'No execution',
+    copy: 'There is no order ticket, no broker link, and no submission route anywhere in the system.',
+  },
+  {
+    title: 'No investment advice',
+    copy: 'Polished surfaces never get to blur the line between descriptive research and advice. Evidence stays typed; authorization stays outside.',
+  },
+] as const
 
-   Models used:
-     · Implied volatility surface (parametric smile + term structure)
-     · Black-Scholes gamma → GEX-by-strike profile
-     · Monte Carlo GBM → terminal distribution fan chart + histogram
-     · Lognormal risk-neutral density → implied range cone
- */
-const MODEL = {
-  S0: 100,
-  mu: 0.08,
-  sigma: 0.3,
-  T: 0.25,
-  r: 0.05,
-  q: 0,
-  steps: 60,
-  nStrikes: 21,
-  strikeRange: 0.25,
-  // Vol surface parameters
-  volSkew: -0.8, // equity put skew (higher IV for downside)
-  volCurve: 1.2, // smile curvature (wings)
-  volTermDecay: 0.3, // term structure decay
-  // Monte Carlo parameters
-  mcPaths: 40,
-  mcBins: 24,
-  mcSeed: 42,
-} as const
+/* ── Structural model parameters ──────────────────────────────────────────────
+   The hero Monte Carlo and the WebGL vol surface share these constants so the
+   whole page describes ONE coherent model world. Labels on every figure mark
+   them as structural anatomy — live values appear only after sign-in. */
+const MC = { S0: 100, sigma: 0.3, T: 0.25, mu: 0.08, r: 0.05, q: 0, totalPaths: 140, seed: 7 }
 
-/* Strike and maturity grids for the vol surface */
-const volStrikes = Array.from({ length: 11 }, (_, i) => MODEL.S0 * (0.8 + 0.04 * i))
-const volMaturities = [0.083, 0.167, 0.25, 0.5, 0.75, 1.0] // 1M, 2M, 3M, 6M, 9M, 12M
+const heroRange = computed(() => impliedRange(MC.S0, MC.T, MC.sigma, MC.r, MC.q))
 
-/* ── Volatility surface (3D mesh) ─────────────────────────────────────────── */
+const volStrikes = Array.from({ length: 11 }, (_, i) => MC.S0 * (0.8 + 0.04 * i))
+const volMaturities = [0.083, 0.167, 0.25, 0.5, 0.75, 1.0] // 1M … 12M
+const VOL_MODEL = { sigma: 0.3, skew: -0.8, curve: 1.2, termDecay: 0.3 }
+
 const volSurfaceData = computed(() =>
   volSurface(
-    MODEL.S0,
-    MODEL.r,
-    MODEL.q,
+    MC.S0,
+    MC.r,
+    MC.q,
     volStrikes,
     volMaturities,
-    MODEL.sigma,
-    MODEL.volSkew,
-    MODEL.volCurve,
-    MODEL.volTermDecay,
+    VOL_MODEL.sigma,
+    VOL_MODEL.skew,
+    VOL_MODEL.curve,
+    VOL_MODEL.termDecay,
   ),
 )
-const volMesh = computed(() =>
-  volSurfaceMeshSvg(
-    volSurfaceData.value,
-    volStrikes,
-    volMaturities,
-    { x: 0, y: 0, w: 500, h: 330 },
-    0.5,
-    0.65,
-  ),
-)
-
-/* ── GEX profile (Black-Scholes gamma) ────────────────────────────────────── */
-const gexGeometry = computed(() => {
-  const profile = gexProfile(
-    MODEL.S0,
-    MODEL.T,
-    MODEL.sigma,
-    MODEL.r,
-    MODEL.q,
-    MODEL.nStrikes,
-    MODEL.strikeRange,
-  )
-  return gexBarsSvg(profile, { x: 40, y: 40, w: 460, h: 120 }, 16)
-})
-
-/* ── Monte Carlo terminal distribution ────────────────────────────────────── */
-const mcResult = computed(() =>
-  monteCarlo(
-    MODEL.S0,
-    MODEL.mu,
-    MODEL.sigma,
-    MODEL.T,
-    MODEL.mcPaths,
-    MODEL.steps,
-    MODEL.mcSeed,
-    MODEL.mcBins,
-  ),
-)
-const mcFanPaths = computed(() =>
-  mcPathsSvg(mcResult.value.paths, { x: 20, y: 200, w: 480, h: 120 }),
-)
-const mcHistogram = computed(() =>
-  histogramSvg(mcResult.value.histogram, { x: 20, y: 200, w: 480, h: 120 }, 14),
-)
-
-/* ── Lognormal risk-neutral density ────────────────────────────────────────── */
-const densityGeometry = computed(() =>
-  lognormalDensitySvg(
-    MODEL.S0,
-    MODEL.T,
-    MODEL.sigma,
-    MODEL.r,
-    MODEL.q,
-    { x: 20, y: 200, w: 480, h: 120 },
-    80,
-  ),
-)
-
-/* ── Risk-neutral implied range ────────────────────────────────────────────── */
-const range = computed(() => impliedRange(MODEL.S0, MODEL.T, MODEL.sigma, MODEL.r, MODEL.q))
 
 /* ── Ticker tape ───────────────────────────────────────────────────────────── */
 const TAPE = [
@@ -359,6 +339,7 @@ const TAPE = [
 ] as const
 
 const tapeData = ref<{ sym: string; label: string; price: number | null; chg: number | null }[]>([])
+const landingNavOpen = ref(false)
 
 async function loadTape(): Promise<void> {
   try {
@@ -382,88 +363,46 @@ async function loadTape(): Promise<void> {
 
 /* ── GSAP animation orchestration ─────────────────────────────────────────── */
 let ctx: gsap.Context | undefined
-const heroSvgRef = ref<SVGSVGElement | null>(null)
-const prefersReducedMotion = ref(false)
-
-function setupMagnetic(): void {
-  if (prefersReducedMotion.value || magneticRefs.value.length === 0) return
-  xTo = gsap.quickTo(magneticRefs.value, 'x', { duration: 0.5, ease: 'power3.out' })
-  yTo = gsap.quickTo(magneticRefs.value, 'y', { duration: 0.5, ease: 'power3.out' })
-}
 
 onMounted(() => {
   document.body.classList.add('edge-public-mode')
   void loadTape()
 
-  prefersReducedMotion.value = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   /* GSAP context scopes all animations so ctx.revert() cleans up everything */
   ctx = gsap.context(() => {
-    if (prefersReducedMotion.value) return
+    /* The masthead hardens once content has scrolled beneath it. Registered
+       before the Reduce Motion guard: it is a material state, not motion,
+       so it applies either way. The class flip keeps the scoped tokens the
+       single source of truth for the appearance. */
+    ScrollTrigger.create({
+      start: 40,
+      onToggle: ({ isActive }) => {
+        document.querySelector('.masthead')?.classList.toggle('is-scrolled', isActive)
+      },
+    })
 
-    /* ── Hero entrance timeline ──────────────────────────────────────────── */
-    const heroTl = gsap.timeline({ defaults: { ease: 'power3.out' } })
-    heroTl
-      .from('.hero-eyebrow', { opacity: 0, y: 12, duration: 0.45 })
-      .from(
-        '.hero-headline .word',
-        { opacity: 0, y: 24, filter: 'blur(6px)', stagger: 0.05, duration: 0.55 },
-        '-=0.15',
-      )
-      .from('.hero-lede', { opacity: 0, y: 12, duration: 0.4 }, '-=0.2')
-      .from('.hero-actions', { opacity: 0, y: 12, duration: 0.4 }, '-=0.15')
-      .from('.hero-boundary', { opacity: 0, y: 10, duration: 0.35 }, '-=0.1')
-      .from('.hero-warn-note', { opacity: 0, y: 8, duration: 0.3 }, '-=0.1')
+    if (prefersReducedMotion) return
 
-    /* ── Hero SVG instrument diagram draws in ────────────────────────────── */
-    const svg = heroSvgRef.value
-    if (svg) {
-      const svgTl = gsap.timeline({ delay: 0.4, defaults: { ease: 'power2.out' } })
-      svgTl
-        .from('.hero-svg-grid path', { opacity: 0, stagger: 0.02, duration: 0.3 })
-        // Vol surface mesh draws in
-        .from('.hero-svg-surface-ribbon', { opacity: 0, stagger: 0.04, duration: 0.4 }, '-=0.1')
-        .from('.hero-svg-mesh-line', { opacity: 0, stagger: 0.015, duration: 0.5 }, '-=0.3')
-        .from('.hero-svg-contour', { opacity: 0, stagger: 0.1, duration: 0.4 }, '-=0.3')
-        // GEX bars grow up
-        .from(
-          '.hero-svg-bar',
-          { scaleY: 0, transformOrigin: 'center bottom', stagger: 0.03, duration: 0.4 },
-          '-=0.2',
-        )
-        .from(
-          '.hero-svg-zero',
-          { scaleX: 0, transformOrigin: 'left center', duration: 0.4 },
-          '-=0.2',
-        )
-        .from('.hero-svg-flip', { scaleY: 0, transformOrigin: 'center', duration: 0.3 }, '-=0.2')
-        // MC fan paths draw in
-        .from('.hero-svg-mc-path', { opacity: 0, stagger: 0.01, duration: 0.3 }, '-=0.2')
-        .from(
-          '.hero-svg-histogram',
-          { scaleY: 0, transformOrigin: 'bottom', duration: 0.4 },
-          '-=0.2',
-        )
-        // Density curve draws in
-        .from('.hero-svg-density-area', { opacity: 0, duration: 0.4 }, '-=0.2')
-        .from(
-          '.hero-svg-trace',
-          { strokeDashoffset: 1200, duration: 1.2, ease: 'power2.inOut' },
-          '-=0.2',
-        )
-        .from(
-          '.hero-svg-range',
-          { scaleY: 0, transformOrigin: 'top', stagger: 0.1, duration: 0.3 },
-          '-=0.5',
-        )
-        .from('.hero-svg-median', { scaleY: 0, transformOrigin: 'top', duration: 0.3 }, '-=0.2')
-        // Labels + corners
-        .from('.hero-svg-label', { opacity: 0, stagger: 0.02, duration: 0.2 }, '-=0.3')
-        .from('.hero-svg-corner', { opacity: 0, stagger: 0.05, duration: 0.2 }, '-=0.2')
-    }
+    /* ── Hero copy fades in beside the decoding headline ─────────────────── */
+    gsap.from('.hero-eyebrow, .hero-lede, .hero-actions, .hero-boundary, .hero-warn-note', {
+      opacity: 0,
+      y: 12,
+      duration: 0.45,
+      stagger: 0.07,
+      ease: 'power3.out',
+      delay: 0.2,
+    })
 
-    /* ── Magnetic buttons ────────────────────────────────────────────────── */
-    setupMagnetic()
+    /* ── Hero instrument frame draws in ───────────────────────────────────── */
+    gsap.from('.hero-visual .instrument-frame', {
+      opacity: 0,
+      y: 26,
+      duration: 0.8,
+      delay: 0.45,
+      ease: 'power2.out',
+    })
 
     /* ── Section reveals via ScrollTrigger ───────────────────────────────── */
     gsap.utils.toArray<HTMLElement>('.gsap-reveal').forEach((el) => {
@@ -483,7 +422,9 @@ onMounted(() => {
       { el: '.stat-gates', value: Number(gates.value?.go ?? 0) },
     ]
     statTargets.forEach(({ el, value }) => {
-      const node = document.querySelector(el)
+      /* Target the figure, not the Readout root — writing textContent on the
+         root replaces the label and sub-label markup with a bare number. */
+      const node = document.querySelector(`${el} .val`)
       if (!node || value === 0) return
       const obj = { val: 0 }
       gsap.to(obj, {
@@ -502,12 +443,12 @@ onMounted(() => {
       })
     })
 
-    /* ── Tracing beam fills as you scroll through the evidence section ───── */
+    /* ── Tracing beam fills as you scroll through the evidence band ──────── */
     gsap.fromTo(
       '.beam-fill',
-      { height: '0%' },
+      { width: '0%' },
       {
-        height: '100%',
+        width: '100%',
         ease: 'none',
         scrollTrigger: {
           trigger: '.tracing-beam-wrap',
@@ -531,48 +472,54 @@ onMounted(() => {
         delay: i * 0.01,
       })
     })
-
-    /* ── Topbar subtle background gain on scroll ─────────────────────────── */
-    gsap.to('.topbar-shell', {
-      backgroundColor: 'rgba(8, 9, 12, 0.96)',
-      borderBottomColor: 'var(--rule-hi)',
-      duration: 0.3,
-      ease: 'none',
-      scrollTrigger: { start: 40, toggleActions: 'play none none reverse' },
-    })
   })
 
+  if (!prefersReducedMotion) runScramble()
+  wireFallIns(prefersReducedMotion)
   startRotating()
 })
 
 onUnmounted(() => {
   document.body.classList.remove('edge-public-mode')
   ctx?.revert()
+  cancelAnimationFrame(scrambleRaf)
+  fallObserver?.disconnect()
   stopRotating()
 })
 </script>
 
 <template>
   <div class="landing-page">
-    <!-- ── topbar ───────────────────────────────────────────────────────────── -->
-    <header class="topbar-shell">
-      <div class="topbar landing-inner">
+    <!-- ── masthead: bordered cream toolbar ────────────────────────────────── -->
+    <header class="masthead">
+      <div class="masthead-inner">
         <RouterLink class="brand" to="/" aria-label="TradeCentral home">
-          <span class="brand-mark"><TradeCentralMark :size="28" /></span>
+          <span class="brand-mark"><TradeCentralMark :size="24" /></span>
           <span class="wordmark">
             <strong>TradeCentral</strong>
             <small>Quantitative research instrument</small>
           </span>
         </RouterLink>
 
-        <nav class="topnav" aria-label="Product overview">
-          <a href="#product"><small>01</small>Product</a>
-          <a href="#workspaces"><small>02</small>Workspaces</a>
-          <a href="#method"><small>03</small>Method</a>
-          <a href="#evidence"><small>04</small>Evidence</a>
+        <nav id="landing-topnav" class="masthead-nav" aria-label="Product overview">
+          <a href="#product" @click="landingNavOpen = false">Product</a>
+          <a href="#flow" @click="landingNavOpen = false">Flow</a>
+          <a href="#lab" @click="landingNavOpen = false">Model lab</a>
+          <a href="#workspaces" @click="landingNavOpen = false">Workspaces</a>
+          <a href="#method" @click="landingNavOpen = false">Method</a>
         </nav>
 
-        <div class="top-actions">
+        <div class="masthead-actions">
+          <button
+            type="button"
+            class="nav-menu-btn"
+            :aria-expanded="landingNavOpen"
+            aria-controls="landing-topnav"
+            aria-label="Product sections"
+            @click="landingNavOpen = !landingNavOpen"
+          >
+            <AppIcon name="density" :size="16" />
+          </button>
           <RouterLink
             class="sign-in"
             :to="{ name: 'auth', query: { mode: 'signin', redirect: '/flow' } }"
@@ -580,79 +527,74 @@ onUnmounted(() => {
             Sign in
           </RouterLink>
           <RouterLink
-            class="button button-accent"
+            class="button button-primary"
             :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }"
           >
             Create access
             <svg
-              class="btn-chevron"
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="none"
+              class="px-arrow"
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="currentColor"
               aria-hidden="true"
             >
-              <path
-                d="M3 7h8M8 3.5l3.5 3.5L8 10.5"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
+              <rect x="1" y="8" width="10" height="4" />
+              <rect x="11" y="4" width="4" height="4" />
+              <rect x="11" y="12" width="4" height="4" />
+              <rect x="15" y="8" width="4" height="4" />
             </svg>
           </RouterLink>
         </div>
       </div>
     </header>
 
-    <!-- ── animated ticker tape ──────────────────────────────────────────────── -->
-    <div class="ticker-tape" aria-hidden="true">
-      <div class="ticker-track">
-        <div class="ticker-row">
-          <span
-            v-for="(item, i) in [...tapeData, ...tapeData]"
-            :key="`${item.sym}-${i}`"
-            class="ticker-item"
-          >
-            <span class="ticker-sym">{{ item.sym }}</span>
-            <span class="ticker-sep">·</span>
-            <span class="ticker-price">{{ item.price != null ? usd(item.price) : 'SYNC' }}</span>
-            <span v-if="item.chg != null" class="ticker-chg" :class="tone(item.chg)">{{
-              signedPct(item.chg, 2)
-            }}</span>
-          </span>
-        </div>
-        <div class="ticker-row" aria-hidden="true">
-          <span
-            v-for="(item, i) in [...tapeData, ...tapeData]"
-            :key="`${item.sym}-dup-${i}`"
-            class="ticker-item"
-          >
-            <span class="ticker-sym">{{ item.sym }}</span>
-            <span class="ticker-sep">·</span>
-            <span class="ticker-price">{{ item.price != null ? usd(item.price) : 'SYNC' }}</span>
-            <span v-if="item.chg != null" class="ticker-chg" :class="tone(item.chg)">{{
-              signedPct(item.chg, 2)
-            }}</span>
-          </span>
+    <!-- ── railroad: the framed content column ─────────────────────────────── -->
+    <main class="railroad">
+      <!-- ticker strip: live indices from the loopback API -->
+      <div class="ticker-tape full-bleed" aria-hidden="true">
+        <div class="ticker-track">
+          <div class="ticker-row">
+            <span
+              v-for="(item, i) in [...tapeData, ...tapeData]"
+              :key="`${item.sym}-${i}`"
+              class="ticker-item"
+            >
+              <span class="ticker-sym">{{ item.sym }}</span>
+              <span class="ticker-sep">·</span>
+              <span class="ticker-price">{{ item.price != null ? usd(item.price) : 'SYNC' }}</span>
+              <span v-if="item.chg != null" class="ticker-chg" :class="tone(item.chg)">{{
+                signedPct(item.chg, 2)
+              }}</span>
+            </span>
+          </div>
+          <div class="ticker-row" aria-hidden="true">
+            <span
+              v-for="(item, i) in [...tapeData, ...tapeData]"
+              :key="`${item.sym}-dup-${i}`"
+              class="ticker-item"
+            >
+              <span class="ticker-sym">{{ item.sym }}</span>
+              <span class="ticker-sep">·</span>
+              <span class="ticker-price">{{ item.price != null ? usd(item.price) : 'SYNC' }}</span>
+              <span v-if="item.chg != null" class="ticker-chg" :class="tone(item.chg)">{{
+                signedPct(item.chg, 2)
+              }}</span>
+            </span>
+          </div>
         </div>
       </div>
-    </div>
 
-    <main>
-      <!-- ── HERO ──────────────────────────────────────────────────────────── -->
-      <section class="hero landing-inner">
+      <!-- ── HERO: decoding headline over the live Monte Carlo instrument ──── -->
+      <section class="hero section-pad">
         <div class="hero-copy">
-          <p class="hero-eyebrow"><span aria-hidden="true" /> US equities · options intelligence</p>
+          <p class="hero-eyebrow">
+            <i class="eyebrow-tick" aria-hidden="true" />US equities · Options intelligence
+          </p>
 
-          <h1 class="hero-headline">
-            <span v-for="(w, i) in 'Read the market'.split(' ')" :key="`a-${i}`" class="word"
-              >{{ w }}&nbsp;</span
-            >
-            <br />
-            <span v-for="(w, i) in 'beneath the price.'.split(' ')" :key="`b-${i}`" class="word em"
-              >{{ w }}&nbsp;</span
-            >
+          <h1 class="hero-headline" :aria-label="heroAriaLabel">
+            <span class="hero-line" aria-hidden="true">{{ scrambledLines[0] }}</span>
+            <span class="hero-line em" aria-hidden="true">{{ scrambledLines[1] }}</span>
           </h1>
 
           <p class="hero-lede">
@@ -671,37 +613,39 @@ onUnmounted(() => {
           </p>
 
           <div class="hero-actions">
-            <span
-              ref="magneticRefs"
-              class="magnetic-wrap"
-              @mousemove="onMagneticMove"
-              @mouseleave="onMagneticLeave"
+            <RouterLink
+              class="button button-primary"
+              :to="{ name: 'auth', query: { redirect: '/flow' } }"
             >
-              <RouterLink
-                class="button button-accent"
-                :to="{ name: 'auth', query: { redirect: '/flow' } }"
-              >
-                Explore market flow
-                <AppIcon name="flow" :size="15" class="btn-icon" />
-              </RouterLink>
-            </span>
-            <a class="button button-quiet" href="#product">
-              See what you get
+              Explore market flow
               <svg
-                class="btn-chevron"
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
+                class="px-arrow"
+                width="20"
+                height="20"
+                viewBox="0 0 20 20"
+                fill="currentColor"
                 aria-hidden="true"
               >
-                <path
-                  d="M7 3v8M3.5 7.5l3.5 3.5L10.5 7.5"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
+                <rect x="1" y="8" width="10" height="4" />
+                <rect x="11" y="4" width="4" height="4" />
+                <rect x="11" y="12" width="4" height="4" />
+                <rect x="15" y="8" width="4" height="4" />
+              </svg>
+            </RouterLink>
+            <a class="button button-ghost" href="#lab">
+              Open the model lab
+              <svg
+                class="px-arrow px-down"
+                width="20"
+                height="20"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <rect x="8" y="1" width="4" height="10" />
+                <rect x="4" y="7" width="4" height="4" />
+                <rect x="12" y="7" width="4" height="4" />
+                <rect x="8" y="11" width="4" height="4" />
               </svg>
             </a>
           </div>
@@ -736,181 +680,54 @@ onUnmounted(() => {
           </p>
         </div>
 
-        <!-- ── animated SVG instrument diagram (math-driven) ───────────────── -->
+        <!-- ── live Monte Carlo hero instrument ──────────────────────────────── -->
         <div class="hero-visual">
           <figure
             class="instrument-frame"
-            aria-label="Quantitative models: implied volatility surface, GEX profile, and Monte Carlo terminal distribution. Live prints appear after sign-in."
+            aria-label="Live Monte Carlo simulation: geometric Brownian motion paths accumulating into a terminal distribution beside its theoretical lognormal density. Structural model, not market data."
           >
             <figcaption>
-              <span class="fig-label">QUANT MODELS</span>
+              <span class="fig-label"
+                ><i class="fig-tick" aria-hidden="true" />LIVE MONTE CARLO</span
+              >
               <span class="fig-state"
-                >STRUCTURAL · 1σ [{{ range.p1Low.toFixed(1) }}–{{ range.p1High.toFixed(1) }}]</span
+                >STRUCTURAL · 1σ [{{ heroRange.p1Low.toFixed(1) }}–{{
+                  heroRange.p1High.toFixed(1)
+                }}]</span
               >
             </figcaption>
 
-            <div class="instrument-stage">
-              <svg
-                ref="heroSvgRef"
-                viewBox="0 0 520 400"
-                preserveAspectRatio="xMidYMid meet"
-                class="hero-svg"
-              >
-                <!-- ── measurement grid ──────────────────────────────────────── -->
-                <g class="hero-svg-grid">
-                  <path
-                    d="M10 10H510M10 60H510M10 110H510M10 160H510M10 210H510M10 260H510M10 310H510M10 360H510M10 390H510"
-                  />
-                  <path
-                    d="M60 10V390M120 10V390M180 10V390M240 10V390M300 10V390M360 10V390M420 10V390M480 10V390"
-                  />
-                </g>
-
-                <!-- ── PANEL 1: Volatility surface 3D mesh (top, largest) ──── -->
-                <g class="vol-surface-panel">
-                  <text class="hero-svg-label" x="14" y="24">IMPLIED VOLATILITY SURFACE</text>
-                  <text class="hero-svg-label dim" x="430" y="24">σ(K,T)</text>
-
-                  <!-- surface fill ribbons (depth shading) -->
-                  <path
-                    v-for="(ribbon, i) in volMesh.surfaceLines"
-                    :key="`ribbon-${i}`"
-                    class="hero-svg-surface-ribbon"
-                    :d="ribbon"
-                    :style="{ opacity: 0.04 + 0.05 * (i % 4) }"
-                  />
-
-                  <!-- mesh grid lines -->
-                  <path
-                    v-for="(line, i) in volMesh.gridLines"
-                    :key="`grid-${i}`"
-                    class="hero-svg-mesh-line"
-                    :d="line"
-                  />
-
-                  <!-- contour lines at IV levels -->
-                  <path
-                    v-for="(contour, i) in volMesh.contourLines"
-                    :key="`contour-${i}`"
-                    class="hero-svg-contour"
-                    :d="contour"
-                  />
-                </g>
-
-                <!-- ── PANEL 2: GEX profile (middle) ────────────────────────── -->
-                <g class="gex-panel" transform="translate(0, 215)">
-                  <text class="hero-svg-label" x="14" y="14">GEX BY STRIKE</text>
-                  <text class="hero-svg-label dim" x="430" y="14">BS γ</text>
-
-                  <path class="hero-svg-bar" :d="gexGeometry.callBars" />
-                  <path class="hero-svg-bar put" :d="gexGeometry.putBars" />
-                  <line
-                    class="hero-svg-zero"
-                    :x1="40"
-                    :y1="gexGeometry.zeroY - 215"
-                    :x2="500"
-                    :y2="gexGeometry.zeroY - 215"
-                  />
-                  <line
-                    class="hero-svg-flip"
-                    :x1="gexGeometry.flipX"
-                    :y1="10"
-                    :x2="gexGeometry.flipX"
-                    :y2="120"
-                  />
-                  <text class="hero-svg-label dim" :x="gexGeometry.flipX - 16" y="6">FLIP</text>
-                </g>
-
-                <!-- ── PANEL 3: MC fan chart + density (bottom) ─────────────── -->
-                <g class="mc-panel" transform="translate(0, 270)">
-                  <text class="hero-svg-label" x="14" y="14">MONTE CARLO · LOGNORMAL DENSITY</text>
-                  <text class="hero-svg-label dim" x="380" y="14">
-                    {{ mcResult.paths.length }} paths
-                  </text>
-
-                  <!-- MC fan paths -->
-                  <path
-                    v-for="(p, i) in mcFanPaths"
-                    :key="`mc-${i}`"
-                    class="hero-svg-mc-path"
-                    :d="p.d"
-                    :style="{ opacity: p.opacity }"
-                  />
-
-                  <!-- histogram bars -->
-                  <path class="hero-svg-histogram" :d="mcHistogram" />
-
-                  <!-- lognormal density curve overlay -->
-                  <path class="hero-svg-density-area" :d="densityGeometry.area" />
-                  <path class="hero-svg-trace" :d="densityGeometry.d" pathLength="1200" />
-
-                  <!-- 1σ range bounds -->
-                  <line
-                    class="hero-svg-range"
-                    :x1="densityGeometry.p1LowX"
-                    :y1="10"
-                    :x2="densityGeometry.p1LowX"
-                    :y2="115"
-                  />
-                  <line
-                    class="hero-svg-range"
-                    :x1="densityGeometry.p1HighX"
-                    :y1="10"
-                    :x2="densityGeometry.p1HighX"
-                    :y2="115"
-                  />
-
-                  <!-- median -->
-                  <line
-                    class="hero-svg-median"
-                    :x1="densityGeometry.medianX"
-                    :y1="10"
-                    :x2="densityGeometry.medianX"
-                    :y2="115"
-                  />
-
-                  <text class="hero-svg-label dim" :x="densityGeometry.p1LowX - 8" y="125">
-                    -1σ
-                  </text>
-                  <text class="hero-svg-label dim" :x="densityGeometry.medianX - 14" y="125">
-                    MED
-                  </text>
-                  <text class="hero-svg-label dim" :x="densityGeometry.p1HighX - 8" y="125">
-                    +1σ
-                  </text>
-                </g>
-
-                <!-- ── corner registration marks ────────────────────────────── -->
-                <path class="hero-svg-corner" d="M10 10h12M10 10v12" />
-                <path class="hero-svg-corner" d="M500 10h-12M500 10v12" />
-                <path class="hero-svg-corner" d="M10 390h12M10 390v-12" />
-                <path class="hero-svg-corner" d="M500 390h-12M500 390v-12" />
-              </svg>
-
-              <!-- axis annotations -->
-              <div class="axis-label axis-vol">Vol surface</div>
-              <div class="axis-label axis-gex">GEX profile</div>
-              <div class="axis-label axis-mc">MC terminal</div>
+            <div class="hero-mc-stage">
+              <McLiveHero
+                :s0="MC.S0"
+                :sigma="MC.sigma"
+                :maturity="MC.T"
+                :mu="MC.mu"
+                :r="MC.r"
+                :q="MC.q"
+                :total-paths="MC.totalPaths"
+                :seed="MC.seed"
+              />
             </div>
 
             <footer>
-              <span class="fig-legend"><i class="leg-mesh" />Vol mesh</span>
-              <span class="fig-legend"><i class="leg-call" />Call GEX</span>
-              <span class="fig-legend"><i class="leg-put" />Put GEX</span>
-              <span class="fig-legend"><i class="leg-trace" />Lognormal</span>
+              <span class="fig-legend"><i class="leg-path" />GBM path</span>
+              <span class="fig-legend"><i class="leg-hist" />Terminal hist.</span>
+              <span class="fig-legend"><i class="leg-trace" />Lognormal φ</span>
+              <span class="fig-legend"><i class="leg-med" />Median</span>
               <strong
-                >BS + GBM · σ={{ (MODEL.sigma * 100).toFixed(0) }}% · T={{
-                  (MODEL.T * 12).toFixed(0)
-                }}M · N={{ mcResult.paths.length }}</strong
+                >GBM · S₀={{ MC.S0 }} · σ={{ (MC.sigma * 100).toFixed(0) }}% · T={{
+                  (MC.T * 12).toFixed(0)
+                }}M · N={{ MC.totalPaths }}</strong
               >
             </footer>
           </figure>
         </div>
       </section>
 
-      <!-- ── animated stats strip ───────────────────────────────────────────── -->
-      <section class="stats-section" aria-label="Live instrument state">
-        <div class="landing-inner stats-strip">
+      <!-- ── stats strip: bordered cell row ──────────────────────────────────── -->
+      <section class="stats-section full-bleed" aria-label="Live instrument state">
+        <div class="section-pad stats-strip">
           <Readout
             label="Symbols tracked"
             value="0"
@@ -931,150 +748,63 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <section class="live-proof-section">
-        <LiveStateVisual
-          class="landing-inner gsap-reveal"
-          :session="session"
-          :session-live="sessionLive"
-          :session-note="sessionNote"
-          :data-asof="dataAsof"
-          :universe="universe"
-          :searchable="searchable"
-          :readiness-label="readinessLabel"
-          :cleared="cleared"
-          :blockers="blockers"
-          :shadow="shadow"
-          :gate-go="num(gates?.go, 0)"
-          :gate-no-go="num(gates?.no_go, 0)"
-          :gate-unknown="num(gates?.unknown, 0)"
-          :api-down="apiDown"
-          :api-stale="apiStale"
-          :contacting="contacting"
-        />
-      </section>
-
-      <!-- ── PRODUCT / bento grid ───────────────────────────────────────────── -->
-      <section id="product" class="product-section">
-        <div class="landing-inner">
-          <header class="section-heading gsap-reveal">
-            <div>
-              <p class="section-index">PRODUCT / 01</p>
-              <h2>One instrument.<br />Three evidence layers.</h2>
-            </div>
-            <p>
-              Built for researchers and active traders who want institutional discipline without a
-              black-box confidence meter. Every surface has a specific question, a source, and an
-              honest failure state.
-            </p>
-          </header>
-
-          <div class="bento-grid">
-            <Panel
-              v-for="capability in capabilities"
-              :key="capability.index"
-              class="bento-card gsap-reveal"
-              :class="`span-${capability.span}`"
-              :label="capability.title"
-              :index="capability.index"
-              :meta="capability.detail"
-            >
-              <div
-                class="card-spotlight-target"
-                @mouseenter="(e) => onCardMove(e, 'enter')"
-                @mousemove="(e) => onCardMove(e, 'move')"
-                @mouseleave="(e) => onCardMove(e, 'leave')"
-              >
-                <EvidenceLayerVisual :kind="capability.kind" />
-                <p class="capability-copy">{{ capability.copy }}</p>
-                <div class="capability-stat">
-                  <span class="stat-label">{{ capability.stat }}</span>
-                  <span class="stat-val fig">{{ capability.statValue() }}</span>
-                </div>
-              </div>
-            </Panel>
-          </div>
-        </div>
-      </section>
-
-      <section class="flow-section">
-        <div class="landing-inner flow-layout">
-          <div class="flow-copy gsap-reveal">
-            <p class="section-index">OPTIONS INTELLIGENCE / 02</p>
-            <h2>See the structure<br />behind a move.</h2>
-            <p>
-              Map dealer gamma by strike, locate the flip, and inspect the tape. Calls, puts, and
-              unsigned activity stay separate until the provider gives a side.
-            </p>
-            <RouterLink class="text-link" :to="{ name: 'auth', query: { redirect: '/flow' } }">
-              Explore market flow
-              <svg
-                class="link-chevron"
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3 7h8M8 3.5l3.5 3.5L8 10.5"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </RouterLink>
-          </div>
-          <GexFlowVisual class="gsap-reveal" />
-        </div>
-      </section>
-
-      <section id="workspaces" class="workspace-section">
-        <div class="landing-inner workspace-layout">
-          <div class="workspace-copy gsap-reveal">
-            <p class="section-index">WORKSPACES / 03</p>
-            <h2>A research path.<br />Not a menu.</h2>
-            <p>
-              Each workspace answers one question, then hands its context forward. The path stays
-              visible, while specialist tools remain adjacent.
-            </p>
-            <RouterLink class="text-link" :to="{ name: 'auth', query: { redirect: '/flow' } }">
-              Open Flow now
-              <svg
-                class="link-chevron"
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3 7h8M8 3.5l3.5 3.5L8 10.5"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </RouterLink>
-          </div>
-          <ResearchLoopVisual class="gsap-reveal" />
-        </div>
-      </section>
-
-      <!-- ── EVIDENCE / tracing beam pipeline ───────────────────────────────── -->
-      <section id="evidence" class="evidence-section">
-        <div class="landing-inner">
-          <header class="section-heading evidence-heading gsap-reveal">
-            <div>
-              <p class="section-index">EVIDENCE / 04</p>
-              <h2>The research loop.<br />Traced end to end.</h2>
-            </div>
-            <p>
+      <!-- ── NAVY BAND: evidence + live state + pipeline ─────────────────────── -->
+      <section id="evidence" class="band-dark evidence-section full-bleed">
+        <div class="section-pad">
+          <header class="section-head gsap-reveal">
+            <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Evidence</p>
+            <h2>Evidence, not promises.</h2>
+            <p class="section-lede">
               Every signal moves through the same path: data, research, gates, shadow, readiness. No
               shortcut, no override, no silent promotion.
             </p>
           </header>
+
+          <div class="live-grid gsap-reveal">
+            <LiveStateVisual
+              class="live-state-frame"
+              :session="session"
+              :session-live="sessionLive"
+              :session-note="sessionNote"
+              :data-asof="dataAsof"
+              :universe="universe"
+              :searchable="searchable"
+              :readiness-label="readinessLabel"
+              :cleared="cleared"
+              :blockers="blockers"
+              :shadow="shadow"
+              :gate-go="num(gates?.go, 0)"
+              :gate-no-go="num(gates?.no_go, 0)"
+              :gate-unknown="num(gates?.unknown, 0)"
+              :api-down="apiDown"
+              :api-stale="apiStale"
+              :contacting="contacting"
+            />
+            <div class="readiness-panel">
+              <p class="readiness-eyebrow">Desk state</p>
+              <div class="readiness-rows">
+                <div class="readiness-row">
+                  <span>Session</span>
+                  <strong :class="sessionLive ? 'ok' : 'warn'">{{ session }}</strong>
+                </div>
+                <div class="readiness-row">
+                  <span>Data as of</span>
+                  <strong>{{ dataAsof }}</strong>
+                </div>
+                <div class="readiness-row">
+                  <span>Readiness</span>
+                  <strong :class="cleared ? 'ok' : 'warn'">{{ readinessLabel }}</strong>
+                </div>
+                <div class="readiness-row">
+                  <span>Gate verdicts</span>
+                  <strong>{{ num(gates?.go, 0) }} go · {{ num(gates?.no_go, 0) }} no-go</strong>
+                </div>
+              </div>
+              <p class="readiness-note" :class="{ warn: !cleared }">
+                Readiness is measured, not claimed — the local API reports it every visit.
+              </p>
+            </div>
+          </div>
 
           <div class="tracing-beam-wrap gsap-reveal" aria-label="Research evidence pipeline">
             <div class="tracing-beam-rail">
@@ -1113,80 +843,334 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <section id="method" class="method-section">
-        <div class="landing-inner">
-          <header class="section-heading method-heading gsap-reveal">
-            <div>
-              <p class="section-index">METHOD / 05</p>
-              <h2>Trust is a system property.</h2>
-            </div>
-            <p>
-              TradeCentral separates research, decision support, readiness, and execution
-              authorization. A polished surface never gets to erase that boundary.
-            </p>
-          </header>
+      <!-- ── editorial headline ──────────────────────────────────────────────── -->
+      <section class="editorial-section section-pad">
+        <h2 class="editorial-headline gsap-reveal">Do it all with TradeCentral.</h2>
+      </section>
 
-          <div class="principle-grid">
-            <Panel
-              v-for="principle in principles"
-              :key="principle.index"
-              class="principle gsap-reveal"
-              :label="principle.title"
-              :index="principle.index"
-            >
-              <div
-                class="principle-inner"
-                @mouseenter="(e) => onCardMove(e, 'enter')"
-                @mousemove="(e) => onCardMove(e, 'move')"
-                @mouseleave="(e) => onCardMove(e, 'leave')"
-              >
-                <div
-                  class="principle-icon"
-                  v-html="
-                    `<svg width='22' height='22' viewBox='0 0 24 24' fill='none' aria-hidden='true'>${principle.svg}</svg>`
-                  "
-                />
-                <p class="principle-copy">{{ principle.copy }}</p>
-              </div>
-            </Panel>
-          </div>
+      <!-- ── MARKITECTURE: bento blocks that fall into place ─────────────────── -->
+      <section id="product" class="bento-section section-pad">
+        <header class="section-head gsap-reveal">
+          <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Product</p>
+          <h2>One instrument. Three evidence layers.</h2>
+          <p class="section-lede">
+            Built for researchers and active traders who want institutional discipline without a
+            black-box confidence meter. Every surface has a specific question, a source, and an
+            honest failure state.
+          </p>
+        </header>
+
+        <div class="bento-grid">
+          <article
+            v-for="capability in capabilities"
+            :key="capability.kind"
+            class="bento-block fall-in"
+            :class="`b-${capability.area}`"
+          >
+            <span class="accent-square" :class="`sq-${capability.area}`" aria-hidden="true" />
+            <header class="bento-head">
+              <h3>{{ capability.title }}</h3>
+              <span class="bento-detail label">{{ capability.detail }}</span>
+            </header>
+            <EvidenceLayerVisual :kind="capability.kind" />
+            <p class="bento-copy">{{ capability.copy }}</p>
+            <div class="bento-stat">
+              <span class="stat-label">{{ capability.stat }}</span>
+              <span class="stat-val fig">{{ capability.statValue() }}</span>
+            </div>
+          </article>
+
+          <article
+            v-for="chip in bentoChips"
+            :key="chip.area"
+            class="bento-block bento-chip fall-in"
+            :class="`b-${chip.area}`"
+          >
+            <span class="accent-square" :class="chip.tone" aria-hidden="true" />
+            <h3>{{ chip.title }}</h3>
+            <p>{{ chip.copy }}</p>
+          </article>
+
+          <article class="bento-block b-diamond fall-in" aria-hidden="true">
+            <span class="diamond-core" />
+          </article>
         </div>
       </section>
 
-      <section class="final-cta">
-        <div class="landing-inner final-inner gsap-reveal">
-          <p class="section-index">THE RESEARCH LOOP</p>
-          <h2>Build conviction from evidence,<br /><em>not presentation.</em></h2>
-          <p>One workstation for market context, options structure, and accountable research.</p>
-          <span
-            ref="magneticRefs"
-            class="magnetic-wrap magnetic-center"
-            @mousemove="onMagneticMove"
-            @mouseleave="onMagneticLeave"
-          >
-            <RouterLink
-              class="button button-accent"
-              :to="{ name: 'auth', query: { redirect: '/flow' } }"
+      <!-- ── PRODUCT: flow ───────────────────────────────────────────────────── -->
+      <section id="flow" class="product-feature section-pad">
+        <div class="pf-copy gsap-reveal">
+          <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Flow</p>
+          <h2>Explore market flow.</h2>
+          <p class="section-lede">
+            Map dealer gamma by strike, locate the flip, and inspect the tape. Calls, puts, and
+            unsigned activity stay separate until the provider gives a side.
+          </p>
+
+          <div class="flow-feature-grid" aria-label="Flow structure capabilities">
+            <article class="flow-feature-box">
+              <span class="feature-top">
+                <span class="feature-icon"><AppIcon name="graph" :size="15" /></span>
+                <span class="feature-idx label">01 · GEX PROFILE</span>
+              </span>
+              <strong>Gamma Topology</strong>
+              <p>Concentration by strike, isolating positive vs negative dealer regimes.</p>
+            </article>
+            <article class="flow-feature-box">
+              <span class="feature-top">
+                <span class="feature-icon"><AppIcon name="flow" :size="15" /></span>
+                <span class="feature-idx label">02 · SIGNED TAPE</span>
+              </span>
+              <strong>Aggressor Side</strong>
+              <p>Prints separated into buyer vs seller initiated flow or marked unsigned.</p>
+            </article>
+            <article class="flow-feature-box">
+              <span class="feature-top">
+                <span class="feature-icon"><AppIcon name="pulse" :size="15" /></span>
+                <span class="feature-idx label">03 · SWEEPS &amp; BLOCKS</span>
+              </span>
+              <strong>Execution Class</strong>
+              <p>
+                Intermarket institutional sweeps distinguished from standard single-exchange fills.
+              </p>
+            </article>
+          </div>
+
+          <div class="chip-row" aria-label="Flow coverage">
+            <span class="chip">Gamma by strike</span>
+            <span class="chip">Flip point</span>
+            <span class="chip">Implied range</span>
+            <span class="chip">Unusual activity</span>
+            <span class="chip">Contract context</span>
+          </div>
+
+          <RouterLink class="px-link" :to="{ name: 'auth', query: { redirect: '/flow' } }">
+            Open Flow now
+            <svg
+              class="px-arrow"
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden="true"
             >
-              Sign in and open Flow
-              <svg
-                class="btn-chevron"
-                width="15"
-                height="15"
-                viewBox="0 0 15 15"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3 7.5h9M9.5 4l3.5 3.5L9.5 11"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </RouterLink>
-          </span>
+              <rect x="1" y="8" width="10" height="4" />
+              <rect x="11" y="4" width="4" height="4" />
+              <rect x="11" y="12" width="4" height="4" />
+              <rect x="15" y="8" width="4" height="4" />
+            </svg>
+          </RouterLink>
+        </div>
+        <GexFlowVisual class="pf-visual gsap-reveal" />
+      </section>
+
+      <!-- ── PRODUCT: options surface (three.js, same parametric family) ─────── -->
+      <section class="product-feature product-feature-alt section-pad">
+        <div class="pf-copy gsap-reveal">
+          <p class="section-eyebrow">
+            <i class="eyebrow-tick" aria-hidden="true" />Options surface
+          </p>
+          <h2>Read the options surface.</h2>
+          <p class="section-lede">
+            The same parametric volatility model behind the hero simulation, rendered live in WebGL.
+            Drag to orbit it — the put skew steepens as expiry shortens and the smile wings widen.
+            Structural parameters only; live per-symbol surfaces appear after sign-in.
+          </p>
+          <div class="surface-params" aria-label="Model parameters">
+            <span>σ<sub>ATM</sub> {{ (VOL_MODEL.sigma * 100).toFixed(0) }}%</span>
+            <span>skew {{ VOL_MODEL.skew }}</span>
+            <span>curve {{ VOL_MODEL.curve }}</span>
+            <span>term {{ VOL_MODEL.termDecay }}</span>
+          </div>
+          <div class="chip-row" aria-label="Surface coverage">
+            <span class="chip">Strike smile</span>
+            <span class="chip">Term structure</span>
+            <span class="chip">Put skew</span>
+            <span class="chip">Vertex nodes</span>
+            <span class="chip">Orbit drag</span>
+          </div>
+        </div>
+        <figure class="instrument-frame surface-frame pf-visual gsap-reveal">
+          <figcaption>
+            <span class="fig-label"
+              ><i class="fig-tick" aria-hidden="true" />IMPLIED VOLATILITY SURFACE</span
+            >
+            <span class="fig-state">DRAG TO ORBIT · σ(K,T)</span>
+          </figcaption>
+          <VolSurfaceCanvas
+            :points="volSurfaceData"
+            :strikes="volStrikes"
+            :maturities="volMaturities"
+          />
+          <footer>
+            <span class="fig-legend"><i class="leg-mesh" />Wire mesh</span>
+            <span class="fig-legend"><i class="leg-call" />Short expiry</span>
+            <span class="fig-legend"><i class="leg-trace" />Vertex nodes</span>
+            <strong
+              >Parametric σ(K,T) · WebGL · {{ volStrikes.length }}×{{
+                volMaturities.length
+              }}
+              grid</strong
+            >
+          </footer>
+        </figure>
+      </section>
+
+      <!-- ── MODEL LAB: interactive Black-Scholes workbench ──────────────────── -->
+      <section id="lab" class="lab-section section-pad">
+        <header class="section-head gsap-reveal">
+          <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Model lab</p>
+          <h2>Every figure is a formula. Go ahead — move it.</h2>
+          <p class="section-lede">
+            This is the actual Black-Scholes engine, running in your browser. Drag volatility and
+            expiry, switch between value and the Greeks, drag the strike marker on the chart. The
+            readouts recompute from the closed forms — nothing here is pre-rendered theatre.
+          </p>
+        </header>
+
+        <BsLab class="lab-frame gsap-reveal" />
+
+        <p class="lab-footnote gsap-reveal">
+          Unitless model spot S₀ = $100 · carry r = 5% · dividend yield q = 0. The desk swaps these
+          inputs for live quotes and chains after operator sign-in.
+        </p>
+      </section>
+
+      <!-- ── PRODUCT: workspaces ─────────────────────────────────────────────── -->
+      <section id="workspaces" class="product-feature section-pad">
+        <div class="pf-copy gsap-reveal">
+          <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Workspaces</p>
+          <h2>A research path. Not a menu.</h2>
+          <p class="section-lede">
+            Each workspace answers one question, then hands its context forward. The path stays
+            visible, while specialist tools remain adjacent.
+          </p>
+          <div class="chip-row" aria-label="Workspace coverage">
+            <span class="chip">Market</span>
+            <span class="chip">Flow</span>
+            <span class="chip">Options</span>
+            <span class="chip">Research</span>
+            <span class="chip">Gates</span>
+          </div>
+          <RouterLink class="px-link" :to="{ name: 'auth', query: { redirect: '/flow' } }">
+            Open Flow now
+            <svg
+              class="px-arrow"
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <rect x="1" y="8" width="10" height="4" />
+              <rect x="11" y="4" width="4" height="4" />
+              <rect x="11" y="12" width="4" height="4" />
+              <rect x="15" y="8" width="4" height="4" />
+            </svg>
+          </RouterLink>
+        </div>
+        <ResearchLoopVisual class="pf-visual gsap-reveal" />
+      </section>
+
+      <!-- ── METHOD: principles grid ─────────────────────────────────────────── -->
+      <section id="method" class="method-section section-pad">
+        <header class="section-head gsap-reveal">
+          <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Method</p>
+          <h2>Trust is a system property.</h2>
+          <p class="section-lede">
+            TradeCentral separates research, decision support, readiness, and execution
+            authorization. A polished surface never gets to erase that boundary.
+          </p>
+        </header>
+
+        <div class="principle-grid">
+          <article v-for="principle in principles" :key="principle.index" class="principle fall-in">
+            <span class="principle-index fig">{{ principle.index }}</span>
+            <span
+              class="principle-icon"
+              v-html="
+                `<svg width='22' height='22' viewBox='0 0 24 24' fill='none' aria-hidden='true'>${principle.svg}</svg>`
+              "
+            />
+            <h3>{{ principle.title }}</h3>
+            <p class="principle-copy">{{ principle.copy }}</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- ── BOUNDARY: three hard limits ─────────────────────────────────────── -->
+      <section class="boundary-section section-pad">
+        <header class="section-head gsap-reveal">
+          <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Boundaries</p>
+          <h2>Built on hard boundaries.</h2>
+        </header>
+
+        <div class="boundary-grid gsap-reveal">
+          <article v-for="column in boundaryColumns" :key="column.title" class="boundary-col">
+            <h3>{{ column.title }}</h3>
+            <p>{{ column.copy }}</p>
+          </article>
+        </div>
+
+        <div class="boundary-chips gsap-reveal" aria-label="System boundaries">
+          <span class="chip chip-strong">No order routing</span>
+          <span class="chip chip-strong">No broker connection</span>
+          <span class="chip chip-strong">No performance promises</span>
+        </div>
+      </section>
+
+      <!-- ── NAVY BAND: closing CTA with pixel candles ───────────────────────── -->
+      <section class="band-dark final-cta full-bleed">
+        <svg class="cta-pixels" viewBox="0 0 232 72" width="232" height="72" aria-hidden="true">
+          <g fill="var(--tc-yellow, #ffaf01)">
+            <rect x="10" y="8" width="4" height="40" />
+            <rect x="4" y="20" width="16" height="16" />
+            <rect x="106" y="12" width="4" height="44" />
+            <rect x="100" y="24" width="16" height="20" />
+            <rect x="198" y="20" width="4" height="36" />
+            <rect x="192" y="32" width="16" height="12" />
+          </g>
+          <g fill="var(--phosphor-hi, #ff8204)">
+            <rect x="42" y="0" width="4" height="52" />
+            <rect x="36" y="12" width="16" height="20" />
+            <rect x="138" y="16" width="4" height="48" />
+            <rect x="132" y="36" width="16" height="16" />
+          </g>
+          <g fill="var(--phosphor, #ff5229)">
+            <rect x="74" y="12" width="4" height="56" />
+            <rect x="68" y="32" width="16" height="20" />
+            <rect x="166" y="4" width="4" height="44" />
+            <rect x="160" y="12" width="16" height="24" />
+          </g>
+        </svg>
+
+        <div class="section-pad final-inner gsap-reveal">
+          <p class="section-eyebrow">
+            <i class="eyebrow-tick" aria-hidden="true" />Research only · No execution
+          </p>
+          <h2>Own your research edge.</h2>
+          <p class="section-lede">
+            One workstation for market context, options structure, and accountable research.
+          </p>
+          <RouterLink
+            class="button button-primary"
+            :to="{ name: 'auth', query: { redirect: '/flow' } }"
+          >
+            Sign in and open Flow
+            <svg
+              class="px-arrow"
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <rect x="1" y="8" width="10" height="4" />
+              <rect x="11" y="4" width="4" height="4" />
+              <rect x="11" y="12" width="4" height="4" />
+              <rect x="15" y="8" width="4" height="4" />
+            </svg>
+          </RouterLink>
           <small
             >No credit card. No broker connection. Clerk session, then the measured tape.</small
           >
@@ -1195,21 +1179,65 @@ onUnmounted(() => {
     </main>
 
     <footer class="landing-footer">
-      <div class="landing-inner footer-inner">
-        <RouterLink class="brand footer-brand" to="/">
-          <TradeCentralMark :size="26" />
-          <span class="wordmark"
-            ><strong>TradeCentral</strong><small>Research instrument</small></span
-          >
-        </RouterLink>
-        <p>Research only · No execution · No investment advice</p>
-        <nav aria-label="Footer links">
-          <a href="#product">Product</a>
-          <a href="#method">Method</a>
-          <RouterLink :to="{ name: 'auth', query: { mode: 'signin', redirect: '/flow' } }"
-            >Sign in</RouterLink
-          >
-        </nav>
+      <div class="footer-frame">
+        <div class="footer-cols section-pad">
+          <div class="footer-brand-col">
+            <RouterLink class="brand footer-brand" to="/">
+              <TradeCentralMark :size="22" />
+              <span class="wordmark"
+                ><strong>TradeCentral</strong><small>Research instrument</small></span
+              >
+            </RouterLink>
+            <p class="footer-tagline">
+              A local research workstation for US equities and options. The evidence loop, traced
+              end to end.
+            </p>
+          </div>
+          <nav class="footer-col" aria-label="Product">
+            <p class="footer-col-title">Product</p>
+            <a href="#product">Evidence layers</a>
+            <a href="#flow">Flow</a>
+            <a href="#lab">Model lab</a>
+          </nav>
+          <nav class="footer-col" aria-label="Research">
+            <p class="footer-col-title">Research</p>
+            <a href="#workspaces">Workspaces</a>
+            <a href="#evidence">Evidence loop</a>
+            <a href="#method">Method</a>
+          </nav>
+          <nav class="footer-col" aria-label="Access">
+            <p class="footer-col-title">Access</p>
+            <RouterLink :to="{ name: 'auth', query: { mode: 'signin', redirect: '/flow' } }"
+              >Sign in</RouterLink
+            >
+            <RouterLink :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }"
+              >Create access</RouterLink
+            >
+          </nav>
+        </div>
+
+        <div class="footer-watermark-wrap" aria-hidden="true">
+          <svg class="footer-watermark" viewBox="0 0 420 220" fill="currentColor">
+            <rect x="0" y="180" width="20" height="40" />
+            <rect x="28" y="160" width="20" height="60" />
+            <rect x="56" y="120" width="20" height="100" />
+            <rect x="84" y="140" width="20" height="80" />
+            <rect x="112" y="90" width="20" height="130" />
+            <rect x="140" y="60" width="20" height="160" />
+            <rect x="168" y="100" width="20" height="120" />
+            <rect x="196" y="40" width="20" height="180" />
+            <rect x="224" y="70" width="20" height="150" />
+            <rect x="252" y="0" width="20" height="220" />
+            <rect x="280" y="50" width="20" height="170" />
+            <rect x="308" y="30" width="20" height="190" />
+            <rect x="336" y="10" width="20" height="210" />
+          </svg>
+        </div>
+
+        <div class="footer-base section-pad">
+          <span>© 2026 TradeCentral</span>
+          <span>Research only · No execution · No investment advice</span>
+        </div>
       </div>
     </footer>
   </div>
@@ -1219,7 +1247,7 @@ onUnmounted(() => {
 :global(body.edge-public-mode) {
   overflow: auto !important;
   overflow-x: hidden !important;
-  background: var(--void);
+  background: #fbfbf8;
 }
 :global(body.edge-public-mode #app),
 :global(body.edge-public-mode .shell) {
@@ -1245,674 +1273,578 @@ onUnmounted(() => {
   overflow: visible !important;
 }
 
+/* ── Paper system remap ────────────────────────────────────────────────────
+   The landing page keeps the desk's token vocabulary but resolves it to a
+   warm editorial paper scheme: cream surfaces, hairline rules, zinc ink, one
+   orange accent, navy bands. The desk itself is untouched; these overrides
+   are scoped to this page. Every child visual (McLiveHero, BsLab, the SVG
+   figures) inherits the remap through the cascade. */
 .landing-page {
+  --void: #fbfbf8;
+  --void-lift: #f7f6f1;
+  --panel: #f5f4ef;
+  --panel-hi: #ebe9e0;
+  --panel-raise: #e4e2d6;
+  --rule: #e4e3de;
+  --rule-hi: #c9c9c4;
+  --rule-faint: #efeee9;
+  --grid: rgba(24, 24, 27, 0.045);
+  --ink: #18181b;
+  --ink-soft: #27272a;
+  --ink-dim: #3f3f46;
+  --ink-faint: #565660;
+  --ink-ghost: #6f6f78;
+  --phosphor: #ff5229;
+  --phosphor-hi: #ff8204;
+  --phosphor-dim: #c93a10;
+  --phosphor-wash: rgba(255, 82, 41, 0.07);
+  --phosphor-glow: rgba(255, 82, 41, 0.15);
+  --call: #0f8a5f;
+  --call-wash: rgba(15, 138, 95, 0.1);
+  --put: #d92620;
+  --put-wash: rgba(217, 38, 32, 0.08);
+  --long: #0f8a5f;
+  --short: #d92620;
+  --warn: #a06a00;
+
+  /* Page-local palette: bright yellows/blues stay decorative-only (progress
+     ticks, accents); text roles stay on the AA-checked ramp above. */
+  --tc-yellow: #ffaf01;
+  --tc-blue: #0082e6;
+  --tc-navy: #151524;
+  --tc-navy-2: #242433;
+  --tc-cream: #fafaf4;
+  --tc-black: #09090b;
+
+  /* Editorial typography (page-scoped; desk stacks untouched). */
+  --font-display: 'Inter Tight Variable', 'Inter Tight', 'Geist Variable', 'Geist', sans-serif;
+  --font-ui: 'Inter Variable', 'Inter', 'Geist Variable', 'Geist', sans-serif;
+  --font-data: 'Space Mono', 'IBM Plex Mono', 'Geist Mono Variable', monospace;
+  --font-mono: 'Space Mono', 'IBM Plex Mono', 'Geist Mono Variable', monospace;
+
+  /* Height of the fixed masthead. */
+  --chrome-h: 56px;
+
   position: relative;
   z-index: 3;
   min-height: 100vh;
   color: var(--ink);
   background: var(--void);
   font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
-.landing-inner {
-  width: min(1240px, calc(100% - 72px));
+/* Anchored sections must clear the fixed masthead when jumped to. */
+.landing-page section[id] {
+  scroll-margin-top: calc(var(--chrome-h) + 16px);
+}
+
+/* ── Shared layout primitives ─────────────────────────────────────────────── */
+.railroad {
+  width: min(1480px, 100% - 48px);
   margin-inline: auto;
+  border-inline: var(--hair) solid var(--rule);
+  padding-top: var(--chrome-h);
+}
+.section-pad {
+  padding-inline: clamp(20px, 4.5vw, 64px);
+}
+.full-bleed {
+  margin-inline: calc(50% - 50vw);
 }
 
-/* ── topbar ─────────────────────────────────────────────────────────────── */
-.topbar-shell {
-  position: sticky;
-  z-index: 20;
-  top: 0;
-  border-bottom: var(--hair) solid var(--rule);
-  background: rgba(8, 9, 12, 0.82);
-  backdrop-filter: blur(18px);
-}
-.topbar {
-  min-height: 72px;
+.section-head {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
+  gap: 14px;
+  max-width: 720px;
+  margin-bottom: clamp(36px, 5vw, 64px);
 }
-.brand {
+.section-eyebrow {
   display: inline-flex;
   align-items: center;
-  gap: 11px;
-  color: var(--ink);
-}
-.brand:hover {
-  text-decoration: none;
-}
-.brand-mark {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  place-items: center;
-  color: var(--phosphor);
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
-  transition: border-color var(--dur) var(--ease-out);
-}
-.brand:hover .brand-mark {
-  border-color: var(--phosphor);
-}
-.wordmark {
-  display: grid;
-  line-height: 1;
-}
-.wordmark strong {
-  font-family: var(--font-display);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-.wordmark small {
-  margin-top: 6px;
-  color: var(--ink-dim);
+  gap: 10px;
   font-family: var(--font-data);
-  font-size: 8px;
-  letter-spacing: 0.1em;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  color: var(--ink-faint);
 }
-.topnav {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  border: var(--hair) solid var(--rule);
-  background: var(--void-lift);
+.eyebrow-tick {
+  width: 8px;
+  height: 8px;
+  background: var(--phosphor);
 }
-.topnav a,
-.sign-in {
-  color: var(--ink-soft);
-  font-family: var(--font-ui);
-  font-size: 12px;
+.section-head h2 {
+  font-family: var(--font-display);
   font-weight: 500;
-}
-.topnav a {
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-}
-.topnav a small {
-  color: var(--ink-ghost);
-  font-family: var(--font-data);
-  font-size: 7px;
-}
-.topnav a:hover,
-.sign-in:hover {
+  font-size: clamp(34px, 4.4vw, 56px);
+  line-height: 1.06;
+  letter-spacing: -0.02em;
   color: var(--ink);
-  background: var(--panel-hi);
-  text-decoration: none;
 }
-.top-actions {
-  justify-self: end;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
-.sign-in {
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 3px;
+.section-lede {
+  max-width: 640px;
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--ink-dim);
 }
 
+/* ── Buttons and links ────────────────────────────────────────────────────── */
 .button {
-  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 0 20px;
-  border: var(--hair) solid transparent;
-  border-radius: var(--r-sm);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 600;
+  min-height: 48px;
+  padding-inline: 20px;
+  border-radius: 6px;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 15px;
   letter-spacing: 0.01em;
-  transition:
-    transform var(--dur-fast),
-    background var(--dur-fast),
-    border-color var(--dur-fast),
-    color var(--dur-fast);
-}
-.button:hover {
   text-decoration: none;
-  transform: translateY(-1px);
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out);
 }
-.button:active {
-  transform: translateY(0);
+.button-primary {
+  background: var(--tc-black);
+  color: #fbfbf8;
 }
-.button-accent {
-  color: var(--void);
-  background: var(--phosphor);
+.button-primary:hover {
+  background: #26262c;
 }
-.button-accent:hover {
-  background: var(--phosphor-dim);
-}
-.button-quiet {
+.button-ghost {
+  border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
-  border-color: var(--rule-hi);
   background: transparent;
 }
-.button-quiet:hover {
-  color: var(--phosphor);
-  border-color: var(--phosphor);
+.button-ghost:hover {
+  background: var(--panel-hi);
 }
-.btn-chevron {
-  transition: transform var(--dur-fast) var(--ease-out);
+.px-arrow {
+  flex: none;
+  transition: transform 280ms var(--ease-out) 40ms;
 }
-.button:hover .btn-chevron {
-  transform: translateX(2px);
+.button:hover .px-arrow,
+.px-link:hover .px-arrow {
+  transform: translateX(3px);
 }
-.link-chevron {
-  display: inline-block;
-  transition: transform var(--dur-fast) var(--ease-out);
+.px-down {
+  transform: translateY(-2px);
 }
-.text-link:hover .link-chevron {
-  transform: translateX(2px);
-}
-.boundary-icon {
-  flex-shrink: 0;
-  color: var(--phosphor);
+.button:hover .px-down {
+  transform: translateY(2px);
 }
 
-/* ── magnetic button wrapper ────────────────────────────────────────────── */
-.magnetic-wrap {
-  display: inline-flex;
-  will-change: transform;
-}
-.magnetic-center {
-  display: inline-flex;
-  margin-top: 30px;
-}
-
-/* ── ticker tape ─────────────────────────────────────────────────────────── */
-.ticker-tape {
+.px-link {
   position: relative;
-  overflow: hidden;
-  border-bottom: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-  height: 34px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  gap: 10px;
+  margin-top: 26px;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 16px;
+  color: var(--ink);
+  text-decoration: none;
 }
-.ticker-tape::before,
-.ticker-tape::after {
+.px-link::after {
   content: '';
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 60px;
-  z-index: 2;
-  pointer-events: none;
-}
-.ticker-tape::before {
   left: 0;
-  background: linear-gradient(to right, var(--void-lift), transparent);
+  bottom: -3px;
+  height: 1px;
+  width: 0;
+  background: currentColor;
+  transition: width var(--dur-slow) var(--ease-out);
 }
-.ticker-tape::after {
-  right: 0;
-  background: linear-gradient(to left, var(--void-lift), transparent);
+.px-link:hover::after {
+  width: calc(100% - 30px);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 26px;
+}
+.chip {
+  font-family: var(--font-data);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 999px;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+.chip-strong {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+/* ── Masthead ─────────────────────────────────────────────────────────────── */
+.masthead {
+  position: fixed;
+  z-index: 20;
+  inset: 0 0 auto;
+  background: var(--void);
+  border-bottom: var(--hair) solid var(--rule);
+  transition: border-color var(--dur) var(--ease-out);
+}
+.masthead.is-scrolled {
+  border-bottom-color: var(--rule-hi);
+}
+.masthead-inner {
+  width: min(1480px, 100% - 48px);
+  margin-inline: auto;
+  min-height: var(--chrome-h);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: stretch;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 20px;
+  border-right: var(--hair) solid var(--rule);
+  margin-right: 20px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 6px;
+  background: var(--tc-cream);
+}
+.wordmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.wordmark strong {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.wordmark small {
+  font-family: var(--font-data);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.masthead-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.masthead-nav a {
+  position: relative;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--ink-dim);
+  text-decoration: none;
+  transition: color var(--dur) var(--ease-out);
+}
+.masthead-nav a::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 2px;
+  height: 1px;
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.masthead-nav a:hover {
+  color: var(--ink);
+}
+.masthead-nav a:hover::after {
+  transform: scaleX(1);
+}
+.masthead-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-left: 20px;
+  border-left: var(--hair) solid var(--rule);
+}
+.sign-in {
+  font-size: 14px;
+  color: var(--ink-dim);
+  text-decoration: none;
+  transition: color var(--dur) var(--ease-out);
+}
+.sign-in:hover {
+  color: var(--ink);
+}
+.masthead-actions .button {
+  min-height: 40px;
+  padding-inline: 16px;
+  font-size: 14px;
+}
+.nav-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+/* ── Ticker tape ──────────────────────────────────────────────────────────── */
+.ticker-tape {
+  border-bottom: var(--hair) solid var(--rule);
+  background: var(--void-lift);
+  overflow: hidden;
 }
 .ticker-track {
   display: flex;
-  gap: 0;
   width: max-content;
-  animation: ticker-scroll 40s linear infinite;
+  animation: ticker-scroll 44s linear infinite;
 }
 .ticker-row {
   display: flex;
-  align-items: center;
-  gap: 0;
-  flex: 0 0 auto;
 }
 .ticker-item {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 20px;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 26px;
   font-family: var(--font-data);
-  font-size: var(--t-micro);
-  font-weight: 600;
+  font-size: 12px;
   border-right: var(--hair) solid var(--rule);
+  white-space: nowrap;
 }
 .ticker-sym {
-  color: var(--ink);
   font-weight: 700;
+  letter-spacing: 0.06em;
 }
-.ticker-sep {
-  color: var(--ink-ghost);
-}
+.ticker-sep,
 .ticker-price {
-  color: var(--ink-soft);
-}
-.ticker-chg {
-  font-weight: 600;
+  color: var(--ink-faint);
 }
 .ticker-chg.pos {
-  color: var(--long);
+  color: var(--call);
 }
 .ticker-chg.neg {
-  color: var(--short);
+  color: var(--put);
 }
 .ticker-chg.flat {
-  color: var(--ink-dim);
+  color: var(--ink-faint);
 }
 @keyframes ticker-scroll {
-  from {
-    transform: translateX(0);
-  }
   to {
     transform: translateX(-50%);
   }
 }
 
-/* ── hero ────────────────────────────────────────────────────────────────── */
+/* ── Hero ─────────────────────────────────────────────────────────────────── */
 .hero {
-  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(480px, 1.1fr);
+  grid-template-columns: minmax(0, 6.5fr) minmax(0, 5.5fr);
+  gap: clamp(36px, 5vw, 72px);
   align-items: center;
-  gap: clamp(48px, 6vw, 88px);
-  min-height: 640px;
-  padding-block: 72px;
-}
-.hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 40px 40px;
-  mask-image: linear-gradient(to right, transparent 0, #000 55%, #000 100%);
-}
-.hero-copy,
-.hero-visual {
-  position: relative;
-  z-index: 1;
-}
-.hero-visual {
-  min-width: 0;
-  width: 100%;
-}
-.hero-eyebrow,
-.section-index {
-  font-family: var(--font-data);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  padding-block: clamp(64px, 8vw, 120px);
 }
 .hero-eyebrow {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 11px;
-  color: var(--ink-dim);
+  gap: 10px;
+  margin-bottom: 26px;
+  font-family: var(--font-data);
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
 }
-.hero-eyebrow span {
-  width: 25px;
-  height: 2px;
-  background: var(--phosphor);
-}
-
 .hero-headline {
-  margin-top: 24px;
   font-family: var(--font-display);
-  font-size: clamp(48px, 5.4vw, 76px);
-  font-weight: 600;
+  font-weight: 500;
+  font-size: clamp(44px, 6.2vw, 92px);
   line-height: 1;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  margin-bottom: 28px;
 }
-.hero-headline .word {
-  display: inline-block;
+.hero-line {
+  display: block;
 }
-.hero-headline .word.em {
-  color: var(--phosphor);
+.hero-line.em {
+  color: var(--ink);
 }
-
 .hero-lede {
-  margin-top: 26px;
-  max-width: 54ch;
-  color: var(--ink-soft);
-  font-family: var(--font-ui);
-  font-size: 16px;
-  line-height: 1.7;
+  max-width: 560px;
+  font-size: 19px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  margin-bottom: 34px;
 }
 .rotating-word {
   display: inline-flex;
   position: relative;
-  height: 1.5em;
-  vertical-align: bottom;
-  overflow: hidden;
-  min-width: 140px;
+  color: var(--phosphor-dim);
+  font-weight: 500;
 }
 .rw-item {
-  position: absolute;
-  left: 0;
-  top: 0;
-  color: var(--phosphor);
-  font-weight: 600;
-  white-space: nowrap;
-  opacity: 0;
-  transform: translateY(100%);
   transition:
-    opacity 0.4s var(--ease-out),
-    transform 0.4s var(--ease-out);
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out);
 }
-.rw-item.active {
-  opacity: 1;
-  transform: translateY(0);
+.rw-item:not(.active) {
+  position: absolute;
+  inset: 0 auto auto 0;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
 }
-
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 34px;
+  gap: 14px;
+  margin-bottom: 30px;
 }
 .hero-boundary {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 26px;
-  color: var(--ink-faint);
-  font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+.hero-boundary .boundary-icon {
+  flex: none;
+  color: var(--phosphor-dim);
 }
 .hero-boundary strong {
-  color: var(--ink-soft);
+  color: var(--ink);
   font-weight: 600;
 }
 .hero-warn-note {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 54ch;
-  color: var(--warn);
+  margin-top: 10px;
   font-family: var(--font-data);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-.hero-warn-note::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  background: var(--warn);
-  border-radius: 1px;
-  flex: 0 0 auto;
+  color: var(--warn);
 }
 
-/* ── hero instrument frame (animated SVG) ────────────────────────────────── */
+/* ── Instrument frames (hero Monte Carlo, vol surface) ────────────────────── */
 .instrument-frame {
-  position: relative;
-  margin: 0;
-  padding: 17px 19px 14px;
-  overflow: hidden;
-  color: var(--ink);
-  border: var(--hair) solid var(--rule-hi);
-  border-top: 2px solid var(--phosphor);
-  background:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px), var(--panel);
-  background-size: 28px 28px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-}
-.instrument-frame::before,
-.instrument-frame::after {
-  content: '';
-  position: absolute;
-  z-index: 4;
-  width: 13px;
-  height: 13px;
-  pointer-events: none;
-}
-.instrument-frame::before {
-  top: -1px;
-  left: -1px;
-  border-top: 1px solid var(--ink);
-  border-left: 1px solid var(--ink);
-}
-.instrument-frame::after {
-  right: -1px;
-  bottom: -1px;
-  border-right: 1px solid var(--ink);
-  border-bottom: 1px solid var(--ink);
-}
-.instrument-frame figcaption,
-.instrument-frame footer {
   display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--ink-dim);
-  font-family: var(--font-data);
-  font-size: 8px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  flex-direction: column;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 8px;
+  background: var(--tc-cream);
+  overflow: hidden;
 }
 .instrument-frame figcaption {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding-bottom: 10px;
+  gap: 12px;
+  padding: 12px 16px;
   border-bottom: var(--hair) solid var(--rule);
 }
 .fig-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   color: var(--ink);
 }
-.fig-label .app-icon {
-  color: var(--phosphor);
+.fig-tick {
+  width: 8px;
+  height: 8px;
+  background: var(--tc-yellow);
 }
 .fig-state {
+  font-family: var(--font-data);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+  text-align: right;
+}
+.hero-mc-stage {
+  height: 340px;
+  border-bottom: var(--hair) solid var(--rule);
+}
+.instrument-frame > footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 10px 16px;
+  font-family: var(--font-data);
+  font-size: 11px;
   color: var(--ink-faint);
 }
-.instrument-stage {
-  position: relative;
-  margin-top: 8px;
-  border: var(--hair) solid var(--rule);
-  background: rgba(8, 9, 12, 0.6);
-  overflow: hidden;
-}
-.hero-svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  min-height: 380px;
-}
-.hero-svg-grid path {
-  fill: none;
-  stroke: var(--rule);
-  stroke-width: 1;
-}
-
-/* ── Vol surface mesh ────────────────────────────────────────────────────── */
-.hero-svg-surface-ribbon {
-  fill: var(--call-wash);
-  stroke: none;
-}
-.hero-svg-mesh-line {
-  fill: none;
-  stroke: var(--call);
-  stroke-width: 0.8;
-  vector-effect: non-scaling-stroke;
-  opacity: 0.35;
-}
-.hero-svg-contour {
-  fill: none;
-  stroke: var(--phosphor);
-  stroke-width: 1.2;
-  vector-effect: non-scaling-stroke;
-  opacity: 0.5;
-  stroke-dasharray: 3 4;
-}
-
-/* ── GEX bars ─────────────────────────────────────────────────────────────── */
-.hero-svg-bar {
-  fill: var(--call);
-}
-.hero-svg-bar.put {
-  fill: var(--put);
-}
-.hero-svg-zero {
-  stroke: var(--ink-faint);
-  stroke-width: 1;
-  stroke-dasharray: 4 4;
-}
-.hero-svg-flip {
-  stroke: var(--put);
-  stroke-width: 1;
-  stroke-dasharray: 3 3;
-}
-
-/* ── MC fan paths ─────────────────────────────────────────────────────────── */
-.hero-svg-mc-path {
-  fill: none;
-  stroke: var(--phosphor-dim);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-.hero-svg-histogram {
-  fill: var(--phosphor-wash);
-  stroke: var(--phosphor-dim);
-  stroke-width: 0.5;
-  vector-effect: non-scaling-stroke;
-  opacity: 0.7;
-}
-
-/* ── Density curve ────────────────────────────────────────────────────────── */
-.hero-svg-density-area {
-  fill: var(--phosphor-glow);
-  stroke: none;
-  opacity: 0.4;
-}
-.hero-svg-trace {
-  fill: none;
-  stroke: var(--phosphor);
-  stroke-width: 1.8;
-  vector-effect: non-scaling-stroke;
-  stroke-dasharray: 1200;
-  stroke-dashoffset: 0;
-}
-
-/* ── Range + median lines ─────────────────────────────────────────────────── */
-.hero-svg-range {
-  stroke: var(--ink-dim);
-  stroke-width: 1;
-  stroke-dasharray: 2 3;
-  opacity: 0.5;
-}
-.hero-svg-median {
-  stroke: var(--phosphor);
-  stroke-width: 1;
-  stroke-dasharray: 4 4;
-  opacity: 0.4;
-}
-
-/* ── Labels + corners ────────────────────────────────────────────────────── */
-.hero-svg-label {
-  fill: var(--ink-faint);
-  font-family: var(--font-data);
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-.hero-svg-label.dim {
-  fill: var(--ink-ghost);
-}
-.hero-svg-corner {
-  fill: none;
-  stroke: var(--ink-soft);
-  stroke-width: 1.5;
-}
-
-/* ── Axis annotations ────────────────────────────────────────────────────── */
-.axis-label {
-  position: absolute;
-  left: 22px;
-  color: var(--ink-soft);
-  font-family: var(--font-data);
-  font-size: 8px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-.axis-label::before {
-  content: '';
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 6px;
-}
-.axis-vol {
-  top: 24px;
-}
-.axis-vol::before {
-  background: var(--call);
-}
-.axis-gex {
-  top: 240px;
-}
-.axis-gex::before {
-  background: var(--call);
-}
-.axis-mc {
-  top: 300px;
-}
-.axis-mc::before {
-  background: var(--phosphor);
-}
-.instrument-frame footer {
-  justify-content: flex-start;
-  gap: 14px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: var(--hair) solid var(--rule);
+.instrument-frame > footer strong {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--ink-ghost);
 }
 .fig-legend {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--ink-soft);
+  gap: 6px;
 }
 .fig-legend i {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
+  width: 10px;
+  height: 2px;
 }
-.leg-mesh {
-  background: var(--call);
-  opacity: 0.4;
+.leg-path {
+  background: var(--phosphor);
 }
-.leg-call {
-  background: var(--call);
-}
-.leg-put {
-  background: var(--put);
+.leg-hist {
+  background: var(--ink-dim);
 }
 .leg-trace {
-  border: 1px solid var(--phosphor);
+  background: var(--tc-blue);
 }
-.instrument-frame footer strong {
-  margin-left: auto;
-  color: var(--ink-dim);
-  font-family: var(--font-data);
-  font-size: 8px;
-  font-weight: 500;
+.leg-med {
+  background: var(--ink-ghost);
+}
+.leg-mesh {
+  background: var(--ink-faint);
+}
+.leg-call {
+  background: var(--tc-yellow);
+}
+.surface-frame {
+  min-height: 420px;
+}
+.surface-frame :deep(canvas) {
+  display: block;
+  width: 100%;
+  height: 380px;
 }
 
-/* ── stats ────────────────────────────────────────────────────────────────── */
+/* ── Stats strip ──────────────────────────────────────────────────────────── */
 .stats-section {
-  border-top: var(--hair) solid var(--rule);
-  border-bottom: var(--hair) solid var(--rule);
+  border-block: var(--hair) solid var(--rule);
   background: var(--void-lift);
 }
 .stats-strip {
@@ -1925,643 +1857,960 @@ onUnmounted(() => {
 }
 .stats-strip :deep(.readout:first-child) {
   border-left: 0;
-  padding-left: 0;
 }
 
-/* ── live proof ───────────────────────────────────────────────────────────── */
-.live-proof-section {
-  border-bottom: var(--hair) solid var(--rule);
-  background: var(--void);
-}
-
-/* ── product / bento grid ─────────────────────────────────────────────────── */
-.product-section,
-.workspace-section,
-.method-section,
-.evidence-section {
-  scroll-margin-top: 72px;
-}
-.product-section {
-  padding-block: 104px;
-}
-.section-heading {
-  display: grid;
-  grid-template-columns: 1fr minmax(300px, 0.6fr);
-  gap: 80px;
-  align-items: end;
-}
-.section-index {
-  color: var(--phosphor);
-}
-.section-heading h2,
-.flow-copy h2,
-.workspace-copy h2,
-.final-inner h2 {
-  margin-top: 16px;
-  font-family: var(--font-display);
-  font-size: clamp(40px, 4.4vw, 60px);
-  font-weight: 600;
-  line-height: 1.05;
-  letter-spacing: -0.035em;
-}
-.section-heading > p,
-.flow-copy > p:not(.section-index),
-.workspace-copy > p:not(.section-index) {
-  color: var(--ink-dim);
-  font-family: var(--font-ui);
-  font-size: 15px;
-  line-height: 1.7;
-}
-.bento-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
-  margin-top: 60px;
-}
-.bento-card {
-  border-top: 1px solid var(--rule-hi);
-  transition: border-color var(--dur) var(--ease-out);
-}
-.bento-card:hover {
-  border-top-color: var(--phosphor);
-}
-.bento-card.span-wide {
-  grid-column: span 2;
-  border-top-color: var(--call);
-}
-.bento-card.span-tall {
-  grid-row: span 2;
-  border-top-color: var(--put);
-}
-.card-spotlight-target,
-.principle-inner {
-  position: relative;
-}
-.card-spotlight-target::before,
-.principle-inner::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: radial-gradient(
-    200px circle at var(--card-x, 50%) var(--card-y, 0%),
-    var(--phosphor),
-    transparent 70%
-  );
-  opacity: 0;
-  transition: opacity 0.3s var(--ease-out);
-  pointer-events: none;
-}
-.card-spotlight-target:hover::before,
-.principle-inner:hover::before {
-  opacity: 0.7;
-}
-.capability-copy {
-  margin-top: 14px;
-  color: var(--ink-dim);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  line-height: 1.65;
-}
-.capability-stat {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: var(--hair) solid var(--rule);
-}
-.capability-stat .stat-label {
-  color: var(--ink-faint);
-  font-family: var(--font-data);
-  font-size: var(--t-micro);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.capability-stat .stat-val {
-  color: var(--phosphor);
-  font-family: var(--font-data);
-  font-size: var(--t-fig);
-  font-weight: 600;
-}
-
-/* ── flow section ─────────────────────────────────────────────────────────── */
-.flow-section {
-  padding-block: 104px;
-  border-top: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-}
-.flow-layout {
-  display: grid;
-  grid-template-columns: minmax(280px, 0.42fr) minmax(560px, 1fr);
-  gap: clamp(48px, 6vw, 88px);
-  align-items: center;
-}
-.flow-copy {
-  align-self: start;
-  padding-top: 12px;
-}
-.flow-copy .section-index {
-  color: var(--call);
-}
-.flow-copy > p:not(.section-index) {
-  margin-top: 22px;
-}
-.text-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 28px;
+/* ── Navy bands ───────────────────────────────────────────────────────────── */
+.band-dark {
+  --void: var(--tc-navy);
+  --void-lift: #191927;
+  --panel: #1d1d30;
+  --panel-hi: var(--tc-navy-2);
+  --panel-raise: #2c2c3f;
+  --rule: rgba(250, 250, 244, 0.14);
+  --rule-hi: rgba(250, 250, 244, 0.3);
+  --rule-faint: rgba(250, 250, 244, 0.08);
+  --grid: rgba(250, 250, 244, 0.05);
+  --ink: #fafaf4;
+  --ink-soft: #e6e6de;
+  --ink-dim: #c0c0c8;
+  --ink-faint: #9a9aa4;
+  --ink-ghost: #80808c;
+  --phosphor: #ff8204;
+  --phosphor-dim: #ffa149;
+  --phosphor-wash: rgba(255, 130, 4, 0.1);
+  /* Signed market colors brighten on navy so figures keep their contrast. */
+  --call: #4ade80;
+  --call-wash: rgba(74, 222, 128, 0.12);
+  --put: #ff7a70;
+  --put-wash: rgba(255, 122, 112, 0.12);
+  --long: #4ade80;
+  --short: #ff7a70;
+  --warn: #ffc95e;
+  background: var(--tc-navy);
   color: var(--ink);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 600;
 }
-.text-link:hover {
-  color: var(--phosphor);
-  text-decoration: none;
+.band-dark .section-head h2,
+.band-dark .hero-lede {
+  color: var(--ink);
 }
-
-/* ── workspaces ───────────────────────────────────────────────────────────── */
-.workspace-section {
-  padding-block: 104px;
-  border-top: var(--hair) solid var(--rule);
+.band-dark .section-lede {
+  color: var(--ink-dim);
 }
-.workspace-layout {
-  display: grid;
-  grid-template-columns: minmax(270px, 0.42fr) minmax(620px, 1fr);
-  gap: clamp(48px, 6vw, 88px);
-  align-items: center;
+.band-dark .button-primary {
+  background: var(--tc-cream);
+  color: var(--tc-navy);
 }
-.workspace-copy {
-  align-self: start;
-  padding-top: 12px;
-}
-.workspace-copy .section-index {
-  color: var(--call);
-}
-.workspace-copy > p:not(.section-index) {
-  margin-top: 22px;
+.band-dark .button-primary:hover {
+  background: #ffffff;
 }
 
-/* ── evidence / tracing beam pipeline ────────────────────────────────────── */
+/* ── Evidence band internals ──────────────────────────────────────────────── */
 .evidence-section {
-  padding-block: 104px;
-  border-top: var(--hair) solid var(--rule);
-  background: var(--void-lift);
+  padding-block: clamp(64px, 8vw, 130px);
 }
-.evidence-heading {
-  align-items: center;
+.live-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 20px;
+  margin-bottom: clamp(48px, 6vw, 80px);
+  align-items: stretch;
 }
-.evidence-heading .section-index {
-  color: var(--put);
+.live-state-frame {
+  border: var(--hair) solid var(--rule);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
 }
-.tracing-beam-wrap {
-  position: relative;
+.readiness-panel {
   display: flex;
-  gap: 32px;
-  margin-top: 56px;
+  flex-direction: column;
+  gap: 16px;
+  border: var(--hair) solid var(--rule);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 20px;
+}
+.readiness-eyebrow {
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.readiness-rows {
+  display: flex;
+  flex-direction: column;
+}
+.readiness-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: var(--hair) solid var(--rule-faint);
+  font-size: 13px;
+}
+.readiness-row span {
+  color: var(--ink-faint);
+}
+.readiness-row strong {
+  font-family: var(--font-data);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+.readiness-row strong.ok {
+  color: #4ade80;
+}
+.readiness-row strong.warn {
+  color: var(--tc-yellow);
+}
+.readiness-note {
+  margin-top: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+.readiness-note.warn {
+  color: var(--tc-yellow);
+}
+
+.tracing-beam-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
 }
 .tracing-beam-rail {
   position: relative;
-  width: 2px;
-  flex: 0 0 auto;
-  background: var(--rule);
-  border-radius: 1px;
-  overflow: hidden;
+  height: 2px;
+  background: var(--rule-faint);
 }
 .beam-fill {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 0%;
-  background: var(--phosphor);
-  border-radius: 1px;
+  inset: 0 auto 0 0;
+  width: 0%;
+  height: 100%;
+  background: var(--tc-yellow);
 }
 .pipeline {
   display: flex;
-  align-items: stretch;
-  gap: 0;
-  flex: 1 1 auto;
+  gap: 12px;
 }
 .pipeline-step {
-  display: flex;
-  align-items: center;
   flex: 1 1 0;
   min-width: 0;
 }
 .pipeline-node {
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 8px;
-  padding: 20px 12px;
-  width: 100%;
-  text-align: center;
-  border: var(--hair) solid var(--rule-hi);
+  padding: 14px;
+  border: var(--hair) solid var(--rule);
+  border-radius: 8px;
   background: var(--panel);
-  transition: border-color var(--dur) var(--ease-out);
+  color: var(--ink-dim);
+  transition:
+    border-color var(--dur-slow) var(--ease-out),
+    color var(--dur-slow) var(--ease-out);
+}
+.pipeline-idx {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.pipeline-icon {
+  color: var(--ink-faint);
+  transition: color var(--dur-slow) var(--ease-out);
+}
+.pipeline-label {
+  font-family: var(--font-data);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.pipeline-note {
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-style: normal;
+  color: var(--ink-ghost);
 }
 .pipeline-step.done .pipeline-node {
-  border-color: var(--phosphor);
+  border-color: var(--rule-hi);
+  color: var(--ink);
 }
 .pipeline-step.done .pipeline-icon {
   color: var(--phosphor);
-  border-color: var(--phosphor-dim);
-}
-.pipeline-idx {
-  font-family: var(--font-data);
-  font-size: 8px;
-  font-weight: 600;
-  color: var(--ink-ghost);
-  letter-spacing: 0.08em;
-}
-.pipeline-icon {
-  width: 48px;
-  height: 48px;
-  display: grid;
-  place-items: center;
-  color: var(--phosphor);
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
-  transition:
-    color var(--dur) var(--ease-out),
-    border-color var(--dur) var(--ease-out),
-    background var(--dur) var(--ease-out);
-}
-.pipeline-icon svg {
-  display: block;
-}
-.pipeline-step:hover .pipeline-icon {
-  border-color: var(--phosphor);
-  background: var(--panel-hi);
-}
-.pipeline-label {
-  color: var(--ink);
-  font-family: var(--font-data);
-  font-size: var(--t-micro);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-.pipeline-step.done .pipeline-label {
-  color: var(--phosphor);
-}
-.pipeline-note {
-  color: var(--ink-faint);
-  font-family: var(--font-ui);
-  font-size: 10px;
-  font-style: normal;
-  line-height: 1.4;
 }
 .pipeline-connector {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  min-width: 32px;
-}
-.connector-line {
-  position: absolute;
-  inset: 0;
-  top: 50%;
-  bottom: 50%;
-  height: 1px;
-  background: var(--rule-hi);
-}
-.connector-arrow {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  color: var(--phosphor-dim);
-  background: var(--void-lift);
-}
-.pipeline-step.done ~ .pipeline-connector .connector-arrow {
-  color: var(--phosphor);
+  display: none;
 }
 
-/* ── method ───────────────────────────────────────────────────────────────── */
-.method-section {
-  padding-block: 104px;
-  border-top: var(--hair) solid var(--rule);
-  background: var(--void-lift);
+/* ── Editorial headline ───────────────────────────────────────────────────── */
+.editorial-section {
+  padding-block: clamp(72px, 9vw, 150px);
+  text-align: center;
 }
-.method-heading {
+.editorial-headline {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(36px, 5.2vw, 68px);
+  line-height: 1.04;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  max-width: 900px;
+  margin-inline: auto;
+}
+
+/* ── Markitecture bento ───────────────────────────────────────────────────── */
+.bento-section {
+  padding-block: clamp(64px, 8vw, 130px) clamp(80px, 9vw, 150px);
+}
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-auto-rows: minmax(88px, auto);
+  grid-template-areas:
+    'market market market market options options'
+    'market market market market options options'
+    'market market market market options options'
+    'governance governance lab lab options options'
+    'governance governance lab lab diamond diamond'
+    'work work work work diamond diamond';
+  border-top: var(--hair) solid var(--rule-hi);
+  border-left: var(--hair) solid var(--rule-hi);
+}
+.bento-block {
+  position: relative;
+  grid-column: span 2;
+  padding: 20px;
+  border-right: var(--hair) solid var(--rule-hi);
+  border-bottom: var(--hair) solid var(--rule-hi);
+  background: var(--void);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.b-market {
+  grid-area: market;
+}
+.b-options {
+  grid-area: options;
+}
+.b-governance {
+  grid-area: governance;
+}
+.b-lab {
+  grid-area: lab;
+}
+.b-work {
+  grid-area: work;
+  grid-column: span 4;
+  flex-direction: row;
   align-items: center;
+  gap: 20px;
 }
-.method-heading .section-index {
-  color: var(--warn);
+.b-diamond {
+  grid-area: diamond;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.diamond-core {
+  width: 46%;
+  aspect-ratio: 1;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--tc-yellow);
+  transform: rotate(45deg);
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.b-diamond:hover .diamond-core {
+  transform: rotate(135deg);
+}
+.accent-square {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 24px;
+  height: 24px;
+}
+.sq-market {
+  background: var(--tc-blue);
+}
+.sq-options {
+  background: var(--phosphor);
+}
+.sq-governance {
+  background: var(--tc-yellow);
+}
+.sq-yellow {
+  background: var(--tc-yellow);
+}
+.sq-blue {
+  background: var(--tc-blue);
+}
+.bento-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 30px;
+}
+.bento-head h3,
+.bento-chip h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.bento-detail {
+  color: var(--ink-faint);
+}
+.bento-copy {
+  max-width: 520px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+.bento-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: var(--hair) solid var(--rule);
+}
+.stat-label {
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.stat-val {
+  font-size: 20px;
+  color: var(--ink);
+}
+.bento-chip {
+  justify-content: center;
+}
+.bento-chip h3 {
+  padding-left: 0;
+}
+.bento-chip p {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+  max-width: 360px;
+}
+
+/* ── Fall-in entrance (bento blocks, principles) ──────────────────────────── */
+.fall-in {
+  opacity: 0;
+}
+.fall-in.in-view {
+  animation: fall-in 0.7s cubic-bezier(0.68, -0.55, 0.27, 1.55) both;
+  animation-delay: calc(var(--fall-i, 0) * 70ms);
+}
+.bento-grid > :nth-child(1) {
+  --fall-i: 0;
+}
+.bento-grid > :nth-child(2) {
+  --fall-i: 1;
+}
+.bento-grid > :nth-child(3) {
+  --fall-i: 2;
+}
+.bento-grid > :nth-child(4) {
+  --fall-i: 3;
+}
+.bento-grid > :nth-child(5) {
+  --fall-i: 4;
+}
+.bento-grid > :nth-child(6) {
+  --fall-i: 5;
+}
+.principle-grid > :nth-child(1) {
+  --fall-i: 0;
+}
+.principle-grid > :nth-child(2) {
+  --fall-i: 1;
+}
+.principle-grid > :nth-child(3) {
+  --fall-i: 2;
+}
+.principle-grid > :nth-child(4) {
+  --fall-i: 3;
+}
+@keyframes fall-in {
+  0% {
+    transform: translateY(-120px) scale(1);
+    opacity: 0;
+  }
+  55% {
+    transform: translateY(0) scale(1.02, 0.96);
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(-6px) scale(0.99, 1.02);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* ── Product feature sections (alternating) ───────────────────────────────── */
+.product-feature {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: clamp(36px, 5vw, 80px);
+  align-items: center;
+  padding-block: clamp(72px, 9vw, 150px);
+  border-top: var(--hair) solid var(--rule);
+}
+.product-feature-alt {
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+}
+.product-feature-alt .pf-copy {
+  order: 2;
+}
+.pf-copy h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(32px, 3.8vw, 48px);
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-block: 14px 16px;
+}
+.pf-copy .section-lede {
+  font-size: 17px;
+}
+.pf-visual {
+  min-width: 0;
+}
+
+.flow-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 26px;
+}
+.flow-feature-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 8px;
+  background: var(--void);
+  transition:
+    transform var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease-out);
+}
+.flow-feature-box:hover {
+  transform: translateY(-3px);
+  border-color: var(--ink);
+}
+.feature-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.feature-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--tc-cream);
+  background: var(--phosphor);
+}
+.feature-idx {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.flow-feature-box strong {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 15px;
+  color: var(--ink);
+}
+.flow-feature-box p {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.surface-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 26px;
+}
+.surface-params span {
+  font-family: var(--font-data);
+  font-size: 12px;
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+/* ── Model lab ────────────────────────────────────────────────────────────── */
+.lab-section {
+  padding-block: clamp(72px, 9vw, 150px);
+  border-top: var(--hair) solid var(--rule);
+}
+.lab-frame {
+  margin-inline: auto;
+}
+.lab-footnote {
+  margin-top: 20px;
+  max-width: 720px;
+  margin-inline: auto;
+  text-align: center;
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+/* ── Principles ───────────────────────────────────────────────────────────── */
+.method-section {
+  padding-block: clamp(72px, 9vw, 150px);
+  border-top: var(--hair) solid var(--rule);
 }
 .principle-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-top: 56px;
+  gap: 12px;
+}
+.principle {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 8px;
+  background: var(--void);
+  transition:
+    transform var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease-out);
+}
+.principle:hover {
+  transform: translateY(-4px);
+  border-color: var(--ink);
+}
+.principle-index {
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--phosphor-dim);
 }
 .principle-icon {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  margin-bottom: 12px;
-  color: var(--phosphor);
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
-  transition:
-    color var(--dur) var(--ease-out),
-    border-color var(--dur) var(--ease-out),
-    background var(--dur) var(--ease-out);
+  color: var(--ink-dim);
 }
-.principle-icon svg {
-  display: block;
-}
-.principle:hover .principle-icon {
-  border-color: var(--phosphor);
-  background: var(--panel-hi);
+.principle h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
 }
 .principle-copy {
-  color: var(--ink-dim);
-  font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 13.5px;
   line-height: 1.6;
+  color: var(--ink-dim);
 }
 
-/* ── final CTA ────────────────────────────────────────────────────────────── */
-.final-cta {
-  position: relative;
-  overflow: hidden;
-  padding-block: 100px 92px;
-  text-align: center;
+/* ── Boundary section ─────────────────────────────────────────────────────── */
+.boundary-section {
+  padding-block: clamp(72px, 9vw, 150px);
   border-top: var(--hair) solid var(--rule);
-  background: var(--void);
 }
-.final-cta::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 40px 40px;
-  mask-image: radial-gradient(ellipse at center, #000 0%, transparent 70%);
+.boundary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border: var(--hair) solid var(--rule-hi);
 }
-.final-inner {
-  position: relative;
+.boundary-col {
+  padding: 26px;
+  border-left: var(--hair) solid var(--rule-hi);
 }
-.final-inner .section-index {
-  color: var(--call);
+.boundary-col:first-child {
+  border-left: 0;
 }
-.final-inner h2 {
+.boundary-col h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+.boundary-col p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+.boundary-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 18px;
 }
-.final-inner h2 em {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-weight: 500;
-  letter-spacing: -0.01em;
+
+/* ── Closing CTA ──────────────────────────────────────────────────────────── */
+.final-cta {
+  position: relative;
+  padding-block: clamp(80px, 10vw, 160px);
+  text-align: center;
 }
-.final-inner > p:not(.section-index) {
-  margin-top: 20px;
-  color: var(--ink-dim);
-  font-family: var(--font-ui);
-  font-size: 15px;
+.cta-pixels {
+  display: block;
+  margin: 0 auto clamp(28px, 4vw, 44px);
+}
+.final-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.final-inner .section-eyebrow {
+  justify-content: center;
+}
+.final-inner h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(36px, 4.6vw, 60px);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.final-inner .section-lede {
+  max-width: 560px;
+  margin-inline: auto;
+}
+.final-inner .button {
+  margin-top: 8px;
 }
 .final-inner small {
-  display: block;
-  margin-top: 16px;
-  color: var(--ink-faint);
-  font-family: var(--font-ui);
+  font-family: var(--font-data);
   font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
 }
 
-/* ── footer ────────────────────────────────────────────────────────────────── */
+/* ── Footer ───────────────────────────────────────────────────────────────── */
 .landing-footer {
+  position: relative;
   border-top: var(--hair) solid var(--rule);
-  background: var(--void-lift);
+  background: var(--void);
+  overflow: hidden;
 }
-.footer-inner {
-  min-height: 84px;
+.footer-frame {
+  width: min(1480px, 100% - 48px);
+  margin-inline: auto;
+  border-inline: var(--hair) solid var(--rule);
+}
+.footer-cols {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 28px;
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
+  gap: 40px;
+  padding-block: clamp(48px, 6vw, 80px);
 }
 .footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  text-decoration: none;
   color: var(--ink);
 }
-.footer-inner > p {
-  color: var(--ink-faint);
-  font-family: var(--font-data);
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.footer-tagline {
+  max-width: 340px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-dim);
 }
-.footer-inner nav {
-  justify-self: end;
+.footer-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.footer-col-title {
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 6px;
+}
+.footer-col a {
+  font-size: 14px;
+  color: var(--ink-dim);
+  text-decoration: none;
+  transition: color var(--dur) var(--ease-out);
+}
+.footer-col a:hover {
+  color: var(--ink);
+}
+.footer-watermark-wrap {
+  position: relative;
+  height: 0;
+}
+.footer-watermark {
+  position: absolute;
+  right: clamp(8px, 3vw, 40px);
+  bottom: 34px;
+  width: clamp(200px, 22vw, 340px);
+  color: var(--tc-navy);
+  opacity: 0.055;
+  pointer-events: none;
+}
+.footer-base {
   display: flex;
   align-items: center;
-  gap: 24px;
-}
-.footer-inner nav a {
-  color: var(--ink-dim);
-  font-family: var(--font-ui);
-  font-size: 12px;
-}
-.footer-inner nav a:hover {
-  color: var(--ink);
-  text-decoration: none;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-block: 18px;
+  border-top: var(--hair) solid var(--rule);
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
 }
 
-/* ── responsive ───────────────────────────────────────────────────────────── */
-@media (max-width: 1080px) {
-  .hero {
-    grid-template-columns: 1fr;
-    min-height: auto;
-    padding-block: 60px;
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .bento-grid {
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-areas:
+      'market market options options'
+      'market market options options'
+      'governance governance lab lab'
+      'work work work diamond';
   }
-  .hero-copy {
-    max-width: 720px;
-  }
-  .hero-visual {
-    max-width: 640px;
-  }
-  .stats-strip {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .stats-strip :deep(.readout:nth-child(3)) {
-    border-left: 0;
-  }
-  .flow-layout,
-  .workspace-layout {
-    grid-template-columns: 1fr;
-  }
-  .flow-copy,
-  .workspace-copy {
-    max-width: 640px;
+  .b-work {
+    grid-column: span 3;
   }
   .principle-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .bento-grid {
+  .product-feature,
+  .product-feature-alt {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  .product-feature-alt .pf-copy {
+    order: 0;
+  }
+  .live-grid {
     grid-template-columns: 1fr;
   }
-  .bento-card.span-wide,
-  .bento-card.span-tall {
-    grid-column: auto;
-    grid-row: auto;
-  }
-  .pipeline {
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  .pipeline-step {
-    flex: 1 1 45%;
-  }
-  .pipeline-connector {
-    display: none;
-  }
-  .tracing-beam-wrap {
-    flex-direction: column;
-    gap: 20px;
-  }
-  .tracing-beam-rail {
-    width: 100%;
-    height: 2px;
-  }
-  .beam-fill {
-    height: 100%;
-    width: 0%;
+  .footer-cols {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 800px) {
-  .landing-inner {
-    width: min(100% - 40px, 1240px);
+  .railroad,
+  .masthead-inner,
+  .footer-frame {
+    width: min(100% - 32px, 1480px);
   }
-  .topbar {
+  .masthead-inner {
     grid-template-columns: 1fr auto;
   }
-  .topnav {
+  .brand {
+    border-right: 0;
+    margin-right: 0;
+  }
+  .masthead-nav {
+    display: none;
+    position: absolute;
+    top: calc(100% + 1px);
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    background: var(--void);
+    border-bottom: var(--hair) solid var(--rule-hi);
+    padding: 8px 16px 16px;
+    z-index: 5;
+  }
+  .masthead:has(.nav-menu-btn[aria-expanded='true']) .masthead-nav {
+    display: flex;
+  }
+  .masthead-nav a {
+    padding: 12px 4px;
+    font-size: 16px;
+    border-bottom: var(--hair) solid var(--rule-faint);
+  }
+  .masthead-nav a::after {
     display: none;
   }
-  .hero h1 {
-    font-size: clamp(44px, 11vw, 68px);
+  .masthead-actions {
+    border-left: 0;
+    padding-left: 0;
   }
-  .section-heading {
-    grid-template-columns: 1fr;
-    gap: 26px;
+  .nav-menu-btn {
+    display: inline-flex;
   }
-  .capability-grid {
+  .hero {
     grid-template-columns: 1fr;
+    gap: 44px;
+    padding-block: 56px;
+  }
+  .hero-headline {
+    font-size: clamp(38px, 10vw, 56px);
+  }
+  .stats-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .stats-strip :deep(.readout) {
+    border-left: 0;
+    border-top: var(--hair) solid var(--rule);
+  }
+  .stats-strip :deep(.readout:nth-child(odd)) {
+    border-right: var(--hair) solid var(--rule);
+  }
+  .stats-strip :deep(.readout:nth-child(-n + 2)) {
+    border-top: 0;
+  }
+  .pipeline {
+    flex-wrap: wrap;
   }
   .pipeline-step {
-    flex: 1 1 100%;
+    flex: 1 1 45%;
   }
-  .footer-inner {
-    grid-template-columns: 1fr auto;
+  .boundary-grid {
+    grid-template-columns: 1fr;
   }
-  .footer-inner > p {
-    display: none;
+  .boundary-col {
+    border-left: 0;
+    border-top: var(--hair) solid var(--rule-hi);
+  }
+  .boundary-col:first-child {
+    border-top: 0;
+  }
+  .footer-watermark {
+    opacity: 0.04;
   }
 }
 
 @media (max-width: 580px) {
-  .landing-inner {
-    width: min(100% - 30px, 1240px);
-  }
-  .topbar {
-    min-height: 64px;
-    grid-template-columns: 1fr auto;
-    gap: 14px;
-  }
   .wordmark small {
     display: none;
   }
-  .brand-mark {
-    width: 34px;
-    height: 34px;
-  }
-  .top-actions {
-    gap: 0;
-  }
-  .top-actions .sign-in {
+  .masthead-actions .sign-in {
     display: none;
   }
-  .button {
+  .masthead-actions .button {
     min-height: 40px;
-    padding-inline: 16px;
-    font-size: 11px;
+    padding-inline: 12px;
+    font-size: 13px;
+    gap: 6px;
   }
   .hero {
-    gap: 44px;
-    padding-block: 48px;
+    padding-block: 44px;
   }
-  .hero h1 {
-    font-size: 40px;
-    line-height: 1.04;
+  .hero-headline {
+    font-size: clamp(34px, 9.6vw, 46px);
   }
   .hero-lede {
-    font-size: 14px;
-  }
-  .rotating-word {
-    min-width: 110px;
+    font-size: 16px;
   }
   .hero-actions {
     display: grid;
   }
-  .hero-actions .button,
-  .hero-actions .magnetic-wrap {
-    width: 100%;
-  }
-  .hero-actions .button {
-    width: 100%;
+  .hero-mc-stage {
+    height: 280px;
   }
   .stats-strip {
     grid-template-columns: 1fr;
   }
-  .stats-strip :deep(.readout),
-  .stats-strip :deep(.readout:first-child) {
-    padding: 18px 0;
-    border-left: 0;
+  .stats-strip :deep(.readout) {
+    border-inline: 0;
     border-top: var(--hair) solid var(--rule);
   }
   .stats-strip :deep(.readout:first-child) {
     border-top: 0;
   }
-  .product-section,
-  .flow-section,
-  .workspace-section,
-  .method-section,
-  .evidence-section {
-    padding-block: 76px;
-  }
-  .section-heading h2,
-  .flow-copy h2,
-  .workspace-copy h2,
-  .final-inner h2 {
-    font-size: clamp(36px, 11vw, 50px);
+  .flow-feature-grid {
+    grid-template-columns: 1fr;
   }
   .principle-grid {
     grid-template-columns: 1fr;
   }
-  .final-cta {
-    padding-block: 76px 72px;
+  .pipeline-step {
+    flex: 1 1 100%;
   }
-  .footer-inner {
-    min-height: 104px;
+  .bento-grid {
     grid-template-columns: 1fr;
-    padding-block: 20px;
+    grid-template-areas:
+      'market'
+      'options'
+      'governance'
+      'lab'
+      'work'
+      'diamond';
   }
-  .footer-inner nav {
-    justify-self: start;
+  .b-work {
+    grid-column: span 1;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .b-diamond {
+    min-height: 140px;
+  }
+  .footer-cols {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+  .footer-base {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+}
+
+/* Increase Contrast: rules harden and secondary ink steps up a level. */
+@media (prefers-contrast: more) {
+  .masthead {
+    border-bottom-color: var(--ink);
+  }
+  .bento-block,
+  .principle,
+  .flow-feature-box,
+  .boundary-grid,
+  .instrument-frame {
+    border-color: var(--ink-dim);
+  }
+  .section-lede,
+  .masthead-nav a,
+  .sign-in,
+  .px-link {
+    color: var(--ink);
+  }
+  .hero-lede {
+    color: var(--ink-soft);
+  }
+  .hero-boundary,
+  .lab-footnote,
+  .pipeline-note,
+  .footer-base,
+  .ticker-price {
+    color: var(--ink-soft);
+  }
+  .button-ghost {
+    border-color: var(--ink-dim);
   }
 }
 
@@ -2569,12 +2818,30 @@ onUnmounted(() => {
   .ticker-track {
     animation: none !important;
   }
-  .rw-item {
+  .rw-item,
+  .rw-item:not(.active) {
     transition: none !important;
   }
-  .card-spotlight-target::before,
-  .principle-inner::before {
-    display: none;
+  .fall-in {
+    opacity: 1;
+    animation: none !important;
+  }
+  .diamond-core {
+    transform: none !important;
+    transition: none !important;
+  }
+  .px-arrow,
+  .button:hover .px-arrow,
+  .px-link:hover .px-arrow,
+  .button:hover .px-down {
+    transform: none !important;
+    transition: none !important;
+  }
+  .px-link::after {
+    transition: none !important;
+  }
+  .masthead-nav a::after {
+    transition: none !important;
   }
 }
 </style>

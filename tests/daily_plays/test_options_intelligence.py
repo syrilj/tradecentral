@@ -6,6 +6,8 @@ from edge.daily_plays.options_intelligence import (
     OptionsFilters,
     _best_observation_time,
     _imbalance_confidence,
+    _setup_from_gex_score,
+    _usd_millions,
     build_options_intelligence,
 )
 
@@ -958,6 +960,43 @@ def test_payload_exposes_charm_pressure_and_delta_weighted_volume():
     )
     assert result["delta_weighted_volume"]["call"] >= 0
     assert result["delta_weighted_volume"]["put"] >= 0
+
+
+def test_negative_gex_takeaway_puts_the_sign_ahead_of_the_dollar_sign():
+    """`f"${-6.55:.2f}M"` renders "$-6.55M", which reads as a malformed amount.
+
+    Near-spot and total dealer GEX are negative for most of the short-gamma
+    tape this takeaway describes, so the sign placement is the common case, not
+    an edge case. The dashboard formats the same numbers as "-$6.55M".
+    """
+    assert _usd_millions(-6.55) == "-$6.55M"
+    assert _usd_millions(6.55) == "$6.55M"
+    assert _usd_millions(0.0) == "$0.00M"
+    assert _usd_millions(-0.004) == "-$0.00M"
+    assert _usd_millions(-1234.5, 1) == "-$1234.5M"
+
+    setup = _setup_from_gex_score(
+        side="bearish",
+        signed_score=-1.1,
+        components={
+            "regime_score": 20.0,
+            "put_prox_score": -9.4,
+            "put_conc_score": -15.0,
+            "wall_asym_score": -10.0,
+            "em_score": 10.0,
+            "flip_score": 0.0,
+        },
+        wall_level=200.0,
+        wall_pct=-0.049409,
+        spot=210.3955,
+        near_net=-6.5479,
+        net_dealer=-7.2359,
+        fuel=0.0329,
+    )
+    headline = setup["setup_analysis"][0]
+    assert "-$6.55M" in headline
+    assert "-$7.24M" in headline
+    assert "$-" not in headline
 
 
 # --- charm / pressure-gauge math audit regressions ---------------------------

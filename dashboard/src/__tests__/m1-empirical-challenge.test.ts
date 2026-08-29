@@ -10,7 +10,10 @@ import { useResource } from '@/composables/useResource'
 const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const deskViewCode = readFileSync(join(srcRoot, 'views', 'DeskView.vue'), 'utf8')
 const optionsViewCode = readFileSync(join(srcRoot, 'views', 'OptionsView.vue'), 'utf8')
-const riskNeutral3DCode = readFileSync(join(srcRoot, 'components', 'RiskNeutral3DModel.vue'), 'utf8')
+const riskNeutral3DCode = readFileSync(
+  join(srcRoot, 'components', 'RiskNeutral3DModel.vue'),
+  'utf8',
+)
 
 // Mathematical functions from RiskNeutral3DModel
 function cdfNormal(x: number): number {
@@ -124,20 +127,21 @@ describe('Milestone 1 Empirical Challenge: Frontend Optimizations & Invariants',
       ])
 
       const reconciliationRef = ref<{ rows: ReconciliationRow[] }>({
-        rows: [
-          { symbol: 'AAPL', relation: 'agree' },
-        ],
+        rows: [{ symbol: 'AAPL', relation: 'agree' }],
       })
 
-      const reconciledBySymbol = computed(() => new Map(
-        (reconciliationRef.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row]),
-      ))
-      const signalsBySymbol = computed(() => new Map(
-        signalsRef.value.map((s) => [s.symbol?.toUpperCase() ?? '', s]),
-      ))
-      const peadBySymbol = computed(() => new Map(
-        peadRef.value.map((p) => [p.symbol?.toUpperCase() ?? '', p]),
-      ))
+      const reconciledBySymbol = computed(
+        () =>
+          new Map(
+            (reconciliationRef.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row]),
+          ),
+      )
+      const signalsBySymbol = computed(
+        () => new Map(signalsRef.value.map((s) => [s.symbol?.toUpperCase() ?? '', s])),
+      )
+      const peadBySymbol = computed(
+        () => new Map(peadRef.value.map((p) => [p.symbol?.toUpperCase() ?? '', p])),
+      )
 
       const signalFor = (sym: string): SignalRow | null => {
         if (!sym) return null
@@ -187,31 +191,29 @@ describe('Milestone 1 Empirical Challenge: Frontend Optimizations & Invariants',
     })
 
     it('maintains dynamic reactive updates when underlying data mutations occur', async () => {
-      const signalsRef = ref<SignalRow[]>([
-        { symbol: 'NVDA', side: 'long', probability: 0.60 },
-      ])
+      const signalsRef = ref<SignalRow[]>([{ symbol: 'NVDA', side: 'long', probability: 0.6 }])
 
-      const signalsBySymbol = computed(() => new Map(
-        signalsRef.value.map((s) => [s.symbol?.toUpperCase() ?? '', s]),
-      ))
+      const signalsBySymbol = computed(
+        () => new Map(signalsRef.value.map((s) => [s.symbol?.toUpperCase() ?? '', s])),
+      )
 
       const signalFor = (sym: string): SignalRow | null => {
         if (!sym) return null
         return signalsBySymbol.value.get(sym.toUpperCase()) ?? null
       }
 
-      expect(signalFor('NVDA')?.probability).toBe(0.60)
+      expect(signalFor('NVDA')?.probability).toBe(0.6)
       expect(signalFor('TSLA')).toBeNull()
 
       // Mutate reactive data
       signalsRef.value = [
         { symbol: 'NVDA', side: 'long', probability: 0.85 },
-        { symbol: 'TSLA', side: 'short', probability: 0.70 },
+        { symbol: 'TSLA', side: 'short', probability: 0.7 },
       ]
       await nextTick()
 
       expect(signalFor('NVDA')?.probability).toBe(0.85)
-      expect(signalFor('TSLA')?.probability).toBe(0.70)
+      expect(signalFor('TSLA')?.probability).toBe(0.7)
       expect(signalFor('tsla')?.side).toBe('short')
     })
 
@@ -227,9 +229,7 @@ describe('Milestone 1 Empirical Challenge: Frontend Optimizations & Invariants',
           ],
         },
         TSLA: {
-          series: [
-            { d: '2026-08-10', c: 200 },
-          ], // <= 2 bars, should be skipped
+          series: [{ d: '2026-08-10', c: 200 }], // <= 2 bars, should be skipped
         },
       })
 
@@ -553,7 +553,9 @@ describe('Milestone 1 Empirical Challenge: Frontend Optimizations & Invariants',
     it('DeskView.vue satisfies all required string and contract patterns', () => {
       expect(deskViewCode).toContain('const signalsBySymbol = computed(() => new Map(')
       expect(deskViewCode).toContain('const peadBySymbol = computed(() => new Map(')
-      expect(deskViewCode).toContain('const sparkCache = new Map<string, { key: string; path: string }>()')
+      expect(deskViewCode).toContain(
+        'const sparkCache = new Map<string, { key: string; path: string }>()',
+      )
       expect(deskViewCode).toContain('RESEARCH BOOK')
       expect(deskViewCode).toContain('LIVE BOOK CLEARED')
       expect(deskViewCode).toContain('STANDBY')

@@ -33,7 +33,11 @@ const KNOWN: Record<string, string> = {
 }
 
 export function cleanTickerSymbol(raw: string): string {
-  return raw.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
 }
 
 export function tickerCompanyName(symbol: string, known?: string | null): string | null {
@@ -194,6 +198,21 @@ const SECTOR_CODES: Record<string, string> = {
   'Indices & ETFs': 'ETF / Index',
 }
 
+export const SECTOR_ETF_MAP: Record<string, string> = {
+  Technology: 'XLK',
+  Communication: 'XLC',
+  'Consumer Discretionary': 'XLY',
+  'Consumer Staples': 'XLP',
+  Financials: 'XLF',
+  Healthcare: 'XLV',
+  Energy: 'XLE',
+  Industrials: 'XLI',
+  Materials: 'XLB',
+  Utilities: 'XLU',
+  'Real Estate': 'XLRE',
+  'Indices & ETFs': 'SPY',
+}
+
 export function tickerSector(symbol: string): string {
   const clean = cleanTickerSymbol(symbol)
   return SECTOR_MAP[clean] ?? 'Other'
@@ -202,6 +221,33 @@ export function tickerSector(symbol: string): string {
 export function tickerSectorCode(symbol: string): string {
   const sector = tickerSector(symbol)
   return SECTOR_CODES[sector] ?? sector
+}
+
+export function tickerSectorEtf(symbol: string): string {
+  const clean = cleanTickerSymbol(symbol)
+  if (
+    [
+      'SPY',
+      'QQQ',
+      'IWM',
+      'DIA',
+      'XLK',
+      'XLF',
+      'XLE',
+      'XLV',
+      'XLI',
+      'XLY',
+      'XLP',
+      'XLU',
+      'XLB',
+      'XLRE',
+      'XLC',
+    ].includes(clean)
+  ) {
+    return clean
+  }
+  const sector = tickerSector(clean)
+  return SECTOR_ETF_MAP[sector] ?? 'SPY'
 }
 
 export function tickerIdentity(

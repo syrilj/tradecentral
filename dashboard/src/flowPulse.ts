@@ -1,9 +1,6 @@
 import type { MarketFlowPrint, UnusualFlowPayload, UnusualFlowRow } from '@/api'
 
-export type FlowPulsePayload = Pick<
-  UnusualFlowPayload,
-  'asof' | 'generated_at' | 'rows' | 'tape'
->
+export type FlowPulsePayload = Pick<UnusualFlowPayload, 'asof' | 'generated_at' | 'rows' | 'tape'>
 
 export interface SymbolPulse {
   newPrints: number
@@ -43,7 +40,7 @@ export function flowReviewScore(row: UnusualFlowRow, maxPremium: number): number
   const size = maxPremium > 0 ? premium / maxPremium : 0
   const sweepShare = premium > 0 ? Math.max(0, Math.min(1, sweepPremium / premium)) : 0
   const flaggedShare = contracts > 0 ? Math.max(0, Math.min(1, unusualContracts / contracts)) : 0
-  return (size * 0.5) + (sweepShare * 0.3) + (flaggedShare * 0.2)
+  return size * 0.5 + sweepShare * 0.3 + flaggedShare * 0.2
 }
 
 export function compareFlowReviewRows(
@@ -51,9 +48,11 @@ export function compareFlowReviewRows(
   b: UnusualFlowRow,
   maxPremium: number,
 ): number {
-  return flowReviewScore(b, maxPremium) - flowReviewScore(a, maxPremium)
-    || rowPremium(b) - rowPremium(a)
-    || a.symbol.localeCompare(b.symbol)
+  return (
+    flowReviewScore(b, maxPremium) - flowReviewScore(a, maxPremium) ||
+    rowPremium(b) - rowPremium(a) ||
+    a.symbol.localeCompare(b.symbol)
+  )
 }
 
 function reviewRanks(rows: UnusualFlowRow[]): Map<string, number> {
@@ -165,12 +164,14 @@ export function buildFlowPulse(
   }
 
   const expiredPrintCount = [...remainingPrevious.values()].reduce((sum, count) => sum + count, 0)
-  const netWindowPremiumChange = current.rows.reduce((sum, row) => sum + rowPremium(row), 0)
-    - previous.rows.reduce((sum, row) => sum + rowPremium(row), 0)
-  const changedSymbolCount = [...bySymbol.values()].filter((pulse) =>
-    pulse.newPrints > 0
-      || Math.abs(pulse.windowPremiumDelta) >= 1
-      || (pulse.rankMove != null && pulse.rankMove !== 0),
+  const netWindowPremiumChange =
+    current.rows.reduce((sum, row) => sum + rowPremium(row), 0) -
+    previous.rows.reduce((sum, row) => sum + rowPremium(row), 0)
+  const changedSymbolCount = [...bySymbol.values()].filter(
+    (pulse) =>
+      pulse.newPrints > 0 ||
+      Math.abs(pulse.windowPremiumDelta) >= 1 ||
+      (pulse.rankMove != null && pulse.rankMove !== 0),
   ).length
 
   return {

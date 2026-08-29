@@ -48,7 +48,7 @@ export function nextResourceData<T>(
 export function useResource<T>(
   loader: () => Promise<T>,
   opts: {
-    intervalMs?: number
+    intervalMs?: number | (() => number)
     immediate?: boolean
     /**
      * Optional activity gate for expensive resources. The caller remains in
@@ -59,6 +59,11 @@ export function useResource<T>(
   } = {},
 ): Resource<T> {
   const { intervalMs = 0, immediate = true, enabled = () => true } = opts
+
+  /** Resolve intervalMs regardless of whether it is a fixed number or a getter. */
+  function resolveIntervalMs(): number {
+    return typeof intervalMs === 'function' ? intervalMs() : intervalMs
+  }
 
   const data = shallowRef<T | null>(null)
   const error = ref<string | null>(null)
@@ -96,8 +101,7 @@ export function useResource<T>(
     } catch (e) {
       if (mine !== seq || disposed) return
       data.value = nextResourceData(data.value, null, { ...opts, failed: true })
-      error.value =
-        e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
+      error.value = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
     } finally {
       if (mine === seq) {
         loading.value = false
@@ -110,7 +114,8 @@ export function useResource<T>(
   }
 
   function schedule(): void {
-    if (!intervalMs || disposed) return
+    const ms = resolveIntervalMs()
+    if (!ms || disposed) return
     stop()
     // Skip ticks while a request is still in flight so a slow backend cannot
     // stack fetches until the tab freezes.
@@ -118,7 +123,7 @@ export function useResource<T>(
       if (enabled() && document.visibilityState === 'visible' && shouldStartRefresh(inFlight)) {
         void refresh()
       }
-    }, intervalMs)
+    }, ms)
   }
 
   function stop(): void {

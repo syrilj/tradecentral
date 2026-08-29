@@ -19,7 +19,6 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Mapping
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -55,9 +54,6 @@ def _safe_round(val: Any, digits: int = 2) -> float | None:
     return round(f, digits)
 
 
-def _seed_for_symbol(symbol: str) -> int:
-    h = hashlib.md5(symbol.upper().encode("utf-8")).hexdigest()
-    return int(h[:8], 16)
 
 
 # ==============================================================================
@@ -98,7 +94,18 @@ def _build_financials_payload(symbol: str, period: str) -> dict[str, Any]:
             target_periods = periods
             canonical_periods = periods
 
-            def extract_row(df: pd.DataFrame, possible_keys: list[str], label: str, **kwargs) -> dict[str, Any] | None:
+            def extract_row(
+                df: pd.DataFrame,
+                possible_keys: list[str],
+                label: str,
+                periods: list[str],
+                **kwargs,
+            ) -> dict[str, Any] | None:
+                # `periods` was previously only a closure variable while all 16
+                # call sites passed it positionally, so the very first call raised
+                # TypeError, the enclosing `except Exception` swallowed it at debug
+                # level, and EVERY symbol silently fell through to the synthetic
+                # generator. The live yfinance path had never once executed.
                 if df is None or df.empty:
                     return None
                 matched_idx = None
@@ -114,23 +121,15 @@ def _build_financials_payload(symbol: str, period: str) -> dict[str, Any]:
 
                 # Build a period -> value map from yfinance data
                 pv: dict[str, float | None] = {}
-                for col, p in zip(df.columns, yf_periods):
+                for col, p in zip(df.columns, periods):
                     pv[p] = _safe_float(df.loc[matched_idx, col])
 
-                # Fill canonical periods: use real value where available, else interpolate
-                vals: list[float | None] = []
-                real_vals = [v for v in pv.values() if v is not None]
-                base = real_vals[0] if real_vals else None
-                for idx_in_canon, p in enumerate(target_periods):
-                    if p in pv and pv[p] is not None:
-                        vals.append(pv[p])
-                    else:
-                        # Estimate from most-recent real value with a slight
-                        # quarter-over-quarter decay (≈2–3% per quarter back)
-                        if base is not None:
-                            vals.append(round(base * (0.97 ** idx_in_canon), 2))
-                        else:
-                            vals.append(None)
+                # A period the filing does not report stays None. This used to
+                # extrapolate the most recent real value backwards with a
+                # ~3%-per-quarter decay, which put invented figures into an
+                # income statement beside real ones with nothing marking them
+                # apart. The dashboard renders None as an em-dash.
+                vals: list[float | None] = [pv.get(p) for p in periods]
                 return {"key": possible_keys[0], "label": label, "values": vals, **kwargs}
 
             periods = canonical_periods
@@ -312,8 +311,6 @@ def _extract_ratios(
     bal = bal_rows or []
     cf = cf_rows or []
 
-    seed = _seed_for_symbol(symbol)
-    rng = np.random.default_rng(seed)
 
     # Core statement items
     rev_latest = _find_row_val(inc, ["TotalRevenue", "OperatingRevenue", "Revenue"])
@@ -356,90 +353,60 @@ def _extract_ratios(
         gross_margin = round((gp_latest / rev_latest) * 100, 2)
     elif gross_margin is None and rev_ttm and gp_ttm and rev_ttm > 0:
         gross_margin = round((gp_ttm / rev_ttm) * 100, 2)
-    if gross_margin is None:
-        gross_margin = round(rng.uniform(42.0, 58.0), 2)
 
     op_margin = _safe_round(_safe_float(info.get("operatingMargins"), 0) * 100 if info.get("operatingMargins") else None, 2)
     if op_margin is None and rev_latest and op_latest and rev_latest > 0:
         op_margin = round((op_latest / rev_latest) * 100, 2)
-    if op_margin is None:
-        op_margin = round(gross_margin * rng.uniform(0.55, 0.75), 2)
 
     net_margin = _safe_round(_safe_float(info.get("profitMargins"), 0) * 100 if info.get("profitMargins") else None, 2)
     if net_margin is None and rev_latest and ni_latest and rev_latest > 0:
         net_margin = round((ni_latest / rev_latest) * 100, 2)
     elif net_margin is None and rev_ttm and ni_ttm and rev_ttm > 0:
         net_margin = round((ni_ttm / rev_ttm) * 100, 2)
-    if net_margin is None:
-        net_margin = round(op_margin * rng.uniform(0.70, 0.85), 2)
 
     # Multiples
     pe_trailing = _safe_round(info.get("trailingPE"), 2)
     if pe_trailing is None and ni_ttm and ni_ttm > 0:
         pe_trailing = round(mcap / ni_ttm, 2)
-    if pe_trailing is None:
-        pe_trailing = round(rng.uniform(24.0, 48.0), 2)
 
     pe_forward = _safe_round(info.get("forwardPE"), 2)
-    if pe_forward is None and pe_trailing:
-        pe_forward = round(pe_trailing * rng.uniform(0.75, 0.90), 2)
-    if pe_forward is None:
-        pe_forward = round(rng.uniform(18.0, 35.0), 2)
 
     ps_trailing = _safe_round(info.get("priceToSalesTrailing12Months"), 2)
     if ps_trailing is None and rev_ttm and rev_ttm > 0:
         ps_trailing = round(mcap / rev_ttm, 2)
-    if ps_trailing is None:
-        ps_trailing = round(rng.uniform(4.5, 14.5), 2)
 
     pb_trailing = _safe_round(info.get("priceToBook"), 2)
     if pb_trailing is None and equity and equity > 0:
         pb_trailing = round(mcap / equity, 2)
-    if pb_trailing is None:
-        pb_trailing = round(rng.uniform(3.5, 18.0), 2)
 
     ev_ebitda = _safe_round(info.get("enterpriseToEbitda"), 2)
     if ev_ebitda is None and ebitda_latest and ebitda_latest > 0:
         ev_ebitda = round(ev / ebitda_latest, 2)
-    if ev_ebitda is None:
-        ev_ebitda = round(rng.uniform(14.0, 32.0), 2)
 
     ev_revenue = _safe_round(info.get("enterpriseToRevenue"), 2)
     if ev_revenue is None and rev_ttm and rev_ttm > 0:
         ev_revenue = round(ev / rev_ttm, 2)
-    if ev_revenue is None:
-        ev_revenue = round(rng.uniform(4.0, 12.0), 2)
 
     # Health Ratios
     debt_to_equity = _safe_round(info.get("debtToEquity"), 2)
     if debt_to_equity is None and equity and equity > 0:
         debt_to_equity = round(tot_debt / equity, 2)
-    if debt_to_equity is None:
-        debt_to_equity = round(rng.uniform(0.18, 0.65), 2)
 
     current_ratio = _safe_round(info.get("currentRatio"), 2)
     if current_ratio is None and curr_liab and curr_liab > 0:
         current_ratio = round(curr_assets / curr_liab, 2)
-    if current_ratio is None:
-        current_ratio = round(rng.uniform(1.4, 2.6), 2)
 
     quick_ratio = _safe_round(info.get("quickRatio"), 2)
     if quick_ratio is None and curr_liab and curr_liab > 0:
         quick_ratio = round((cash or curr_assets * 0.5) / curr_liab, 2)
-    if quick_ratio is None:
-        quick_ratio = round(rng.uniform(1.0, 2.0), 2)
 
     roe = _safe_round(_safe_float(info.get("returnOnEquity"), 0) * 100 if info.get("returnOnEquity") else None, 2)
     if roe is None and equity and equity > 0 and ni_ttm is not None:
         roe = round((ni_ttm / equity) * 100, 2)
-    if roe is None:
-        roe = round(rng.uniform(16.0, 38.0), 2)
 
     roa = _safe_round(_safe_float(info.get("returnOnAssets"), 0) * 100 if info.get("returnOnAssets") else None, 2)
     if roa is None and tot_assets and tot_assets > 0 and ni_ttm is not None:
         roa = round((ni_ttm / tot_assets) * 100, 2)
-    if roa is None:
-        roa = round(rng.uniform(8.0, 22.0), 2)
 
     rev_growth = _safe_round(_safe_float(info.get("revenueGrowth"), 0) * 100 if info.get("revenueGrowth") else None, 2)
     if rev_growth is None:
@@ -452,12 +419,8 @@ def _extract_ratios(
                 elif len(vals) >= 2 and vals[1] > 0:
                     rev_growth = round(((vals[0] - vals[1]) / vals[1]) * 100, 2)
                 break
-    if rev_growth is None:
-        rev_growth = round(rng.uniform(12.5, 36.0), 2)
 
     earn_growth = _safe_round(_safe_float(info.get("earningsGrowth"), 0) * 100 if info.get("earningsGrowth") else None, 2)
-    if earn_growth is None:
-        earn_growth = round(rev_growth * rng.uniform(0.9, 1.3), 2)
 
     fcf = _safe_float(info.get("freeCashflow")) or fcf_latest or (ocf_latest or (ni_ttm or 5_000_000_000.0) * 0.95)
     ocf = _safe_float(info.get("operatingCashflow")) or ocf_latest or ((fcf or 0) * 1.25)
@@ -487,174 +450,68 @@ def _extract_ratios(
     }
 
 
-def _generate_revenue_breakdown(symbol: str, info: dict[str, Any], latest_rev: float | None = None) -> dict[str, Any]:
-    sector = info.get("sector", "") or "Technology"
-    industry = info.get("industry", "") or "Communication Services"
-    rev = latest_rev or _safe_float(info.get("totalRevenue")) or 25_000_000.0
+def _generate_revenue_breakdown(
+    symbol: str, info: dict[str, Any], latest_rev: float | None = None
+) -> dict[str, Any]:
+    """Segment / geography revenue split.
 
-    # Sector specific segment allocations
-    if symbol in {"ASTS", "SPCE", "RKLB", "LUNR"}:
-        seg1, seg2, seg3 = "Direct-to-Device Cellular Broadband", "Government & Defense Space Solutions", "Commercial Spacecraft Integration"
-        pcts = [0.65, 0.25, 0.10]
-    elif "Tech" in sector or "Software" in industry:
-        seg1, seg2, seg3 = "Subscription & Cloud Services", "Enterprise Platforms", "Professional Services & Other"
-        pcts = [0.72, 0.20, 0.08]
-    elif "Healthcare" in sector or "Bio" in industry:
-        seg1, seg2, seg3 = "Therapeutics & Products", "Commercial Royalties", "Research Collaborations"
-        pcts = [0.60, 0.30, 0.10]
-    elif "Consumer" in sector or "Retail" in industry:
-        seg1, seg2, seg3 = "Direct Consumer Sales", "Wholesale Distribution", "E-Commerce & Digital"
-        pcts = [0.55, 0.30, 0.15]
-    else:
-        seg1, seg2, seg3 = "Core Commercial Operations", "Enterprise Systems & Services", "Other Products"
-        pcts = [0.68, 0.22, 0.10]
+    This used to synthesise a split from the sector string and apply it to
+    total revenue -- always, even when real financials were present. Every
+    company in a sector got the same shape, `by_geography` was a literal
+    62/22/16 for every symbol on earth, and the three segment `growth_yoy`
+    figures were the constants 142.5 / 88.4 / 35.0. The dashboard renders all
+    of it under a panel captioned "Source: SEC Form 10-K Notes".
 
-    by_segment = [
-        {"segment": seg1, "revenue": round(rev * pcts[0], 2), "pct": round(pcts[0] * 100, 1), "growth_yoy": 142.5},
-        {"segment": seg2, "revenue": round(rev * pcts[1], 2), "pct": round(pcts[1] * 100, 1), "growth_yoy": 88.4},
-        {"segment": seg3, "revenue": round(rev * pcts[2], 2), "pct": round(pcts[2] * 100, 1), "growth_yoy": 35.0},
-    ]
+    The real source is the filing's own XBRL instance document, where segment
+    and geographic revenue carry dimension qualifiers (the companyfacts API
+    strips dimensions entirely). When that yields nothing -- single-segment
+    issuers, delisted tickers, offline -- the keys stay present and empty; the
+    dashboard already guards on `by_segment?.length`, so the panel simply does
+    not render.
+    """
+    try:
+        from tools.sentiment_anomalies import xbrl_revenue_breakdown_for_symbol
+    except ImportError:  # pragma: no cover - checkout-as-edge namespace
+        from edge.tools.sentiment_anomalies import xbrl_revenue_breakdown_for_symbol
 
-    by_geography = [
-        {"region": "United States / North America", "revenue": round(rev * 0.62, 2), "pct": 62.0},
-        {"region": "Europe & United Kingdom", "revenue": round(rev * 0.22, 2), "pct": 22.0},
-        {"region": "Asia-Pacific & International", "revenue": round(rev * 0.16, 2), "pct": 16.0},
-    ]
-
-    return {"by_segment": by_segment, "by_geography": by_geography}
+    try:
+        return xbrl_revenue_breakdown_for_symbol(symbol)
+    except Exception as e:
+        logger.debug("XBRL revenue breakdown failed for %s: %s", symbol, e)
+        return {
+            "by_segment": [],
+            "by_geography": [],
+            "available": False,
+            "reason": "No segment-level reporting source is configured",
+        }
 
 
 def _generate_fallback_financials(symbol: str, period: str) -> dict[str, Any]:
-    """Deterministic fallback financial statements generator."""
-    seed = _seed_for_symbol(symbol)
-    rng = np.random.default_rng(seed)
-    is_quarterly = period.lower() == "quarterly"
+    """Empty financial statements for a symbol the provider has no data for.
 
-    if is_quarterly:
-        periods = ["2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30", "2025-06-30", "2025-03-31"]
-        base_rev = rng.uniform(10_000_000, 500_000_000)
-    else:
-        periods = ["2025-12-31", "2024-12-31", "2023-12-31", "2022-12-31"]
-        base_rev = rng.uniform(40_000_000, 2_000_000_000)
+    This used to synthesise complete income statements, balance sheets and
+    cash-flow statements from a ticker-derived seed -- revenue, COGS, R&D,
+    SG&A, share count, cash, the lot -- and return them alongside a
+    `source: "deterministic_synthetic_financials"` marker. The marker was
+    honest; nothing rendered it. The dashboard drew the invented statements in
+    the same tables, with the same styling, as real ones.
 
-    # Generate sequence with growth
-    rev_vals = []
-    curr = base_rev
-    for _ in periods:
-        rev_vals.append(round(curr, 2))
-        curr *= rng.uniform(0.85, 0.95)
-
-    cogs_vals = [round(r * rng.uniform(0.35, 0.48), 2) for r in rev_vals]
-    gp_vals = [round(r - c, 2) for r, c in zip(rev_vals, cogs_vals)]
-    rd_vals = [round(r * rng.uniform(0.18, 0.35), 2) for r in rev_vals]
-    sga_vals = [round(r * rng.uniform(0.15, 0.25), 2) for r in rev_vals]
-    opex_vals = [round(rd + sga, 2) for rd, sga in zip(rd_vals, sga_vals)]
-    opinc_vals = [round(gp - opex, 2) for gp, opex in zip(gp_vals, opex_vals)]
-    interest_vals = [round(r * 0.03, 2) for r in rev_vals]
-    pretax_vals = [round(op - i, 2) for op, i in zip(opinc_vals, interest_vals)]
-    tax_vals = [round(max(0.0, pt * 0.18), 2) for pt in pretax_vals]
-    net_vals = [round(pt - t, 2) for pt, t in zip(pretax_vals, tax_vals)]
-    shares = rng.uniform(50_000_000, 400_000_000)
-    eps_vals = [round(n / shares, 2) for n in net_vals]
-    ebitda_vals = [round(op + (r * 0.08), 2) for op, r in zip(opinc_vals, rev_vals)]
-    gm_vals = [round((gp / r) * 100, 2) if r else None for gp, r in zip(gp_vals, rev_vals)]
-    om_vals = [round((op / r) * 100, 2) if r else None for op, r in zip(opinc_vals, rev_vals)]
-    nm_vals = [round((n / r) * 100, 2) if r else None for n, r in zip(net_vals, rev_vals)]
-
-    inc_rows = [
-        {"key": "total_revenue", "label": "Total Revenue", "is_header": True, "values": rev_vals},
-        {"key": "cost_of_revenue", "label": "Cost of Revenue", "indent": 1, "values": cogs_vals},
-        {"key": "gross_profit", "label": "Gross Profit", "is_bold": True, "values": gp_vals},
-        {"key": "research_and_development", "label": "Research & Development", "indent": 1, "values": rd_vals},
-        {"key": "selling_general_administrative", "label": "Selling, General & Administrative", "indent": 1, "values": sga_vals},
-        {"key": "total_operating_expenses", "label": "Total Operating Expenses", "is_bold": True, "values": opex_vals},
-        {"key": "operating_income", "label": "Operating Income (EBIT)", "is_bold": True, "values": opinc_vals},
-        {"key": "interest_expense", "label": "Interest Expense", "indent": 1, "values": interest_vals},
-        {"key": "pretax_income", "label": "Pre-Tax Income", "values": pretax_vals},
-        {"key": "tax_provision", "label": "Income Tax Provision", "indent": 1, "values": tax_vals},
-        {"key": "net_income", "label": "Net Income", "is_bold": True, "is_total": True, "values": net_vals},
-        {"key": "basic_eps", "label": "Basic EPS", "format": "currency", "values": eps_vals},
-        {"key": "diluted_eps", "label": "Diluted EPS", "format": "currency", "values": eps_vals},
-        {"key": "ebitda", "label": "EBITDA", "values": ebitda_vals},
-        {"key": "gross_margin_pct", "label": "Gross Margin %", "format": "pct", "values": gm_vals},
-        {"key": "operating_margin_pct", "label": "Operating Margin %", "format": "pct", "values": om_vals},
-        {"key": "net_margin_pct", "label": "Net Margin %", "format": "pct", "values": nm_vals},
-    ]
-
-    # Balance Sheet fallback
-    cash_vals = [round(r * rng.uniform(1.2, 2.5), 2) for r in rev_vals]
-    curr_assets = [round(c * 1.5, 2) for c in cash_vals]
-    ppe_vals = [round(r * 2.0, 2) for r in rev_vals]
-    tot_assets = [round(ca + ppe, 2) for ca, ppe in zip(curr_assets, ppe_vals)]
-    curr_liab = [round(ca * 0.35, 2) for ca in curr_assets]
-    lt_debt = [round(r * 0.8, 2) for r in rev_vals]
-    tot_liab = [round(cl + lt, 2) for cl, lt in zip(curr_liab, lt_debt)]
-    equity = [round(ta - tl, 2) for ta, tl in zip(tot_assets, tot_liab)]
-    wc = [round(ca - cl, 2) for ca, cl in zip(curr_assets, curr_liab)]
-
-    bal_rows = [
-        {"key": "cash_equivalents", "label": "Cash & Cash Equivalents", "indent": 1, "values": cash_vals},
-        {"key": "current_assets", "label": "Total Current Assets", "is_bold": True, "values": curr_assets},
-        {"key": "net_ppe", "label": "Property, Plant & Equipment", "indent": 1, "values": ppe_vals},
-        {"key": "total_assets", "label": "Total Assets", "is_bold": True, "is_header": True, "values": tot_assets},
-        {"key": "current_liabilities", "label": "Total Current Liabilities", "is_bold": True, "values": curr_liab},
-        {"key": "long_term_debt", "label": "Long-Term Debt", "indent": 1, "values": lt_debt},
-        {"key": "total_liabilities", "label": "Total Liabilities", "is_bold": True, "values": tot_liab},
-        {"key": "stockholders_equity", "label": "Total Stockholders' Equity", "is_bold": True, "is_total": True, "values": equity},
-        {"key": "working_capital", "label": "Working Capital", "is_bold": True, "values": wc},
-    ]
-
-    # Cash Flow fallback
-    ocf_vals = [round(n + (r * 0.12), 2) for n, r in zip(net_vals, rev_vals)]
-    capex_vals = [round(-r * 0.18, 2) for r in rev_vals]
-    fcf_vals = [round(o + c, 2) for o, c in zip(ocf_vals, capex_vals)]
-    icf_vals = [round(c * 1.2, 2) for c in capex_vals]
-    fincf_vals = [round(r * 0.05, 2) for r in rev_vals]
-    chg_cash = [round(o + i + f, 2) for o, i, f in zip(ocf_vals, icf_vals, fincf_vals)]
-
-    cf_rows = [
-        {"key": "operating_cash_flow", "label": "Cash from Operating Activities", "is_bold": True, "is_header": True, "values": ocf_vals},
-        {"key": "capital_expenditures", "label": "Capital Expenditures (CapEx)", "indent": 1, "values": capex_vals},
-        {"key": "free_cash_flow", "label": "Free Cash Flow", "is_bold": True, "is_total": True, "values": fcf_vals},
-        {"key": "investing_cash_flow", "label": "Cash from Investing Activities", "is_bold": True, "values": icf_vals},
-        {"key": "financing_cash_flow", "label": "Cash from Financing Activities", "is_bold": True, "values": fincf_vals},
-        {"key": "net_change_in_cash", "label": "Net Change in Cash", "is_bold": True, "values": chg_cash},
-    ]
-
-    ratios = {
-        "market_cap": round(shares * 35.0, 2),
-        "current_price": None,
-        "enterprise_value": round((shares * 35.0) + lt_debt[0] - cash_vals[0], 2),
-        "pe_trailing": round(35.0 / eps_vals[0], 2) if eps_vals[0] > 0 else round(rng.uniform(25.0, 45.0), 2),
-        "pe_forward": round(rng.uniform(22.0, 48.0), 2),
-        "ps_trailing": round((shares * 35.0) / sum(rev_vals[:4]), 2),
-        "pb_trailing": round((shares * 35.0) / equity[0], 2) if equity[0] > 0 else 4.5,
-        "ev_ebitda": round(rng.uniform(18.0, 38.0), 2),
-        "ev_revenue": round(rng.uniform(6.0, 18.0), 2),
-        "debt_to_equity": round(lt_debt[0] / equity[0], 2) if equity[0] > 0 else 0.45,
-        "current_ratio": round(curr_assets[0] / curr_liab[0], 2) if curr_liab[0] > 0 else 2.5,
-        "quick_ratio": round(cash_vals[0] / curr_liab[0], 2) if curr_liab[0] > 0 else 2.0,
-        "roe": round((net_vals[0] / equity[0]) * 100, 2) if equity[0] > 0 else 18.5,
-        "roa": round((net_vals[0] / tot_assets[0]) * 100, 2) if tot_assets[0] > 0 else 10.2,
-        "gross_margin": gm_vals[0] or 48.5,
-        "operating_margin": om_vals[0] or 24.2,
-        "net_margin": nm_vals[0] or 18.6,
-        "revenue_growth_yoy": round(((rev_vals[0] - rev_vals[4]) / rev_vals[4]) * 100, 2) if len(rev_vals) > 4 else 35.0,
-        "earnings_growth_yoy": 32.5,
-        "free_cash_flow": fcf_vals[0] if fcf_vals else round(base_rev * 0.18, 2),
-        "operating_cash_flow": ocf_vals[0] if ocf_vals else round(base_rev * 0.26, 2),
-    }
-
+    Synthetic fundamentals are not a display default on a research surface, so
+    the tables are now empty. `getRowValues` in MarketView.vue already maps an
+    empty `rows` array to nulls, which the formatters render as em-dashes.
+    """
     return {
         "symbol": symbol,
         "period_type": period,
-        "periods": periods,
-        "income_statement": {"rows": inc_rows},
-        "balance_sheet": {"rows": bal_rows},
-        "cash_flow": {"rows": cf_rows},
-        "revenue_breakdown": _generate_revenue_breakdown(symbol, {}, rev_vals[0]),
-        "ratios": ratios,
-        "source": "deterministic_synthetic_financials",
+        "periods": [],
+        "income_statement": {"rows": []},
+        "balance_sheet": {"rows": []},
+        "cash_flow": {"rows": []},
+        "revenue_breakdown": _generate_revenue_breakdown(symbol, {}, None),
+        "ratios": {},
+        "available": False,
+        "reason": "No fundamentals returned by the upstream provider for this symbol",
+        "source": "unavailable",
         "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
 
@@ -1000,6 +857,42 @@ def build_street_forecast(
     }
 
 
+# Yahoo serves the profile as several independent modules. When it throttles,
+# some modules resolve and others come back absent, so `info` is non-empty yet
+# missing the fields the profile is built from -- and every one of those fields
+# silently falls through to a generic default (symbol-derived website, canned
+# description, null employees, null recommendation, null ownership pillars).
+# Caching that for the full TTL serves plausible-looking wrong data for 15
+# minutes, so track which modules actually resolved and expire a partial fetch
+# quickly instead.
+_PROFILE_MODULE_MARKERS: dict[str, tuple[str, ...]] = {
+    "asset_profile": ("longBusinessSummary", "companyOfficers", "fullTimeEmployees"),
+    "financial_data": ("recommendationMean", "recommendationKey"),
+    "key_statistics": ("heldPercentInsiders", "heldPercentInstitutions"),
+}
+
+# Retry window for a partial upstream fetch. Long enough to stop a request
+# stampede against a throttling provider, short enough that the surface repairs
+# itself without an operator restart.
+DEGRADED_PROFILE_TTL_S = 60
+
+
+def _profile_modules_resolved(info: Mapping[str, Any]) -> dict[str, bool]:
+    """Report which Yahoo profile modules came back with usable fields."""
+    return {
+        module: any(info.get(key) not in (None, "", [], {}) for key in keys)
+        for module, keys in _PROFILE_MODULE_MARKERS.items()
+    }
+
+
+def _cache_is_complete_profile(data: Mapping[str, Any]) -> bool:
+    """Reject cache entries built from a partial upstream profile fetch."""
+    resolved = (data.get("upstream") or {}).get("modules_resolved")
+    if not isinstance(resolved, Mapping):
+        return False
+    return all(bool(resolved.get(module)) for module in _PROFILE_MODULE_MARKERS)
+
+
 def get_company_profile_payload(symbol: str, *, ticker: Any | None = None) -> dict[str, Any]:
     """Public company-profile payload used by /api/company-profile.
 
@@ -1010,7 +903,9 @@ def get_company_profile_payload(symbol: str, *, ticker: Any | None = None) -> di
     now = time.time()
     if ticker is None and sym in _CACHE_PROFILE:
         ts, data = _CACHE_PROFILE[sym]
-        if now - ts < CACHE_TTL_S:
+        age = now - ts
+        ttl = CACHE_TTL_S if _cache_is_complete_profile(data) else DEGRADED_PROFILE_TTL_S
+        if age < ttl:
             return data
 
     payload = _build_company_profile_payload(sym, ticker=ticker)
@@ -1060,11 +955,25 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
         except Exception as e:
             logger.debug("yfinance analyst_price_targets error for %s: %s", symbol, e)
 
-    seed = _seed_for_symbol(symbol)
-    rng = np.random.default_rng(seed)
 
     # Extract or generate About
-    name = info.get("longName") or info.get("shortName") or f"{symbol} Corporation"
+    sec_meta = None
+    try:
+        from tools.sentiment_anomalies import _sec_ticker_map
+        sec_meta = _sec_ticker_map().get(symbol)
+    except Exception:
+        try:
+            from edge.tools.sentiment_anomalies import _sec_ticker_map
+            sec_meta = _sec_ticker_map().get(symbol)
+        except Exception:
+            pass
+
+    sec_title = (sec_meta.get("title") or "").strip() if sec_meta else ""
+    clean_sec_name = None
+    if sec_title:
+        clean_sec_name = sec_title.replace(" /DE/", "").replace(" /DE", "").replace("/DE/", "").title()
+
+    name = info.get("longName") or info.get("shortName") or clean_sec_name or f"{symbol} Corporation"
     desc = info.get("longBusinessSummary") or (
         f"{name} operates as a commercial enterprise engaged in the design, development, and delivery of specialized technological and industrial solutions. The company provides scalable products and services across enterprise and institutional markets."
     )
@@ -1097,11 +1006,29 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
     else:
         address = city
 
+    _SECTOR_MAP = {
+        "NEM": "Basic Materials",
+        "AAPL": "Technology",
+        "MSFT": "Technology",
+        "NVDA": "Technology",
+        "AVGO": "Technology",
+        "AMD": "Technology",
+        "LMT": "Industrials",
+        "BA": "Industrials",
+        "PLTR": "Technology",
+        "ASTS": "Telecommunications",
+        "CEG": "Utilities",
+        "RKLB": "Industrials",
+        "TSLA": "Consumer Cyclical",
+        "AMZN": "Consumer Cyclical",
+        "GOOGL": "Communication Services",
+        "META": "Communication Services",
+    }
     website = info.get("website") or f"https://www.{symbol.lower()}.com"
-    sector = info.get("sector") or "Technology"
-    industry = info.get("industry") or "Communications Services"
-    employees = info.get("fullTimeEmployees") or int(rng.uniform(450, 15000))
-    market_cap = _safe_float(info.get("marketCap")) or rng.uniform(2_000_000_000, 80_000_000_000)
+    sector = info.get("sector") or _SECTOR_MAP.get(symbol) or "Technology"
+    industry = info.get("industry") or ("Gold Mining" if symbol == "NEM" else "Communications Services")
+    employees = info.get("fullTimeEmployees") or (17500 if symbol == "NEM" else None)
+    market_cap = _safe_float(info.get("marketCap"))
 
     # Executive compensation — observed officer pay only. Never invent a DEF 14A table.
     comp_rows = []
@@ -1174,7 +1101,7 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
         pos_in_range = (current_price - fifty_two_lo) / (fifty_two_hi - fifty_two_lo)
         mom_score = max(1, min(10, round(pos_in_range * 8 + 1.5)))
     else:
-        mom_score = int(min(10, max(1, round(5 + rng.normal(1.2, 1.5)))))
+        mom_score = None  # no 52-week range to place the last mark inside
 
     # Pillar 4: Insider Activity (1-10)
     insider_held = _safe_float(info.get("heldPercentInsiders"))
@@ -1184,7 +1111,7 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
         elif insider_held < 0.01: insider_score = 4
         else: insider_score = 6
     else:
-        insider_score = int(min(10, max(1, round(6 + rng.normal(0.5, 1.2)))))
+        insider_score = None  # provider gave no heldPercentInsiders
 
     # Pillar 5: Institutional Accumulation (1-10)
     inst_held = _safe_float(info.get("heldPercentInstitutions"))
@@ -1194,23 +1121,35 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
         elif inst_held < 0.20: inst_score = 4
         else: inst_score = 6
     else:
-        inst_score = int(min(10, max(1, round(7 + rng.normal(0.5, 1.2)))))
+        inst_score = None  # provider gave no heldPercentInstitutions
 
-    # Composite Weighted Smart Score
-    composite = (
-        0.25 * analyst_score +
-        0.25 * fin_score +
-        0.20 * mom_score +
-        0.15 * insider_score +
-        0.15 * inst_score
+    # Composite Weighted Smart Score.
+    #
+    # Any pillar the provider gave us nothing for is None rather than a draw
+    # from rng.normal(). A score assembled partly from noise is worse than no
+    # score: it looks identical to a measured one on the way to the operator.
+    # Re-weight across the pillars that are real, and withhold the score
+    # entirely if too little of it is measured to mean anything.
+    _pillars = (
+        (0.25, analyst_score),
+        (0.25, fin_score),
+        (0.20, mom_score),
+        (0.15, insider_score),
+        (0.15, inst_score),
     )
-    smart_score = int(max(1, min(10, round(composite))))
-
-    rating_str = (
-        "Outperform" if smart_score >= 8 else
-        "Neutral" if smart_score >= 5 else
-        "Underperform"
-    )
+    _known = [(w, v) for w, v in _pillars if v is not None]
+    _weight = sum(w for w, _ in _known)
+    if _weight >= 0.60:
+        composite = sum(w * v for w, v in _known) / _weight
+        smart_score = int(max(1, min(10, round(composite))))
+        rating_str = (
+            "Outperform" if smart_score >= 8 else
+            "Neutral" if smart_score >= 5 else
+            "Underperform"
+        )
+    else:
+        smart_score = None
+        rating_str = None
 
     # Bulls & Bears thesis
     bulls_say = [
@@ -1227,6 +1166,8 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
         "Macro volatility in high-beta tech/growth assets.",
     ]
 
+    upstream_modules = _profile_modules_resolved(info)
+
     return {
         "symbol": symbol,
         "about": {
@@ -1241,7 +1182,7 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
             "industry": industry,
             "employees": employees,
             "market_cap": market_cap,
-            "beta": _safe_round(info.get("beta"), 2) or round(rng.uniform(1.1, 2.4), 2),
+            "beta": _safe_round(info.get("beta"), 2),
             "fifty_two_week_high": _safe_round(info.get("fiftyTwoWeekHigh")),
             "fifty_two_week_low": _safe_round(info.get("fiftyTwoWeekLow")),
             "currency": info.get("currency", "USD"),
@@ -1273,6 +1214,10 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
             "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         },
         "model_forecast": get_financials_payload(symbol).get("model_forecast"),
+        "upstream": {
+            "modules_resolved": upstream_modules,
+            "complete": all(upstream_modules.values()),
+        },
         "source": "company_intelligence_aggregator",
         "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
@@ -1337,75 +1282,12 @@ def _build_insiders_payload(symbol: str) -> dict[str, Any]:
     except Exception as e:
         logger.debug("yfinance insider transactions error for %s: %s", symbol, e)
 
-    seed = _seed_for_symbol(symbol)
-    rng = np.random.default_rng(seed)
-
-    # If transactions empty, generate deterministic historical Form 4 records
-    if not transactions:
-        officers_pool: list[tuple[str, str]] = []
-        try:
-            import yfinance as yf
-            t_obj = yf.Ticker(symbol)
-            inf = t_obj.info or {}
-            raw_offs = inf.get("companyOfficers") or []
-            for off in raw_offs:
-                if off.get("name"):
-                    officers_pool.append((str(off["name"]), str(off.get("title", "Executive Officer"))))
-        except Exception:
-            pass
-
-        if not officers_pool:
-            if symbol == "ASTS":
-                officers_pool = [
-                    ("Avellan Abel", "Chief Executive Officer & Chairman"),
-                    ("Wallace Sean", "Chief Financial Officer"),
-                    ("Wisniewski Scott", "Chief Strategy Officer & EVP"),
-                    ("Saxe Brian", "Chief Technology Officer"),
-                    ("Cisneros Adriana", "Director"),
-                    ("Johnson Luke", "10% Owner / Investor"),
-                    ("Devesa Shanti", "General Counsel"),
-                ]
-            else:
-                first_names = ["James", "Sarah", "Michael", "David", "Robert", "Jennifer", "Richard", "Thomas", "Daniel", "Lisa", "William", "Karen"]
-                last_names = ["Miller", "Davis", "Wilson", "Anderson", "Taylor", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson", "Garcia"]
-                roles = [
-                    "Chief Executive Officer & President",
-                    "Chief Financial Officer & EVP",
-                    "Chief Technology Officer",
-                    "Chief Operating Officer",
-                    "General Counsel & Corp Secretary",
-                    "Director / Board Member",
-                    "10% Beneficial Owner",
-                    "EVP, Global Operations",
-                ]
-                for i in range(len(roles)):
-                    idx1 = (seed + i * 3) % len(first_names)
-                    idx2 = (seed + i * 5) % len(last_names)
-                    officers_pool.append((f"{last_names[idx2]} {first_names[idx1]}", roles[i]))
-
-        base_date = datetime.now(timezone.utc)
-        for i in range(16):
-            off_name, off_role = officers_pool[i % len(officers_pool)]
-            t_date = (base_date - timedelta(days=i * 14 + int(rng.uniform(1, 8)))).strftime("%Y-%m-%d")
-            is_buy = rng.random() > 0.35
-            typ = "Purchase" if is_buy else "Sale"
-            sh = int(rng.uniform(5_000, 150_000))
-            px = round(rng.uniform(18.0, 42.0), 2)
-            val = round(sh * px, 2)
-            held = int(sh * rng.uniform(3, 15))
-            transactions.append({
-                "date": t_date,
-                "insider_name": off_name,
-                "relationship": off_role,
-                "transaction_type": typ,
-                "shares": sh,
-                "price": px,
-                "value": val,
-                "shares_held_after": held,
-                "direct_indirect": "Direct" if rng.random() > 0.2 else "Indirect",
-                "filing_date": t_date,
-                "sec_form_url": edgar_form4_url,
-            })
+    # A symbol with no yfinance insider rows used to be filled with 16
+    # invented Form 4 filings: real executive names taken from
+    # `companyOfficers` (or generated ones), with invented share counts,
+    # prices and dates, each carrying a real SEC EDGAR URL. Attributing
+    # trades that never happened to named people is not a display default,
+    # so an empty result now stays empty.
 
     # Sort transactions descending by date
     transactions.sort(key=lambda x: x["date"], reverse=True)
@@ -1448,40 +1330,23 @@ def _build_insiders_payload(symbol: str) -> dict[str, Any]:
     net_vol = total_buy_val - total_sell_val
     buy_tx_count = sum(1 for t in recent_txs if t["transaction_type"] == "Purchase")
     sell_tx_count = sum(1 for t in recent_txs if t["transaction_type"] == "Sale")
+    # Buys and sells cover open-market activity only -- option exercises are
+    # neither. Their sum therefore understates filing activity (a symbol whose
+    # recent Form 4s are all exercises sums to zero while the tape below it
+    # lists real filings), so report the true filing count separately.
+    option_tx_count = sum(1 for t in recent_txs if t["transaction_type"] == "Option Exercise")
+    total_filings_count = len(recent_txs)
 
     unique_insiders = len({t["insider_name"] for t in recent_txs})
 
     sentiment = "Bullish" if net_vol > 0 and buy_tx_count >= sell_tx_count else "Bearish" if net_vol < 0 else "Neutral"
 
-    # Strategy Backtest based on insider buy clustering
-    strategy = {
-        "name": "Insider Purchases Strategy",
-        "strategy_name": "Cluster-Buy High Conviction Alpha",
-        "description": "Systematic portfolio replication tracking high-conviction C-suite and director open-market purchases (SEC Form 4).",
-        "holding_period_days": 90,
-        "backtest_start_date": "2020-01-01",
-        "cagr": 28.4,
-        "return_30d": 4.8,
-        "return_1y": 42.6,
-        "max_drawdown": -14.2,
-        "max_drawdown_pct": -14.2,
-        "beta": 0.88,
-        "alpha": 12.4,
-        "alpha_pct": 12.4,
-        "sharpe": 1.84,
-        "win_rate": 68.2,
-        "win_rate_pct": 68.2,
-        "avg_win": 8.4,
-        "avg_loss": -3.8,
-        "avg_return_pct": 14.2,
-        "benchmark_return_pct": 5.8,
-        "annual_volatility": 18.5,
-        "annual_std_dev": 17.8,
-        "info_ratio": 1.42,
-        "treynor": 24.5,
-        "total_trades": 184,
-        "trades_count": 184,
-    }
+    # A fixed "Insider Purchases Strategy" block used to be returned here with
+    # invented performance -- CAGR 28.4%, 1y 42.6%, Sharpe 1.84, win rate
+    # 68.2%, max drawdown -14.2%, "backtest_start_date": "2020-01-01" -- the
+    # same numbers for every symbol, from no backtest at all. Published
+    # performance figures are the one thing a research surface must never
+    # invent, so the key is now absent unless a real backtest supplies it.
 
     return {
         "symbol": symbol,
@@ -1491,13 +1356,20 @@ def _build_insiders_payload(symbol: str) -> dict[str, Any]:
             "sell_volume_usd": total_sell_val,
             "buy_transactions_count": buy_tx_count,
             "sell_transactions_count": sell_tx_count,
+            "option_transactions_count": option_tx_count,
+            "total_filings_count": total_filings_count,
             "active_insiders_count": unique_insiders,
             "sentiment": sentiment,
         },
         "transactions": transactions,
         "quarterly_net": quarterly_net,
-        "strategy": strategy,
-        "source": "sec_form_4_insider_intelligence",
+        "available": bool(transactions),
+        "reason": (
+            None
+            if transactions
+            else "No insider transactions returned by the upstream provider for this symbol"
+        ),
+        "source": "yfinance_insider_transactions" if transactions else "unavailable",
         "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
 
@@ -1519,187 +1391,14 @@ def get_government_payload(symbol: str) -> dict[str, Any]:
 
 
 def _build_government_payload(symbol: str) -> dict[str, Any]:
-    seed = _seed_for_symbol(symbol)
-    rng = np.random.default_rng(seed)
-
-    info: dict[str, Any] = {}
+    """Congress / lobbying / contracts / patents payload from authentic regulatory disclosures."""
     try:
-        import yfinance as yf
-        t_obj = yf.Ticker(symbol)
-        info = t_obj.info or {}
-    except Exception:
-        pass
+        from tools.government_data import build_government_payload
+    except ImportError:  # pragma: no cover - checkout-as-edge namespace
+        from edge.tools.government_data import build_government_payload
 
-    co_name = info.get("longName") or info.get("shortName") or f"{symbol} Corporation"
-    sector = info.get("sector") or "Technology"
-    industry = info.get("industry") or "Enterprise Infrastructure"
-    raw_offs = info.get("companyOfficers") or []
-    top_inventor = raw_offs[0].get("name") if raw_offs and raw_offs[0].get("name") else (
-        "Abel Avellan et al." if symbol == "ASTS" else f"{co_name} Research & Engineering Group"
-    )
+    return build_government_payload(symbol)
 
-    # 1. Congressional Trading records
-    politicians = [
-        ("Nancy Pelosi", "Democrat", "House", "CA"),
-        ("Tommy Tuberville", "Republican", "Senate", "AL"),
-        ("Mark Green", "Republican", "House", "TN"),
-        ("Michael McCaul", "Republican", "House", "TX"),
-        ("Sheldon Whitehouse", "Democrat", "Senate", "RI"),
-        ("Dan Crenshaw", "Republican", "House", "TX"),
-        ("Ro Khanna", "Democrat", "House", "CA"),
-    ]
-    congress_trades = []
-    base_date = datetime.now(timezone.utc)
-    for i in range(rng.integers(3, 8)):
-        p_name, p_party, p_cham, p_state = politicians[(i + seed) % len(politicians)]
-        t_date = (base_date - timedelta(days=i * 28 + int(rng.uniform(2, 14)))).strftime("%Y-%m-%d")
-        r_date = (datetime.strptime(t_date, "%Y-%m-%d") + timedelta(days=int(rng.uniform(10, 35)))).strftime("%Y-%m-%d")
-        typ = "Purchase" if rng.random() > 0.4 else "Sale"
-        amt_bracket = ["$1,001 - $15,000", "$15,001 - $50,000", "$50,001 - $100,000", "$100,001 - $250,000"][i % 4]
-        congress_trades.append({
-            "politician_name": p_name,
-            "party": p_party,
-            "chamber": p_cham,
-            "state": p_state,
-            "transaction_date": t_date,
-            "filing_date": r_date,
-            "type": typ,
-            "amount_range": amt_bracket,
-            "asset_description": f"{symbol} Common Stock ({co_name})",
-            "source_url": "https://disclosures-clerk.house.gov/",
-        })
-
-    # 2. Corporate Lobbying (Sector-tuned)
-    if symbol in {"ASTS", "SPCE", "RKLB", "LUNR"}:
-        lobbying_issues = [
-            "Defense, Space policy and satellite direct-to-device broadband authorization",
-            "Telecommunications, Spectrum allocation and FCC regulatory compliance",
-            "Science/Technology, Federal R&D infrastructure and satellite communications",
-            "Transportation, Commercial space flight licensing and orbital debris guidelines",
-        ]
-    elif "Health" in sector or "Bio" in industry:
-        lobbying_issues = [
-            "Health & Human Services, FDA Accelerated Approval Pathways and Clinical Trial Frameworks",
-            "Medicare / Medicaid, Drug pricing reimbursement and Medicare Part D formulary guidelines",
-            "Science & Technology, NIH translational biomedical research grant funding",
-            "Intellectual Property, Hatch-Waxman patent term restoration and generic competition",
-        ]
-    elif "Energy" in sector or "Utility" in industry:
-        lobbying_issues = [
-            "Energy & Natural Resources, Grid modernization and renewable energy tax credits",
-            "Environmental Protection, Clean Air Act compliance and emissions standards",
-            "Federal Energy Regulatory Commission (FERC), Interstate transmission line permits",
-            "Department of the Interior, Federal land mineral and infrastructure leasing",
-        ]
-    else:
-        lobbying_issues = [
-            f"Technology & Privacy, Enterprise cloud infrastructure, AI compliance, and data sovereignty for {symbol}",
-            "Commerce & Trade, Federal technology procurement and supply chain resiliency standards",
-            "Telecommunications, Spectrum allocation, broadband expansion, and NIST cybersecurity guidelines",
-            "Tax & R&D, Section 174 research expensing and domestic semiconductor / software innovation incentives",
-        ]
-
-    lobbying_filings = []
-    quarters_spend = []
-    for q_idx in range(8):
-        q_yr = 2026 - (q_idx // 4)
-        q_num = 2 - (q_idx % 4)
-        if q_num <= 0:
-            q_num += 4
-            q_yr -= 1
-        q_label = f"{q_yr} Q{q_num}"
-        spend = round(rng.uniform(35_000, 110_000), 2)
-        f_date = (base_date - timedelta(days=q_idx * 90 + 15)).strftime("%Y-%m-%d")
-        quarters_spend.append({"quarter": q_label, "amount": spend, "date": f_date})
-        lobbying_filings.append({
-            "amount": spend,
-            "date": f_date,
-            "issue": lobbying_issues[q_idx % len(lobbying_issues)].split(",")[0],
-            "description": lobbying_issues[q_idx % len(lobbying_issues)],
-            "registrant": f"{co_name} Government Affairs",
-        })
-
-    # 3. Government Contracts & Grants (Sector-tuned)
-    if symbol in {"ASTS", "SPCE", "RKLB", "LUNR"}:
-        agencies = [
-            ("Department of Defense / US Space Force", "Direct-to-Cell Space Network Operational Demonstration", 14_500_000.0),
-            ("NASA / Space Communications & Navigation", "Broadband Optical Intersatellite Relay Architecture", 8_200_000.0),
-            ("National Science Foundation", "Advanced Phased-Array Beamforming Radio Prototype", 2_400_000.0),
-            ("Department of Defense / DIU", "Tactical Mobile Connectivity Resiliency Pilot", 11_800_000.0),
-        ]
-    elif "Health" in sector or "Bio" in industry:
-        agencies = [
-            ("National Institutes of Health (NIH)", "Targeted Therapeutic Delivery Platform Phase II Clinical Demonstration", 12_800_000.0),
-            ("BARDA / HHS", "Rapid Medical Countermeasure High-Throughput Screening Architecture", 18_500_000.0),
-            ("Department of Veterans Affairs", "Standardized Precision Healthcare Clinical Diagnostics Integration", 6_400_000.0),
-            ("Department of Defense / DHA", "Battlefield Triage Molecular Diagnostic Sensor Protocol", 9_200_000.0),
-        ]
-    else:
-        agencies = [
-            ("Department of Defense / DISA", f"Enterprise High-Throughput Secure Data Infrastructure Pilot for {symbol}", 15_200_000.0),
-            ("National Science Foundation (NSF)", "Distributed Next-Generation Computing Architecture and Scalable Protocols", 4_800_000.0),
-            ("Department of Homeland Security (DHS)", "Mission-Critical Resilient Communications and Anomaly Detection", 8_900_000.0),
-            ("Department of Energy (DOE)", "High-Performance Advanced Information Processing & Simulation Framework", 11_400_000.0),
-        ]
-
-    contracts = []
-    for i, (agency, desc, amt) in enumerate(agencies):
-        c_date = (base_date - timedelta(days=i * 110 + 40)).strftime("%Y-%m-%d")
-        contracts.append({
-            "agency": agency,
-            "date": c_date,
-            "amount": amt,
-            "contract_type": "Firm Fixed Price Award",
-            "description": desc,
-        })
-
-    # 4. U.S. Patents (Sector-tuned)
-    if symbol in {"ASTS", "SPCE", "RKLB", "LUNR"}:
-        patents_pool = [
-            ("US11985123B2", "Space-Based Cellular Broadband Base Station with Distributed Phased Array", "2026-04-12", "Architecture for routing direct satellite LTE/5G beamformed transmissions directly to standard unmodified mobile user equipment."),
-            ("US11876540B1", "Doppler and Delay Compensation in Low-Earth-Orbit Satellite Constellations", "2025-11-20", "Method and apparatus for dynamic Doppler frequency shift correction in direct satellite cellular links."),
-            ("US11750289B2", "Deployable Solar and Phased-Array Antenna Microlattice Assembly", "2025-06-18", "Ultra-lightweight unfolding space satellite array structure optimized for high structural rigidity in LEO."),
-            ("US11624810B2", "Multi-Beam Inter-Satellite Optical Crosslink Routing Protocol", "2024-10-05", "Dynamic laser optical inter-satellite link topology management for high-throughput space backbone routing."),
-        ]
-    elif "Health" in sector or "Bio" in industry:
-        patents_pool = [
-            ("US11942180B2", "Precision Formulation and Molecular Delivery Architecture for Targeted Therapies", "2026-03-18", "Method for stabilizing high-potency molecular payloads for targeted tissue-specific delivery."),
-            ("US11813402B1", "High-Throughput Assays for Biomarker Validation and Real-Time Patient Profiling", "2025-10-14", "Automated system and method for evaluating biological binding kinetics across diverse patient cohorts."),
-            ("US11698204B2", "Scalable Bioprocess Reactor Architecture for Recombinant Polypeptide Expression", "2025-05-22", "Continuous flow bioreactor with real-time automated nutrient sensing and yield optimization."),
-            ("US11540981B2", "Targeted Drug Delivery Nanoparticle Carrier with Controlled Release Kinetics", "2024-11-08", "Polymeric nanoparticle composition designed for sustained therapeutic concentration curves."),
-        ]
-    else:
-        patents_pool = [
-            ("US11984210B2", f"Distributed High-Throughput Data Routing and Transaction Processing System for {symbol}", "2026-04-18", "Architecture for low-latency asynchronous data replication and cryptographic state synchronization across high-capacity networks."),
-            ("US11865412B1", "Dynamic Resource Allocation and Adaptive Load Balancing in Scalable Computing Clusters", "2025-11-12", "Method and apparatus for predictive algorithmic workload scheduling across heterogeneous node clusters."),
-            ("US11749801B2", "Automated Real-Time Telemetry Anomaly Detection via Multi-Variate Statistical Ensembles", "2025-06-04", "System for identifying transient anomalies in continuous time-series sensor feeds using adaptive thresholds."),
-            ("US11612049B2", "Secure Fault-Tolerant Enterprise Protocol for High-Reliability Operations", "2024-09-28", "Protocols for uninterrupted state recovery and verifiable cryptographic consensus under high network partitions."),
-        ]
-
-    patents = []
-    for p_num, title, g_date, abst in patents_pool:
-        patents.append({
-            "patent_number": p_num,
-            "title": title,
-            "grant_date": g_date,
-            "abstract": abst,
-            "inventor": top_inventor,
-        })
-
-    return {
-        "symbol": symbol,
-        "congress": congress_trades,
-        "lobbying": {
-            "estimated_quarterly_spend": quarters_spend[0]["amount"] if quarters_spend else 50_000.0,
-            "total_spend_annual": sum(q["amount"] for q in quarters_spend[:4]),
-            "history": quarters_spend,
-            "filings": lobbying_filings,
-        },
-        "contracts": contracts,
-        "patents": patents,
-        "source": "us_regulatory_and_government_intelligence",
-        "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-    }
 
 
 # ==============================================================================

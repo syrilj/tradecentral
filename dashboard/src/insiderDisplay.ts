@@ -25,7 +25,8 @@ function text(value: unknown): string {
 export function classifyInsiderSide(raw: unknown): InsiderSide {
   const side = text(raw).toLowerCase()
   if (!side) return 'other'
-  if (side.includes('buy') || side.includes('purchase') || side === 'p' || side === 'a') return 'buy'
+  if (side.includes('buy') || side.includes('purchase') || side === 'p' || side === 'a')
+    return 'buy'
   if (side.includes('sell') || side.includes('sale') || side === 's' || side === 'd') return 'sell'
   return 'other'
 }
@@ -93,7 +94,9 @@ export function presentFintelInsiders(rows: unknown): InsiderRow[] {
     if (!raw || typeof raw !== 'object') continue
     const row = raw as Record<string, unknown>
     const who = text(row.insider_name || row.name || row.reporting_name || row.owner)
-    const typeLabel = text(row.transaction_type || row.type || row.transactionType || row.transaction)
+    const typeLabel = text(
+      row.transaction_type || row.type || row.transactionType || row.transaction,
+    )
     const date = text(row.transaction_date || row.date || row.filed || row.asof) || null
     const shares = row.shares ?? row.share_count ?? row.quantity
     const price = row.price ?? row.transaction_price
@@ -115,14 +118,19 @@ export function presentFintelInsiders(rows: unknown): InsiderRow[] {
   return out
 }
 
-export function presentSecFilings(payload: {
-  filings?: Array<{
-    form?: string
-    filed?: string
-    description?: string
-    url?: string | null
-  }>
-} | null | undefined): SecFilingRow[] {
+export function presentSecFilings(
+  payload:
+    | {
+        filings?: Array<{
+          form?: string
+          filed?: string
+          description?: string
+          url?: string | null
+        }>
+      }
+    | null
+    | undefined,
+): SecFilingRow[] {
   const filings = payload?.filings
   if (!Array.isArray(filings)) return []
   return filings.map((row) => ({

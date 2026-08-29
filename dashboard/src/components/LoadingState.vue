@@ -10,9 +10,7 @@ withDefaults(
 
 <template>
   <div class="loading" :class="{ compact }" role="status" aria-live="polite">
-    <span class="orb" aria-hidden="true">
-      <i /><i /><i />
-    </span>
+    <span class="orb" aria-hidden="true"> <i /><i /><i /> </span>
     <span class="label text">{{ label }}</span>
   </div>
 </template>
@@ -46,24 +44,26 @@ withDefaults(
   border-radius: 50%;
   border: 1.5px solid transparent;
   border-top-color: var(--phosphor);
-  animation: spin 0.9s linear infinite;
+  animation: spin var(--dur-orb) linear infinite;
 }
 .orb i:nth-child(2) {
   inset: 4px;
   border-top-color: var(--phosphor-dim);
-  animation-duration: 1.2s;
+  animation-duration: var(--dur-orb-mid);
   animation-direction: reverse;
 }
 .orb i:nth-child(3) {
   inset: 9px;
   border-top-color: var(--ink-faint);
-  animation-duration: 0.7s;
+  animation-duration: var(--dur-orb-fast);
 }
 .text {
   letter-spacing: 0.12em;
   color: var(--ink-faint);
 }
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

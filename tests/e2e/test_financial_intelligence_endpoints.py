@@ -107,45 +107,57 @@ def test_financials_model_forecast_consistent_and_symbol_specific(api_client):
 
 
 def test_insiders_endpoint(api_client):
-    """Verify /api/insiders returns transactions, quarterly net volume, summary, and strategy backtest."""
+    """Verify /api/insiders returns real Form 4 rows, or an honest empty result."""
     res = api_client.get("/api/insiders?symbol=ASTS")
     assert res.status_code == 200
     data = res.json()
     assert data["symbol"] == "ASTS"
     assert "summary" in data
     assert "transactions" in data
-    assert len(data["transactions"]) > 0
-    tx = data["transactions"][0]
-    assert "date" in tx
-    assert "insider_name" in tx
-    assert "transaction_type" in tx
-    assert "shares" in tx
+    # Not asserted non-empty: a symbol with no provider rows used to be padded
+    # with 16 invented filings attributed to real named executives.
+    for tx in data["transactions"]:
+        assert "date" in tx
+        assert "insider_name" in tx
+        assert "transaction_type" in tx
+        assert "shares" in tx
     assert "quarterly_net" in data
-    assert "strategy" in data
-    assert "cagr" in data["strategy"]
-    assert "sharpe" in data["strategy"]
+    # `strategy` is present only if a real backtest produced it. It used to be
+    # a fixed invented block, identical for every symbol.
+    if "strategy" in data:
+        assert data["strategy"].get("cagr") is not None
+        assert data["strategy"].get("sharpe") is not None
 
 
 def test_government_endpoint(api_client):
-    """Verify /api/government returns congress trades, lobbying, contracts, and patents."""
+    """/api/government returns authentic regulatory disclosures for tracked symbols and clean missing state for untracked."""
+    # 1. Tracked symbol with real regulatory disclosures
     res = api_client.get("/api/government?symbol=ASTS")
     assert res.status_code == 200
     data = res.json()
     assert data["symbol"] == "ASTS"
-    assert "congress" in data
     assert isinstance(data["congress"], list)
+    assert data["available"] is True
+    assert data["source"] == "regulatory_disclosures_sec_usaspending_uspto_lda"
     assert len(data["congress"]) > 0
-    cg = data["congress"][0]
-    assert "politician_name" in cg
-    assert "party" in cg
-    assert "type" in cg
-
     assert "lobbying" in data
     assert "history" in data["lobbying"]
     assert "filings" in data["lobbying"]
+    assert len(data["contracts"]) > 0
+    assert len(data["patents"]) > 0
 
-    assert "contracts" in data
-    assert "patents" in data
+    # 2. Untracked symbol reports unavailable
+    res_un = api_client.get("/api/government?symbol=ZZTESTSYM")
+    assert res_un.status_code == 200
+    data_un = res_un.json()
+    assert data_un["symbol"] == "ZZTESTSYM"
+    assert data_un["available"] is False
+    assert data_un["source"] == "unavailable"
+    assert data_un["congress"] == []
+    assert data_un["contracts"] == []
+    assert data_un["patents"] == []
+    assert data_un["reason"]
+
 
 
 def test_ownership_endpoint(api_client):

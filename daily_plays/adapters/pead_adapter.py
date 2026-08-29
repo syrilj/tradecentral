@@ -20,7 +20,6 @@ from datetime import datetime
 from typing import Any, Sequence
 import numpy as np
 import pandas as pd
-import yfinance as yf
 ROOT = Path(__file__).resolve().parents[3]
 
 DEFAULT_UNIVERSE_PATH = ROOT / "edge" / "config" / "universe_wide.json"
@@ -42,7 +41,12 @@ import concurrent.futures
 
 def _load_symbol_df(sym: str) -> pd.DataFrame:
     cols = ["open", "high", "low", "close", "volume"]
-    for cache_dir in [ROOT / "edge" / "data" / "1d", ROOT / "edge" / "data" / "1d_wide"]:
+    # Order matters: the first directory containing the symbol wins, so a stale
+    # directory listed first silently shadows fresher data. `1d_wide` is the
+    # maintained feed (558 symbols, current); `1d` lags it by ~13 sessions but
+    # still holds 19 symbols -- mostly index ETFs -- that `1d_wide` lacks, so it
+    # stays as the fallback rather than being dropped.
+    for cache_dir in [ROOT / "edge" / "data" / "1d_wide", ROOT / "edge" / "data" / "1d"]:
         p = cache_dir / f"{sym}.parquet"
         if p.exists():
             try:
@@ -59,6 +63,7 @@ def _load_symbol_df(sym: str) -> pd.DataFrame:
                 except Exception:
                     pass
     try:
+        import yfinance as yf
         df = yf.download(sym, period="30d", progress=False)
         if isinstance(df.columns, pd.MultiIndex):
             df = df.xs(sym, level=1, axis=1) if sym in df.columns.levels[1] else df.droplevel(1, axis=1)

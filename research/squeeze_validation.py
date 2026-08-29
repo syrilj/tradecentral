@@ -61,30 +61,65 @@ def _norm_right(value: Any) -> str | None:
     return None
 
 
+def _load_one_price_file(path: Path) -> pd.DataFrame | None:
+    """Load and normalize a single per-symbol OHLCV parquet.
+
+    Returns ``None`` on any read/parse failure or if the result is unusable
+    (no ``close`` column, or empty) rather than raising, so a caller can try
+    the next candidate directory.
+    """
+    try:
+        df = pd.read_parquet(path)
+    except Exception:
+        return None
+    if not isinstance(df.index, pd.DatetimeIndex):
+        for col in ("Date", "date", "timestamp"):
+            if col in df.columns:
+                df = df.set_index(col)
+                break
+    try:
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+    except (TypeError, ValueError):
+        return None
+    df = df.sort_index()
+    # normalize columns
+    cols = {c.lower(): c for c in df.columns}
+    rename = {}
+    for want in ("open", "high", "low", "close", "volume"):
+        if want in cols:
+            rename[cols[want]] = want
+    df = df.rename(columns=rename)
+    if "close" not in df.columns or df.empty:
+        return None
+    return df
+
+
 def _load_price(symbol: str, price_dirs: Iterable[Path]) -> pd.DataFrame | None:
+    """Load a symbol's OHLCV history, preferring the freshest candidate.
+
+    ``price_dirs`` commonly lists more than one directory for the same
+    symbol -- e.g. a stale ``data/1d`` snapshot alongside a current
+    ``data/1d_wide`` one. Returning on the first directory that merely
+    *contains* the file (the old behavior) silently pinned every forward
+    return to whichever snapshot happened to be listed first, even when a
+    later directory had weeks of newer bars -- this is why ``fwd_5d`` came
+    back all-null against a chain panel that spanned dates past the stale
+    directory's last close. Read every directory that has the symbol and
+    keep whichever has the latest last-bar date.
+    """
+    best: pd.DataFrame | None = None
+    best_max: pd.Timestamp | None = None
     for root in price_dirs:
         path = Path(root) / f"{symbol.upper()}.parquet"
         if not path.exists():
             continue
-        df = pd.read_parquet(path)
-        if not isinstance(df.index, pd.DatetimeIndex):
-            for col in ("Date", "date", "timestamp"):
-                if col in df.columns:
-                    df = df.set_index(col)
-                    break
-        df.index = pd.to_datetime(df.index).tz_localize(None)
-        df = df.sort_index()
-        # normalize columns
-        cols = {c.lower(): c for c in df.columns}
-        rename = {}
-        for want in ("open", "high", "low", "close", "volume"):
-            if want in cols:
-                rename[cols[want]] = want
-        df = df.rename(columns=rename)
-        if "close" not in df.columns:
+        df = _load_one_price_file(path)
+        if df is None or df.empty:
             continue
-        return df
-    return None
+        candidate_max = df.index.max()
+        if best is None or candidate_max > best_max:
+            best, best_max = df, candidate_max
+    return best
 
 
 def _try_yfinance_extend(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame | None:
@@ -367,7 +402,34 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
 
     panel = pd.DataFrame.from_records(records)
     summary = _summarize(panel, cfg)
-    train_oos = None
+    train_oos, summary_updates = _score_train_oos(panel, cfg)
+    summary.update(summary_updates)
+    return {
+        "config": asdict(cfg),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "n_records": int(len(panel)),
+        "n_errors": int(panel["error"].notna().sum()) if "error" in panel.columns else 0,
+        "summary": summary,
+        "train_oos": train_oos,
+        "panel": panel,
+    }
+
+
+def _score_train_oos(
+    panel: pd.DataFrame, cfg: SqueezeValidationConfig
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Fit the walk-forward train/OOS block from a scored theory-score panel.
+
+    Returns ``(train_oos, summary_updates)``: ``train_oos`` is the full
+    ``evaluate_train_oos`` result (or the synthesized error block below),
+    and ``summary_updates`` holds just the ``"train"``/``"oos"`` keys meant
+    to be merged into the caller's summary dict. Split out of
+    ``evaluate_universe`` so the failure-surfacing behavior here (the
+    ``except`` clause) is unit-testable without a full option-chain
+    fixture tree.
+    """
+    train_oos: dict[str, Any] | None = None
+    summary_updates: dict[str, Any] = {}
     try:
         from edge.research.squeeze_flow_eval import (
             SqueezeFlowEvalConfig,
@@ -386,6 +448,11 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
             train_oos = evaluate_train_oos(
                 eval_panel,
                 cfg=SqueezeFlowEvalConfig(
+                    # `label_horizon` is metadata only here (`label_end` is
+                    # already set above); evaluate_train_oos pins its own
+                    # walk-forward geometry to the horizon it actually scores
+                    # (SCORE_LABEL_HORIZON in squeeze_flow_eval.py) regardless
+                    # of this value.
                     label_horizon=max(cfg.forward_horizons),
                     initial_train_dates=max(2, eval_panel["asof"].nunique() // 3),
                     validation_dates=max(2, eval_panel["asof"].nunique() // 3),
@@ -395,19 +462,19 @@ def evaluate_universe(cfg: SqueezeValidationConfig) -> dict[str, Any]:
                     min_threshold_n=1,
                 ),
             )
-            summary["train"] = train_oos.get("train")
-            summary["oos"] = train_oos.get("oos")
-    except Exception:
-        train_oos = None
-    return {
-        "config": asdict(cfg),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "n_records": int(len(panel)),
-        "n_errors": int(panel["error"].notna().sum()) if "error" in panel.columns else 0,
-        "summary": summary,
-        "train_oos": train_oos,
-        "panel": panel,
-    }
+            summary_updates["train"] = train_oos.get("train")
+            summary_updates["oos"] = train_oos.get("oos")
+    except Exception as exc:
+        # A real failure here must never vanish as a clean-looking empty
+        # pass -- that is precisely the governance bug this module exists to
+        # avoid. Surface the exception into the saved summary so a promotion
+        # gate sees an explicit error status instead of zeros that read like
+        # "evaluated, no edge".
+        error_info = {"type": type(exc).__name__, "message": str(exc)}
+        train_oos = {"status": "error", "oos_error": error_info, "train": None, "oos": None}
+        summary_updates["train"] = {"status": "error", "oos_error": error_info}
+        summary_updates["oos"] = {"status": "error", "oos_error": error_info}
+    return train_oos, summary_updates
 
 
 def _hit_rate(series: pd.Series) -> dict[str, Any]:

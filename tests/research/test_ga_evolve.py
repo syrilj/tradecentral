@@ -63,6 +63,28 @@ def test_genes_bounds_reject_invalid():
         )
 
 
+def test_mean_reversion_rejects_exit_band_wider_than_entry():
+    """An MR exit band wider than the entry band can never close what it opened.
+
+    `mutate_genes`/`crossover` clamp this, but `from_mapping` does not go through
+    them, so the dataclass itself must reject it rather than accept it silently.
+    """
+    kwargs = dict(
+        lookback=20,
+        horizon_days=5,
+        top_k=3,
+        long_short="long_only",
+        vol_window=20,
+        dollar_volume_min_rank=0.0,
+    )
+    with pytest.raises(ValueError):
+        Genes(signal_family="mean_reversion", entry_z=1.0, exit_z=1.5, **kwargs)
+
+    # Equality is the allowed edge, and momentum is unaffected by this invariant.
+    Genes(signal_family="mean_reversion", entry_z=1.0, exit_z=1.0, **kwargs)
+    Genes(signal_family="momentum", entry_z=1.0, exit_z=1.5, **kwargs)
+
+
 def test_random_mutate_crossover_stay_in_bounds():
     rng = np.random.default_rng(42)
     for _ in range(30):

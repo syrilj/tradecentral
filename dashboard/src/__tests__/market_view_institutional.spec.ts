@@ -52,7 +52,15 @@ import type {
 
 const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const marketViewPath = join(srcRoot, 'views', 'MarketView.vue')
-const marketViewSource = readFileSync(marketViewPath, 'utf8')
+// MarketView plus the cards it delegates to — the forecast highlight lives in
+// ModelForecastCard.vue so both tabs render an identical, in-sync surface.
+const marketViewSource = [
+  readFileSync(marketViewPath, 'utf8'),
+  readFileSync(
+    marketViewPath.replace(/views[\\/]MarketView\.vue$/, 'components/ModelForecastCard.vue'),
+    'utf8',
+  ),
+].join('\n')
 const routerPath = join(srcRoot, 'router.ts')
 const routerSource = readFileSync(routerPath, 'utf8')
 const financialsDisplayPath = join(srcRoot, 'financialsDisplay.ts')
@@ -67,26 +75,67 @@ describe('1. Institutional Zero-Emoji Design Invariant', () => {
   it('MarketView.vue contains zero decorative consumer emojis in tab headers and navigation', () => {
     // Specifically test that the tab items array does not contain emoji icons
     const forbiddenSpecificEmojis = [
-      '⚡', '📊', '🎯', '👥', '🏛', '⚖', '💼', '🥧', '📰',
-      '🚀', '🔥', '📈', '📉', '🤑', '💰', '✨', '💡', '🔔',
+      '⚡',
+      '📊',
+      '🎯',
+      '👥',
+      '🏛',
+      '⚖',
+      '💼',
+      '🥧',
+      '📰',
+      '🚀',
+      '🔥',
+      '📈',
+      '📉',
+      '🤑',
+      '💰',
+      '✨',
+      '💡',
+      '🔔',
     ]
     for (const emoji of forbiddenSpecificEmojis) {
-      expect(marketViewSource, `MarketView.vue should not contain emoji: ${emoji}`).not.toContain(emoji)
+      expect(marketViewSource, `MarketView.vue should not contain emoji: ${emoji}`).not.toContain(
+        emoji,
+      )
     }
   })
 
   it('financialsDisplay.ts and insiderDisplay.ts contain zero unicode emojis', () => {
-    const forbiddenSpecificEmojis = ['⚡', '📊', '🎯', '👥', '🏛', '⚖', '💼', '🥧', '📰', '🚀', '🔥', '📈', '📉', '🤑']
+    const forbiddenSpecificEmojis = [
+      '⚡',
+      '📊',
+      '🎯',
+      '👥',
+      '🏛',
+      '⚖',
+      '💼',
+      '🥧',
+      '📰',
+      '🚀',
+      '🔥',
+      '📈',
+      '📉',
+      '🤑',
+    ]
     for (const emoji of forbiddenSpecificEmojis) {
-      expect(financialsDisplaySource, `financialsDisplay.ts should not contain emoji: ${emoji}`).not.toContain(emoji)
-      expect(insiderDisplaySource, `insiderDisplay.ts should not contain emoji: ${emoji}`).not.toContain(emoji)
+      expect(
+        financialsDisplaySource,
+        `financialsDisplay.ts should not contain emoji: ${emoji}`,
+      ).not.toContain(emoji)
+      expect(
+        insiderDisplaySource,
+        `insiderDisplay.ts should not contain emoji: ${emoji}`,
+      ).not.toContain(emoji)
     }
   })
 
   it('uses clean institutional typography and subtle badges instead of decorative emojis', () => {
     expect(marketViewSource).toContain('cockpit-tabs-nav')
     expect(marketViewSource).toContain('tab-label')
-    expect(marketViewSource).toMatch(/Overview|Financials|Forecast|Insiders|Institutions|Government|Compensation|Ownership|News|Compare/)
+    expect(marketViewSource).toMatch(
+      /Overview|Financials|Forecast|Insiders|Institutions|Government|Compensation|Ownership|News|Compare/,
+    )
   })
 })
 
@@ -150,7 +199,9 @@ describe('2. All 10 Institutional Analytical Tabs Contract', () => {
     // Tab 6: Government
     expect(marketViewSource).toMatch(/activeTab\s*===\s*['"]government['"]/)
     expect(marketViewSource).toContain('government-layout')
-    expect(marketViewSource).toMatch(/Congressional Trading Activity|Corporate Lobbying|Federal Government Contracts|Patent Grants/)
+    expect(marketViewSource).toMatch(
+      /Congressional Trading Activity|Corporate Lobbying|Federal Government Contracts|Patent Grants/,
+    )
 
     // Tab 7: Compensation
     expect(marketViewSource).toMatch(/activeTab\s*===\s*['"]compensation['"]/)
@@ -189,7 +240,7 @@ describe('3. In-Cockpit Insiders Navigation & Circular Redirect Prevention', () 
     // If MarketView redirected tab=insiders back to { name: 'insiders' }, it would create an infinite redirect loop.
     // The component must allow activeTab to be set to 'insiders' and render the in-tab section.
     expect(marketViewSource).toContain("activeTab === 'insiders'")
-    expect(marketViewSource).toContain("insiders-layout")
+    expect(marketViewSource).toContain('insiders-layout')
   })
 })
 
@@ -309,7 +360,7 @@ describe('4. Strict Dash (—) Formatting Invariant', () => {
       expect(formatPeriodHeader('', false)).toBe(DASH)
     })
 
-    it('formats quarterly dates into Q{1-4} \'{YY} format', () => {
+    it("formats quarterly dates into Q{1-4} '{YY} format", () => {
       expect(formatPeriodHeader('2026-03-31', true)).toBe("Q1 '26")
       expect(formatPeriodHeader('2026-06-30', true)).toBe("Q2 '26")
       expect(formatPeriodHeader('2026-09-30', true)).toBe("Q3 '26")
@@ -413,7 +464,11 @@ describe('6. Graceful Fallbacks & Data Source Resilience', () => {
   it('handles null company profile and forecast data without crashing', () => {
     const profile = ref<CompanyProfilePayload | null>(null)
     const consensus = computed(() => profile.value?.forecast?.consensus_rating ?? DASH)
-    const medianTarget = computed(() => profile.value?.forecast?.target_price_median != null ? usd(profile.value?.forecast?.target_price_median) : DASH)
+    const medianTarget = computed(() =>
+      profile.value?.forecast?.target_price_median != null
+        ? usd(profile.value?.forecast?.target_price_median)
+        : DASH,
+    )
     const officers = computed(() => profile.value?.compensation?.rows || [])
     const smartScore = computed(() => profile.value?.smart_score?.score ?? DASH)
 
@@ -483,24 +538,67 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
     periods: ['2026-06-30', '2026-03-31', '2025-12-31', '2025-09-30'],
     income_statement: {
       rows: [
-        { key: 'rev', label: 'Total Revenue', values: [25_000_000, 20_000_000, 15_000_000, 10_000_000], is_bold: true },
-        { key: 'gp', label: 'Gross Profit', values: [18_000_000, 14_000_000, 10_000_000, 7_000_000], is_bold: true },
+        {
+          key: 'rev',
+          label: 'Total Revenue',
+          values: [25_000_000, 20_000_000, 15_000_000, 10_000_000],
+          is_bold: true,
+        },
+        {
+          key: 'gp',
+          label: 'Gross Profit',
+          values: [18_000_000, 14_000_000, 10_000_000, 7_000_000],
+          is_bold: true,
+        },
         { key: 'gm', label: 'Gross Margin', values: [72.0, 70.0, 66.7, 70.0], format: 'pct' },
-        { key: 'ni', label: 'Net Income', values: [5_000_000, 3_000_000, -2_000_000, -5_000_000], is_total: true },
+        {
+          key: 'ni',
+          label: 'Net Income',
+          values: [5_000_000, 3_000_000, -2_000_000, -5_000_000],
+          is_total: true,
+        },
       ],
     },
     balance_sheet: {
       rows: [
-        { key: 'cash', label: 'Cash & Short-Term Investments', values: [450_000_000, 420_000_000, 380_000_000, 310_000_000], is_bold: true },
-        { key: 'assets', label: 'Total Assets', values: [1_200_000_000, 1_100_000_000, 1_000_000_000, 900_000_000], is_total: true },
-        { key: 'debt', label: 'Total Long-Term Debt', values: [150_000_000, 150_000_000, 150_000_000, 150_000_000] },
+        {
+          key: 'cash',
+          label: 'Cash & Short-Term Investments',
+          values: [450_000_000, 420_000_000, 380_000_000, 310_000_000],
+          is_bold: true,
+        },
+        {
+          key: 'assets',
+          label: 'Total Assets',
+          values: [1_200_000_000, 1_100_000_000, 1_000_000_000, 900_000_000],
+          is_total: true,
+        },
+        {
+          key: 'debt',
+          label: 'Total Long-Term Debt',
+          values: [150_000_000, 150_000_000, 150_000_000, 150_000_000],
+        },
       ],
     },
     cash_flow: {
       rows: [
-        { key: 'ocf', label: 'Operating Cash Flow', values: [12_000_000, 8_000_000, 4_000_000, -2_000_000], is_bold: true },
-        { key: 'capex', label: 'Capital Expenditures', values: [-25_000_000, -20_000_000, -18_000_000, -15_000_000] },
-        { key: 'fcf', label: 'Free Cash Flow', values: [-13_000_000, -12_000_000, -14_000_000, -17_000_000], is_total: true },
+        {
+          key: 'ocf',
+          label: 'Operating Cash Flow',
+          values: [12_000_000, 8_000_000, 4_000_000, -2_000_000],
+          is_bold: true,
+        },
+        {
+          key: 'capex',
+          label: 'Capital Expenditures',
+          values: [-25_000_000, -20_000_000, -18_000_000, -15_000_000],
+        },
+        {
+          key: 'fcf',
+          label: 'Free Cash Flow',
+          values: [-13_000_000, -12_000_000, -14_000_000, -17_000_000],
+          is_total: true,
+        },
       ],
     },
     revenue_breakdown: {
@@ -540,9 +638,7 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
       market_cap: 8_500_000_000,
       website: 'https://ast-science.com',
     },
-    officers: [
-      { name: 'Abel Avellan', title: 'CEO & Chairman', total_pay: 3_500_000 },
-    ],
+    officers: [{ name: 'Abel Avellan', title: 'CEO & Chairman', total_pay: 3_500_000 }],
     compensation: {
       highest_paid_name: 'Abel Avellan',
       highest_paid_total: 3_500_000,
@@ -550,8 +646,24 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
       ceo_pay_ratio: 24.1,
       year: '2025',
       rows: [
-        { name: 'Abel Avellan', role: 'CEO & Chairman', salary: 750_000, bonus: 500_000, stock_awards: 2_250_000, total_compensation: 3_500_000, year: '2025' },
-        { name: 'Sean Wallace', role: 'CFO', salary: 500_000, bonus: 250_000, stock_awards: 1_250_000, total_compensation: 2_000_000, year: '2025' },
+        {
+          name: 'Abel Avellan',
+          role: 'CEO & Chairman',
+          salary: 750_000,
+          bonus: 500_000,
+          stock_awards: 2_250_000,
+          total_compensation: 3_500_000,
+          year: '2025',
+        },
+        {
+          name: 'Sean Wallace',
+          role: 'CFO',
+          salary: 500_000,
+          bonus: 250_000,
+          stock_awards: 1_250_000,
+          total_compensation: 2_000_000,
+          year: '2025',
+        },
       ],
     },
     forecast: {
@@ -564,16 +676,31 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
       upside_pct: 38.5,
       recommendations: { strong_buy: 6, buy: 3, hold: 1, underperform: 0, sell: 0 },
       upgrades_downgrades: [
-        { date: '2026-08-01', firm: 'Scotiabank', action: 'Upgrade', current: 'Outperform', previous: 'Sector Perform' },
+        {
+          date: '2026-08-01',
+          firm: 'Scotiabank',
+          action: 'Upgrade',
+          current: 'Outperform',
+          previous: 'Sector Perform',
+        },
       ],
     },
     smart_score: {
       score: 9,
       rating: 'High Institutional Conviction',
-      components: { momentum: 9, insider_activity: 8, institutional_flow: 9, analyst_sentiment: 9, financial_health: 8 },
+      components: {
+        momentum: 9,
+        insider_activity: 8,
+        institutional_flow: 9,
+        analyst_sentiment: 9,
+        financial_health: 8,
+      },
     },
     bull_bear: {
-      bulls_say: ['First-mover satellite constellation advantage', 'Direct Tier 1 telecom MNO agreements'],
+      bulls_say: [
+        'First-mover satellite constellation advantage',
+        'Direct Tier 1 telecom MNO agreements',
+      ],
       bears_say: ['High capital intensity of orbital launches', 'Execution and regulatory risk'],
       last_updated: '2026-08-15',
     },
@@ -615,8 +742,22 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
       },
     ],
     quarterly_net: [
-      { quarter: "Q2 '26", net_shares: 200_000, buy_volume: 6_000_000, sell_volume: 500_000, net_volume: 5_500_000, transaction_count: 7 },
-      { quarter: "Q1 '26", net_shares: 50_000, buy_volume: 2_500_000, sell_volume: 700_000, net_volume: 1_800_000, transaction_count: 5 },
+      {
+        quarter: "Q2 '26",
+        net_shares: 200_000,
+        buy_volume: 6_000_000,
+        sell_volume: 500_000,
+        net_volume: 5_500_000,
+        transaction_count: 7,
+      },
+      {
+        quarter: "Q1 '26",
+        net_shares: 50_000,
+        buy_volume: 2_500_000,
+        sell_volume: 700_000,
+        net_volume: 1_800_000,
+        transaction_count: 5,
+      },
     ],
     strategy: {
       name: 'Form 4 Insider Cluster Accumulation',
@@ -657,14 +798,31 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
       total_spend_annual: 1_400_000,
       history: [{ quarter: "Q2 '26", amount: 350_000, date: '2026-07-20' }],
       filings: [
-        { date: '2026-07-20', amount: 350_000, issue: 'FCC Spectrum & Satellite Direct-to-Device Allocation', description: 'Advocacy for cellular direct-to-device rules', registrant: 'AST SpaceMobile Inc' },
+        {
+          date: '2026-07-20',
+          amount: 350_000,
+          issue: 'FCC Spectrum & Satellite Direct-to-Device Allocation',
+          description: 'Advocacy for cellular direct-to-device rules',
+          registrant: 'AST SpaceMobile Inc',
+        },
       ],
     },
     contracts: [
-      { agency: 'U.S. Space Force / Department of Defense', date: '2026-06-15', amount: 45_000_000, contract_type: 'Prime Defense Contract', description: 'Space-based tactical cellular communications prototype' },
+      {
+        agency: 'U.S. Space Force / Department of Defense',
+        date: '2026-06-15',
+        amount: 45_000_000,
+        contract_type: 'Prime Defense Contract',
+        description: 'Space-based tactical cellular communications prototype',
+      },
     ],
     patents: [
-      { patent_number: 'US 11,848,720', title: 'Space-to-Ground Cellular Phased Array Beamforming', grant_date: '2026-05-10', abstract: 'Architecture for direct satellite-to-standard-smartphone communications' },
+      {
+        patent_number: 'US 11,848,720',
+        title: 'Space-to-Ground Cellular Phased Array Beamforming',
+        grant_date: '2026-05-10',
+        abstract: 'Architecture for direct satellite-to-standard-smartphone communications',
+      },
     ],
   }
 
@@ -678,11 +836,29 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
       float_shares: 218_000_000,
     },
     top_institutions: [
-      { holder: 'Vanguard Group Inc', shares: 22_500_000, date_reported: '2026-06-30', pct_out: 8.04, value: 731_250_000 },
-      { holder: 'BlackRock Inc', shares: 19_200_000, date_reported: '2026-06-30', pct_out: 6.86, value: 624_000_000 },
+      {
+        holder: 'Vanguard Group Inc',
+        shares: 22_500_000,
+        date_reported: '2026-06-30',
+        pct_out: 8.04,
+        value: 731_250_000,
+      },
+      {
+        holder: 'BlackRock Inc',
+        shares: 19_200_000,
+        date_reported: '2026-06-30',
+        pct_out: 6.86,
+        value: 624_000_000,
+      },
     ],
     top_funds: [
-      { holder: 'Vanguard Total Stock Market Index Fund', shares: 8_500_000, date_reported: '2026-06-30', pct_out: 3.04, value: 276_250_000 },
+      {
+        holder: 'Vanguard Total Stock Market Index Fund',
+        shares: 8_500_000,
+        date_reported: '2026-06-30',
+        pct_out: 3.04,
+        value: 276_250_000,
+      },
     ],
     short_interest: {
       shares_short: 42_000_000,
@@ -720,7 +896,9 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
         if (filter.value === 'sell' && tx.transaction_type !== 'Sale') return false
         if (query.value) {
           const q = query.value.toLowerCase()
-          return tx.insider_name.toLowerCase().includes(q) || tx.relationship.toLowerCase().includes(q)
+          return (
+            tx.insider_name.toLowerCase().includes(q) || tx.relationship.toLowerCase().includes(q)
+          )
         }
         return true
       })
@@ -789,8 +967,16 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
     const compareData: ComparePayload = {
       window: '1y',
       series: {
-        ASTS: [{ d: '2026-08-01', cum: 0 }, { d: '2026-08-02', cum: 10 }, { d: '2026-08-03', cum: 20 }],
-        SPY: [{ d: '2026-08-01', cum: 0 }, { d: '2026-08-02', cum: 0.36 }, { d: '2026-08-03', cum: 0.91 }],
+        ASTS: [
+          { d: '2026-08-01', cum: 0 },
+          { d: '2026-08-02', cum: 10 },
+          { d: '2026-08-03', cum: 20 },
+        ],
+        SPY: [
+          { d: '2026-08-01', cum: 0 },
+          { d: '2026-08-02', cum: 0.36 },
+          { d: '2026-08-03', cum: 0.91 },
+        ],
       },
       stats: {
         ASTS: { chg_window_pct: 20.0, sharpe: 2.1, max_drawdown_pct: -4.5 },
@@ -805,7 +991,12 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
     const sparks: Record<string, string> = {}
     for (const [sym, rows] of Object.entries(compareData.series)) {
       if (rows && rows.length > 0) {
-        sparks[sym] = sparkline(rows.map((r) => r.cum), 120, 22, 2).d
+        sparks[sym] = sparkline(
+          rows.map((r) => r.cum),
+          120,
+          22,
+          2,
+        ).d
       }
     }
 
@@ -850,16 +1041,33 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
       if (filter === 'all') return true
       const act = (action || '').toLowerCase().trim()
       if (filter === 'upgrade') {
-        return act.includes('upgrade') || act.includes('outperform') || act.includes('buy') || act === 'up'
+        return (
+          act.includes('upgrade') ||
+          act.includes('outperform') ||
+          act.includes('buy') ||
+          act === 'up'
+        )
       }
       if (filter === 'initiate') {
         return act.includes('initiat') || act.includes('coverage') || act === 'init'
       }
       if (filter === 'maintain') {
-        return act.includes('maintain') || act.includes('reiterat') || act.includes('hold') || act.includes('neutral') || act === 'main' || act === 'reit'
+        return (
+          act.includes('maintain') ||
+          act.includes('reiterat') ||
+          act.includes('hold') ||
+          act.includes('neutral') ||
+          act === 'main' ||
+          act === 'reit'
+        )
       }
       if (filter === 'downgrade') {
-        return act.includes('downgrade') || act.includes('underperform') || act.includes('sell') || act === 'down'
+        return (
+          act.includes('downgrade') ||
+          act.includes('underperform') ||
+          act.includes('sell') ||
+          act === 'down'
+        )
       }
       return true
     }
@@ -877,12 +1085,48 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
 
   it('correctly handles institutional search, sorting, and pagination', () => {
     const institutions = [
-      { holder: 'Vanguard Group Inc', shares: 50000000, pct_out: 12.5, value: 4500000000, date_reported: '2026-06-30' },
-      { holder: 'BlackRock Inc', shares: 42000000, pct_out: 10.5, value: 3780000000, date_reported: '2026-06-30' },
-      { holder: 'State Street Corp', shares: 20000000, pct_out: 5.0, value: 1800000000, date_reported: '2026-06-30' },
-      { holder: 'Citadel Advisors LLC', shares: 15000000, pct_out: 3.75, value: 1350000000, date_reported: '2026-06-30' },
-      { holder: 'Two Sigma Investments', shares: 10000000, pct_out: 2.5, value: 900000000, date_reported: '2026-06-30' },
-      { holder: 'Renaissance Technologies', shares: 8000000, pct_out: 2.0, value: 720000000, date_reported: '2026-06-30' },
+      {
+        holder: 'Vanguard Group Inc',
+        shares: 50000000,
+        pct_out: 12.5,
+        value: 4500000000,
+        date_reported: '2026-06-30',
+      },
+      {
+        holder: 'BlackRock Inc',
+        shares: 42000000,
+        pct_out: 10.5,
+        value: 3780000000,
+        date_reported: '2026-06-30',
+      },
+      {
+        holder: 'State Street Corp',
+        shares: 20000000,
+        pct_out: 5.0,
+        value: 1800000000,
+        date_reported: '2026-06-30',
+      },
+      {
+        holder: 'Citadel Advisors LLC',
+        shares: 15000000,
+        pct_out: 3.75,
+        value: 1350000000,
+        date_reported: '2026-06-30',
+      },
+      {
+        holder: 'Two Sigma Investments',
+        shares: 10000000,
+        pct_out: 2.5,
+        value: 900000000,
+        date_reported: '2026-06-30',
+      },
+      {
+        holder: 'Renaissance Technologies',
+        shares: 8000000,
+        pct_out: 2.0,
+        value: 720000000,
+        date_reported: '2026-06-30',
+      },
     ]
 
     const filtered = filterSortInstitutions(institutions, 'citadel', 'shares', false)
@@ -908,4 +1152,3 @@ describe('7. End-to-End Realistic Data Ingestion & Derived Calculations', () => 
     expect(top5Pct).toBe(34.25)
   })
 })
-

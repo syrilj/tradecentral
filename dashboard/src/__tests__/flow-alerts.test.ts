@@ -30,7 +30,12 @@ describe('watchlist Unusual/Sweep alerts', () => {
       watchlist: ['NVDA', 'AMD'],
       prints: [
         print({ symbol: 'NVDA', is_unusual: true, timestamp: '2026-08-14T15:01:00Z' }),
-        print({ symbol: 'AMD', is_sweep: true, trade_class: 'sweep', timestamp: '2026-08-14T15:02:00Z' }),
+        print({
+          symbol: 'AMD',
+          is_sweep: true,
+          trade_class: 'sweep',
+          timestamp: '2026-08-14T15:02:00Z',
+        }),
         print({ symbol: 'TSLA', is_unusual: true, timestamp: '2026-08-14T15:03:00Z' }),
         print({ symbol: 'NVDA', timestamp: '2026-08-14T15:04:00Z' }),
       ],

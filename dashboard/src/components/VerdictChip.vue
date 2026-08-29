@@ -4,10 +4,7 @@ import { computed } from 'vue'
 /**
  * Renders a pre-registered gate verdict with human-readable status labels.
  */
-const props = withDefaults(
-  defineProps<{ verdict: string; size?: 'sm' | 'md' }>(),
-  { size: 'md' },
-)
+const props = withDefaults(defineProps<{ verdict: string; size?: 'sm' | 'md' }>(), { size: 'md' })
 
 const kind = computed(() => {
   const v = (props.verdict ?? '').toUpperCase().replace(/[\s_]/g, '-')
@@ -26,7 +23,8 @@ const labelText = computed(() => {
 })
 
 const tooltipText = computed(() => {
-  if (kind.value === 'go') return 'Pre-registered backtest passed all turnover, drawdown, and IC gates.'
+  if (kind.value === 'go')
+    return 'Pre-registered backtest passed all turnover, drawdown, and IC gates.'
   if (kind.value === 'no-go') return 'Gate evaluation failed turnover or drawdown risk thresholds.'
   return 'Gate status pending or unevaluated.'
 })
@@ -51,9 +49,15 @@ const tooltipText = computed(() => {
   line-height: 1;
   font-weight: 600;
   border-radius: var(--r-sm);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  box-shadow: var(--glass-specular-subtle);
 }
 
-.s-sm { padding: 2px 6px; font-size: var(--t-micro); }
+.s-sm {
+  padding: 2px 6px;
+  font-size: var(--t-micro);
+}
 
 .dot {
   width: 5px;
@@ -63,9 +67,23 @@ const tooltipText = computed(() => {
   flex: 0 0 auto;
 }
 
-.go { color: var(--go); background: var(--long-wash); }
-.no-go { color: var(--no-go); background: var(--short-wash); }
-.running { color: var(--running); background: var(--warn-wash); }
-.running .dot { animation: pulse-lamp 1.4s var(--ease-in-out) infinite; }
-.unknown { color: var(--unknown); background: rgba(255, 255, 255, 0.02); }
+.go {
+  color: var(--go);
+  background: var(--long-wash);
+}
+.no-go {
+  color: var(--no-go);
+  background: var(--short-wash);
+}
+.running {
+  color: var(--running);
+  background: var(--warn-wash);
+}
+.running .dot {
+  animation: pulse-lamp var(--dur-pulse-fast) var(--ease-in-out) infinite;
+}
+.unknown {
+  color: var(--unknown);
+  background: rgba(255, 255, 255, 0.02);
+}
 </style>

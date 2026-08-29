@@ -167,7 +167,9 @@ function boardSymbols(): string[] {
   const out: string[] = []
   const seen = new Set<string>()
   const push = (value: string | undefined) => {
-    const sym = String(value || '').trim().toUpperCase()
+    const sym = String(value || '')
+      .trim()
+      .toUpperCase()
     if (!sym || seen.has(sym)) return
     seen.add(sym)
     out.push(sym)
@@ -319,15 +321,11 @@ const board = computed(() => (d.value?.leaderboard ?? []) as unknown as BoardRow
 const sectors = computed(() => (d.value?.sector_flow as any)?.sectors_ranked ?? [])
 const scan = computed(() => d.value?.scan_summary)
 const reconciliation = computed(() => d.value?.signal_reconciliation)
-const reconciledBySymbol = computed(() => new Map(
-  (reconciliation.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row]),
-))
-const signalsBySymbol = computed(() => new Map(
-  signals.value.map((s) => [s.symbol?.toUpperCase() ?? '', s]),
-))
-const peadBySymbol = computed(() => new Map(
-  pead.value.map((p) => [p.symbol?.toUpperCase() ?? '', p]),
-))
+const reconciledBySymbol = computed(
+  () => new Map((reconciliation.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row])),
+)
+const signalsBySymbol = computed(() => new Map(signals.value.map((s) => [s.symbol?.toUpperCase() ?? '', s])))
+const peadBySymbol = computed(() => new Map(pead.value.map((p) => [p.symbol?.toUpperCase() ?? '', p])))
 
 watch(
   () => scan.value?.depth,
@@ -345,18 +343,24 @@ watch(
 )
 
 /* Filtering + confidence ranking */
-const peadFlagged = computed(() => pead.value.filter((p) => p.setup_ok || p.model?.state === 'FLAG').length)
-const sigEntered = computed(() => signals.value.filter((s) => s.state === 'ENTER').length)
-const sigHighConf = computed(() =>
-  signals.value.filter((s) => hasHighConfidence(s.probability, s.state)).length,
+const peadFlagged = computed(
+  () => pead.value.filter((p) => p.setup_ok || p.model?.state === 'FLAG').length,
 )
-const sigActionable = computed(() =>
-  signals.value.filter((s) => hasActionableEdge(s.probability)).length,
+const sigEntered = computed(() => signals.value.filter((s) => s.state === 'ENTER').length)
+const sigHighConf = computed(
+  () => signals.value.filter((s) => hasHighConfidence(s.probability, s.state)).length,
+)
+const sigActionable = computed(
+  () => signals.value.filter((s) => hasActionableEdge(s.probability)).length,
 )
 const maxCalibratedEdge = computed(() => {
   let max = 0
   for (const s of signals.value) {
-    if (typeof s.probability === 'number' && Number.isFinite(s.probability) && s.probability > max) {
+    if (
+      typeof s.probability === 'number' &&
+      Number.isFinite(s.probability) &&
+      s.probability > max
+    ) {
       max = s.probability
     }
   }
@@ -372,7 +376,9 @@ const highConfidenceQueue = computed(() =>
 const rankedSignals = computed(() => signals.value.slice().sort(compareSignals))
 const rankedPead = computed(() => pead.value.slice().sort(comparePead))
 const liveActivityCount = computed(() => activity.value.filter((row) => row.live).length)
-const peadGateVerdict = computed(() => String(scan.value?.pead_gate_verdict ?? 'UNKNOWN').toUpperCase())
+const peadGateVerdict = computed(() =>
+  String(scan.value?.pead_gate_verdict ?? 'UNKNOWN').toUpperCase(),
+)
 const peadMeta = computed(() => {
   const summary = scan.value
   return summary
@@ -405,9 +411,10 @@ const confidencePosture = computed(() => {
   return {
     label: 'NO EDGE',
     tone: 'held' as const,
-    detail: maxCalibratedEdge.value != null
-      ? `Max calibrated ${pctFrac(maxCalibratedEdge.value, 1)} · nothing clears ${pctFrac(ACTIONABLE_EDGE, 0)} watch floor`
-      : 'No calibrated directional probabilities this session',
+    detail:
+      maxCalibratedEdge.value != null
+        ? `Max calibrated ${pctFrac(maxCalibratedEdge.value, 1)} · nothing clears ${pctFrac(ACTIONABLE_EDGE, 0)} watch floor`
+        : 'No calibrated directional probabilities this session',
   }
 })
 const activityMeta = computed(() => {
@@ -431,8 +438,12 @@ const selectedScanLabel = computed(() =>
     : `${Math.min(scan.value?.activity_market_universe_symbols ?? 175, 175)} LOCAL`,
 )
 const quickScopeCount = computed(() => Math.min(d.value?.broad_universe_count ?? 175, 175))
-const deepScopeCount = computed(() =>
-  scan.value?.activity_market_universe_symbols ?? d.value?.market_universe_count ?? d.value?.searchable_symbol_count ?? 576,
+const deepScopeCount = computed(
+  () =>
+    scan.value?.activity_market_universe_symbols ??
+    d.value?.market_universe_count ??
+    d.value?.searchable_symbol_count ??
+    576,
 )
 const selectedScanTitle = computed(() =>
   scanDepth.value === 'deep' ? 'MARKET-WIDE + LIVE FLOW' : 'FAST LOCAL ACTIVITY',
@@ -443,10 +454,14 @@ const selectedScanDetail = computed(() =>
     : `${quickScopeCount.value} local activity names and 25 priority names from the calibrated model domain; no live-provider fan-out.`,
 )
 const scanStageLabel = computed(() =>
-  String(scanJob.value?.stage || 'starting').replaceAll('_', ' ').toUpperCase(),
+  String(scanJob.value?.stage || 'starting')
+    .replaceAll('_', ' ')
+    .toUpperCase(),
 )
 
-function confidenceBand(value: number | null | undefined): 'HIGH' | 'MODERATE' | 'LOW' | 'UNAVAILABLE' {
+function confidenceBand(
+  value: number | null | undefined,
+): 'HIGH' | 'MODERATE' | 'LOW' | 'UNAVAILABLE' {
   if (value === null || value === undefined || !Number.isFinite(value)) return 'UNAVAILABLE'
   if (value >= ENTER_EDGE) return 'HIGH'
   if (value >= ACTIONABLE_EDGE) return 'MODERATE'
@@ -483,8 +498,10 @@ function compareSignals(a: SignalRow, b: SignalRow): number {
   const aEnter = a.state === 'ENTER' ? 1 : 0
   const bEnter = b.state === 'ENTER' ? 1 : 0
   if (aEnter !== bEnter) return bEnter - aEnter
-  const ap = typeof a.probability === 'number' && Number.isFinite(a.probability) ? a.probability : -1
-  const bp = typeof b.probability === 'number' && Number.isFinite(b.probability) ? b.probability : -1
+  const ap =
+    typeof a.probability === 'number' && Number.isFinite(a.probability) ? a.probability : -1
+  const bp =
+    typeof b.probability === 'number' && Number.isFinite(b.probability) ? b.probability : -1
   if (bp !== ap) return bp - ap
   return Math.abs(b.momentum ?? 0) - Math.abs(a.momentum ?? 0)
 }
@@ -529,10 +546,18 @@ function activityLean(row: ActivityFlagRow): { label: string; cls: string; title
   const lean = String(row.activity_lean || '').toLowerCase()
   const source = String(row.activity_lean_source || 'none').replaceAll('_', ' ')
   if (lean === 'bullish') {
-    return { label: row.activity_lean_label || 'BULLISH', cls: 'bullish', title: `Activity lean · ${source}` }
+    return {
+      label: row.activity_lean_label || 'BULLISH',
+      cls: 'bullish',
+      title: `Activity lean · ${source}`,
+    }
   }
   if (lean === 'bearish') {
-    return { label: row.activity_lean_label || 'BEARISH', cls: 'bearish', title: `Activity lean · ${source}` }
+    return {
+      label: row.activity_lean_label || 'BEARISH',
+      cls: 'bearish',
+      title: `Activity lean · ${source}`,
+    }
   }
   if (lean === 'mixed') {
     return { label: 'MIXED', cls: 'mixed', title: `Activity lean · ${source}` }
@@ -630,7 +655,9 @@ function navTo(name: string): void {
           </span>
         </div>
         <h1>Execution Arena</h1>
-        <p class="arena-desc">Session posture, live marks, ranked activity, and the names worth opening next.</p>
+        <p class="arena-desc">
+          Session posture, live marks, ranked activity, and the names worth opening next.
+        </p>
       </div>
 
       <div class="arena-context" aria-label="Desk scope and shortcuts">
@@ -667,7 +694,11 @@ function navTo(name: string): void {
           </span>
         </div>
         <span class="kpi-sub">
-          {{ r?.blocking_reasons?.length ? `${r.blocking_reasons.length} blocker(s) active` : '0 blockers recorded' }}
+          {{
+            r?.blocking_reasons?.length
+              ? `${r.blocking_reasons.length} blocker(s) active`
+              : '0 blockers recorded'
+          }}
         </span>
       </div>
 
@@ -680,7 +711,10 @@ function navTo(name: string): void {
           </span>
         </div>
         <div class="kpi-val-row">
-          <span class="kpi-val fig" :class="sigHighConf > 0 ? 'pos' : sigActionable > 0 ? 'warn-text' : ''">
+          <span
+            class="kpi-val fig"
+            :class="sigHighConf > 0 ? 'pos' : sigActionable > 0 ? 'warn-text' : ''"
+          >
             {{ confidencePosture.label }}
           </span>
         </div>
@@ -707,7 +741,12 @@ function navTo(name: string): void {
 
       <!-- Zone 3: Macro & Strategy Navigation -->
       <!-- 04 Top Sector Flow (Interactive Navigation Button) -->
-      <button class="kpi-card ticked kpi-nav-card" type="button" aria-label="Open Sectors for top sector flow" @click="navTo('sectors')">
+      <button
+        class="kpi-card ticked kpi-nav-card"
+        type="button"
+        aria-label="Open Sectors for top sector flow"
+        @click="navTo('sectors')"
+      >
         <div class="kpi-head-row">
           <span class="label kpi-label">Top Sector Flow</span>
           <span class="kpi-nav-badge">OPEN →</span>
@@ -724,7 +763,12 @@ function navTo(name: string): void {
       </button>
 
       <!-- 05 Top Alpha Strategy (Interactive Navigation Button) -->
-      <button class="kpi-card ticked kpi-nav-card" type="button" aria-label="Open Gates for the top alpha strategy" @click="navTo('gates')">
+      <button
+        class="kpi-card ticked kpi-nav-card"
+        type="button"
+        aria-label="Open Gates for the top alpha strategy"
+        @click="navTo('gates')"
+      >
         <div class="kpi-head-row">
           <span class="label kpi-label">Top Alpha Strategy</span>
           <span class="kpi-nav-badge">OPEN →</span>
@@ -740,7 +784,11 @@ function navTo(name: string): void {
     </section>
 
     <!-- ── High-Confidence Authorization Queue ─────────────────────────── -->
-    <section class="confidence-queue ticked w-full" :class="{ 'has-items': highConfidenceQueue.length > 0 }" aria-label="High confidence directional queue">
+    <section
+      class="confidence-queue ticked w-full"
+      :class="{ 'has-items': highConfidenceQueue.length > 0 }"
+      aria-label="High confidence directional queue"
+    >
       <div class="confidence-queue-head">
         <div class="confidence-queue-title">
           <div class="queue-kicker-row">
@@ -749,11 +797,15 @@ function navTo(name: string): void {
           </div>
           <strong>High-Confidence Directional Signals</strong>
           <p class="queue-note">
-            Calibrated model domain only. PEAD ordinal flags never appear here. Moderate watches ({{ pctFrac(ACTIONABLE_EDGE, 0) }}–{{ pctFrac(ENTER_EDGE, 0) }}) stay in Directional Signals.
+            Calibrated model domain only. PEAD ordinal flags never appear here. Moderate watches ({{
+              pctFrac(ACTIONABLE_EDGE, 0)
+            }}–{{ pctFrac(ENTER_EDGE, 0) }}) stay in Directional Signals.
           </p>
         </div>
         <div class="confidence-queue-stats">
-          <span class="fig count-fig" :class="highConfidenceQueue.length > 0 ? 'pos' : 'dim'">{{ highConfidenceQueue.length }}</span>
+          <span class="fig count-fig" :class="highConfidenceQueue.length > 0 ? 'pos' : 'dim'">{{
+            highConfidenceQueue.length
+          }}</span>
           <span class="label count-label">AUTHORIZED</span>
         </div>
       </div>
@@ -786,9 +838,12 @@ function navTo(name: string): void {
           <template v-else>
             <strong>No high-confidence authorizations this session.</strong>
             <p>
-              Max calibrated edge: <strong class="fig">{{ maxCalibratedEdge != null ? pctFrac(maxCalibratedEdge, 1) : DASH }}</strong>
-              · ENTER threshold: <strong class="fig">{{ pctFrac(ENTER_EDGE, 0) }}</strong>
-              · {{ sigActionable }} moderate watch names remain under observation.
+              Max calibrated edge:
+              <strong class="fig">{{
+                maxCalibratedEdge != null ? pctFrac(maxCalibratedEdge, 1) : DASH
+              }}</strong>
+              · ENTER threshold: <strong class="fig">{{ pctFrac(ENTER_EDGE, 0) }}</strong> ·
+              {{ sigActionable }} moderate watch names remain under observation.
             </p>
           </template>
         </div>
@@ -801,28 +856,35 @@ function navTo(name: string): void {
         <div class="scan-title-block">
           <span class="label scan-kicker">Scan Operations</span>
           <strong class="scan-title">{{ selectedScanTitle }}</strong>
-          <span class="last-scan label">LAST COMPLETE · {{ scan?.depth?.toUpperCase() ?? 'NONE' }}</span>
+          <span class="last-scan label"
+            >LAST COMPLETE · {{ scan?.depth?.toUpperCase() ?? 'NONE' }}</span
+          >
         </div>
 
         <div class="scan-readouts" aria-label="Latest scan coverage">
           <div class="scan-readout">
             <span class="label">Market activity</span>
             <span class="fig">
-              {{ scan?.activity_local_scanned_symbols ?? 0 }}<i>/{{ scan?.activity_market_universe_symbols ?? d?.market_universe_count ?? '—' }}</i>
+              {{ scan?.activity_local_scanned_symbols ?? 0
+              }}<i
+                >/{{ scan?.activity_market_universe_symbols ?? d?.market_universe_count ?? '—' }}</i
+              >
             </span>
             <small>daily bars ranked</small>
           </div>
           <div class="scan-readout">
             <span class="label">Live LSE flow</span>
             <span class="fig">
-              {{ scan?.activity_live_completed_symbols ?? 0 }}<i>/{{ scan?.activity_live_requested_symbols ?? 0 }}</i>
+              {{ scan?.activity_live_completed_symbols ?? 0
+              }}<i>/{{ scan?.activity_live_requested_symbols ?? 0 }}</i>
             </span>
             <small>{{ scan?.activity_live_with_prints_symbols ?? 0 }} names with prints</small>
           </div>
           <div class="scan-readout">
             <span class="label">Calibrated model</span>
             <span class="fig">
-              {{ scan?.directional_scored_symbols ?? signals.length }}<i>/{{ scan?.directional_model_universe_symbols ?? '—' }}</i>
+              {{ scan?.directional_scored_symbols ?? signals.length
+              }}<i>/{{ scan?.directional_model_universe_symbols ?? '—' }}</i>
             </span>
             <small>frozen serving domain</small>
           </div>
@@ -856,7 +918,11 @@ function navTo(name: string): void {
           </div>
           <button class="scan-run label" :disabled="scanning" @click="runScan">
             <span class="scan-pulse" aria-hidden="true" />
-            {{ scanning ? `${scanJob?.progress ?? 0}% · ${selectedScanLabel}` : `RUN ${scanDepth.toUpperCase()} SCAN` }}
+            {{
+              scanning
+                ? `${scanJob?.progress ?? 0}% · ${selectedScanLabel}`
+                : `RUN ${scanDepth.toUpperCase()} SCAN`
+            }}
           </button>
         </div>
       </div>
@@ -864,7 +930,9 @@ function navTo(name: string): void {
         <div class="scan-progress-copy">
           <span class="label">{{ scanJob.depth.toUpperCase() }} PASS · {{ scanStageLabel }}</span>
           <strong>{{ scanJob.message }}</strong>
-          <small class="fig">{{ num(scanJob.elapsed_seconds, 1) }}s elapsed · the desk remains available</small>
+          <small class="fig"
+            >{{ num(scanJob.elapsed_seconds, 1) }}s elapsed · the desk remains available</small
+          >
         </div>
         <div
           class="scan-progress-track"
@@ -880,7 +948,10 @@ function navTo(name: string): void {
       <div class="scan-explain" aria-live="polite">
         <span v-if="scanMsg && !scanning" class="scan-msg label">{{ scanMsg }}</span>
         <span v-else-if="!scanning" class="label">{{ selectedScanDetail }}</span>
-        <span v-else class="label">Selected scope is executing as a background job; leaving this view will not cancel it.</span>
+        <span v-else class="label"
+          >Selected scope is executing as a background job; leaving this view will not cancel
+          it.</span
+        >
         <RouterLink
           v-if="!scanning && scan?.depth === 'deep'"
           :to="{ name: 'flow' }"
@@ -923,7 +994,12 @@ function navTo(name: string): void {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in activity" :key="row.symbol" class="activity-row" @click="open(row.symbol)">
+            <tr
+              v-for="row in activity"
+              :key="row.symbol"
+              class="activity-row"
+              @click="open(row.symbol)"
+            >
               <td class="col-rank">
                 <span class="rank-idx fig">{{ String(row.activity_rank).padStart(2, '0') }}</span>
                 <span class="fig sym">{{ row.symbol }}</span>
@@ -933,7 +1009,8 @@ function navTo(name: string): void {
                   class="lean-chip label"
                   :class="activityLean(row).cls"
                   :title="activityLean(row).title"
-                >{{ activityLean(row).label }}</span>
+                  >{{ activityLean(row).label }}</span
+                >
               </td>
               <td class="num col-act">
                 <div class="activity-score">
@@ -951,7 +1028,9 @@ function navTo(name: string): void {
                   :title="`Ordinal qlib cross-sectional rank · ${row.qlib_source ?? 'research source'} · ${row.qlib_asof ?? 'as-of unavailable'}`"
                 >
                   <strong class="qlib-rank-text">#{{ row.qlib_rank }}</strong>
-                  <small class="dim">XS {{ row.qlib_score != null ? num(row.qlib_score, 2) : DASH }} · RSCH</small>
+                  <small class="dim"
+                    >XS {{ row.qlib_score != null ? num(row.qlib_score, 2) : DASH }} · RSCH</small
+                  >
                 </div>
                 <span v-else class="dim">—</span>
               </td>
@@ -969,32 +1048,58 @@ function navTo(name: string): void {
               </td>
               <td class="fig num col-flow">
                 <template v-if="row.live">
-                  <strong class="live-value">{{ row.premium == null ? DASH : usd(row.premium) }}</strong>
-                  <small class="flow-count">{{ row.print_count }} prints · C{{ row.call_print_count }}/P{{ row.put_print_count }}</small>
+                  <strong class="live-value">{{
+                    row.premium == null ? DASH : usd(row.premium)
+                  }}</strong>
+                  <small class="flow-count"
+                    >{{ row.print_count }} prints · C{{ row.call_print_count }}/P{{
+                      row.put_print_count
+                    }}</small
+                  >
                 </template>
                 <span v-else class="dim local-tag">LOCAL ONLY</span>
               </td>
               <td class="fig num col-price">
-                <span class="price-ret" :class="tone((row.ret_1d ?? 0) * 100)">{{ signedPct((row.ret_1d ?? 0) * 100, 1) }}</span>
-                <small class="flow-count">{{ row.volume_vs_20d_median == null ? DASH : `${num(row.volume_vs_20d_median, 1)}× vol` }}</small>
+                <span class="price-ret" :class="tone((row.ret_1d ?? 0) * 100)">{{
+                  signedPct((row.ret_1d ?? 0) * 100, 1)
+                }}</span>
+                <small class="flow-count">{{
+                  row.volume_vs_20d_median == null
+                    ? DASH
+                    : `${num(row.volume_vs_20d_median, 1)}× vol`
+                }}</small>
               </td>
               <td class="col-dir">
                 <div class="signal-context">
                   <div class="signal-context-top">
-                    <span v-if="row.pead_side" class="context-source label">GAP {{ sideWord(row.pead_side) }}</span>
-                    <span v-if="row.directional_side" class="context-source label">5D {{ sideWord(row.directional_side) }}</span>
+                    <span v-if="row.pead_side" class="context-source label"
+                      >GAP {{ sideWord(row.pead_side) }}</span
+                    >
+                    <span v-if="row.directional_side" class="context-source label"
+                      >5D {{ sideWord(row.directional_side) }}</span
+                    >
                   </div>
                   <div class="signal-context-bottom">
-                    <span
-                      class="alignment-chip label"
-                      :class="row.signal_alignment || 'none'"
-                    >
-                      {{ row.signal_alignment === 'agree' ? 'AGREE'
-                        : row.signal_alignment === 'conflict' ? 'CONFLICT'
-                          : row.signal_alignment === 'pead_only' ? 'EVENT ONLY'
-                            : row.signal_alignment === 'directional_only' ? 'MODEL ONLY' : 'NO VIEW' }}
+                    <span class="alignment-chip label" :class="row.signal_alignment || 'none'">
+                      {{
+                        row.signal_alignment === 'agree'
+                          ? 'AGREE'
+                          : row.signal_alignment === 'conflict'
+                            ? 'CONFLICT'
+                            : row.signal_alignment === 'pead_only'
+                              ? 'EVENT ONLY'
+                              : row.signal_alignment === 'directional_only'
+                                ? 'MODEL ONLY'
+                                : 'NO VIEW'
+                      }}
                     </span>
-                    <small v-if="row.calibrated_probability != null && hasActionableEdge(row.calibrated_probability)" class="context-edge">
+                    <small
+                      v-if="
+                        row.calibrated_probability != null &&
+                        hasActionableEdge(row.calibrated_probability)
+                      "
+                      class="context-edge"
+                    >
                       model {{ pctFrac(row.calibrated_probability, 1) }}
                     </small>
                   </div>
@@ -1004,11 +1109,13 @@ function navTo(name: string): void {
           </tbody>
         </table>
         <p v-else class="note pad">
-          No activity rows are available. Run Deep to scan the full catalog and request live LSE flow.
+          No activity rows are available. Run Deep to scan the full catalog and request live LSE
+          flow.
         </p>
       </div>
       <p class="note tiny pad confidence-footnote">
-        Activity score ranks observed price, volume, gaps, and live premium. It is not win probability; unsigned call/put flow never supplies trade direction.
+        Activity score ranks observed price, volume, gaps, and live premium. It is not win
+        probability; unsigned call/put flow never supplies trade direction.
       </p>
     </Panel>
 
@@ -1021,20 +1128,41 @@ function navTo(name: string): void {
         </div>
         <strong>Model Separation Contract</strong>
         <p>
-          PEAD records what happened at the market open. Directional estimates the next multi-session move inside a smaller frozen model domain.
-          Only the same symbol can agree or conflict; different symbols are non-overlap, not disagreement.
+          PEAD records what happened at the market open. Directional estimates the next
+          multi-session move inside a smaller frozen model domain. Only the same symbol can agree or
+          conflict; different symbols are non-overlap, not disagreement.
         </p>
       </div>
       <div class="reconciliation-stats" aria-label="Signal overlap counts">
-        <div class="stat-box"><span class="label">OVERLAP</span><strong class="fig">{{ reconciliation?.counts.overlap ?? 0 }}</strong></div>
-        <div class="stat-box agree"><span class="label">AGREE</span><strong class="fig pos">{{ reconciliation?.counts.agreements ?? 0 }}</strong></div>
-        <div class="stat-box conflict"><span class="label">CONFLICT</span><strong class="fig neg">{{ reconciliation?.counts.conflicts ?? 0 }}</strong></div>
-        <div class="stat-box"><span class="label">SEPARATE</span><strong class="fig">{{ (reconciliation?.counts.pead_only ?? pead.length) + (reconciliation?.counts.directional_only ?? signals.length) }}</strong></div>
+        <div class="stat-box">
+          <span class="label">OVERLAP</span
+          ><strong class="fig">{{ reconciliation?.counts.overlap ?? 0 }}</strong>
+        </div>
+        <div class="stat-box agree">
+          <span class="label">AGREE</span
+          ><strong class="fig pos">{{ reconciliation?.counts.agreements ?? 0 }}</strong>
+        </div>
+        <div class="stat-box conflict">
+          <span class="label">CONFLICT</span
+          ><strong class="fig neg">{{ reconciliation?.counts.conflicts ?? 0 }}</strong>
+        </div>
+        <div class="stat-box">
+          <span class="label">SEPARATE</span
+          ><strong class="fig">{{
+            (reconciliation?.counts.pead_only ?? pead.length) +
+            (reconciliation?.counts.directional_only ?? signals.length)
+          }}</strong>
+        </div>
       </div>
       <div v-if="reconciliation?.counts.conflicts" class="conflict-strip label">
         <span class="conflict-head">NO UNIFIED THESIS:</span>
-        <span v-for="row in reconciliation.rows.filter((item) => item.relation === 'conflict')" :key="row.symbol" class="conflict-item">
-          {{ row.symbol }} · GAP {{ sideWord(row.pead_side) }} / 5D {{ sideWord(row.directional_side) }}
+        <span
+          v-for="row in reconciliation.rows.filter((item) => item.relation === 'conflict')"
+          :key="row.symbol"
+          class="conflict-item"
+        >
+          {{ row.symbol }} · GAP {{ sideWord(row.pead_side) }} / 5D
+          {{ sideWord(row.directional_side) }}
         </span>
       </div>
     </section>
@@ -1086,7 +1214,11 @@ function navTo(name: string): void {
       <template #action>
         <div class="action-bar">
           <div class="select-wrap">
-            <select v-model="peadFilter" class="filter-select label" aria-label="Filter PEAD gap setups">
+            <select
+              v-model="peadFilter"
+              class="filter-select label"
+              aria-label="Filter PEAD gap setups"
+            >
               <option value="all">ALL FLAGS ({{ pead.length }})</option>
               <option value="flagged">SETUP OK ({{ peadFlagged }})</option>
               <option value="long">UP-GAP FLAGS</option>
@@ -1126,16 +1258,26 @@ function navTo(name: string): void {
                   {{ (c.side ?? DASH).toUpperCase() }}
                 </span>
               </td>
-              <td class="fig num col-score" :class="tone(c.evidence?.pead_score)">{{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}</td>
-              <td v-if="dualViewMode !== 'split'" class="fig num col-gap" :class="tone(c.evidence?.gap_std)">{{ num(c.evidence?.gap_std, 2) }}</td>
-              <td v-if="dualViewMode !== 'split'" class="fig num col-vol">{{ num(c.evidence?.vol_surge, 2) }}×</td>
+              <td class="fig num col-score" :class="tone(c.evidence?.pead_score)">
+                {{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}
+              </td>
+              <td v-if="dualViewMode !== 'split'" class="fig num col-gap" :class="tone(c.evidence?.gap_std)">
+                {{ num(c.evidence?.gap_std, 2) }}
+              </td>
+              <td v-if="dualViewMode !== 'split'" class="fig num col-vol">
+                {{ num(c.evidence?.vol_surge, 2) }}×
+              </td>
               <td class="col-5d">
                 <span
                   v-if="signalFor(c.symbol)"
                   class="alignment-chip label"
                   :class="relationFor(c.symbol)"
                 >
-                  {{ relationFor(c.symbol) === 'agree' ? `AGREES ${sideWord(signalFor(c.symbol)?.side)}` : `CONFLICT ${sideWord(signalFor(c.symbol)?.side)}` }}
+                  {{
+                    relationFor(c.symbol) === 'agree'
+                      ? `AGREES ${sideWord(signalFor(c.symbol)?.side)}`
+                      : `CONFLICT ${sideWord(signalFor(c.symbol)?.side)}`
+                  }}
                 </span>
                 <span v-else class="coverage-chip label">NO 5D MODEL ROW</span>
               </td>
@@ -1158,12 +1300,17 @@ function navTo(name: string): void {
           </tbody>
         </table>
         <p v-else class="note pad">
-          {{ pead.length === 0 ? 'No gap/volume flags cleared the ordinal threshold this session.' : 'No flags match the selected filter.' }}
+          {{
+            pead.length === 0
+              ? 'No gap/volume flags cleared the ordinal threshold this session.'
+              : 'No flags match the selected filter.'
+          }}
         </p>
       </div>
       <p class="note tiny pad confidence-footnote">
-        PEAD gate <strong>{{ peadGateVerdict }}</strong>.
-        Strength is ordinal (not probability) and cannot authorize an entry or be read as confidence.
+        PEAD gate <strong>{{ peadGateVerdict }}</strong
+        >. Strength is ordinal (not probability) and cannot authorize an entry or be read as
+        confidence.
       </p>
     </Panel>
 
@@ -1180,10 +1327,16 @@ function navTo(name: string): void {
       <template #action>
         <div class="action-bar">
           <div class="select-wrap">
-            <select v-model="signalFilter" class="filter-select label" aria-label="Filter directional signals">
+            <select
+              v-model="signalFilter"
+              class="filter-select label"
+              aria-label="Filter directional signals"
+            >
               <option value="all">ALL (ranked by edge) · {{ signals.length }}</option>
               <option value="entered">ENTER ONLY · {{ sigEntered }}</option>
-              <option value="actionable">≥{{ pctFrac(ACTIONABLE_EDGE, 0) }} WATCH · {{ sigActionable }}</option>
+              <option value="actionable">
+                ≥{{ pctFrac(ACTIONABLE_EDGE, 0) }} WATCH · {{ sigActionable }}
+              </option>
               <option value="long">LONG</option>
               <option value="short">SHORT</option>
             </select>
@@ -1223,14 +1376,14 @@ function navTo(name: string): void {
                 {{ signedPct(markChg(s.symbol)) }}
               </td>
               <td class="col-side">
-                <span class="side-pill" :class="s.side === 'LONG' || s.side === 'long' ? 'pos' : 'neg'">
+                <span
+                  class="side-pill"
+                  :class="s.side === 'LONG' || s.side === 'long' ? 'pos' : 'neg'"
+                >
                   {{ (s.side ?? DASH).toUpperCase() }}
                 </span>
               </td>
-              <td
-                class="fig num col-edge"
-                :title="edgeTitle(s.probability, s.state)"
-              >
+              <td class="fig num col-edge" :title="edgeTitle(s.probability, s.state)">
                 <template v-if="s.probability != null && Number.isFinite(s.probability)">
                   <div
                     class="prob-cell"
@@ -1242,8 +1395,16 @@ function navTo(name: string): void {
                     <div class="prob-bar-wrap" aria-hidden="true">
                       <div
                         class="prob-bar"
-                        :class="hasHighConfidence(s.probability, s.state) ? 'pos' : hasActionableEdge(s.probability) ? 'mod' : 'flat'"
-                        :style="{ width: `${Math.min(100, Math.max(0, (s.probability ?? 0) * 100))}%` }"
+                        :class="
+                          hasHighConfidence(s.probability, s.state)
+                            ? 'pos'
+                            : hasActionableEdge(s.probability)
+                              ? 'mod'
+                              : 'flat'
+                        "
+                        :style="{
+                          width: `${Math.min(100, Math.max(0, (s.probability ?? 0) * 100))}%`,
+                        }"
                       />
                     </div>
                     <span class="confidence-value">
@@ -1256,25 +1417,39 @@ function navTo(name: string): void {
                 </template>
                 <span v-else class="dim" title="Uncalibrated — not an edge readout">—</span>
               </td>
-              <td class="fig num mom-cell col-mom" :class="tone(s.momentum)" :title="`Model momentum score ${num(s.momentum, 3)}`">
+              <td
+                class="fig num mom-cell col-mom"
+                :class="tone(s.momentum)"
+                :title="`Model momentum score ${num(s.momentum, 3)}`"
+              >
                 <div class="mom-wrap">
-                  <span class="mom-bar" aria-hidden="true"><i :style="{ width: `${momentumBarPct(s.momentum)}%` }" /></span>
+                  <span class="mom-bar" aria-hidden="true"
+                    ><i :style="{ width: `${momentumBarPct(s.momentum)}%` }"
+                  /></span>
                   <span>{{ num(s.momentum, 2) }}</span>
                 </div>
               </td>
-              <td v-if="dualViewMode !== 'split'" class="fig num dim col-hz">{{ (s.horizon ?? '').replace(' Days', 'd') }}</td>
+              <td v-if="dualViewMode !== 'split'" class="fig num dim col-hz">
+                {{ (s.horizon ?? '').replace(' Days', 'd') }}
+              </td>
               <td class="col-gap-event">
                 <span
                   v-if="peadFor(s.symbol)"
                   class="alignment-chip label"
                   :class="relationFor(s.symbol)"
                 >
-                  {{ relationFor(s.symbol) === 'agree' ? `AGREES ${sideWord(peadFor(s.symbol)?.side)}` : `CONFLICT ${sideWord(peadFor(s.symbol)?.side)}` }}
+                  {{
+                    relationFor(s.symbol) === 'agree'
+                      ? `AGREES ${sideWord(peadFor(s.symbol)?.side)}`
+                      : `CONFLICT ${sideWord(peadFor(s.symbol)?.side)}`
+                  }}
                 </span>
                 <span v-else class="coverage-chip label">NO GAP EVENT</span>
               </td>
               <td class="col-state">
-                <span class="state label" :class="s.state === 'ENTER' ? 'enter' : 'watch'">{{ s.state }}</span>
+                <span class="state label" :class="s.state === 'ENTER' ? 'enter' : 'watch'">{{
+                  s.state
+                }}</span>
               </td>
               <td class="col-chain">
                 <button
@@ -1290,13 +1465,17 @@ function navTo(name: string): void {
           </tbody>
         </table>
         <p v-else class="note pad">
-          {{ signals.length === 0 ? 'No directional signals emitted — run Quick or Deep scan.' : 'No directional signals match the selected filter.' }}
+          {{
+            signals.length === 0
+              ? 'No directional signals emitted — run Quick or Deep scan.'
+              : 'No directional signals match the selected filter.'
+          }}
         </p>
       </div>
       <p class="note tiny pad confidence-footnote">
-        Ranked by ENTER then calibrated probability.
-        HIGH ≥ {{ pctFrac(ENTER_EDGE, 0) }} · MODERATE ≥ {{ pctFrac(ACTIONABLE_EDGE, 0) }} · below that is WEAK.
-        Confidence kind must be calibrated_probability — ordinal PEAD is excluded.
+        Ranked by ENTER then calibrated probability. HIGH ≥ {{ pctFrac(ENTER_EDGE, 0) }} · MODERATE
+        ≥ {{ pctFrac(ACTIONABLE_EDGE, 0) }} · below that is WEAK. Confidence kind must be
+        calibrated_probability — ordinal PEAD is excluded.
       </p>
     </Panel>
 
@@ -1318,10 +1497,19 @@ function navTo(name: string): void {
             aria-label="Add ticker to watchlist"
             @keyup.enter="probeSymbol(customTickerInput)"
           />
-          <button class="act label act-primary" :disabled="probing || !customTickerInput.trim()" @click="probeSymbol(customTickerInput)">
+          <button
+            class="act label act-primary"
+            :disabled="probing || !customTickerInput.trim()"
+            @click="probeSymbol(customTickerInput)"
+          >
             {{ probing ? 'PROBING…' : '+ ADD TICKER' }}
           </button>
-          <button class="act label act-secondary" :disabled="probing" title="Force refresh all watchlist rows" @click="probeWatchlist(true)">
+          <button
+            class="act label act-secondary"
+            :disabled="probing"
+            title="Force refresh all watchlist rows"
+            @click="probeWatchlist(true)"
+          >
             REFRESH ALL
           </button>
         </div>
@@ -1348,7 +1536,12 @@ function navTo(name: string): void {
               <td class="fig sym col-sym">{{ sym }}</td>
               <td class="spark-cell col-spark">
                 <svg v-if="watchSparks[sym]" viewBox="0 0 88 22" class="spark" aria-hidden="true">
-                  <path :d="watchSparks[sym]" fill="none" stroke="currentColor" stroke-width="1.6" />
+                  <path
+                    :d="watchSparks[sym]"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                  />
                 </svg>
                 <span v-else class="dim">—</span>
               </td>
@@ -1366,22 +1559,34 @@ function navTo(name: string): void {
                 <template v-if="signalFor(sym)?.probability != null">
                   <span
                     class="edge-pill-wrap"
-                    :class="hasHighConfidence(signalFor(sym)?.probability, signalFor(sym)?.state)
-                      ? 'pos'
-                      : hasActionableEdge(signalFor(sym)?.probability) ? 'mod' : 'dim'"
+                    :class="
+                      hasHighConfidence(signalFor(sym)?.probability, signalFor(sym)?.state)
+                        ? 'pos'
+                        : hasActionableEdge(signalFor(sym)?.probability)
+                          ? 'mod'
+                          : 'dim'
+                    "
                   >
                     {{ pctFrac(signalFor(sym)!.probability, 1) }}
                     <small
                       v-if="signalFor(sym)?.state"
                       class="label state-mini"
                       :class="signalFor(sym)?.state === 'ENTER' ? 'enter' : 'watch'"
-                    >{{ signalFor(sym)?.state }}</small>
+                      >{{ signalFor(sym)?.state }}</small
+                    >
                   </span>
                 </template>
                 <span v-else class="dim">—</span>
               </td>
-              <td class="fig num col-mom" :class="tone(signalFor(sym)?.momentum ?? probeResults[sym]?.stats?.chg_5d_pct)">
-                {{ signalFor(sym)?.momentum != null ? num(signalFor(sym)!.momentum, 2) : signedPct(probeResults[sym]?.stats?.chg_5d_pct) }}
+              <td
+                class="fig num col-mom"
+                :class="tone(signalFor(sym)?.momentum ?? probeResults[sym]?.stats?.chg_5d_pct)"
+              >
+                {{
+                  signalFor(sym)?.momentum != null
+                    ? num(signalFor(sym)!.momentum, 2)
+                    : signedPct(probeResults[sym]?.stats?.chg_5d_pct)
+                }}
               </td>
               <td class="col-act">
                 <div class="watch-actions">
@@ -1405,10 +1610,13 @@ function navTo(name: string): void {
             </tr>
           </tbody>
         </table>
-        <p v-else class="note pad">No custom tickers pinned yet. Type a ticker above to probe and pin.</p>
+        <p v-else class="note pad">
+          No custom tickers pinned yet. Type a ticker above to probe and pin.
+        </p>
       </div>
       <p class="note tiny pad-x">
-        Saved in this browser. Rows re-probe every 60s. Edge/Mom fill when the name is on the directional board; otherwise 5D return stands in for momentum.
+        Saved in this browser. Rows re-probe every 60s. Edge/Mom fill when the name is on the
+        directional board; otherwise 5D return stands in for momentum.
       </p>
     </Panel>
   </div>
@@ -1422,8 +1630,12 @@ function navTo(name: string): void {
   align-items: start;
   padding-bottom: var(--s6);
 }
-.w-full { grid-column: 1 / -1; }
-.w-half { grid-column: span 2; }
+.w-full {
+  grid-column: 1 / -1;
+}
+.w-half {
+  grid-column: span 2;
+}
 
 /* ── Workspace Identity Header ───────────────────────────────────────────── */
 .arena-head {
@@ -1435,7 +1647,9 @@ function navTo(name: string): void {
   padding: var(--s3) 0 var(--s2);
   border-bottom: var(--hair) solid var(--rule-hi);
 }
-.arena-title { min-width: 0; }
+.arena-title {
+  min-width: 0;
+}
 .arena-kicker-row {
   display: flex;
   align-items: center;
@@ -1578,13 +1792,16 @@ function navTo(name: string): void {
   gap: var(--s2);
   min-height: 104px;
   min-width: 0;
-  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .kpi-card:hover {
   border-color: var(--rule-hi);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
-.kpi-card:focus-visible, .arena-flow-link:focus-visible {
+.kpi-card:focus-visible,
+.arena-flow-link:focus-visible {
   outline: var(--hair) solid var(--phosphor);
   outline-offset: 2px;
 }
@@ -1670,7 +1887,9 @@ function navTo(name: string): void {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.warn-text { color: var(--warn); }
+.warn-text {
+  color: var(--warn);
+}
 
 .kpi-badge {
   font-family: var(--font-data);
@@ -1684,10 +1903,25 @@ function navTo(name: string): void {
   letter-spacing: 0.04em;
   border: var(--hair) solid currentColor;
 }
-.kpi-badge.armed, .kpi-badge.pos { color: var(--long); background: var(--long-wash); }
-.kpi-badge.held, .kpi-badge.neg { color: var(--short); background: var(--short-wash); }
-.kpi-badge.enter { color: var(--phosphor); background: var(--phosphor-wash); }
-.kpi-badge.flat { color: var(--ink-soft); background: var(--rule); border-color: var(--rule-hi); }
+.kpi-badge.armed,
+.kpi-badge.pos {
+  color: var(--long);
+  background: var(--long-wash);
+}
+.kpi-badge.held,
+.kpi-badge.neg {
+  color: var(--short);
+  background: var(--short-wash);
+}
+.kpi-badge.enter {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+}
+.kpi-badge.flat {
+  color: var(--ink-soft);
+  background: var(--rule);
+  border-color: var(--rule-hi);
+}
 
 .kpi-sub {
   font-size: var(--t-tiny);
@@ -1702,8 +1936,19 @@ function navTo(name: string): void {
   font-size: var(--t-micro);
   font-weight: 600;
 }
-.fl-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.strat-name { font-size: var(--t-lead); min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.strat-name {
+  font-size: var(--t-lead);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ── High-Confidence Authorization Queue ─────────────────────────────────── */
 .confidence-queue {
@@ -1860,7 +2105,9 @@ function navTo(name: string): void {
   align-items: stretch;
   min-width: 0;
 }
-.scan-console-head > * { min-width: 0; }
+.scan-console-head > * {
+  min-width: 0;
+}
 .scan-title-block {
   display: flex;
   flex-direction: column;
@@ -1870,7 +2117,11 @@ function navTo(name: string): void {
   border-right: var(--hair) solid var(--rule);
   background: var(--panel);
 }
-.scan-kicker { color: var(--phosphor); font-size: var(--t-micro); font-weight: 700; }
+.scan-kicker {
+  color: var(--phosphor);
+  font-size: var(--t-micro);
+  font-weight: 700;
+}
 .scan-title {
   font-family: var(--font-display);
   color: var(--ink);
@@ -1878,7 +2129,15 @@ function navTo(name: string): void {
   font-weight: 700;
   letter-spacing: var(--track-tight);
 }
-.last-scan { color: var(--ink-ghost); font-size: var(--t-micro); font-weight: 600; }
+.last-scan {
+  overflow: visible;
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: clip;
+  white-space: normal;
+}
 
 .scan-readouts {
   display: grid;
@@ -1893,10 +2152,26 @@ function navTo(name: string): void {
   padding: var(--s3) var(--s4);
   border-right: var(--hair) solid var(--rule);
 }
-.scan-readout > .label { color: var(--ink-dim); font-size: var(--t-micro); font-weight: 700; }
-.scan-readout > .fig { color: var(--ink); font-size: var(--t-fig); font-weight: 500; }
-.scan-readout > .fig i { color: var(--ink-ghost); font-size: var(--t-micro); font-style: normal; font-weight: 500; }
-.scan-readout > small { color: var(--ink-soft); font-size: var(--t-micro); }
+.scan-readout > .label {
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  font-weight: 700;
+}
+.scan-readout > .fig {
+  color: var(--ink);
+  font-size: var(--t-fig);
+  font-weight: 500;
+}
+.scan-readout > .fig i {
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+  font-style: normal;
+  font-weight: 500;
+}
+.scan-readout > small {
+  color: var(--ink-soft);
+  font-size: var(--t-micro);
+}
 
 .scan-controls {
   display: flex;
@@ -1905,7 +2180,10 @@ function navTo(name: string): void {
   padding: var(--s3) var(--s5);
   background: var(--panel-hi);
 }
-.depth-switch { display: flex; border: var(--hair) solid var(--rule-hi); }
+.depth-switch {
+  display: flex;
+  border: var(--hair) solid var(--rule-hi);
+}
 .depth-option {
   min-width: 88px;
   min-height: var(--density-control-h);
@@ -1915,13 +2193,29 @@ function navTo(name: string): void {
   border-right: var(--hair) solid var(--rule-hi);
   font-size: var(--t-micro);
   font-weight: 750;
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
-.depth-option:last-child { border-right: 0; }
-.depth-option span { color: var(--ink-ghost); margin-left: var(--s1); font-weight: 600; }
-.depth-option:hover:not(:disabled) { color: var(--ink); background: var(--panel-raise); }
-.depth-option.on { color: var(--void); background: var(--phosphor); }
-.depth-option.on span { color: color-mix(in srgb, var(--void) 70%, transparent); }
+.depth-option:last-child {
+  border-right: 0;
+}
+.depth-option span {
+  color: var(--ink-ghost);
+  margin-left: var(--s1);
+  font-weight: 600;
+}
+.depth-option:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--panel-raise);
+}
+.depth-option.on {
+  color: var(--void);
+  background: var(--phosphor);
+}
+.depth-option.on span {
+  color: color-mix(in srgb, var(--void) 70%, transparent);
+}
 
 .scan-run {
   display: flex;
@@ -1943,10 +2237,25 @@ function navTo(name: string): void {
 .scan-run:hover:not(:disabled) {
   background: var(--phosphor-dim);
 }
-.scan-run:disabled, .depth-option:disabled { cursor: progress; opacity: 0.7; }
-.scan-pulse { width: 7px; height: 7px; background: currentColor; border-radius: 1px; }
-.scan-run:disabled .scan-pulse { animation: scan-blink 720ms steps(2, end) infinite; }
-@keyframes scan-blink { 50% { opacity: 0.2; } }
+.scan-run:disabled,
+.depth-option:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+.scan-pulse {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+  border-radius: 1px;
+}
+.scan-run:disabled .scan-pulse {
+  animation: scan-blink 720ms steps(2, end) infinite;
+}
+@keyframes scan-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
 
 .scan-progress {
   display: grid;
@@ -1957,12 +2266,44 @@ function navTo(name: string): void {
   border-top: var(--hair) solid var(--phosphor-dim);
   background: var(--phosphor-wash);
 }
-.scan-progress-copy { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: var(--s3); min-width: 0; }
-.scan-progress-copy > .label { color: var(--phosphor); font-size: var(--t-micro); font-weight: 700; white-space: nowrap; }
-.scan-progress-copy > strong { overflow: hidden; color: var(--ink); font-size: var(--t-small); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.scan-progress-copy > small { color: var(--ink-soft); font-size: var(--t-micro); white-space: nowrap; }
-.scan-progress-track { height: 5px; overflow: hidden; border: var(--hair) solid var(--rule-hi); background: var(--void); }
-.scan-progress-track > i { display: block; height: 100%; background: var(--phosphor); transition: width var(--dur) ease; }
+.scan-progress-copy {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--s3);
+  min-width: 0;
+}
+.scan-progress-copy > .label {
+  color: var(--phosphor);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.scan-progress-copy > strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--t-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-progress-copy > small {
+  color: var(--ink-soft);
+  font-size: var(--t-micro);
+  white-space: nowrap;
+}
+.scan-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void);
+}
+.scan-progress-track > i {
+  display: block;
+  height: 100%;
+  background: var(--phosphor);
+  transition: width var(--dur) ease;
+}
 
 .scan-explain {
   display: flex;
@@ -1976,7 +2317,11 @@ function navTo(name: string): void {
   background: var(--void-lift);
   font-size: var(--t-micro);
 }
-.scan-explain .scan-msg { padding: 0; color: var(--phosphor); font-weight: 600; }
+.scan-explain .scan-msg {
+  padding: 0;
+  color: var(--phosphor);
+  font-weight: 600;
+}
 .scan-flow-link {
   flex: 0 0 auto;
   min-height: 24px;
@@ -1988,19 +2333,54 @@ function navTo(name: string): void {
   font-weight: 700;
   font-size: var(--t-micro);
 }
-.scan-flow-link:hover { color: var(--void); background: var(--phosphor); }
+.scan-flow-link:hover {
+  color: var(--void);
+  background: var(--phosphor);
+}
 
 /* ── Panel 01: Live Activity Flags ───────────────────────────────────────── */
-.activity-panel { border-color: var(--rule-hi); }
-.activity-table { max-height: 520px; }
-.activity-legend { display: flex; align-items: center; gap: var(--s3); color: var(--ink-soft); font-size: var(--t-micro); font-weight: 600; }
-.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); }
-.live-dot.on { background: var(--phosphor); }
-.pass-label { color: var(--ink); }
-.ordinal-note { color: var(--warn); border-left: var(--hair) solid var(--rule-hi); padding-left: var(--s3); }
+.activity-panel {
+  border-color: var(--rule-hi);
+}
+.activity-table {
+  max-height: 520px;
+}
+.activity-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  color: var(--ink-soft);
+  font-size: var(--t-micro);
+  font-weight: 600;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-ghost);
+}
+.live-dot.on {
+  background: var(--phosphor);
+}
+.pass-label {
+  color: var(--ink);
+}
+.ordinal-note {
+  color: var(--warn);
+  border-left: var(--hair) solid var(--rule-hi);
+  padding-left: var(--s3);
+}
 
-.rank-idx { display: inline-block; width: 3ch; margin-right: var(--s2); color: var(--ink-ghost); font-weight: 700; }
-.activity-row:hover { background: var(--panel-raise); }
+.rank-idx {
+  display: inline-block;
+  width: 3ch;
+  margin-right: var(--s2);
+  color: var(--ink-ghost);
+  font-weight: 700;
+}
+.activity-row:hover {
+  background: var(--panel-raise);
+}
 
 /* Lean Chips - High Contrast Tokenized */
 .lean-chip {
@@ -2043,7 +2423,10 @@ function navTo(name: string): void {
   align-items: center;
   gap: 2px var(--s2);
 }
-.score-val { font-weight: 750; color: var(--ink); }
+.score-val {
+  font-weight: 750;
+  color: var(--ink);
+}
 .activity-bar-wrap {
   display: block;
   height: 4px;
@@ -2065,11 +2448,25 @@ function navTo(name: string): void {
 }
 
 /* Qlib Cell */
-.qlib-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; }
-.qlib-rank-text { color: var(--ink); font-weight: 750; }
+.qlib-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  white-space: nowrap;
+}
+.qlib-rank-text {
+  color: var(--ink);
+  font-weight: 750;
+}
 
 /* Flags */
-.flag-stack { display: flex; flex-wrap: wrap; gap: 4px; max-width: 280px; }
+.flag-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 280px;
+}
 .flag-pill {
   padding: 1px 6px;
   color: var(--ink-soft);
@@ -2086,10 +2483,28 @@ function navTo(name: string): void {
   background: var(--phosphor-wash);
 }
 
-.live-value { display: block; color: var(--phosphor); font-weight: 800; font-size: var(--t-small); }
-.flow-count { display: block; margin-top: 2px; color: var(--ink-dim); font-family: var(--font-ui); font-size: var(--t-micro); white-space: nowrap; }
-.local-tag { font-size: var(--t-micro); font-weight: 600; }
-.price-ret { font-weight: 750; font-size: var(--t-small); }
+.live-value {
+  display: block;
+  color: var(--phosphor);
+  font-weight: 800;
+  font-size: var(--t-small);
+}
+.flow-count {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-dim);
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  white-space: nowrap;
+}
+.local-tag {
+  font-size: var(--t-micro);
+  font-weight: 600;
+}
+.price-ret {
+  font-weight: 750;
+  font-size: var(--t-small);
+}
 
 /* Signal Context (Structured 2-Line Direction Cell) */
 .signal-context {
@@ -2106,7 +2521,8 @@ function navTo(name: string): void {
   flex-wrap: wrap;
   gap: 4px;
 }
-.context-source, .coverage-chip {
+.context-source,
+.coverage-chip {
   padding: 2px 6px;
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink-soft);
@@ -2138,12 +2554,17 @@ function navTo(name: string): void {
   border-color: var(--short);
   background: var(--short-wash);
 }
-.alignment-chip.pead_only, .alignment-chip.directional_only {
+.alignment-chip.pead_only,
+.alignment-chip.directional_only {
   color: var(--warn);
   border-color: var(--warn);
   background: var(--warn-wash);
 }
-.context-edge { color: var(--warn); font-size: var(--t-micro); font-weight: 700; }
+.context-edge {
+  color: var(--warn);
+  font-size: var(--t-micro);
+  font-weight: 700;
+}
 
 /* ── Signal Contract Reconciliation ──────────────────────────────────────── */
 .signal-contract {
@@ -2161,7 +2582,12 @@ function navTo(name: string): void {
   gap: var(--s3);
   margin-bottom: 2px;
 }
-.contract-kicker { color: var(--warn); font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.08em; }
+.contract-kicker {
+  color: var(--warn);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
 .contract-rule-badge {
   color: var(--ink-soft);
   font-size: var(--t-micro);
@@ -2200,11 +2626,25 @@ function navTo(name: string): void {
   padding: var(--s3) var(--s3);
   border-right: var(--hair) solid var(--rule-hi);
 }
-.stat-box:last-child { border-right: 0; }
-.stat-box .label { color: var(--ink-ghost); font-size: var(--t-micro); font-weight: 700; margin-bottom: 2px; }
-.stat-box strong { font-size: var(--t-fig); font-weight: 500; }
-.stat-box.agree strong { color: var(--long); }
-.stat-box.conflict strong { color: var(--short); }
+.stat-box:last-child {
+  border-right: 0;
+}
+.stat-box .label {
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.stat-box strong {
+  font-size: var(--t-fig);
+  font-weight: 500;
+}
+.stat-box.agree strong {
+  color: var(--long);
+}
+.stat-box.conflict strong {
+  color: var(--short);
+}
 
 .conflict-strip {
   grid-column: 1 / -1;
@@ -2216,7 +2656,10 @@ function navTo(name: string): void {
   border-top: var(--hair) solid var(--rule);
   color: var(--short);
 }
-.conflict-head { font-weight: 750; font-size: var(--t-micro); }
+.conflict-head {
+  font-weight: 750;
+  font-size: var(--t-micro);
+}
 .conflict-item {
   padding: 2px 8px;
   border: var(--hair) solid color-mix(in srgb, var(--short) 60%, var(--rule));
@@ -2236,7 +2679,12 @@ function navTo(name: string): void {
   margin-top: var(--s2);
   border-bottom: var(--hair) solid var(--rule-hi);
 }
-.section-kicker { color: var(--phosphor-dim); font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.08em; }
+.section-kicker {
+  color: var(--phosphor-dim);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
 .model-views-kicker h2 {
   font-family: var(--font-display);
   font-size: var(--t-display);
@@ -2259,16 +2707,27 @@ function navTo(name: string): void {
   border-right: var(--hair) solid var(--rule-hi);
   transition: all var(--dur-fast) ease;
 }
-.view-tab:last-child { border-right: 0; }
-.view-tab:hover { color: var(--ink); background: var(--panel-hi); }
+.view-tab:last-child {
+  border-right: 0;
+}
+.view-tab:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+}
 .view-tab.active {
   color: var(--void);
   background: var(--phosphor);
 }
 
 /* ── Filter Controls & Action Bar ────────────────────────────────────────── */
-.action-bar { display: flex; align-items: center; gap: var(--s3); }
-.select-wrap { position: relative; }
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+.select-wrap {
+  position: relative;
+}
 .filter-select {
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule-hi);
@@ -2280,7 +2739,8 @@ function navTo(name: string): void {
   cursor: pointer;
   transition: border-color var(--dur-fast);
 }
-.filter-select:hover, .filter-select:focus-visible {
+.filter-select:hover,
+.filter-select:focus-visible {
   border-color: var(--phosphor);
 }
 .filter-select option {
@@ -2296,7 +2756,11 @@ function navTo(name: string): void {
   scrollbar-width: thin;
 }
 
-.grid { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
 .grid th {
   text-align: left;
   padding: var(--s3) var(--s4);
@@ -2318,11 +2782,22 @@ function navTo(name: string): void {
   color: var(--ink);
   vertical-align: middle;
 }
-.grid tbody tr { cursor: pointer; transition: background var(--dur-fast); }
-.grid tbody tr:hover { background: var(--panel-hi); }
+.grid tbody tr {
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.grid tbody tr:hover {
+  background: var(--panel-hi);
+}
 
-.num { text-align: right; }
-.sym { color: var(--phosphor); font-weight: 750; font-size: var(--t-small); }
+.num {
+  text-align: right;
+}
+.sym {
+  color: var(--phosphor);
+  font-weight: 750;
+  font-size: var(--t-small);
+}
 
 /* Split View Column Condensation (.w-half) */
 .w-half .table-pead th,
@@ -2423,22 +2898,70 @@ function navTo(name: string): void {
 }
 
 /* Directional Edge Gauges */
-.prob-cell { display: flex; align-items: center; justify-content: flex-end; gap: var(--s3); }
-.prob-bar-wrap { width: 50px; height: 5px; background: var(--rule); border-radius: 1px; overflow: hidden; }
-.prob-bar { height: 100%; border-radius: 1px; }
-.prob-bar.pos { background: var(--phosphor); }
-.prob-bar.mod { background: var(--warn); }
-.prob-bar.flat { background: var(--ink-ghost); opacity: 0.6; }
-.prob-cell.weak { opacity: 0.75; }
-.confidence-value { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; font-weight: 750; }
-.confidence-value small { font-family: var(--font-ui); font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.08em; }
-.confidence-high { color: var(--long); }
-.confidence-moderate { color: var(--warn); }
-.confidence-low, .confidence-unavailable { color: var(--ink-ghost); }
-.row-high td { background: color-mix(in srgb, var(--long) 7%, transparent); }
+.prob-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s3);
+}
+.prob-bar-wrap {
+  width: 50px;
+  height: 5px;
+  background: var(--rule);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.prob-bar {
+  height: 100%;
+  border-radius: 1px;
+}
+.prob-bar.pos {
+  background: var(--phosphor);
+}
+.prob-bar.mod {
+  background: var(--warn);
+}
+.prob-bar.flat {
+  background: var(--ink-ghost);
+  opacity: 0.6;
+}
+.prob-cell.weak {
+  opacity: 0.75;
+}
+.confidence-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.1;
+  font-weight: 750;
+}
+.confidence-value small {
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.confidence-high {
+  color: var(--long);
+}
+.confidence-moderate {
+  color: var(--warn);
+}
+.confidence-low,
+.confidence-unavailable {
+  color: var(--ink-ghost);
+}
+.row-high td {
+  background: color-mix(in srgb, var(--long) 7%, transparent);
+}
 
 /* Momentum Cells */
-.mom-wrap { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.mom-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
 .mom-bar {
   width: 36px;
   height: 4px;
@@ -2446,7 +2969,12 @@ function navTo(name: string): void {
   overflow: hidden;
   border-radius: 1px;
 }
-.mom-bar i { display: block; height: 100%; background: currentColor; opacity: 0.85; }
+.mom-bar i {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  opacity: 0.85;
+}
 
 /* Status Badges */
 .state {
@@ -2459,8 +2987,15 @@ function navTo(name: string): void {
   font-size: var(--t-micro);
   letter-spacing: 0.04em;
 }
-.state.enter { color: var(--phosphor); background: var(--phosphor-wash); }
-.state.watch { color: var(--ink-soft); border-color: var(--rule-hi); background: var(--panel-hi); }
+.state.enter {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+}
+.state.watch {
+  color: var(--ink-soft);
+  border-color: var(--rule-hi);
+  background: var(--panel-hi);
+}
 
 /* Action Buttons */
 .chain-btn {
@@ -2527,7 +3062,10 @@ function navTo(name: string): void {
   border-color: var(--rule-hi);
   background: var(--panel-hi);
 }
-.act:disabled { opacity: 0.6; cursor: progress; }
+.act:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
 
 .table-watchlist {
   width: 100%;
@@ -2547,14 +3085,28 @@ function navTo(name: string): void {
 .table-watchlist tbody tr:last-child td {
   border-bottom: var(--hair) solid var(--rule);
 }
-.table-watchlist .col-sym { width: 10%; }
-.table-watchlist .col-spark { width: 16%; }
-.table-watchlist .col-price { width: 11%; }
+.table-watchlist .col-sym {
+  width: 10%;
+}
+.table-watchlist .col-spark {
+  width: 16%;
+}
+.table-watchlist .col-price {
+  width: 11%;
+}
 .table-watchlist .col-ret1,
-.table-watchlist .col-ret5 { width: 9%; }
-.table-watchlist .col-edge { width: 13%; }
-.table-watchlist .col-mom { width: 10%; }
-.table-watchlist .col-act { width: 22%; }
+.table-watchlist .col-ret5 {
+  width: 9%;
+}
+.table-watchlist .col-edge {
+  width: 13%;
+}
+.table-watchlist .col-mom {
+  width: 10%;
+}
+.table-watchlist .col-act {
+  width: 22%;
+}
 .table-watchlist .spark-cell {
   width: 16%;
   color: var(--phosphor);
@@ -2566,9 +3118,18 @@ function navTo(name: string): void {
   display: block;
   margin: 0;
 }
-.spark-cell { width: 96px; color: var(--phosphor); }
-.spark { width: 88px; height: 22px; display: block; }
-.spark path { vector-effect: non-scaling-stroke; }
+.spark-cell {
+  width: 96px;
+  color: var(--phosphor);
+}
+.spark {
+  width: 88px;
+  height: 22px;
+  display: block;
+}
+.spark path {
+  vector-effect: non-scaling-stroke;
+}
 
 .edge-pill-wrap {
   display: inline-flex;
@@ -2576,8 +3137,12 @@ function navTo(name: string): void {
   gap: 6px;
   font-weight: 750;
 }
-.edge-pill-wrap.pos { color: var(--long); }
-.edge-pill-wrap.mod { color: var(--warn); }
+.edge-pill-wrap.pos {
+  color: var(--long);
+}
+.edge-pill-wrap.mod {
+  color: var(--warn);
+}
 .state-mini {
   font-size: var(--t-micro);
   padding: var(--s1) var(--s2);
@@ -2607,55 +3172,164 @@ function navTo(name: string): void {
 }
 
 /* ── Shared Utilities & Responsive Breakpoints ───────────────────────────── */
-.dim { color: var(--ink-ghost); }
-.pos { color: var(--long); }
-.neg { color: var(--short); }
-.confidence-footnote { border-top: var(--hair) solid var(--rule); margin-top: 0 !important; }
-.note { color: var(--ink-soft); font-size: var(--t-small); }
-.note.pad { padding: var(--s5) var(--s4); }
-.note.pad-x { padding: var(--s3) var(--s4) var(--s4); }
-.note.tiny { font-size: var(--t-micro); margin-top: var(--s3); }
-.err { color: var(--short); font-size: var(--t-small); }
-.err.pad { padding: var(--s3) var(--s4); }
+.dim {
+  color: var(--ink-ghost);
+}
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
+.confidence-footnote {
+  border-top: var(--hair) solid var(--rule);
+  margin-top: 0 !important;
+}
+.note {
+  color: var(--ink-soft);
+  font-size: var(--t-small);
+}
+.note.pad {
+  padding: var(--s5) var(--s4);
+}
+.note.pad-x {
+  padding: var(--s3) var(--s4) var(--s4);
+}
+.note.tiny {
+  font-size: var(--t-micro);
+  margin-top: var(--s3);
+}
+.err {
+  color: var(--short);
+  font-size: var(--t-small);
+}
+.err.pad {
+  padding: var(--s3) var(--s4);
+}
 
 @media (max-width: 1400px) {
-  .desk-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .kpi-nav-card:nth-child(4) { grid-column: span 1; }
-  .kpi-nav-card:nth-child(5) { grid-column: span 2; }
-  .desk { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .scan-console-head { grid-template-columns: 180px 1fr; }
-  .scan-controls { grid-column: 1 / -1; border-top: var(--hair) solid var(--rule); justify-content: flex-end; }
+  .desk-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .kpi-nav-card:nth-child(4) {
+    grid-column: span 1;
+  }
+  .kpi-nav-card:nth-child(5) {
+    grid-column: span 2;
+  }
+  .desk {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .scan-console-head {
+    grid-template-columns: 180px 1fr;
+  }
+  .scan-controls {
+    grid-column: 1 / -1;
+    border-top: var(--hair) solid var(--rule);
+    justify-content: flex-end;
+  }
 }
 @media (max-width: 1100px) {
-  .w-half { grid-column: span 4; }
-  .desk-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .kpi-breadth-card { grid-column: 1 / -1; }
-  .kpi-nav-card:nth-child(5) { grid-column: span 1; }
-  .reconciliation-stats { grid-template-columns: repeat(2, 1fr); }
-  .stat-box:nth-child(2) { border-right: 0; }
-  .stat-box:nth-child(-n + 2) { border-bottom: var(--hair) solid var(--rule-hi); }
+  .w-half {
+    grid-column: span 4;
+  }
+  .desk-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .kpi-breadth-card {
+    grid-column: 1 / -1;
+  }
+  .kpi-nav-card:nth-child(5) {
+    grid-column: span 1;
+  }
+  .reconciliation-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .stat-box:nth-child(2) {
+    border-right: 0;
+  }
+  .stat-box:nth-child(-n + 2) {
+    border-bottom: var(--hair) solid var(--rule-hi);
+  }
 }
 @media (max-width: 768px) {
-  .arena-head { align-items: flex-start; flex-direction: column; gap: var(--s3); padding-bottom: var(--s3); }
-  .arena-context { justify-content: flex-start; }
-  .arena-flow-link { min-height: 40px; }
-  .desk-summary { grid-template-columns: 1fr; }
-  .desk { grid-template-columns: 1fr; }
-  .w-half { grid-column: span 1; }
-  .action-bar { flex-direction: column; align-items: flex-start; }
-  .scan-console-head { display: flex; flex-direction: column; }
-  .scan-title-block { border-right: 0; border-bottom: var(--hair) solid var(--rule); }
-  .scan-readouts { grid-template-columns: repeat(2, 1fr); }
-  .scan-controls { flex-wrap: wrap; justify-content: stretch; }
-  .depth-switch, .scan-run { flex: 1 1 100%; }
-  .depth-option { flex: 1; }
-  .scan-progress { grid-template-columns: 1fr; gap: var(--s3); }
-  .scan-progress-copy { grid-template-columns: 1fr auto; }
-  .scan-progress-copy > strong { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
-  .scan-explain { align-items: flex-start; flex-direction: column; }
-  .signal-contract { grid-template-columns: 1fr; }
-  .model-views-header { flex-direction: column; align-items: flex-start; gap: var(--s2); }
-  .view-mode-tabs { width: 100%; }
-  .view-tab { flex: 1; text-align: center; }
+  .arena-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--s3);
+    padding-bottom: var(--s3);
+  }
+  .arena-context {
+    justify-content: flex-start;
+  }
+  .arena-flow-link {
+    min-height: 40px;
+  }
+  .desk-summary {
+    grid-template-columns: 1fr;
+  }
+  .desk {
+    grid-template-columns: 1fr;
+  }
+  .w-half {
+    grid-column: span 1;
+  }
+  .action-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .scan-console-head {
+    display: flex;
+    flex-direction: column;
+  }
+  .scan-title-block {
+    border-right: 0;
+    border-bottom: var(--hair) solid var(--rule);
+  }
+  .scan-readouts {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .scan-controls {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+  .depth-switch,
+  .scan-run {
+    flex: 1 1 100%;
+  }
+  .depth-option {
+    flex: 1;
+  }
+  .scan-progress {
+    grid-template-columns: 1fr;
+    gap: var(--s3);
+  }
+  .scan-progress-copy {
+    grid-template-columns: 1fr auto;
+  }
+  .scan-progress-copy > strong {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: normal;
+  }
+  .scan-explain {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .signal-contract {
+    grid-template-columns: 1fr;
+  }
+  .model-views-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s2);
+  }
+  .view-mode-tabs {
+    width: 100%;
+  }
+  .view-tab {
+    flex: 1;
+    text-align: center;
+  }
 }
 </style>

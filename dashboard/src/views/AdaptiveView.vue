@@ -11,12 +11,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  api,
-  type AdaptiveSignalPayload,
-  type AdaptiveSignalRow,
-  type StreamHitRates,
-} from '@/api'
+import { api, type AdaptiveSignalPayload, type AdaptiveSignalRow, type StreamHitRates } from '@/api'
 import { useResource } from '@/composables/useResource'
 import { num, signed, shortDate, tone, DASH } from '@/format'
 import Panel from '@/components/Panel.vue'
@@ -53,7 +48,11 @@ watch(
 )
 
 function applySymbol(): void {
-  const s = draft.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  const s = draft.value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
   draft.value = s
   symbol.value = s
   void router.replace({ name: 'adaptive', query: s ? { symbol: s } : {} })
@@ -170,19 +169,14 @@ const weightBars = computed(() => {
 
     <template v-else-if="payload">
       <div class="auth-banner lab">
-        decision_authorized={{ payload.decision_authorized }} ·
-        live_capital_authorized={{ payload.live_capital_authorized }} ·
-        mode={{ payload.mode }} ·
-        asof={{ payload.asof ? shortDate(payload.asof) : DASH }}
+        decision_authorized={{ payload.decision_authorized }} · live_capital_authorized={{
+          payload.live_capital_authorized
+        }}
+        · mode={{ payload.mode }} · asof={{ payload.asof ? shortDate(payload.asof) : DASH }}
       </div>
 
       <div class="grid-top">
-        <Panel
-          label="Focus composite"
-          index="01"
-          live
-          :meta="focus?.symbol || '—'"
-        >
+        <Panel label="Focus composite" index="01" live :meta="focus?.symbol || '—'">
           <template v-if="focus">
             <div class="focus-row">
               <div>
@@ -202,37 +196,28 @@ const weightBars = computed(() => {
               </div>
             </div>
             <div class="readout-grid">
-              <Readout
-                label="Vol regime"
-                :value="focus.regime?.volatility_regime || DASH"
-              />
-              <Readout
-                label="Trend regime"
-                :value="focus.regime?.trend_regime || DASH"
-              />
+              <Readout label="Vol regime" :value="focus.regime?.volatility_regime || DASH" />
+              <Readout label="Trend regime" :value="focus.regime?.trend_regime || DASH" />
               <Readout
                 label="Bear"
-                :value="focus.regime?.bear_market == null ? DASH : focus.regime.bear_market ? 'YES' : 'no'"
+                :value="
+                  focus.regime?.bear_market == null ? DASH : focus.regime.bear_market ? 'YES' : 'no'
+                "
               />
-              <Readout
-                label="Adapt mode"
-                :value="focus.weights?.adaptation_mode || DASH"
-              />
-              <Readout
-                label="Bar freq"
-                :value="focus.bar_freq || DASH"
-              />
-              <Readout
-                label="Bars"
-                :value="focus.n_bars != null ? String(focus.n_bars) : DASH"
-              />
+              <Readout label="Adapt mode" :value="focus.weights?.adaptation_mode || DASH" />
+              <Readout label="Bar freq" :value="focus.bar_freq || DASH" />
+              <Readout label="Bars" :value="focus.n_bars != null ? String(focus.n_bars) : DASH" />
             </div>
             <p class="caveat lab">{{ focus.caveat }}</p>
           </template>
           <p v-else class="lab muted">No scored symbol yet.</p>
         </Panel>
 
-        <Panel label="Stream stack" index="02" :meta="focus ? `${focus.present_streams?.length || 0} live` : ''">
+        <Panel
+          label="Stream stack"
+          index="02"
+          :meta="focus ? `${focus.present_streams?.length || 0} live` : ''"
+        >
           <div v-if="focusStreams.length" class="stream-list">
             <div v-for="s in focusStreams" :key="s.name" class="stream-row">
               <div class="stream-head">
@@ -267,9 +252,7 @@ const weightBars = computed(() => {
                 <span class="base" :style="{ width: `${w.base * 100}%` }" title="base" />
                 <span class="adapt" :style="{ width: `${w.adapted * 100}%` }" title="adapted" />
               </div>
-              <span class="fig nums">
-                {{ num(w.base, 2) }}→{{ num(w.adapted, 2) }}
-              </span>
+              <span class="fig nums"> {{ num(w.base, 2) }}→{{ num(w.adapted, 2) }} </span>
             </div>
           </div>
           <p class="lab legend">thin = regime base · solid = adapted</p>
@@ -305,7 +288,10 @@ const weightBars = computed(() => {
                 v-for="row in board"
                 :key="row.symbol"
                 class="clickable"
-                @click="draft = row.symbol; applySymbol()"
+                @click="
+                  draft = row.symbol;
+                  applySymbol();
+                "
               >
                 <td class="fig">{{ row.attention_rank ?? DASH }}</td>
                 <td class="fig sym">{{ row.symbol }}</td>
@@ -318,16 +304,30 @@ const weightBars = computed(() => {
                   {{ row.regime?.volatility_regime || '?' }}/{{ row.regime?.trend_regime || '?' }}
                 </td>
                 <td class="fig" :class="tone(row.stream_scores?.technical)">
-                  {{ row.stream_scores?.technical == null ? DASH : signed(row.stream_scores.technical, 2) }}
+                  {{
+                    row.stream_scores?.technical == null
+                      ? DASH
+                      : signed(row.stream_scores.technical, 2)
+                  }}
                 </td>
                 <td class="fig" :class="tone(row.stream_scores?.sector)">
-                  {{ row.stream_scores?.sector == null ? DASH : signed(row.stream_scores.sector, 2) }}
+                  {{
+                    row.stream_scores?.sector == null ? DASH : signed(row.stream_scores.sector, 2)
+                  }}
                 </td>
                 <td class="fig" :class="tone(row.stream_scores?.sentiment)">
-                  {{ row.stream_scores?.sentiment == null ? DASH : signed(row.stream_scores.sentiment, 2) }}
+                  {{
+                    row.stream_scores?.sentiment == null
+                      ? DASH
+                      : signed(row.stream_scores.sentiment, 2)
+                  }}
                 </td>
                 <td class="fig" :class="tone(row.stream_scores?.fundamental)">
-                  {{ row.stream_scores?.fundamental == null ? DASH : signed(row.stream_scores.fundamental, 2) }}
+                  {{
+                    row.stream_scores?.fundamental == null
+                      ? DASH
+                      : signed(row.stream_scores.fundamental, 2)
+                  }}
                 </td>
               </tr>
             </tbody>
@@ -348,9 +348,9 @@ const weightBars = computed(() => {
           "
         >
           <p class="lab legend">
-            Closed-loop soft tilt from realized shadow outcomes (point-in-time
-            stream reconstruction). Needs ≥{{ hitRates?.min_events ?? 5 }} signed
-            calls per stream before a rate is used.
+            Closed-loop soft tilt from realized shadow outcomes (point-in-time stream
+            reconstruction). Needs ≥{{ hitRates?.min_events ?? 5 }} signed calls per stream before a
+            rate is used.
           </p>
           <div class="hit-list">
             <div v-for="h in hitRows" :key="h.name" class="hit-row">
@@ -406,7 +406,11 @@ const weightBars = computed(() => {
   gap: var(--s4);
   align-items: flex-end;
 }
-.kicker { color: var(--ink-faint); letter-spacing: 0.12em; margin: 0 0 var(--s1); }
+.kicker {
+  color: var(--ink-faint);
+  letter-spacing: 0.12em;
+  margin: 0 0 var(--s1);
+}
 .title {
   margin: 0;
   font-size: var(--t-display);
@@ -415,8 +419,15 @@ const weightBars = computed(() => {
   align-items: center;
   gap: var(--s2);
 }
-.sub { margin: var(--s1) 0 0; color: var(--ink-dim); }
-.sym-form { display: flex; gap: var(--s2); align-items: center; }
+.sub {
+  margin: var(--s1) 0 0;
+  color: var(--ink-dim);
+}
+.sym-form {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+}
 .sym-input {
   width: 7.5rem;
   background: var(--panel-hi);
@@ -444,7 +455,9 @@ const weightBars = computed(() => {
   color: var(--ink);
   border: var(--hair) solid var(--rule);
 }
-.btn.ghost:hover { background: var(--panel-hi); }
+.btn.ghost:hover {
+  background: var(--panel-hi);
+}
 .auth-banner {
   font-size: var(--t-micro);
   color: var(--ink-dim);
@@ -462,35 +475,77 @@ const weightBars = computed(() => {
   gap: var(--s4);
   margin-bottom: var(--s3);
 }
-.sym { font-size: var(--t-fig); margin: 0; letter-spacing: 0.04em; }
-.meta-line { margin: var(--s1) 0 0; color: var(--ink-dim); }
-.score-block { text-align: right; }
-.score { font-size: var(--t-fig); margin: 0; }
+.sym {
+  font-size: var(--t-fig);
+  margin: 0;
+  letter-spacing: 0.04em;
+}
+.meta-line {
+  margin: var(--s1) 0 0;
+  color: var(--ink-dim);
+}
+.score-block {
+  text-align: right;
+}
+.score {
+  font-size: var(--t-fig);
+  margin: 0;
+}
 .readout-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--s2);
   margin-top: var(--s2);
 }
-.caveat { margin: var(--s3) 0 0; color: var(--ink-faint); font-size: var(--t-micro); line-height: 1.4; }
-.stream-list { display: flex; flex-direction: column; gap: var(--s3); }
+.caveat {
+  margin: var(--s3) 0 0;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.4;
+}
+.stream-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
 .stream-head {
   display: grid;
   grid-template-columns: 1fr auto auto auto;
   gap: var(--s2);
   align-items: baseline;
 }
-.stream-head .name { text-transform: uppercase; letter-spacing: 0.08em; font-size: var(--t-micro); }
-.stream-head .w, .stream-head .q { color: var(--ink-faint); font-size: var(--t-micro); }
+.stream-head .name {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: var(--t-micro);
+}
+.stream-head .w,
+.stream-head .q {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+}
 .bar-track {
   height: var(--s1);
   background: color-mix(in srgb, var(--rule) 70%, transparent);
   margin-top: var(--s1);
   display: flex;
 }
-.bar-fill { height: 100%; background: currentColor; min-width: 2px; border-radius: 1px; }
-.reasons { margin: var(--s1) 0 0; color: var(--ink-ghost); font-size: var(--t-micro); }
-.weight-list { display: flex; flex-direction: column; gap: var(--s2); }
+.bar-fill {
+  height: 100%;
+  background: currentColor;
+  min-width: 2px;
+  border-radius: 1px;
+}
+.reasons {
+  margin: var(--s1) 0 0;
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+}
+.weight-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
 .weight-row {
   display: grid;
   grid-template-columns: 5.5rem 1fr auto;
@@ -502,18 +557,33 @@ const weightBars = computed(() => {
   height: 10px;
   background: color-mix(in srgb, var(--rule) 50%, transparent);
 }
-.dual .base, .dual .adapt {
+.dual .base,
+.dual .adapt {
   position: absolute;
   left: 0;
   top: 0;
   height: 100%;
   border-radius: 1px;
 }
-.dual .base { background: color-mix(in srgb, var(--ink-dim) 25%, transparent); }
-.dual .adapt { background: var(--phosphor); opacity: 0.85; }
-.nums { font-size: var(--t-tiny); color: var(--ink-soft); }
-.legend { margin: var(--s3) 0 0; color: var(--ink-ghost); font-size: var(--t-micro); }
-.table-wrap { overflow-x: auto; }
+.dual .base {
+  background: color-mix(in srgb, var(--ink-dim) 25%, transparent);
+}
+.dual .adapt {
+  background: var(--phosphor);
+  opacity: 0.85;
+}
+.nums {
+  font-size: var(--t-tiny);
+  color: var(--ink-soft);
+}
+.legend {
+  margin: var(--s3) 0 0;
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+}
+.table-wrap {
+  overflow-x: auto;
+}
 .board {
   width: 100%;
   border-collapse: collapse;
@@ -542,12 +612,26 @@ const weightBars = computed(() => {
   white-space: nowrap;
   vertical-align: middle;
 }
-.board tr.clickable { cursor: pointer; }
-.board tr.clickable:hover { background: var(--panel-hi); }
-.board .sym { letter-spacing: 0.04em; }
-.pad { padding: var(--s4); }
-.empty { color: var(--ink-faint); }
-.hist { display: flex; flex-direction: column; gap: var(--s2); }
+.board tr.clickable {
+  cursor: pointer;
+}
+.board tr.clickable:hover {
+  background: var(--panel-hi);
+}
+.board .sym {
+  letter-spacing: 0.04em;
+}
+.pad {
+  padding: var(--s4);
+}
+.empty {
+  color: var(--ink-faint);
+}
+.hist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
 .hist-row {
   display: grid;
   grid-template-columns: 7rem 1fr 2rem;
@@ -564,7 +648,12 @@ const weightBars = computed(() => {
   background: var(--phosphor);
   border-radius: 1px;
 }
-.hit-list { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s2); }
+.hit-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
 .hit-row {
   display: grid;
   grid-template-columns: 5.5rem 1fr auto;
@@ -582,9 +671,19 @@ const weightBars = computed(() => {
   min-width: 0;
   border-radius: 1px;
 }
-.err { color: var(--short); }
-.pos { color: var(--long); }
-.neg { color: var(--short); }
-.warm { color: var(--warn); }
-.muted { color: var(--ink-faint); }
+.err {
+  color: var(--short);
+}
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
+.warm {
+  color: var(--warn);
+}
+.muted {
+  color: var(--ink-faint);
+}
 </style>

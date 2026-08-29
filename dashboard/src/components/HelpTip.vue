@@ -3,17 +3,28 @@
  * Hover/focus help bubble for dense desk panels.
  * Keeps the surface clean while answering "what do I do with this?"
  */
-defineProps<{
-  label?: string
-  /** Longer explanation shown on hover/focus. */
-  text: string
-}>()
+withDefaults(
+  defineProps<{
+    label?: string
+    /** Longer explanation shown on hover/focus. */
+    text: string
+    /** Horizontal alignment of the popover bubble: 'center' (default), 'left', or 'right'. */
+    align?: 'center' | 'left' | 'right'
+    /** Vertical placement: 'top' (default) or 'bottom'. */
+    placement?: 'top' | 'bottom'
+  }>(),
+  {
+    label: undefined,
+    align: 'center',
+    placement: 'top',
+  },
+)
 </script>
 
 <template>
   <span class="help" tabindex="0" :aria-label="label || 'Help'">
     <span class="mark" aria-hidden="true">?</span>
-    <span class="bubble" role="tooltip">
+    <span class="bubble" :class="[`align-${align}`, `placement-${placement}`]" role="tooltip">
       <strong v-if="label" class="title">{{ label }}</strong>
       <span class="body">{{ text }}</span>
     </span>
@@ -36,33 +47,53 @@ defineProps<{
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: var(--hair) solid var(--rule-hi);
+  border: var(--hair) solid var(--glass-border-hi);
   color: var(--ink-faint);
   font: 700 9px/14px var(--font-display);
   text-align: center;
-  background: var(--panel-hi);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .help:hover .mark,
 .help:focus-visible .mark {
   color: var(--phosphor);
   border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
 }
 .bubble {
   position: absolute;
-  z-index: 80;
+  z-index: var(--z-tooltip); /* above --z-overlay so a tooltip survives an open drawer */
   left: 50%;
   bottom: calc(100% + 8px);
   transform: translateX(-50%);
   width: min(300px, calc(100vw - 32px));
   max-width: 70vw;
   padding: 10px 12px;
-  background: var(--void-lift);
-  border: var(--hair) solid var(--rule-hi);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  background: var(--glass-surface-hi);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+  border: var(--hair) solid var(--glass-border-hi);
+  border-radius: var(--r-md);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-out);
+}
+.bubble.align-left {
+  left: 0;
+  transform: none;
+}
+.bubble.align-right {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+.bubble.placement-bottom {
+  bottom: auto;
+  top: calc(100% + 8px);
 }
 .help:hover .bubble,
 .help:focus-visible .bubble {
@@ -71,9 +102,15 @@ defineProps<{
   pointer-events: auto;
 }
 /* Keep bubbles on-screen when the ? sits near edges */
-.help:first-child .bubble,
-th .help .bubble {
+.help:first-child .bubble:not(.align-right),
+th .help .bubble:not(.align-right) {
   left: 0;
+  transform: none;
+}
+th:last-child .help .bubble,
+th:nth-last-child(2) .help .bubble {
+  left: auto;
+  right: 0;
   transform: none;
 }
 .title {

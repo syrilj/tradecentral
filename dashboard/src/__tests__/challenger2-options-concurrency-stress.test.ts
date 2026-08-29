@@ -57,10 +57,10 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
       // 4-Leg Iron Condor with asymmetric volatility smile per leg:
       // Put Wing (180P @ 42% IV), Short Put (190P @ 36% IV), Short Call (210C @ 28% IV), Call Wing (220C @ 31% IV)
       const legs: CalcLeg[] = [
-        { id: 'leg-1', right: 'put', strike: 180, quantity: 1, premium: 1.80, vol: 42, dte },
-        { id: 'leg-2', right: 'put', strike: 190, quantity: -1, premium: 3.50, vol: 36, dte },
-        { id: 'leg-3', right: 'call', strike: 210, quantity: -1, premium: 3.20, vol: 28, dte },
-        { id: 'leg-4', right: 'call', strike: 220, quantity: 1, premium: 1.40, vol: 31, dte },
+        { id: 'leg-1', right: 'put', strike: 180, quantity: 1, premium: 1.8, vol: 42, dte },
+        { id: 'leg-2', right: 'put', strike: 190, quantity: -1, premium: 3.5, vol: 36, dte },
+        { id: 'leg-3', right: 'call', strike: 210, quantity: -1, premium: 3.2, vol: 28, dte },
+        { id: 'leg-4', right: 'call', strike: 220, quantity: 1, premium: 1.4, vol: 31, dte },
       ]
 
       // Net cash: long legs debit - short legs credit = (1.80 - 3.50 - 3.20 + 1.40) * 100 = -$350 (credit of $350)
@@ -128,8 +128,8 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
       // Lower BE = 190 - 3.50 = 186.50; Upper BE = 210 + 3.50 = 213.50
       const bePoints = findBreakevens(dualSeries)
       expect(bePoints.length).toBe(2)
-      expect(bePoints[0]).toBeCloseTo(186.50, 0.5)
-      expect(bePoints[1]).toBeCloseTo(213.50, 0.5)
+      expect(bePoints[0]).toBeCloseTo(186.5, 0.5)
+      expect(bePoints[1]).toBeCloseTo(213.5, 0.5)
 
       // Risk/Reward bounds assessment
       const bounds = evaluateRiskRewardBounds(legs, dualSeries)
@@ -155,12 +155,12 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
       // 6-Leg Double Ratio Spread:
       // +1 85P (@32% IV), -2 95P (@28% IV), +1 100P (@26% IV), +1 100C (@26% IV), -2 105C (@24% IV), +1 115C (@25% IV)
       const legs: CalcLeg[] = [
-        { id: 'leg-1', right: 'put', strike: 85, quantity: 1, premium: 0.60, vol: 32, dte },
-        { id: 'leg-2', right: 'put', strike: 95, quantity: -2, premium: 2.20, vol: 28, dte },
-        { id: 'leg-3', right: 'put', strike: 100, quantity: 1, premium: 4.10, vol: 26, dte },
-        { id: 'leg-4', right: 'call', strike: 100, quantity: 1, premium: 4.30, vol: 26, dte },
-        { id: 'leg-5', right: 'call', strike: 105, quantity: -2, premium: 2.40, vol: 24, dte },
-        { id: 'leg-6', right: 'call', strike: 115, quantity: 1, premium: 0.70, vol: 25, dte },
+        { id: 'leg-1', right: 'put', strike: 85, quantity: 1, premium: 0.6, vol: 32, dte },
+        { id: 'leg-2', right: 'put', strike: 95, quantity: -2, premium: 2.2, vol: 28, dte },
+        { id: 'leg-3', right: 'put', strike: 100, quantity: 1, premium: 4.1, vol: 26, dte },
+        { id: 'leg-4', right: 'call', strike: 100, quantity: 1, premium: 4.3, vol: 26, dte },
+        { id: 'leg-5', right: 'call', strike: 105, quantity: -2, premium: 2.4, vol: 24, dte },
+        { id: 'leg-6', right: 'call', strike: 115, quantity: 1, premium: 0.7, vol: 25, dte },
       ]
 
       const usable = usableLegs(legs)
@@ -236,14 +236,14 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
       // Leg 7: -2 520C (30 DTE, 23% IV)
       // Leg 8: +2 540C (60 DTE, 26% IV)
       const legs: CalcLeg[] = [
-        { id: 'leg-1', right: 'put', strike: 460, quantity: 2, premium: 3.50, dte: 60, vol: 28 },
-        { id: 'leg-2', right: 'put', strike: 480, quantity: -2, premium: 5.20, dte: 30, vol: 24 },
-        { id: 'leg-3', right: 'put', strike: 490, quantity: 1, premium: 4.80, dte: 14, vol: 22 },
-        { id: 'leg-4', right: 'put', strike: 500, quantity: -1, premium: 6.50, dte: 7, vol: 20 },
-        { id: 'leg-5', right: 'call', strike: 500, quantity: -1, premium: 6.50, dte: 7, vol: 20 },
-        { id: 'leg-6', right: 'call', strike: 510, quantity: 1, premium: 4.20, dte: 14, vol: 21 },
-        { id: 'leg-7', right: 'call', strike: 520, quantity: -2, premium: 4.50, dte: 30, vol: 23 },
-        { id: 'leg-8', right: 'call', strike: 540, quantity: 2, premium: 2.80, dte: 60, vol: 26 },
+        { id: 'leg-1', right: 'put', strike: 460, quantity: 2, premium: 3.5, dte: 60, vol: 28 },
+        { id: 'leg-2', right: 'put', strike: 480, quantity: -2, premium: 5.2, dte: 30, vol: 24 },
+        { id: 'leg-3', right: 'put', strike: 490, quantity: 1, premium: 4.8, dte: 14, vol: 22 },
+        { id: 'leg-4', right: 'put', strike: 500, quantity: -1, premium: 6.5, dte: 7, vol: 20 },
+        { id: 'leg-5', right: 'call', strike: 500, quantity: -1, premium: 6.5, dte: 7, vol: 20 },
+        { id: 'leg-6', right: 'call', strike: 510, quantity: 1, premium: 4.2, dte: 14, vol: 21 },
+        { id: 'leg-7', right: 'call', strike: 520, quantity: -2, premium: 4.5, dte: 30, vol: 23 },
+        { id: 'leg-8', right: 'call', strike: 540, quantity: 2, premium: 2.8, dte: 60, vol: 26 },
       ]
 
       const usable = usableLegs(legs)
@@ -366,7 +366,10 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
 
       const placed = raw
         .map((level) => ({ ...level, x: level.value != null ? xOfPrice(level.value) : null }))
-        .filter((level): level is { key: string; label: string; value: number; cls: string; x: number } => level.x != null)
+        .filter(
+          (level): level is { key: string; label: string; value: number; cls: string; x: number } =>
+            level.x != null,
+        )
         .sort((a, b) => a.x - b.x)
 
       if (!placed.length) return []
@@ -407,13 +410,12 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
 
       // 5. Vertical tier staggering
       const hasRemainingOverlap = xs.some((x, i) => i > 0 && Math.abs(x - xs[i - 1]) < 48)
-      const isWidthConstrained = (maxBoundary - minBoundary) < (placed.length * minGap)
+      const isWidthConstrained = maxBoundary - minBoundary < placed.length * minGap
 
       return placed.map((level, i) => {
         const labelX = Math.max(minBoundary, Math.min(maxBoundary, xs[i]))
-        const labelY = (hasRemainingOverlap || isWidthConstrained)
-          ? (i % 2 === 0 ? top + 10 : top + 22)
-          : top + 10
+        const labelY =
+          hasRemainingOverlap || isWidthConstrained ? (i % 2 === 0 ? top + 10 : top + 22) : top + 10
 
         return {
           ...level,
@@ -426,8 +428,7 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
     it('2.1 Dense 10-strike cluster in 0.5% span guarantees column separation and zero bar overlap', () => {
       // 10 strikes spaced by 0.25 (0.05% of spot) across [498.75, 501.00] (0.45% total span)
       const denseStrikes = [
-        498.75, 499.00, 499.25, 499.50, 499.75,
-        500.00, 500.25, 500.50, 500.75, 501.00,
+        498.75, 499.0, 499.25, 499.5, 499.75, 500.0, 500.25, 500.5, 500.75, 501.0,
       ]
 
       const hostW = 800
@@ -453,13 +454,10 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
 
     it('2.2 Structural Level Anti-Collision Algorithm resolves 4 overlapping levels in tight 0.1% span', () => {
       // Put Wall at 499.75, Flip at 500.00, Spot at 500.00, Call Wall at 500.25
-      const strikes = [
-        498.75, 499.00, 499.25, 499.50, 499.75,
-        500.00, 500.25, 500.50, 500.75, 501.00,
-      ]
-      const spot = 500.00
+      const strikes = [498.75, 499.0, 499.25, 499.5, 499.75, 500.0, 500.25, 500.5, 500.75, 501.0]
+      const spot = 500.0
       const putWall = 499.75
-      const gammaFlip = 500.00
+      const gammaFlip = 500.0
       const callWall = 500.25
 
       const left = 52
@@ -661,9 +659,13 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
       const loader = vi.fn().mockImplementation(() => {
         reqCount++
         if (reqCount === 1) {
-          return new Promise((_, reject) => { rejectSPY = reject })
+          return new Promise((_, reject) => {
+            rejectSPY = reject
+          })
         }
-        return new Promise((resolve) => { resolveAAPL = resolve })
+        return new Promise((resolve) => {
+          resolveAAPL = resolve
+        })
       })
 
       const resource = useResource(loader, { immediate: false })
@@ -729,7 +731,9 @@ describe('Challenger 2 Empirical Stress: Multi-Leg Options, GEX Clustering & Con
     it('4.2 Late-resolving promise after scope disposal does not mutate reactive refs', async () => {
       let resolveLate: (val: any) => void = () => {}
       const loader = vi.fn().mockImplementation(() => {
-        return new Promise((resolve) => { resolveLate = resolve })
+        return new Promise((resolve) => {
+          resolveLate = resolve
+        })
       })
 
       const scope = effectScope()

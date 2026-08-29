@@ -23,7 +23,7 @@ describe('public entry and operator routing', () => {
   it('sanitizes redirect targets and returns signed-in operators to Flow', () => {
     expect(routerSource).toContain("value.startsWith('//')")
     expect(routerSource).toContain("value.startsWith('/auth')")
-    expect(routerSource).toContain("return fallback")
+    expect(routerSource).toContain('return fallback')
     expect(routerSource).toContain("fallback = '/flow'")
   })
 
@@ -33,5 +33,10 @@ describe('public entry and operator routing', () => {
     expect(routerSource).toContain("name: 'market'")
     expect(routerSource).toContain("highlight: 'model-forecast'")
     expect(routerSource).toContain("tab: 'financials'")
+  })
+
+  it('updates document title with active symbol from route query', () => {
+    expect(routerSource).toContain('to.query.symbol || to.query.setup')
+    expect(routerSource).toContain('document.title = sym ?')
   })
 })

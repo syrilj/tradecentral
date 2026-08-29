@@ -13,7 +13,9 @@ const desk = readFileSync(join(srcRoot, 'views', 'DeskView.vue'), 'utf8')
 const ENTER_EDGE = 0.65
 const ACTIONABLE_EDGE = 0.55
 
-function confidenceBand(value: number | null | undefined): 'HIGH' | 'MODERATE' | 'LOW' | 'UNAVAILABLE' {
+function confidenceBand(
+  value: number | null | undefined,
+): 'HIGH' | 'MODERATE' | 'LOW' | 'UNAVAILABLE' {
   if (value === null || value === undefined || !Number.isFinite(value)) return 'UNAVAILABLE'
   if (value >= ENTER_EDGE) return 'HIGH'
   if (value >= ACTIONABLE_EDGE) return 'MODERATE'
@@ -48,8 +50,10 @@ function compareSignals(a: any, b: any): number {
   const aEnter = a.state === 'ENTER' ? 1 : 0
   const bEnter = b.state === 'ENTER' ? 1 : 0
   if (aEnter !== bEnter) return bEnter - aEnter
-  const ap = typeof a.probability === 'number' && Number.isFinite(a.probability) ? a.probability : -1
-  const bp = typeof b.probability === 'number' && Number.isFinite(b.probability) ? b.probability : -1
+  const ap =
+    typeof a.probability === 'number' && Number.isFinite(a.probability) ? a.probability : -1
+  const bp =
+    typeof b.probability === 'number' && Number.isFinite(b.probability) ? b.probability : -1
   if (bp !== ap) return bp - ap
   return Math.abs(b.momentum ?? 0) - Math.abs(a.momentum ?? 0)
 }
@@ -72,10 +76,18 @@ function activityLean(row: any): { label: string; cls: string; title: string } {
   const lean = String(row.activity_lean || '').toLowerCase()
   const source = String(row.activity_lean_source || 'none').replaceAll('_', ' ')
   if (lean === 'bullish') {
-    return { label: row.activity_lean_label || 'BULLISH', cls: 'bullish', title: `Activity lean · ${source}` }
+    return {
+      label: row.activity_lean_label || 'BULLISH',
+      cls: 'bullish',
+      title: `Activity lean · ${source}`,
+    }
   }
   if (lean === 'bearish') {
-    return { label: row.activity_lean_label || 'BEARISH', cls: 'bearish', title: `Activity lean · ${source}` }
+    return {
+      label: row.activity_lean_label || 'BEARISH',
+      cls: 'bearish',
+      title: `Activity lean · ${source}`,
+    }
   }
   if (lean === 'mixed') {
     return { label: 'MIXED', cls: 'mixed', title: `Activity lean · ${source}` }
@@ -104,17 +116,23 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
 
     it('enforces exact table column symmetry in PEAD table for split vs focus modes', () => {
       // PEAD table header check
-      const peadTableMatch = desk.match(/<table v-if="filteredPead\.length" class="grid table-pead"[\s\S]*?<\/thead>/)
+      const peadTableMatch = desk.match(
+        /<table v-if="filteredPead\.length" class="grid table-pead"[\s\S]*?<\/thead>/,
+      )
       expect(peadTableMatch).toBeTruthy()
       const peadHead = peadTableMatch![0]
 
-      const peadBodyMatch = desk.match(/<tr v-for="c in filteredPead" :key="c\.symbol" class="pead-row"[\s\S]*?<\/tr>/)
+      const peadBodyMatch = desk.match(
+        /<tr v-for="c in filteredPead" :key="c\.symbol" class="pead-row"[\s\S]*?<\/tr>/,
+      )
       expect(peadBodyMatch).toBeTruthy()
       const peadRow = peadBodyMatch![0]
 
       // Count th vs td tags with v-if="dualViewMode !== 'split'"
-      const thSplitHidden = (peadHead.match(/<th\b[^>]*v-if="dualViewMode !== 'split'"/g) || []).length
-      const tdSplitHidden = (peadRow.match(/<td\b[^>]*v-if="dualViewMode !== 'split'"/g) || []).length
+      const thSplitHidden = (peadHead.match(/<th\b[^>]*v-if="dualViewMode !== 'split'"/g) || [])
+        .length
+      const tdSplitHidden = (peadRow.match(/<td\b[^>]*v-if="dualViewMode !== 'split'"/g) || [])
+        .length
       expect(thSplitHidden).toBe(2) // Gap / ATR, Volume
       expect(tdSplitHidden).toBe(2) // Gap / ATR, Volume
 
@@ -131,17 +149,23 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
 
     it('enforces exact table column symmetry in Directional table for split vs focus modes', () => {
       // Directional table header check
-      const dirTableMatch = desk.match(/<table v-if="filteredSignals\.length" class="grid table-directional"[\s\S]*?<\/thead>/)
+      const dirTableMatch = desk.match(
+        /<table v-if="filteredSignals\.length" class="grid table-directional"[\s\S]*?<\/thead>/,
+      )
       expect(dirTableMatch).toBeTruthy()
       const dirHead = dirTableMatch![0]
 
-      const dirBodyMatch = desk.match(/<tr\s+v-for="s in filteredSignals"\s+:key="s\.symbol"[\s\S]*?<\/tr>/)
+      const dirBodyMatch = desk.match(
+        /<tr\s+v-for="s in filteredSignals"\s+:key="s\.symbol"[\s\S]*?<\/tr>/,
+      )
       expect(dirBodyMatch).toBeTruthy()
       const dirRow = dirBodyMatch![0]
 
       // Count th vs td tags with v-if="dualViewMode !== 'split'"
-      const thSplitHidden = (dirHead.match(/<th\b[^>]*v-if="dualViewMode !== 'split'"/g) || []).length
-      const tdSplitHidden = (dirRow.match(/<td\b[^>]*v-if="dualViewMode !== 'split'"/g) || []).length
+      const thSplitHidden = (dirHead.match(/<th\b[^>]*v-if="dualViewMode !== 'split'"/g) || [])
+        .length
+      const tdSplitHidden = (dirRow.match(/<td\b[^>]*v-if="dualViewMode !== 'split'"/g) || [])
+        .length
       expect(thSplitHidden).toBe(1) // Hz column
       expect(tdSplitHidden).toBe(1) // Hz column
 
@@ -200,7 +224,11 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
 
       let max: number | null = null
       for (const s of emptySignals) {
-        if (typeof s.probability === 'number' && Number.isFinite(s.probability) && (max === null || s.probability > max)) {
+        if (
+          typeof s.probability === 'number' &&
+          Number.isFinite(s.probability) &&
+          (max === null || s.probability > max)
+        ) {
           max = s.probability
         }
       }
@@ -226,7 +254,11 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
 
       let max = 0
       for (const s of lowConfSignals) {
-        if (typeof s.probability === 'number' && Number.isFinite(s.probability) && s.probability > max) {
+        if (
+          typeof s.probability === 'number' &&
+          Number.isFinite(s.probability) &&
+          s.probability > max
+        ) {
           max = s.probability
         }
       }
@@ -235,7 +267,12 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
 
     it('handles malformed numbers, NaNs, and unexpected types without throwing errors', () => {
       const dirtySignals = [
-        { symbol: 'A', state: 'ENTER', probability: Number.NaN, momentum: Number.POSITIVE_INFINITY },
+        {
+          symbol: 'A',
+          state: 'ENTER',
+          probability: Number.NaN,
+          momentum: Number.POSITIVE_INFINITY,
+        },
         { symbol: 'B', state: 'WATCH', probability: null, momentum: null },
         { symbol: 'C', state: undefined, probability: -1, momentum: undefined },
         { symbol: 'D', state: 'ENTER', probability: 0.72, momentum: 1.4 },
@@ -249,9 +286,9 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
       expect(confidenceBand(Number.NaN)).toBe('UNAVAILABLE')
       expect(confidenceBand(null)).toBe('UNAVAILABLE')
       expect(confidenceBand(undefined)).toBe('UNAVAILABLE')
-      expect(confidenceBand(0.70)).toBe('HIGH')
-      expect(confidenceBand(0.60)).toBe('MODERATE')
-      expect(confidenceBand(0.40)).toBe('LOW')
+      expect(confidenceBand(0.7)).toBe('HIGH')
+      expect(confidenceBand(0.6)).toBe('MODERATE')
+      expect(confidenceBand(0.4)).toBe('LOW')
 
       expect(momentumBarPct(Number.NaN)).toBe(0)
       expect(momentumBarPct(null)).toBe(0)
@@ -260,10 +297,12 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
       expect(momentumBarPct(5.0)).toBe(100) // clamped to 100
 
       // edgeTitle tests
-      expect(edgeTitle(null)).toBe('No calibrated probability — use momentum + state only. Not authorization.')
-      expect(edgeTitle(0.70, 'ENTER')).toContain('HIGH — meets ENTER bar')
+      expect(edgeTitle(null)).toBe(
+        'No calibrated probability — use momentum + state only. Not authorization.',
+      )
+      expect(edgeTitle(0.7, 'ENTER')).toContain('HIGH — meets ENTER bar')
       expect(edgeTitle(0.58)).toContain('MODERATE — above 55% watch floor')
-      expect(edgeTitle(0.40)).toContain('LOW — near coin-flip')
+      expect(edgeTitle(0.4)).toContain('LOW — near coin-flip')
 
       // sideWord tests
       expect(sideWord('long')).toBe('UP')
@@ -273,8 +312,12 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
     })
 
     it('handles activity lean computation across all permutations and fallbacks', () => {
-      expect(activityLean({ activity_lean: 'bullish', activity_lean_label: 'BULLISH' }).cls).toBe('bullish')
-      expect(activityLean({ activity_lean: 'bearish', activity_lean_label: 'BEARISH' }).cls).toBe('bearish')
+      expect(activityLean({ activity_lean: 'bullish', activity_lean_label: 'BULLISH' }).cls).toBe(
+        'bullish',
+      )
+      expect(activityLean({ activity_lean: 'bearish', activity_lean_label: 'BEARISH' }).cls).toBe(
+        'bearish',
+      )
       expect(activityLean({ activity_lean: 'mixed' }).cls).toBe('mixed')
       // Fallbacks
       expect(activityLean({ price_impulse: 'up' }).cls).toBe('bullish')
@@ -324,7 +367,7 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
     it('verifies timer intervals and cleanup in lifecycle hooks', () => {
       expect(desk).toContain('60_000') // Watchlist polling 60s
       expect(desk).toContain('20_000') // Marks polling 20s
-      expect(desk).toContain('document.visibilityState === \'visible\'')
+      expect(desk).toContain("document.visibilityState === 'visible'")
       expect(desk).toContain('clearInterval(watchlistTimer)')
       expect(desk).toContain('clearInterval(marksTimer)')
     })
@@ -338,7 +381,9 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
         const out: string[] = []
         const seen = new Set<string>()
         const push = (value: string | undefined) => {
-          const sym = String(value || '').trim().toUpperCase()
+          const sym = String(value || '')
+            .trim()
+            .toUpperCase()
           if (!sym || seen.has(sym)) return
           seen.add(sym)
           out.push(sym)
@@ -361,7 +406,12 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
 
   describe('4. Tactical Desk Computeds & Multi-domain Reconciliation', () => {
     it('evaluates confidence posture states accurately', () => {
-      const getPosture = (entered: number, high: number, actionable: number, maxEdge: number | null) => {
+      const getPosture = (
+        entered: number,
+        high: number,
+        actionable: number,
+        maxEdge: number | null,
+      ) => {
         if (entered > 0 || high > 0) {
           return {
             label: 'HIGH CONFIDENCE',
@@ -379,21 +429,24 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
         return {
           label: 'NO EDGE',
           tone: 'held' as const,
-          detail: maxEdge != null
-            ? `Max calibrated ${pctFrac(maxEdge, 1)} · nothing clears ${pctFrac(ACTIONABLE_EDGE, 0)} watch floor`
-            : 'No calibrated directional probabilities this session',
+          detail:
+            maxEdge != null
+              ? `Max calibrated ${pctFrac(maxEdge, 1)} · nothing clears ${pctFrac(ACTIONABLE_EDGE, 0)} watch floor`
+              : 'No calibrated directional probabilities this session',
         }
       }
 
       expect(getPosture(1, 1, 3, 0.72).label).toBe('HIGH CONFIDENCE')
       expect(getPosture(1, 1, 3, 0.72).tone).toBe('armed')
 
-      expect(getPosture(0, 0, 2, 0.60).label).toBe('WATCH ONLY')
-      expect(getPosture(0, 0, 2, 0.60).tone).toBe('held')
+      expect(getPosture(0, 0, 2, 0.6).label).toBe('WATCH ONLY')
+      expect(getPosture(0, 0, 2, 0.6).tone).toBe('held')
 
       expect(getPosture(0, 0, 0, 0.48).label).toBe('NO EDGE')
       expect(getPosture(0, 0, 0, 0.48).tone).toBe('held')
-      expect(getPosture(0, 0, 0, null).detail).toBe('No calibrated directional probabilities this session')
+      expect(getPosture(0, 0, 0, null).detail).toBe(
+        'No calibrated directional probabilities this session',
+      )
     })
 
     it('correctly derives relation agreement vs conflict across model domains', () => {
@@ -405,15 +458,26 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
       ): 'agree' | 'conflict' | 'none' => {
         const relation = reconciledMap.get(sym.toUpperCase())?.relation
         if (relation === 'agree' || relation === 'conflict') return relation
-        const peadSide = peadRows.find((r) => r.symbol?.toUpperCase() === sym.toUpperCase())?.side?.toLowerCase()
-        const directionalSide = signalRows.find((r) => r.symbol?.toUpperCase() === sym.toUpperCase())?.side?.toLowerCase()
+        const peadSide = peadRows
+          .find((r) => r.symbol?.toUpperCase() === sym.toUpperCase())
+          ?.side?.toLowerCase()
+        const directionalSide = signalRows
+          .find((r) => r.symbol?.toUpperCase() === sym.toUpperCase())
+          ?.side?.toLowerCase()
         if (!peadSide || !directionalSide) return 'none'
         return peadSide === directionalSide ? 'agree' : 'conflict'
       }
 
       const map = new Map()
-      const peadRows = [{ symbol: 'NVDA', side: 'long' }, { symbol: 'TSLA', side: 'short' }]
-      const sigRows = [{ symbol: 'NVDA', side: 'LONG' }, { symbol: 'TSLA', side: 'LONG' }, { symbol: 'AAPL', side: 'LONG' }]
+      const peadRows = [
+        { symbol: 'NVDA', side: 'long' },
+        { symbol: 'TSLA', side: 'short' },
+      ]
+      const sigRows = [
+        { symbol: 'NVDA', side: 'LONG' },
+        { symbol: 'TSLA', side: 'LONG' },
+        { symbol: 'AAPL', side: 'LONG' },
+      ]
 
       expect(relationFor('NVDA', map, peadRows, sigRows)).toBe('agree')
       expect(relationFor('TSLA', map, peadRows, sigRows)).toBe('conflict')

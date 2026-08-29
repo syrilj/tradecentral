@@ -44,6 +44,24 @@ DEFAULT_OUT = EDGE_ROOT / "runs" / "squeeze_flow_eval"
 DEFAULT_FIXTURE = EDGE_ROOT / "tests" / "research" / "fixtures" / "squeeze_flow_eval_panel.parquet"
 FIRE_THRESHOLD_GRID = (0.0, 0.05, 0.10, 0.20, 0.35, 0.50)
 
+# `evaluate_train_oos` below always fits/scores against the *next-session*
+# forward return -- `fit_fire_threshold` and `summarize_split` both read this
+# one column, never a caller-selectable one. The walk-forward purge/embargo
+# geometry fed to the splitter has to protect exactly that column's forward
+# window: passing a larger `cfg.label_horizon` (e.g. 5, sized for a `fwd_5d`
+# label nothing here scores) doesn't make a 1-day score any safer, it just
+# burns extra trailing dates the splitter never needed to protect from
+# leakage -- which is exactly what starved fold formation in production (a
+# panel with 8 usable dates and `label_horizon=5` cannot form a single fold;
+# see `_min_dates_required`). `cfg.label_horizon` keeps its own meaning
+# elsewhere in this module (e.g. the `label_end` fallback below and in
+# `build_panel_from_local_bars`); it is intentionally NOT threaded into the
+# splitter call in `evaluate_train_oos`. Callers who want a wider protective
+# margin than a 1-day label strictly requires should raise `embargo_dates`
+# instead, which exists for exactly that purpose (see splits.py docstring).
+SCORE_FWD_COL = "fwd_1d"
+SCORE_LABEL_HORIZON = 1
+
 
 @dataclass(frozen=True)
 class SqueezeFlowEvalConfig:
@@ -357,9 +375,18 @@ def summarize_split(
     frame: pd.DataFrame,
     *,
     score_col: str = "eval_score",
-    fwd_col: str = "fwd_1d",
+    fwd_col: str = SCORE_FWD_COL,
     threshold: float,
+    status: str = "evaluated",
 ) -> dict[str, Any]:
+    """Summarize one train/OOS slice.
+
+    ``status`` is caller-supplied context (``"evaluated"``,
+    ``"empty_panel"``, ``"insufficient_dates"``, ...) so a block with
+    ``n: 0`` can be told apart from one that was genuinely scored and simply
+    found no valid observations -- both look identical on ``n``/``hit_rate``
+    alone.
+    """
     if frame.empty or score_col not in frame.columns or fwd_col not in frame.columns:
         return {
             "n": 0,
@@ -367,12 +394,42 @@ def summarize_split(
             "hit_rate": None,
             "rank_ic": None,
             "threshold": float(threshold),
+            "status": status,
             "by_confidence": _band_blocks(frame, score_col=score_col, fwd_col=fwd_col, threshold=threshold),
         }
     block = _accuracy_block(frame[score_col], frame[fwd_col], threshold=threshold)
     block["by_confidence"] = _band_blocks(frame, score_col=score_col, fwd_col=fwd_col, threshold=threshold)
     block["n_rows"] = int(len(frame))
+    block["status"] = status
     return block
+
+
+def _min_dates_required(cfg: SqueezeFlowEvalConfig) -> int:
+    """Fewest usable trading dates the walk-forward geometry needs to yield
+    even one fold, given the horizon the splitter actually uses
+    (``SCORE_LABEL_HORIZON``, not ``cfg.label_horizon`` -- see module
+    docstring comment above ``SCORE_FWD_COL``).
+
+    Mirrors the arithmetic in ``expanding_walk_forward_splits``
+    (research/splits.py): the first fold needs
+    ``validation_start = initial_train_size + label_horizon + embargo``
+    plus enough remaining dates for either a full validation block or, if
+    partial finals are allowed, the smaller partial minimum.
+    """
+    tail = cfg.min_partial_validation_dates if cfg.include_partial_final else cfg.validation_dates
+    return cfg.initial_train_dates + SCORE_LABEL_HORIZON + cfg.embargo_dates + tail
+
+
+def _geometry_dict(cfg: SqueezeFlowEvalConfig) -> dict[str, Any]:
+    return {
+        "initial_train_dates": cfg.initial_train_dates,
+        "validation_dates": cfg.validation_dates,
+        "label_horizon": SCORE_LABEL_HORIZON,
+        "embargo_dates": cfg.embargo_dates,
+        "step_dates": cfg.step_dates,
+        "include_partial_final": cfg.include_partial_final,
+        "min_partial_validation_dates": cfg.min_partial_validation_dates,
+    }
 
 
 def evaluate_train_oos(
@@ -380,16 +437,31 @@ def evaluate_train_oos(
     *,
     cfg: SqueezeFlowEvalConfig | None = None,
 ) -> dict[str, Any]:
-    """Walk-forward train vs OOS on unique asof dates. No lookahead."""
+    """Walk-forward train vs OOS on unique asof dates. No lookahead.
+
+    The result always carries a top-level ``status`` -- ``"evaluated"``,
+    ``"empty_panel"``, or ``"insufficient_dates"`` -- and the same status is
+    mirrored onto both the ``train`` and ``oos`` blocks, so a caller reading
+    only ``result["train"]``/``result["oos"]`` (as
+    ``squeeze_validation.evaluate_universe`` does) can still tell "evaluated,
+    no edge found" apart from "never evaluated" without inferring it from an
+    all-null block that looks identical either way.
+    """
     cfg = cfg or SqueezeFlowEvalConfig()
     if panel.empty:
-        empty = summarize_split(panel, threshold=cfg.score_threshold)
+        train_empty = summarize_split(panel, threshold=cfg.score_threshold, status="empty_panel")
+        oos_empty = summarize_split(panel, threshold=cfg.score_threshold, status="empty_panel")
         return {
-            "train": empty,
-            "oos": empty,
+            "train": train_empty,
+            "oos": oos_empty,
             "n_folds": 0,
             "chosen_threshold": cfg.score_threshold,
             "split": "expanding_panel_walk_forward",
+            "status": "empty_panel",
+            "note": "empty_panel",
+            "n_dates_available": 0,
+            "n_dates_required": _min_dates_required(cfg),
+            "geometry": _geometry_dict(cfg),
         }
     work = panel.copy()
     work["asof"] = pd.to_datetime(work["asof"]).dt.tz_localize(None).dt.normalize()
@@ -398,7 +470,7 @@ def evaluate_train_oos(
     folds = list(
         expanding_panel_walk_forward_splits(
             work,
-            label_horizon=cfg.label_horizon,
+            label_horizon=SCORE_LABEL_HORIZON,
             initial_train_dates=cfg.initial_train_dates,
             validation_dates=cfg.validation_dates,
             step_dates=cfg.step_dates,
@@ -409,15 +481,26 @@ def evaluate_train_oos(
         )
     )
     if not folds:
-        # Honest fallback: still emit two blocks with n=0 rather than crashing.
-        empty = summarize_split(work.iloc[0:0], threshold=cfg.score_threshold)
+        # Honest fallback: still emit two blocks with n=0 rather than
+        # crashing -- but tagged so this can never be mistaken for "we
+        # evaluated and found no edge". The required-vs-available date
+        # counts make the infeasibility diagnosable straight from a saved
+        # summary.json, without re-deriving the splitter arithmetic by hand.
+        n_dates_available = int(work["asof"].nunique())
+        n_dates_required = _min_dates_required(cfg)
+        train_empty = summarize_split(work.iloc[0:0], threshold=cfg.score_threshold, status="insufficient_dates")
+        oos_empty = summarize_split(work.iloc[0:0], threshold=cfg.score_threshold, status="insufficient_dates")
         return {
-            "train": empty,
-            "oos": empty,
+            "train": train_empty,
+            "oos": oos_empty,
             "n_folds": 0,
             "chosen_threshold": cfg.score_threshold,
             "split": "expanding_panel_walk_forward",
             "note": "not_enough_dates_for_walk_forward",
+            "status": "insufficient_dates",
+            "n_dates_available": n_dates_available,
+            "n_dates_required": n_dates_required,
+            "geometry": _geometry_dict(cfg),
         }
     fold = folds[-1]
     train = work.iloc[fold.train_indices].copy()
@@ -426,11 +509,11 @@ def evaluate_train_oos(
         raise RuntimeError("walk-forward produced overlapping train/OOS dates")
     threshold = fit_fire_threshold(
         train["eval_score"],
-        train["fwd_1d"],
+        train[SCORE_FWD_COL],
         min_n=cfg.min_threshold_n,
     )
-    train_block = summarize_split(train, threshold=threshold)
-    oos_block = summarize_split(oos, threshold=threshold)
+    train_block = summarize_split(train, threshold=threshold, status="evaluated")
+    oos_block = summarize_split(oos, threshold=threshold, status="evaluated")
     train_block["n_dates"] = int(train["asof"].nunique())
     oos_block["n_dates"] = int(oos["asof"].nunique())
     train_block["max_asof"] = str(pd.Timestamp(train["asof"].max()).date()) if len(train) else None
@@ -444,6 +527,7 @@ def evaluate_train_oos(
         "embargo": int(fold.embargo),
         "chosen_threshold": float(threshold),
         "split": "expanding_panel_walk_forward",
+        "status": "evaluated",
         "train_dates": [str(d.date()) for d in fold.train_dates],
         "oos_dates": [str(d.date()) for d in fold.validation_dates],
     }

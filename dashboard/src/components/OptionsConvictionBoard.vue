@@ -1,22 +1,5 @@
-<script setup lang="ts">
-/**
- * Conviction board — the scan's top-ranked names with their option structure.
- *
- * Until this existed, the options engine only ever ran on a hand-typed ticker,
- * so the names the scan surfaced (PEAD flags, live-flow prints, activity ranks)
- * never got a chain fetch. Each row here is one live chain request, and clicking
- * one loads it in the detail view below.
- *
- * Three honesty rules the design enforces, because the numbers invite misreading:
- *   1. Selection is ordinal. Every row shows WHY it earned a chain request.
- *   2. A missing measurement renders as "—", never as 0.0/"quiet".
- *   3. Staleness is loud. A live chain scored on old bars gets a visible mark.
- */
-import { computed, onMounted, ref } from 'vue'
-import { api, type OptionsBoard, type OptionsBoardRow } from '@/api'
-import { optGex, optPctFrac, optSigned, optUsd } from '@/format'
-import Panel from '@/components/Panel.vue'
-import HelpTip from '@/components/HelpTip.vue'
+<script lang="ts">
+import type { OptionsBoardRow } from '@/api'
 
 export type ConvictionSortKey =
   | 'rank'
@@ -33,6 +16,75 @@ export type ConvictionSortKey =
 
 export type ConvictionSortDir = 'asc' | 'desc'
 export type BasisFilter = 'ALL' | 'LIVE FLOW' | 'PEAD' | 'MODEL' | 'ACTIVITY'
+
+/**
+ * Pressure score calculation conforming to reconciled Milestone 2 contract:
+ * - Positive signed squeeze flow maps to 'pos'
+ * - Negative signed squeeze flow maps to 'neg'
+ * - Net GEX alone (without directional pressure) maps to 'neutral'
+ * - Absent/missing measurements map to 'neutral'
+ */
+export function computePressureScore(row: OptionsBoardRow): {
+  score: number
+  signed: number
+  tone: 'pos' | 'neg' | 'neutral'
+  label: string
+} {
+  const callPrem = Number(row.call_premium ?? 0)
+  const putPrem = Number(row.put_premium ?? 0)
+  const totalPrem = callPrem + putPrem
+  // Normalize pressure score delta with total premium dampening so small prints (< $100k) do not distort conviction
+  const dampener = totalPrem > 0 ? Math.min(1, Math.max(0.15, totalPrem / 100_000)) : 1
+
+  // 1. Squeeze Score (Directional Squeeze Fuel)
+  if (row.squeeze_score != null && Number.isFinite(row.squeeze_score)) {
+    const rawSigned = Math.max(-100, Math.min(100, row.squeeze_score))
+    const signed =
+      row.selection_basis === 'live_options_flow' && totalPrem > 0
+        ? rawSigned * dampener
+        : rawSigned
+    const score = Math.abs(signed)
+    const tone = signed > 0.5 ? 'pos' : signed < -0.5 ? 'neg' : 'neutral'
+    return { score, signed, tone, label: `${signed > 0 ? '+' : ''}${signed.toFixed(1)}` }
+  }
+
+  // 2. Net GEX (Dealer Gamma Regime - Volatility Dampening/Amplification, NOT Directional Trend)
+  if (row.net_gex_m != null && Number.isFinite(row.net_gex_m)) {
+    const gex = row.net_gex_m
+    const score = Math.min(100, Math.abs(gex) * 10)
+    // Decoupled: Dealer Net GEX represents structural regime (dampening vs amplification), NOT directional pressure
+    return { score, signed: gex, tone: 'neutral', label: `${gex > 0 ? '+' : ''}${gex.toFixed(1)}M` }
+  }
+
+  // 3. Selection Score Fallback (Unmeasured Direction)
+  if (row.selection_score != null && Number.isFinite(row.selection_score)) {
+    const score = Math.min(100, row.selection_score)
+    return { score, signed: score, tone: 'neutral', label: `${score.toFixed(1)}` }
+  }
+
+  return { score: 0, signed: 0, tone: 'neutral', label: '0.0' }
+}
+</script>
+
+<script setup lang="ts">
+/**
+ * Conviction board — the scan's top-ranked names with their option structure.
+ *
+ * Until this existed, the options engine only ever ran on a hand-typed ticker,
+ * so the names the scan surfaced (PEAD flags, live-flow prints, activity ranks)
+ * never got a chain fetch. Each row here is one live chain request, and clicking
+ * one loads it in the detail view below.
+ *
+ * Three honesty rules the design enforces, because the numbers invite misreading:
+ *   1. Selection is ordinal. Every row shows WHY it earned a chain request.
+ *   2. A missing measurement renders as "—", never as 0.0/"quiet".
+ *   3. Staleness is loud. A live chain scored on old bars gets a visible mark.
+ */
+import { computed, onMounted, ref } from 'vue'
+import { api, type OptionsBoard } from '@/api'
+import { optGex, optPctFrac, optSigned, optUsd } from '@/format'
+import Panel from '@/components/Panel.vue'
+import HelpTip from '@/components/HelpTip.vue'
 
 const props = defineProps<{ depth?: 'quick' | 'deep' }>()
 const emit = defineEmits<{ (e: 'select', symbol: string): void }>()
@@ -104,7 +156,7 @@ function setSort(key: ConvictionSortKey) {
     sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
   } else {
     sortKey.value = key
-    sortDir.value = (key === 'rank' || key === 'symbol' || key === 'selection_basis') ? 'asc' : 'desc'
+    sortDir.value = key === 'rank' || key === 'symbol' || key === 'selection_basis' ? 'asc' : 'desc'
   }
 }
 
@@ -156,57 +208,10 @@ function selectionDisplay(row: OptionsBoardRow): string {
     ? pct(row.selection_score)
     : row.selection_score.toFixed(2)
 }
-
-function computePressureScore(row: OptionsBoardRow): {
-  score: number
-  signed: number
-  tone: 'pos' | 'neg' | 'neutral'
-  label: string
-} {
-  const callPrem = Number(row.call_premium ?? 0)
-  const putPrem = Number(row.put_premium ?? 0)
-  const totalPrem = callPrem + putPrem
-  // Normalize pressure score delta with total premium dampening so small prints (< $100k) do not distort conviction
-  const dampener = totalPrem > 0 ? Math.min(1, Math.max(0.15, totalPrem / 100_000)) : 1
-
-  if (row.squeeze_score != null && Number.isFinite(row.squeeze_score)) {
-    const rawSigned = Math.max(-100, Math.min(100, row.squeeze_score))
-    const signed = (row.selection_basis === 'live_options_flow' && totalPrem > 0)
-      ? rawSigned * dampener
-      : rawSigned
-    const score = Math.abs(signed)
-    const tone = signed > 0.5 ? 'pos' : signed < -0.5 ? 'neg' : 'neutral'
-    return { score, signed, tone, label: `${signed > 0 ? '+' : ''}${signed.toFixed(1)}` }
-  }
-  if (row.activity_imbalance != null && Number.isFinite(row.activity_imbalance)) {
-    const rawSigned = Math.max(-1, Math.min(1, row.activity_imbalance)) * 100
-    const signed = rawSigned * (totalPrem > 0 ? dampener : 0.5)
-    const score = Math.abs(signed)
-    const tone = signed > 0.5 ? 'pos' : signed < -0.5 ? 'neg' : 'neutral'
-    return { score, signed, tone, label: `${signed > 0 ? '+' : ''}${signed.toFixed(1)}` }
-  }
-  if (row.net_gex_m != null && Number.isFinite(row.net_gex_m)) {
-    const gex = row.net_gex_m
-    const tone = gex > 0 ? 'pos' : gex < 0 ? 'neg' : 'neutral'
-    const score = Math.min(100, Math.abs(gex) * 10)
-    return { score, signed: gex, tone, label: `${gex > 0 ? '+' : ''}${gex.toFixed(1)}M` }
-  }
-  if (row.selection_score != null && Number.isFinite(row.selection_score)) {
-    const score = Math.min(100, row.selection_score)
-    return { score, signed: score, tone: 'neutral', label: `${score.toFixed(1)}` }
-  }
-  return { score: 0, signed: 0, tone: 'neutral', label: '0.0' }
-}
 </script>
 
 <template>
-  <Panel
-    label="Conviction Board"
-    index="00"
-    :meta="meta"
-    :live="!loading"
-    flush
-  >
+  <Panel label="Conviction Board" index="00" :meta="meta" :live="!loading" flush>
     <template #action>
       <label class="live-toggle label">
         <input v-model="requireLiveFlow" type="checkbox" @change="load(true)" />
@@ -256,7 +261,7 @@ function computePressureScore(row: OptionsBoardRow): {
 
       <div class="basis-chips" role="group" aria-label="Selection basis filter">
         <button
-          v-for="b in (['ALL', 'LIVE FLOW', 'PEAD', 'MODEL', 'ACTIVITY'] as const)"
+          v-for="b in ['ALL', 'LIVE FLOW', 'PEAD', 'MODEL', 'ACTIVITY'] as const"
           :key="b"
           type="button"
           class="basis-chip-btn label"
@@ -273,13 +278,17 @@ function computePressureScore(row: OptionsBoardRow): {
     </div>
 
     <!-- Institutional Pressure Score Conviction Heatmap Bar -->
-    <div v-if="filteredRows.length" class="pressure-heatmap-bar" aria-label="Institutional Conviction Heatmap">
+    <div
+      v-if="filteredRows.length"
+      class="pressure-heatmap-bar"
+      aria-label="Institutional Conviction Heatmap"
+    >
       <div class="heatmap-header label">
         <span class="heatmap-title">INSTITUTIONAL PRESSURE CONVICTION SPECTRUM</span>
         <div class="heatmap-legend">
-          <span class="leg-item"><span class="leg-swatch pos" /> BULL / LONG GEX</span>
-          <span class="leg-item"><span class="leg-swatch neg" /> BEAR / SHORT GEX</span>
-          <span class="leg-item"><span class="leg-swatch neutral" /> UNMEASURED</span>
+          <span class="leg-item"><span class="leg-swatch pos" /> BULL FLOW</span>
+          <span class="leg-item"><span class="leg-swatch neg" /> BEAR FLOW</span>
+          <span class="leg-item"><span class="leg-swatch neutral" /> NEUTRAL / GEX</span>
         </div>
       </div>
       <div class="heatmap-strip">
@@ -303,41 +312,89 @@ function computePressureScore(row: OptionsBoardRow): {
       <table class="grid board-table">
         <thead>
           <tr>
-            <th class="label sortable" :class="{ active: sortKey === 'rank' }" @click="setSort('rank')">
+            <th
+              class="label sortable"
+              :class="{ active: sortKey === 'rank' }"
+              @click="setSort('rank')"
+            >
               # <span class="sort-arr">{{ sortIndicator('rank') }}</span>
             </th>
-            <th class="label sortable" :class="{ active: sortKey === 'symbol' }" @click="setSort('symbol')">
+            <th
+              class="label sortable"
+              :class="{ active: sortKey === 'symbol' }"
+              @click="setSort('symbol')"
+            >
               SYM <span class="sort-arr">{{ sortIndicator('symbol') }}</span>
             </th>
-            <th class="label sortable" :class="{ active: sortKey === 'selection_basis' }" @click="setSort('selection_basis')">
+            <th
+              class="label sortable"
+              :class="{ active: sortKey === 'selection_basis' }"
+              @click="setSort('selection_basis')"
+            >
               WHY
-              <HelpTip text="Which scan tier routed this name into a chain request. Ordinal except MODEL, which is the only calibrated probability on the board." />
+              <HelpTip
+                text="Which scan tier routed this name into a chain request. Ordinal except MODEL, which is the only calibrated probability on the board."
+              />
               <span class="sort-arr">{{ sortIndicator('selection_basis') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'selection_score' }" @click="setSort('selection_score')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'selection_score' }"
+              @click="setSort('selection_score')"
+            >
               SCORE <span class="sort-arr">{{ sortIndicator('selection_score') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'spot' }" @click="setSort('spot')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'spot' }"
+              @click="setSort('spot')"
+            >
               SPOT <span class="sort-arr">{{ sortIndicator('spot') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'squeeze_score' }" @click="setSort('squeeze_score')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'squeeze_score' }"
+              @click="setSort('squeeze_score')"
+            >
               SQUEEZE
-              <HelpTip text="Signed structural score. '0.0' indicates baseline or unmeasured structure." />
+              <HelpTip
+                text="Signed structural score. '0.0' indicates baseline or unmeasured structure."
+              />
               <span class="sort-arr">{{ sortIndicator('squeeze_score') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'net_gex_m' }" @click="setSort('net_gex_m')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'net_gex_m' }"
+              @click="setSort('net_gex_m')"
+            >
               NET GEX $M <span class="sort-arr">{{ sortIndicator('net_gex_m') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'put_wall' }" @click="setSort('put_wall')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'put_wall' }"
+              @click="setSort('put_wall')"
+            >
               PUT WALL <span class="sort-arr">{{ sortIndicator('put_wall') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'call_wall' }" @click="setSort('call_wall')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'call_wall' }"
+              @click="setSort('call_wall')"
+            >
               CALL WALL <span class="sort-arr">{{ sortIndicator('call_wall') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'expected_move' }" @click="setSort('expected_move')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'expected_move' }"
+              @click="setSort('expected_move')"
+            >
               EXP MOVE <span class="sort-arr">{{ sortIndicator('expected_move') }}</span>
             </th>
-            <th class="label num sortable" :class="{ active: sortKey === 'atm_iv' }" @click="setSort('atm_iv')">
+            <th
+              class="label num sortable"
+              :class="{ active: sortKey === 'atm_iv' }"
+              @click="setSort('atm_iv')"
+            >
               ATM IV <span class="sort-arr">{{ sortIndicator('atm_iv') }}</span>
             </th>
             <th class="label">DATA</th>
@@ -376,26 +433,50 @@ function computePressureScore(row: OptionsBoardRow): {
             <td class="fig num">{{ optPctFrac(row.atm_iv, 1) }}</td>
             <td class="flags">
               <span v-if="!row.available" class="chip halt label">NO CHAIN</span>
-              <span v-else-if="!row.gex_measurable" class="chip warn label" title="Open interest unavailable — gamma is unmeasured, not zero">NO OI</span>
+              <span
+                v-else-if="!row.gex_measurable"
+                class="chip warn label"
+                title="Open interest unavailable — gamma is unmeasured, not zero"
+                >NO OI</span
+              >
               <span
                 v-if="row.clock_mismatch"
                 class="chip warn label"
                 :title="`Chain is ${row.clock_skew_days}d newer than the last price bar (${row.price_asof}) — momentum term is stale`"
-              >{{ row.clock_skew_days }}D STALE</span>
+                >{{ row.clock_skew_days }}D STALE</span
+              >
             </td>
             <td class="risk-viz-cell">
               <!-- Squeeze score spark bar -->
-              <div class="sq-spark" :title="row.squeeze_score != null ? `Squeeze: ${row.squeeze_score.toFixed(1)}` : 'Unmeasured'">
+              <div
+                class="sq-spark"
+                :title="
+                  row.squeeze_score != null
+                    ? `Squeeze: ${row.squeeze_score.toFixed(1)}`
+                    : 'Unmeasured'
+                "
+              >
                 <div
                   class="sq-spark-bar"
-                  :class="row.squeeze_score == null ? 'unmeasured' : row.squeeze_score > 0 ? 'pos' : 'neg'"
-                  :style="{ width: row.squeeze_score != null ? `${Math.min(100, Math.abs(row.squeeze_score))}%` : '0%' }"
+                  :class="
+                    row.squeeze_score == null ? 'unmeasured' : row.squeeze_score > 0 ? 'pos' : 'neg'
+                  "
+                  :style="{
+                    width:
+                      row.squeeze_score != null
+                        ? `${Math.min(100, Math.abs(row.squeeze_score))}%`
+                        : '0%',
+                  }"
                 />
               </div>
               <!-- ATM IV chip -->
-              <span v-if="row.atm_iv != null" class="iv-chip label">IV {{ optPctFrac(row.atm_iv, 1) }}</span>
+              <span v-if="row.atm_iv != null" class="iv-chip label"
+                >IV {{ optPctFrac(row.atm_iv, 1) }}</span
+              >
               <!-- Expected move -->
-              <span v-if="row.expected_move != null" class="em-chip label">±{{ optUsd(row.expected_move) }}</span>
+              <span v-if="row.expected_move != null" class="em-chip label"
+                >±{{ optUsd(row.expected_move) }}</span
+              >
             </td>
           </tr>
         </tbody>
@@ -403,8 +484,8 @@ function computePressureScore(row: OptionsBoardRow): {
     </div>
 
     <p v-else-if="!loading" class="board-msg label">
-      No scan candidate met the selection criteria. Clear the search/filter, run a deep scan from the Desk,
-      or clear the live-flow filter.
+      No scan candidate met the selection criteria. Clear the search/filter, run a deep scan from
+      the Desk, or clear the live-flow filter.
     </p>
 
     <footer v-if="board?.caveats?.length" class="board-caveats">
@@ -414,6 +495,7 @@ function computePressureScore(row: OptionsBoardRow): {
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .refresh-btn,
 .live-toggle {
   display: inline-flex;
@@ -579,9 +661,15 @@ function computePressureScore(row: OptionsBoardRow): {
   display: inline-block;
 }
 
-.leg-swatch.pos { background: var(--call); }
-.leg-swatch.neg { background: var(--put); }
-.leg-swatch.neutral { background: var(--rule-hi); }
+.leg-swatch.pos {
+  background: var(--call);
+}
+.leg-swatch.neg {
+  background: var(--put);
+}
+.leg-swatch.neutral {
+  background: var(--rule-hi);
+}
 
 .heatmap-strip {
   display: flex;
@@ -637,8 +725,12 @@ function computePressureScore(row: OptionsBoardRow): {
   color: var(--ink-dim);
 }
 
-.heatmap-cell.pos .cell-val { color: var(--call-hi); }
-.heatmap-cell.neg .cell-val { color: var(--put-hi); }
+.heatmap-cell.pos .cell-val {
+  color: var(--call-hi);
+}
+.heatmap-cell.neg .cell-val {
+  color: var(--put-hi);
+}
 
 /* Table and Sort Headers */
 th.sortable {
@@ -700,10 +792,18 @@ th.sortable.active .sort-arr {
   color: var(--ink-faint);
 }
 
-.pos { color: var(--call-hi, var(--call)); }
-.neg { color: var(--put-hi, var(--put)); }
-.call { color: var(--call-hi, var(--call)); }
-.put { color: var(--put-hi, var(--put)); }
+.pos {
+  color: var(--call-hi, var(--call));
+}
+.neg {
+  color: var(--put-hi, var(--put));
+}
+.call {
+  color: var(--call-hi, var(--call));
+}
+.put {
+  color: var(--put-hi, var(--put));
+}
 
 .basis {
   border: var(--hair) solid var(--rule-hi);
@@ -711,9 +811,18 @@ th.sortable.active .sort-arr {
   color: var(--ink-dim);
 }
 
-.basis.pead_ordinal { border-color: var(--phosphor-dim); color: var(--phosphor); }
-.basis.live_options_flow { border-color: var(--call); color: var(--call-hi); }
-.basis.directional_model { border-color: var(--long); color: var(--long); }
+.basis.pead_ordinal {
+  border-color: var(--phosphor-dim);
+  color: var(--phosphor);
+}
+.basis.live_options_flow {
+  border-color: var(--call);
+  color: var(--call-hi);
+}
+.basis.directional_model {
+  border-color: var(--long);
+  color: var(--long);
+}
 
 .sq-label {
   display: block;
@@ -735,7 +844,9 @@ th.sortable.active .sort-arr {
   padding: 0.05rem 0.3rem;
 }
 
-.sq-col { min-width: 120px; }
+.sq-col {
+  min-width: 120px;
+}
 
 .risk-viz-cell {
   display: flex;
@@ -757,9 +868,17 @@ th.sortable.active .sort-arr {
   transition: width 0.4s ease;
   min-width: 2px;
 }
-.sq-spark-bar.pos { background: var(--call); }
-.sq-spark-bar.neg { background: var(--put); }
-.sq-spark-bar.unmeasured { background: var(--rule-hi); width: 100% !important; opacity: 0.4; }
+.sq-spark-bar.pos {
+  background: var(--call);
+}
+.sq-spark-bar.neg {
+  background: var(--put);
+}
+.sq-spark-bar.unmeasured {
+  background: var(--rule-hi);
+  width: 100% !important;
+  opacity: 0.4;
+}
 
 .iv-chip {
   display: inline-block;
@@ -779,8 +898,12 @@ th.sortable.active .sort-arr {
   color: var(--ink-ghost);
   letter-spacing: 0.03em;
 }
-.chip.halt { color: var(--halt); }
-.chip.warn { color: var(--warn); }
+.chip.halt {
+  color: var(--halt);
+}
+.chip.warn {
+  color: var(--warn);
+}
 
 .board-msg {
   padding: 1rem 0.75rem;
@@ -789,7 +912,9 @@ th.sortable.active .sort-arr {
   color: var(--ink-dim);
 }
 
-.board-msg.err { color: var(--halt); }
+.board-msg.err {
+  color: var(--halt);
+}
 
 .board-caveats {
   border-top: var(--hair) solid var(--rule);

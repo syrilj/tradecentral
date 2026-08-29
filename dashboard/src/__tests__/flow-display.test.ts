@@ -67,100 +67,134 @@ describe('flow display helpers (shipped)', () => {
   })
 
   it('labels the first provider window as a baseline, later windows as previous-window deltas', () => {
-    expect(pulseWindowCopy({
-      baseline: true,
-      newPrints: 0,
-      newPremiumLabel: '+$80k',
-      windowDeltaLabel: '+$0',
-    })).toBe(FIRST_WINDOW_BASELINE)
-    expect(pulseWindowCopy({
-      baseline: false,
-      newPrints: 2,
-      newPremiumLabel: '+$80k',
-      windowDeltaLabel: '+$12k',
-    })).toBe(`+$80k · 2 new vs ${PREVIOUS_PROVIDER_WINDOW}`)
-    expect(pulseWindowCopy({
-      baseline: false,
-      newPrints: 0,
-      newPremiumLabel: '+$0',
-      windowDeltaLabel: '−$12k',
-    })).toBe(`−$12k vs ${PREVIOUS_PROVIDER_WINDOW}`)
-    expect(pulseWindowCopy({
-      baseline: true,
-      newPrints: 0,
-      newPremiumLabel: '+$80k',
-      windowDeltaLabel: '+$0',
-    })).not.toContain('prior sample')
+    expect(
+      pulseWindowCopy({
+        baseline: true,
+        newPrints: 0,
+        newPremiumLabel: '+$80k',
+        windowDeltaLabel: '+$0',
+      }),
+    ).toBe(FIRST_WINDOW_BASELINE)
+    expect(
+      pulseWindowCopy({
+        baseline: false,
+        newPrints: 2,
+        newPremiumLabel: '+$80k',
+        windowDeltaLabel: '+$12k',
+      }),
+    ).toBe(`+$80k · 2 new vs ${PREVIOUS_PROVIDER_WINDOW}`)
+    expect(
+      pulseWindowCopy({
+        baseline: false,
+        newPrints: 0,
+        newPremiumLabel: '+$0',
+        windowDeltaLabel: '−$12k',
+      }),
+    ).toBe(`−$12k vs ${PREVIOUS_PROVIDER_WINDOW}`)
+    expect(
+      pulseWindowCopy({
+        baseline: true,
+        newPrints: 0,
+        newPremiumLabel: '+$80k',
+        windowDeltaLabel: '+$0',
+      }),
+    ).not.toContain('prior sample')
   })
 
   it('classifies institutional flow order taxonomy correctly', () => {
     // Golden sweep
-    expect(classifyFlowOrder({
-      trade_class: 'sweep',
-      aggressor: 'buy',
-      premium: 250_000,
-    }).type).toBe('golden_sweep')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'sweep',
+        aggressor: 'buy',
+        premium: 250_000,
+      }).type,
+    ).toBe('golden_sweep')
 
-    expect(classifyFlowOrder({
-      is_sweep: true,
-      aggressor: 'ask',
-      volume: 1500,
-      open_interest: 800,
-    }).type).toBe('golden_sweep')
+    expect(
+      classifyFlowOrder({
+        is_sweep: true,
+        aggressor: 'ask',
+        volume: 1500,
+        open_interest: 800,
+      }).type,
+    ).toBe('golden_sweep')
 
-    expect(classifyFlowOrder({
-      trade_class: 'sweep',
-      aggressor: 'buy',
-      premium: 600_000,
-    }).type).toBe('golden_sweep')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'sweep',
+        aggressor: 'buy',
+        premium: 600_000,
+      }).type,
+    ).toBe('golden_sweep')
 
-    expect(classifyFlowOrder({
-      flags: ['golden_sweep'],
-    }).type).toBe('golden_sweep')
+    expect(
+      classifyFlowOrder({
+        flags: ['golden_sweep'],
+      }).type,
+    ).toBe('golden_sweep')
 
     // Sweep
-    expect(classifyFlowOrder({
-      trade_class: 'sweep',
-      aggressor: 'sell',
-      premium: 50_000,
-    }).type).toBe('sweep')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'sweep',
+        aggressor: 'sell',
+        premium: 50_000,
+      }).type,
+    ).toBe('sweep')
 
     // Split
-    expect(classifyFlowOrder({
-      trade_class: 'split',
-    }).type).toBe('split')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'split',
+      }).type,
+    ).toBe('split')
 
-    expect(classifyFlowOrder({
-      flags: ['cross_exchange'],
-    }).type).toBe('split')
+    expect(
+      classifyFlowOrder({
+        flags: ['cross_exchange'],
+      }).type,
+    ).toBe('split')
 
     // Multi-leg
-    expect(classifyFlowOrder({
-      trade_class: 'multileg',
-    }).type).toBe('multileg')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'multileg',
+      }).type,
+    ).toBe('multileg')
 
-    expect(classifyFlowOrder({
-      trade_class: 'spread',
-    }).type).toBe('multileg')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'spread',
+      }).type,
+    ).toBe('multileg')
 
-    expect(classifyFlowOrder({
-      flags: ['straddle'],
-    }).type).toBe('multileg')
+    expect(
+      classifyFlowOrder({
+        flags: ['straddle'],
+      }).type,
+    ).toBe('multileg')
 
     // Block
-    expect(classifyFlowOrder({
-      trade_class: 'block',
-      premium: 500_000,
-    }).type).toBe('block')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'block',
+        premium: 500_000,
+      }).type,
+    ).toBe('block')
 
-    expect(classifyFlowOrder({
-      is_block: true,
-    }).type).toBe('block')
+    expect(
+      classifyFlowOrder({
+        is_block: true,
+      }).type,
+    ).toBe('block')
 
     // Standard
-    expect(classifyFlowOrder({
-      trade_class: 'single',
-    }).type).toBe('standard')
+    expect(
+      classifyFlowOrder({
+        trade_class: 'single',
+      }).type,
+    ).toBe('standard')
 
     expect(classifyFlowOrder({})).toMatchObject({
       type: 'standard',
@@ -278,4 +312,3 @@ describe('flow display helpers (shipped)', () => {
     expect(formatMoneyness(-0.05)).toEqual({ label: 'ITM -5.0%', className: 'moneyness-itm' })
   })
 })
-

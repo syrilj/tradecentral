@@ -1758,7 +1758,7 @@ const charmChartKey = computed(
               <th colspan="2" class="group-center">STRIKE IDENTIFIER</th>
               <th colspan="6" class="group-call">CALL OPTIONS (DEALER LONG INVENTORY)</th>
               <th colspan="6" class="group-put">PUT OPTIONS (DEALER SHORT INVENTORY)</th>
-              <th colspan="2" class="group-net">DEALER NET IMPACT</th>
+              <th colspan="2" class="group-net">DEALER NET FLOW</th>
             </tr>
             <!-- Individual Column Headers (Sortable) -->
             <tr class="header-cols">
@@ -1972,6 +1972,7 @@ const charmChartKey = computed(
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .drift-view {
   display: flex;
   flex-direction: column;

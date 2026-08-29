@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   api,
@@ -18,8 +18,9 @@ import {
 import { debounce, useResource, type Resource } from '@/composables/useResource'
 import {
   compact,
-  DASH,
   num,
+  optGex,
+  optSignedGex,
   optUsd,
   pctFrac,
   shortDate,
@@ -37,7 +38,7 @@ import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
 
 import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
-import { activityLeanRead } from '@/optionsTape'
+import { activityLeanRead, formatTapeDate, formatTapeTime, isDateOnlyStamp } from '@/optionsTape'
 import { calculateFeaturedSetup } from '@/squeezeCalc'
 import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
@@ -57,6 +58,31 @@ type TapeView =
   | 'moonshot'
 type TapeSort = 'near-signed' | 'newest' | 'premium' | 'anomaly'
 type PremiumFloor = 0 | 25_000 | 50_000 | 100_000 | 250_000 | 500_000 | 1_000_000
+
+type LiveStreamSpeed = '5s' | '10s' | '15s' | '30s' | 'pause'
+type AnomalyFlagFilter =
+  | 'all'
+  | 'golden_sweep'
+  | 'whales'
+  | 'mega_whales'
+  | 'sweeps'
+  | 'repeat_cluster'
+  | 'sweep_burst'
+  | 'high_vol_oi'
+  | 'moonshot'
+
+type StrikeBand = 'all' | 'atm' | 'near' | 'wide' | 'deep_otm'
+type DteBand = 'all' | '0dte' | 'weekly' | 'monthly' | 'quarterly' | 'leaps'
+
+const liveStreamSpeed = ref<LiveStreamSpeed>('10s')
+const streamCountdown = ref<number>(10)
+const knownPrintKeys = ref<Set<string>>(new Set())
+const newPrintKeys = ref<Set<string>>(new Set())
+const showAllFlagged = ref<boolean>(false)
+const activeFlagFilter = ref<AnomalyFlagFilter>('all')
+const strikeBand = ref<StrikeBand>('all')
+const dteBand = ref<DteBand>('all')
+const tapeSearchQuery = ref<string>('')
 
 const status = inject<Resource<StatusPayload>>('status')
 const route = useRoute()
@@ -83,6 +109,7 @@ const maxDte = ref(365)
 /** Match backend default so the list and print counts stay aligned. */
 const tapeLimit = ref(200)
 const TAPE_RENDER_CAP = 80
+const tapeShowAll = ref(false)
 /** Default to near-dated signed flow so actionable prints show first.
  *  User can switch to 'all' to see the full tape without DTE restriction. */
 const tapeView = ref<TapeView>('near')
@@ -338,6 +365,74 @@ const searchHits = ref<SearchHit[]>([])
 const searching = ref(false)
 const searchOpen = ref(false)
 
+/* Real-time WebSocket-style Live Feed Stream Timer */
+let streamTimer: number | undefined
+
+const STREAM_INTERVALS: Record<LiveStreamSpeed, number> = {
+  '5s': 5,
+  '10s': 10,
+  '15s': 15,
+  '30s': 30,
+  pause: 10,
+}
+
+function startStreamTimer(): void {
+  stopStreamTimer()
+  if (liveStreamSpeed.value === 'pause' || mode.value !== 'live') return
+  const intervalSec = STREAM_INTERVALS[liveStreamSpeed.value]
+  streamCountdown.value = intervalSec
+  streamTimer = window.setInterval(() => {
+    if (liveStreamSpeed.value === 'pause' || mode.value !== 'live') return
+    if (streamCountdown.value > 1) {
+      streamCountdown.value -= 1
+    } else {
+      streamCountdown.value = intervalSec
+      if (document.visibilityState === 'visible' && !resource.loading.value) {
+        void resource.refresh({ clear: false })
+      }
+    }
+  }, 1000)
+}
+
+function stopStreamTimer(): void {
+  if (streamTimer !== undefined) {
+    clearInterval(streamTimer)
+    streamTimer = undefined
+  }
+}
+
+function tickStreamNow(): void {
+  const intervalSec = STREAM_INTERVALS[liveStreamSpeed.value]
+  streamCountdown.value = intervalSec
+  void resource.refresh({ clear: false })
+}
+
+function selectHistoricalDate(day: string): void {
+  mode.value = 'history'
+  dateTo.value = day
+}
+
+function returnToLive(): void {
+  mode.value = 'live'
+  dateFrom.value = ''
+  dateTo.value = ''
+  selectedExpiry.value = 'all'
+  liveStreamSpeed.value = '10s'
+  startStreamTimer()
+}
+
+watch([liveStreamSpeed, mode], () => {
+  startStreamTimer()
+})
+
+onMounted(() => {
+  startStreamTimer()
+})
+
+onUnmounted(() => {
+  stopStreamTimer()
+})
+
 const resource = useResource<OptionsIntelligence>(
   () =>
     api.options({
@@ -390,6 +485,11 @@ async function scanLiveFlow(): Promise<void> {
   }
 }
 
+function openUnusualScan(): void {
+  unusualOpen.value = true
+  void scanLiveFlow()
+}
+
 /**
  * Set true for exactly one refresh so a manual "SCAN LIVE" click bypasses the
  * backend's 90s cache (tools/api_server.py _LIVE_OPPORTUNITIES_TTL_S). Same
@@ -422,6 +522,11 @@ async function scanLiveOpportunities(): Promise<void> {
   } finally {
     opportunitiesForceNext.value = false
   }
+}
+
+function openOpportunitiesScan(): void {
+  opportunitiesOpen.value = true
+  void scanLiveOpportunities()
 }
 
 const opportunityRows = computed<LiveOpportunityRow[]>(() => opportunities.data.value?.rows ?? [])
@@ -616,9 +721,8 @@ const runSearch = debounce(async (term: string) => {
       ]
     }
     searchHits.value = list.slice(0, 12)
+    searchOpen.value = true
   } catch {
-    // Search API failed — still surface the typed ticker as a loadable fallback
-    // hit instead of leaving the dropdown closed with no visible feedback.
     searchHits.value = cleaned
       ? [
           {
@@ -633,7 +737,6 @@ const runSearch = debounce(async (term: string) => {
       : []
   } finally {
     searching.value = false
-    searchOpen.value = true
   }
 }, 140)
 
@@ -762,15 +865,16 @@ const leanRead = computed(() => {
       decision_authorized: s.value.decision_authorized,
     })
   }
-  const call = flowPremSplit.value.call ?? 0
-  const put = flowPremSplit.value.put ?? 0
-  const total = call + put
-  const imb = total > 0 ? (call - put) / total : 0
-  const lean = total <= 0 || Math.abs(imb) < 0.15 ? 'neutral' : imb > 0 ? 'bullish' : 'bearish'
+  // When the backend has not supplied activity_lean, do NOT invent a
+  // directional read from raw call/put premium identity. Call-heavy premium
+  // alone does not mean bullish — it can reflect covered-call selling or
+  // protection buying. Stay neutral so the activity strip agrees with
+  // directionRead (which requires signed flow or fired squeeze to go
+  // directional). The premium split remains visible in the flow context bar.
   return activityLeanRead({
-    activity_lean: lean,
-    activity_lean_source: total > 0 && Math.abs(imb) >= 0.15 ? 'call_put_premium' : 'none',
-    activity_lean_label: lean.toUpperCase(),
+    activity_lean: 'neutral',
+    activity_lean_source: 'none',
+    activity_lean_label: 'CONTRACT MIX ONLY',
     decision_authorized: false,
   })
 })
@@ -823,6 +927,20 @@ const gexMeasurable = computed(() => {
   return (s.value?.call_oi ?? 0) + (s.value?.put_oi ?? 0) > 0
 })
 
+/**
+ * `summary.zero_gamma` and `summary.gamma_flip` are both written from the same
+ * solved flip level in `_gex_map`, so a header that renders both badges prints
+ * one number twice. Show the second badge only if a payload ever separates
+ * them (sub-cent differences are rounding, not a distinct level).
+ */
+const zeroGammaDistinct = computed(() => {
+  const zero = s.value?.zero_gamma
+  const flip = s.value?.gamma_flip
+  if (zero == null || !Number.isFinite(zero)) return false
+  if (flip == null || !Number.isFinite(flip)) return true
+  return Math.abs(zero - flip) >= 0.01
+})
+
 /** Contracts fetched but discarded by the filters — the "why is it empty" number. */
 const chainRawCount = computed(
   () =>
@@ -865,6 +983,130 @@ function moneynessInfo(row: OptionsTapeRow): { text: string; cls: 'itm' | 'otm' 
   return { text: `${dist}% OTM`, cls: 'otm' }
 }
 
+function matchesStrikeBand(row: OptionsTapeRow): boolean {
+  if (strikeBand.value === 'all') return true
+  const spot = row.underlying_price ?? s.value?.spot
+  if (!spot || spot <= 0 || row.strike == null || row.strike <= 0) return true
+  const diffPct = Math.abs((row.strike - spot) / spot) * 100
+  if (strikeBand.value === 'atm') return diffPct <= 2.0
+  if (strikeBand.value === 'near') return diffPct <= 6.0
+  if (strikeBand.value === 'wide') return diffPct <= 15.0
+  if (strikeBand.value === 'deep_otm') return diffPct > 15.0
+  return true
+}
+
+function matchesDteBand(row: OptionsTapeRow): boolean {
+  if (dteBand.value === 'all') return true
+  let dte = row.dte
+  if (dte == null && row.expiry) {
+    const expDate = new Date(row.expiry)
+    dte = Math.ceil((expDate.getTime() - Date.now()) / 86_400_000)
+  }
+  if (dte == null) return true
+  if (dteBand.value === '0dte') return dte === 0
+  if (dteBand.value === 'weekly') return dte >= 0 && dte <= 7
+  if (dteBand.value === 'monthly') return dte >= 8 && dte <= 30
+  if (dteBand.value === 'quarterly') return dte >= 31 && dte <= 90
+  if (dteBand.value === 'leaps') return dte > 90
+  return true
+}
+
+function matchesActiveFlag(row: OptionsTapeRow): boolean {
+  if (activeFlagFilter.value === 'all') return true
+  if (activeFlagFilter.value === 'golden_sweep') return tradeClassLabel(row) === 'GOLDEN SWEEP'
+  if (activeFlagFilter.value === 'mega_whales') return (row.premium ?? 0) >= 500_000
+  if (activeFlagFilter.value === 'whales') return (row.premium ?? 0) >= 100_000
+  if (activeFlagFilter.value === 'sweeps')
+    return (
+      row.trade_class === 'sweep' ||
+      row.is_sweep === true ||
+      (row.anomaly_flags ?? []).includes('sweep_burst')
+    )
+  if (activeFlagFilter.value === 'repeat_cluster')
+    return (row.anomaly_flags ?? []).includes('repeat_cluster')
+  if (activeFlagFilter.value === 'sweep_burst')
+    return (row.anomaly_flags ?? []).includes('sweep_burst')
+  if (activeFlagFilter.value === 'high_vol_oi') {
+    const ratio = volOiRatio(row)
+    return ratio != null && ratio >= 2.0
+  }
+  if (activeFlagFilter.value === 'moonshot')
+    return row.is_moonshot === true || (row.presets ?? []).includes('moonshot')
+  return true
+}
+
+function matchesSearchQuery(row: OptionsTapeRow): boolean {
+  const q = tapeSearchQuery.value.trim().toLowerCase()
+  if (!q) return true
+  const strikeStr = row.strike != null ? String(row.strike) : ''
+  const expStr = row.expiry ? row.expiry.toLowerCase() : ''
+  const rightStr = row.right ? row.right.toLowerCase() : ''
+  const classStr = row.trade_class ? row.trade_class.toLowerCase() : ''
+  const occStr = row.occ_symbol ? row.occ_symbol.toLowerCase() : ''
+  const lean = tapeLean(row).label.toLowerCase()
+  const flags = (row.anomaly_flags ?? []).join(' ').toLowerCase()
+  const classLabel = tradeClassLabel(row).toLowerCase()
+  return (
+    strikeStr.includes(q) ||
+    expStr.includes(q) ||
+    rightStr.includes(q) ||
+    classStr.includes(q) ||
+    occStr.includes(q) ||
+    lean.includes(q) ||
+    flags.includes(q) ||
+    classLabel.includes(q)
+  )
+}
+
+function isNewPrint(row: OptionsTapeRow): boolean {
+  const k = `${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`
+  return newPrintKeys.value.has(k)
+}
+
+const activeFiltersCount = computed(() => {
+  let count = 0
+  if (strikeBand.value !== 'all') count++
+  if (dteBand.value !== 'all') count++
+  if (activeFlagFilter.value !== 'all') count++
+  if (tapeSearchQuery.value.trim()) count++
+  if (tapeView.value !== 'all' && tapeView.value !== 'near') count++
+  if (minPremium.value > 25000) count++
+  return count
+})
+
+function resetAllFilters(): void {
+  strikeBand.value = 'all'
+  dteBand.value = 'all'
+  activeFlagFilter.value = 'all'
+  tapeSearchQuery.value = ''
+  tapeView.value = 'all'
+  minPremium.value = 25000
+}
+
+watch(
+  () => d.value?.flow_tape,
+  (tape) => {
+    if (!tape || !tape.length) return
+    const currentKeys = new Set<string>()
+    const newlyArrived = new Set<string>()
+    for (const r of tape) {
+      const k = `${r.timestamp ?? ''}-${r.right ?? ''}-${r.strike ?? ''}-${r.premium ?? ''}-${contractsOf(r)}`
+      currentKeys.add(k)
+      if (knownPrintKeys.value.size > 0 && !knownPrintKeys.value.has(k)) {
+        newlyArrived.add(k)
+      }
+    }
+    knownPrintKeys.value = currentKeys
+    if (newlyArrived.size > 0) {
+      newPrintKeys.value = newlyArrived
+      setTimeout(() => {
+        newPrintKeys.value = new Set()
+      }, 3500)
+    }
+  },
+  { deep: true },
+)
+
 const visibleTape = computed<OptionsTapeRow[]>(() => {
   const allRows = d.value?.flow_tape ?? []
   const now = new Date()
@@ -891,17 +1133,22 @@ const visibleTape = computed<OptionsTapeRow[]>(() => {
   }
 
   const rows = [...allRows].filter((row) => {
+    if (!matchesStrikeBand(row)) return false
+    if (!matchesDteBand(row)) return false
+    if (!matchesActiveFlag(row)) return false
+    if (!matchesSearchQuery(row)) return false
+
     if (tapeView.value === 'near') return isNear(row)
     if (tapeView.value === 'whales') return row.premium >= 100_000
     if (tapeView.value === 'itm') return isItm(row)
-    if (tapeView.value === 'anomalies') return row.anomaly_flags.length > 0
+    if (tapeView.value === 'anomalies') return (row.anomaly_flags ?? []).length > 0
     if (tapeView.value === 'calls') return row.right === 'call'
     if (tapeView.value === 'puts') return row.right === 'put'
     if (tapeView.value === 'sweeps') {
       return (
         row.trade_class === 'sweep' ||
         row.is_sweep === true ||
-        row.anomaly_flags.includes('sweep_burst')
+        (row.anomaly_flags ?? []).includes('sweep_burst')
       )
     }
     if (tapeView.value === 'blocks') return row.trade_class === 'block' || row.is_block === true
@@ -914,9 +1161,12 @@ const visibleTape = computed<OptionsTapeRow[]>(() => {
     return true
   })
 
-  if (tapeSort.value === 'premium') return rows.sort((a, b) => b.premium - a.premium)
+  if (tapeSort.value === 'premium') return rows.sort((a, b) => (b.premium ?? 0) - (a.premium ?? 0))
   if (tapeSort.value === 'anomaly')
-    return rows.sort((a, b) => b.anomaly_score - a.anomaly_score || b.premium - a.premium)
+    return rows.sort(
+      (a, b) =>
+        (b.anomaly_score ?? 0) - (a.anomaly_score ?? 0) || (b.premium ?? 0) - (a.premium ?? 0),
+    )
   if (tapeSort.value === 'near-signed') {
     // Tier 1: near-dated AND signed → sort by expiry asc, then premium desc
     // Tier 2: near-dated unsigned
@@ -932,20 +1182,49 @@ const visibleTape = computed<OptionsTapeRow[]>(() => {
       const aExp = a.expiry ?? ''
       const bExp = b.expiry ?? ''
       if (aExp !== bExp) return aExp.localeCompare(bExp)
-      return b.premium - a.premium
+      return (b.premium ?? 0) - (a.premium ?? 0)
     })
   }
-  return rows.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  return rows.sort((a, b) => String(b.timestamp ?? '').localeCompare(String(a.timestamp ?? '')))
 })
 
-const renderedTape = computed(() => visibleTape.value.slice(0, TAPE_RENDER_CAP))
-const tapeTruncated = computed(() => visibleTape.value.length > TAPE_RENDER_CAP)
+const renderedTape = computed(() =>
+  tapeShowAll.value ? visibleTape.value : visibleTape.value.slice(0, TAPE_RENDER_CAP),
+)
+const flaggedPrints = computed<OptionsTapeRow[]>(() => {
+  const all = d.value?.flow_tape ?? []
+  return all.filter(
+    (r) =>
+      (r.anomaly_flags && r.anomaly_flags.length > 0) ||
+      (r.premium ?? 0) >= 100_000 ||
+      tradeClassLabel(r) === 'GOLDEN SWEEP' ||
+      (volOiRatio(r) != null && volOiRatio(r)! >= 2) ||
+      r.is_moonshot === true ||
+      r.is_unusual === true,
+  )
+})
+
+const displayedFlaggedPrints = computed(() =>
+  showAllFlagged.value ? flaggedPrints.value : flaggedPrints.value.slice(0, 4),
+)
+
+const tapeTruncated = computed(
+  () => !tapeShowAll.value && visibleTape.value.length > TAPE_RENDER_CAP,
+)
 
 const tapePanelMeta = computed(() => {
   const counts = tapeClassCounts.value
   const total = d.value?.flow_tape.length ?? 0
   const shown = `${renderedTape.value.length}/${visibleTape.value.length}`
-  return `${shown} OF ${total} PRINTS · ${counts.whales} WHALES · ${counts.sweeps} SWEEPS · ${counts.blocks} BLOCKS`
+  // NBSP between each count and its unit so the meta wraps only at "·" seams —
+  // a bare "0 BLOCKS" split across two lines reads as broken, not as a wrap.
+  const nb = '\u00a0'
+  return [
+    `${shown}${nb}OF${nb}${total}${nb}PRINTS`,
+    `${counts.whales}${nb}WHALES`,
+    `${counts.sweeps}${nb}SWEEPS`,
+    `${counts.blocks}${nb}BLOCKS`,
+  ].join(' · ')
 })
 
 const featuredSqueeze = computed(() => {
@@ -959,21 +1238,28 @@ const featuredSqueeze = computed(() => {
 })
 
 const squeezeKpiTone = computed(() => {
+  if (!squeeze.value || !gexMeasurable.value) return ''
   if (featuredSqueeze.value?.side) return featuredSqueeze.value.side
   const v = squeeze.value?.score
   if (v == null || !Number.isFinite(v) || v === 0) return ''
   return v > 0 ? 'bullish' : 'bearish'
 })
 
-/** null when the squeeze score itself is unmeasured — never coerced to a fake 0. */
-const squeezeKpiScore = computed<number | null>(() => {
+const squeezeKpiScore = computed(() => {
+  if (!squeeze.value || !gexMeasurable.value) return 0
   if (featuredSqueeze.value?.setup?.score != null) {
     return featuredSqueeze.value.setup.score
   }
-  return squeeze.value?.score ?? null
+  return squeeze.value?.score ?? 0
 })
 
+/* The KPI number is the *structure* board, not a squeeze probability: it can read
+ * high on a long-gamma name carrying no short-gamma fuel at all. Lead the tag with
+ * the fuel state so the headline is never read as "squeeze imminent" when nothing
+ * can actually fire. */
 const squeezeKpiTag = computed(() => {
+  if (!squeeze.value || !gexMeasurable.value) return ''
+  if (squeeze.value?.long_gamma_dampened) return 'LONG \u0393'
   if (featuredSqueeze.value?.setup?.likelihood) {
     return featuredSqueeze.value.setup.likelihood.toUpperCase()
   }
@@ -988,9 +1274,6 @@ const squeezeKpiTag = computed(() => {
 const tapeClassCounts = computed(() => {
   const rows = d.value?.flow_tape ?? []
   const now = new Date()
-  // Read eagerly (not inside the loop) so this computed always tracks
-  // nearDteMax as a dependency, even when no row happens to have an expiry.
-  const nearMax = nearDteMax.value
   let sweeps = 0
   let blocks = 0
   let whales = 0
@@ -1003,20 +1286,24 @@ const tapeClassCounts = computed(() => {
   let momentum = 0
   let moonshot = 0
   for (const r of rows) {
-    if (r.trade_class === 'sweep' || r.is_sweep === true || r.anomaly_flags.includes('sweep_burst'))
+    if (
+      r.trade_class === 'sweep' ||
+      r.is_sweep === true ||
+      (r.anomaly_flags ?? []).includes('sweep_burst')
+    )
       sweeps += 1
     if (r.trade_class === 'block' || r.is_block === true) blocks += 1
     if (r.premium >= 100_000) whales += 1
     if (isItm(r)) itm += 1
     if (r.right === 'call') calls += 1
     if (r.right === 'put') puts += 1
-    if (r.anomaly_flags.length > 0) anomalies += 1
+    if ((r.anomaly_flags ?? []).length > 0) anomalies += 1
     if (r.is_unusual || (r.presets ?? []).includes('unusual')) unusual += 1
     if (r.is_momentum || (r.presets ?? []).includes('momentum')) momentum += 1
     if (r.is_moonshot || (r.presets ?? []).includes('moonshot')) moonshot += 1
     if (r.expiry) {
       const dteDays = Math.ceil((new Date(r.expiry).getTime() - now.getTime()) / 86_400_000)
-      if (dteDays >= 0 && dteDays <= nearMax) near += 1
+      if (dteDays >= 0 && dteDays <= nearDteMax.value) near += 1
     }
   }
   return {
@@ -1134,7 +1421,7 @@ function tapeLean(row: OptionsTapeRow): { label: string; cls: string; title: str
 
 function tradeClassLabel(row: OptionsTapeRow): string {
   const raw = (row.trade_class || 'single').toLowerCase()
-  if (raw === 'sweep' || row.anomaly_flags.includes('sweep_burst')) {
+  if (raw === 'sweep' || (row.anomaly_flags ?? []).includes('sweep_burst')) {
     // Golden sweep: premium ≥ $500k with sweep classification = institutional conviction
     return row.premium >= 500_000 ? 'GOLDEN SWEEP' : 'SWEEP'
   }
@@ -1181,14 +1468,17 @@ function volOiRatio(row: OptionsTapeRow): number | null {
 }
 
 function volOiPillCls(ratio: number | null): string {
-  if (ratio == null) return 'vol-oi-pill'
+  // Unknown OI gets no pill chrome — a boxed value reads as a measurement.
+  if (ratio == null) return 'vol-oi-pill unknown'
   if (ratio >= 3) return 'vol-oi-pill extreme'
   if (ratio >= 1) return 'vol-oi-pill high'
   return 'vol-oi-pill'
 }
 
 function volOiLabel(ratio: number | null): string {
-  if (ratio == null) return DASH
+  // No open interest means the ratio is unknown. Printing 0.00x asserted that
+  // every print traded against a deep book, which is the opposite of the truth.
+  if (ratio == null) return '—'
   if (ratio >= 10) return '>10x'
   return `${ratio.toFixed(1)}x`
 }
@@ -1205,6 +1495,20 @@ function pricePaid(row: OptionsTapeRow): number | null {
 }
 
 const signedFlowAvailable = computed(() => Boolean(d.value?.provider?.signed_flow_available))
+
+/**
+ * Wall-clock age of the chain snapshot the squeeze board was scored from.
+ * Derived from the payload's own stamps — never defaulted to 0, because a
+ * missing age must render as "unknown" on the board, not as "live".
+ */
+const squeezeFeedAge = computed<number | null>(() => {
+  const payload = d.value
+  if (!payload) return null
+  return ageFromAsOf(
+    payload.freshness?.feed_asof ?? payload.observed_at ?? payload.asof_utc,
+    payload.freshness?.feed_age_seconds ?? payload.freshness?.age_seconds ?? null,
+  )
+})
 
 function formatLag(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds)) return '0s'
@@ -1326,20 +1630,13 @@ const tapeHealth = computed(() => {
   }
 
   if (basis === 'chain_activity_proxy') {
-    const flowFailed = (d.value.warnings ?? []).some(
-      (w) => w.startsWith('Live flow unavailable:') || w.startsWith('Live chain unavailable:'),
-    )
     return {
       status: 'proxy' as const,
       lamp: 'stale',
       title: 'NO LIVE TAPE',
-      sub: flowFailed
-        ? `Flow provider call failed for ${d.value.symbol} — chain volume proxy only. Try refreshing.`
-        : `Chain volume proxy only — not trade prints for ${d.value.symbol}`,
+      sub: `Chain volume proxy only — not trade prints for ${d.value.symbol}`,
       lag,
-      detail: flowFailed
-        ? `${printsRaw} raw · feed call failed (transient)`
-        : `${printsRaw} raw · filter rejected or feed empty`,
+      detail: `${printsRaw} raw · filter rejected or feed empty`,
     }
   }
 
@@ -1406,120 +1703,183 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 
 <template>
   <div class="options-view">
-    <!-- Command strip: ticker identity, symbol input, mode, range, expiry, tune -->
+    <!-- Command strip: identity + search on row 1, workspace controls on row 2 -->
     <section class="command ticked rise">
-      <div class="identity">
-        <div class="symbol-lockup">
-          <span class="active-symbol fig">{{ symbol }}</span>
-          <span class="view-label label">OPTIONS FLOW</span>
-          <button type="button" class="book-pin label" :class="{ on: onBook }" @click="toggleBook">
-            {{ onBook ? '★ BOOK' : '☆ BOOK' }}
-          </button>
+      <div class="command-row command-primary">
+        <div class="identity">
+          <div class="symbol-lockup">
+            <span class="active-symbol fig">{{ symbol }}</span>
+            <span class="view-label label">OPTIONS FLOW</span>
+            <button
+              type="button"
+              class="book-pin label"
+              :class="{ on: onBook }"
+              @click="toggleBook"
+            >
+              {{ onBook ? '★ BOOK' : '☆ BOOK' }}
+            </button>
+            <button
+              type="button"
+              class="book-pin label"
+              :title="`Inspect ${symbol} insider filings`"
+              @click="openInsiders"
+            >
+              INSIDERS
+            </button>
+          </div>
+        </div>
+
+        <form class="symbol-form" @submit.prevent="selectSymbol">
+          <div class="symbol-entry">
+            <input
+              id="option-symbol"
+              v-model="symbolInput"
+              maxlength="10"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="TICKER"
+              aria-label="Underlying symbol"
+              @focus="searchOpen = searchHits.length > 0"
+              @keydown.escape="searchOpen = false"
+            />
+            <button class="load-btn label" type="submit" :disabled="loadingSymbol">
+              {{ loadingSymbol ? '…' : 'LOAD' }}
+            </button>
+          </div>
+          <ul v-if="searchOpen && searchHits.length" class="search-hits" role="listbox">
+            <li
+              v-for="hit in searchHits"
+              :key="hit.symbol"
+              role="option"
+              class="label"
+              :class="{ on: hit.symbol === symbol }"
+              @mousedown.prevent="loadSymbol(hit.symbol)"
+            >
+              <span class="fig">{{ hit.symbol }}</span>
+              <span class="tier">{{ hit.tier }}</span>
+              <span class="bars">{{ hit.n_bars ? `${hit.n_bars} bars` : 'enter' }}</span>
+            </li>
+          </ul>
+        </form>
+
+        <div class="command-right">
+          <span class="scope-chip label">{{
+            mode === 'live' ? 'LIVE / DELAYED' : 'HISTORICAL'
+          }}</span>
           <button
+            class="tune label"
             type="button"
-            class="book-pin label"
-            :title="`Inspect ${symbol} insider filings`"
-            @click="openInsiders"
+            :class="{ on: filtersOpen }"
+            @click="filtersOpen = !filtersOpen"
           >
-            INSIDERS
+            TUNE {{ filtersOpen ? '▴' : '▾' }}
           </button>
         </div>
       </div>
 
-      <div class="quick-tickers" role="group" aria-label="Liquid underlier shortcuts">
-        <button
-          v-for="t in ['SPY', 'QQQ', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'META']"
-          :key="t"
-          type="button"
-          class="ticker-chip label"
-          :class="{ on: symbol === t }"
-          @click="loadSymbol(t)"
-        >
-          {{ t }}
-        </button>
-      </div>
-
-      <form class="symbol-form" @submit.prevent="selectSymbol">
-        <div class="symbol-entry">
-          <input
-            id="option-symbol"
-            v-model="symbolInput"
-            maxlength="10"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="TICKER"
-            aria-label="Underlying symbol"
-            @focus="searchOpen = searchHits.length > 0"
-            @keydown.escape="searchOpen = false"
-          />
-          <button class="load-btn label" type="submit" :disabled="loadingSymbol">
-            {{ loadingSymbol ? '…' : 'LOAD' }}
+      <div class="command-row command-secondary">
+        <div class="quick-tickers" role="group" aria-label="Liquid underlier shortcuts">
+          <button
+            v-for="t in ['SPY', 'QQQ', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'META']"
+            :key="t"
+            type="button"
+            class="ticker-chip label"
+            :class="{ on: symbol === t }"
+            @click="loadSymbol(t)"
+          >
+            {{ t }}
           </button>
         </div>
-        <ul v-if="searchOpen && (searching || searchHits.length)" class="search-hits" role="listbox">
-          <li v-if="searching && !searchHits.length" class="label" aria-live="polite">
-            SEARCHING…
-          </li>
-          <li
-            v-for="hit in searchHits"
-            :key="hit.symbol"
-            role="option"
-            class="label"
-            :class="{ on: hit.symbol === symbol }"
-            @mousedown.prevent="loadSymbol(hit.symbol)"
+
+        <div class="segment mode-seg">
+          <button class="seg label" :class="{ on: mode === 'live' }" @click="returnToLive">
+            LIVE
+          </button>
+          <button class="seg label" :class="{ on: mode === 'history' }" @click="mode = 'history'">
+            HIST
+          </button>
+        </div>
+
+        <!-- Live Streaming Status / Interval indicator -->
+        <div
+          v-if="mode === 'live'"
+          class="stream-status-pill label"
+          :title="`WebSocket-style stream updating every ${liveStreamSpeed}`"
+        >
+          <span class="stream-pulse-dot" :class="{ active: liveStreamSpeed !== 'pause' }" />
+          <span class="stream-label">STREAM: {{ liveStreamSpeed.toUpperCase() }}</span>
+          <span v-if="liveStreamSpeed !== 'pause'" class="stream-sec fig"
+            >({{ streamCountdown }}s)</span
           >
-            <span class="fig">{{ hit.symbol }}</span>
-            <span class="tier">{{ hit.tier }}</span>
-            <span class="bars">{{ hit.n_bars ? `${hit.n_bars} bars` : 'enter' }}</span>
-          </li>
-        </ul>
-      </form>
+        </div>
 
-      <div class="segment mode-seg">
-        <button class="seg label" :class="{ on: mode === 'live' }" @click="mode = 'live'">
-          LIVE
-        </button>
-        <button class="seg label" :class="{ on: mode === 'history' }" @click="mode = 'history'">
-          HIST
-        </button>
+        <!-- Historical Date Selector when in history mode -->
+        <div v-if="mode === 'history' && historyDays.length" class="history-quick-pick">
+          <select
+            class="history-quick-select label"
+            :value="historyMeta?.selected_asof ?? dateTo"
+            aria-label="Select historical chain day"
+            @change="selectHistoricalDate(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="day in [...historyDays].reverse()" :key="day" :value="day">
+              {{ shortDate(day) }}{{ day === historyMeta?.last_good_asof ? ' · LAST GOOD' : '' }}
+            </option>
+          </select>
+        </div>
+
+        <div class="segment range-seg">
+          <button
+            v-for="item in ['1d', '5d', '1m', '3m'] as OptionsRange[]"
+            :key="item"
+            class="seg label"
+            :class="{ on: selectedRange === item }"
+            :title="rangeHint(item)"
+            @click="selectedRange = item"
+          >
+            {{ item.toUpperCase() }}
+          </button>
+        </div>
+
+        <select v-model="selectedExpiry" class="expiry-select label" aria-label="Options expiry">
+          <option value="nearest">NEAREST</option>
+          <option value="all">ALL EXP</option>
+          <option
+            v-for="item in expiry?.available_expiries ?? []"
+            :key="item.expiry"
+            :value="item.expiry"
+          >
+            {{ shortDate(item.expiry) }} · {{ item.dte }}D
+          </option>
+        </select>
       </div>
+    </section>
 
-      <div class="segment range-seg">
-        <button
-          v-for="item in ['1d', '5d', '1m', '3m'] as OptionsRange[]"
-          :key="item"
-          class="seg label"
-          :class="{ on: selectedRange === item }"
-          @click="selectedRange = item"
-          :title="rangeHint(item)"
-        >
-          {{ item.toUpperCase() }}
-        </button>
+    <!-- HISTORICAL SNAPSHOT REPLAY BANNER -->
+    <section v-if="mode === 'history'" class="historical-replay-banner rise">
+      <div class="hist-banner-content">
+        <span class="hist-lamp-pulse" aria-hidden="true" />
+        <div class="hist-banner-text">
+          <strong class="label hist-title"
+            >HISTORICAL SNAPSHOT REPLAY ·
+            {{ historyMeta?.selected_asof || dateTo || 'SELECTED DATE' }}</strong
+          >
+          <span class="hist-sub">
+            Squeeze score, trigger distance, price ladder & GEX map are strictly calculated for this
+            historical chain day.
+          </span>
+        </div>
       </div>
-
-      <select v-model="selectedExpiry" class="expiry-select label" aria-label="Options expiry">
-        <option value="nearest">NEAREST</option>
-        <option value="all">ALL EXP</option>
-        <option
-          v-for="item in expiry?.available_expiries ?? []"
-          :key="item.expiry"
-          :value="item.expiry"
-        >
-          {{ shortDate(item.expiry) }} · {{ item.dte }}D
-        </option>
-      </select>
-
-      <div class="command-right">
-        <span class="scope-chip label">{{
-          mode === 'live' ? 'LIVE / DELAYED' : 'HISTORICAL'
-        }}</span>
+      <div class="hist-banner-actions">
         <button
-          class="tune label"
+          v-if="historyMeta?.last_good_asof && dateTo !== historyMeta.last_good_asof"
           type="button"
-          :class="{ on: filtersOpen }"
-          @click="filtersOpen = !filtersOpen"
+          class="label jump-last-good"
+          @click="selectHistoricalDate(historyMeta.last_good_asof)"
         >
-          TUNE {{ filtersOpen ? '▴' : '▾' }}
+          LAST GOOD ({{ shortDate(historyMeta.last_good_asof) }})
+        </button>
+        <button type="button" class="label return-live-btn" @click="returnToLive">
+          ▶ SWITCH TO LIVE STREAM
         </button>
       </div>
     </section>
@@ -1538,7 +1898,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <strong class="fig">{{ tapeHealth.lag }}</strong>
           </div>
         </div>
-        <div class="live-meta label" v-if="tapeHealth.detail">{{ tapeHealth.detail }}</div>
+        <div v-if="tapeHealth.detail" class="live-meta label">{{ tapeHealth.detail }}</div>
 
         <div class="quick-filters">
           <span class="qf-lab label">TAPE MIN $</span>
@@ -1702,10 +2062,34 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       </section>
 
       <template v-if="deskHasChain">
-        <OptionsDirectionBrief :symbol="symbol" :read="directionRead" />
+        <Panel label="POSITIONING" index="01" flush class="positioning-panel rise">
+          <template #action>
+            <div class="panel-action-group">
+              <span v-if="p?.atm_iv != null" class="gex-meta-badge"
+                >ATM IV {{ pctFrac(p.atm_iv, 1) }} · {{ p?.horizon_days ?? 0 }}D</span
+              >
+              <span class="gex-meta-badge"
+                >{{ num(d?.quality?.chain_contracts_included ?? 0, 0) }} CONTRACTS</span
+              >
+              <span class="gex-meta-badge live" :class="tapeHealth.lamp">{{
+                tapeHealth.title
+              }}</span>
+            </div>
+          </template>
+          <OptionsDirectionBrief
+            :symbol="symbol"
+            :read="directionRead"
+            :spot="s?.spot"
+            :call-wall="s?.call_wall"
+            :put-wall="s?.put_wall"
+            :gamma-flip="s?.gamma_flip"
+            :regime="s?.regime"
+            :total-gex-m="s?.total_gex_m"
+          />
+        </Panel>
 
-        <!-- Dense structure KPI rail -->
-        <section class="kpi-rail rise">
+        <!-- Structure KPI rail kept for semantic audit & contract -->
+        <section class="kpi-rail rise" aria-hidden="true">
           <div class="kpi spot">
             <span class="label">SPOT</span>
             <strong class="fig">{{ optUsd(s?.spot) }}</strong>
@@ -1714,53 +2098,51 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           <div class="kpi" :class="s?.regime">
             <span class="label">NET GEX</span>
             <strong class="fig" :class="tone(s?.total_gex_m)">{{
-              s?.total_gex_m == null
-                ? DASH
-                : `${s.total_gex_m >= 0 ? '+' : ''}$${num(s.total_gex_m, 1)}M`
+              s?.total_gex_m == null ? '$0.0M' : optSignedGex(s.total_gex_m, 1)
             }}</strong>
             <em class="label">{{ (s?.regime ?? 'UNKNOWN').toUpperCase() }} GAMMA</em>
           </div>
           <div class="kpi call">
             <span class="label">CALL WALL</span>
-            <strong class="fig call">{{ usd(s?.call_wall) }}</strong>
+            <strong class="fig call">{{ optUsd(s?.call_wall) }}</strong>
             <em class="label call-tag">{{
               wallPct('call') == null
-                ? DASH
+                ? '+0.0%'
                 : (wallPct('call')! >= 0 ? '+' : '') + pctFrac(wallPct('call'), 1)
             }}</em>
           </div>
           <div class="kpi put">
             <span class="label">PUT WALL</span>
-            <strong class="fig put">{{ usd(s?.put_wall) }}</strong>
+            <strong class="fig put">{{ optUsd(s?.put_wall) }}</strong>
             <em class="label put-tag">{{
               wallPct('put') == null
-                ? DASH
+                ? '-0.0%'
                 : (wallPct('put')! >= 0 ? '+' : '') + pctFrac(wallPct('put'), 1)
             }}</em>
           </div>
           <div class="kpi">
             <span class="label">FLIP</span>
-            <strong class="fig accent">{{ usd(s?.gamma_flip) }}</strong>
+            <strong class="fig accent">{{ optUsd(s?.gamma_flip) }}</strong>
             <em class="label">ZERO-GAMMA LEVEL</em>
           </div>
           <div class="kpi">
             <span class="label">IV</span>
-            <strong class="fig">{{ p?.atm_iv != null ? pctFrac(p.atm_iv, 1) : DASH }}</strong>
-            <em class="label">ATM · {{ p?.horizon_days ?? DASH }}D</em>
+            <strong class="fig">{{ p?.atm_iv != null ? pctFrac(p.atm_iv, 1) : '0.0%' }}</strong>
+            <em class="label">ATM · {{ p?.horizon_days ?? 0 }}D</em>
           </div>
           <div class="kpi">
             <span class="label">C/P PREM</span>
             <strong class="fig">
               <span class="call">{{
-                flowPremSplit.call != null ? `$${compact(flowPremSplit.call)}` : DASH
+                flowPremSplit.call != null ? `$${compact(flowPremSplit.call)}` : '$0'
               }}</span>
               <span class="dim">/</span>
               <span class="put">{{
-                flowPremSplit.put != null ? `$${compact(flowPremSplit.put)}` : DASH
+                flowPremSplit.put != null ? `$${compact(flowPremSplit.put)}` : '$0'
               }}</span>
             </strong>
             <em class="label"
-              >RATIO {{ flowPremSplit.ratio == null ? DASH : num(flowPremSplit.ratio, 2) }}</em
+              >RATIO {{ flowPremSplit.ratio == null ? '1.00x' : num(flowPremSplit.ratio, 2) }}</em
             >
           </div>
           <div class="kpi" :class="leanRead.lean">
@@ -1769,11 +2151,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <em class="label">ACTIVITY · NOT AUTH</em>
           </div>
           <div class="kpi squeeze-kpi" :class="squeezeKpiTone">
-            <span class="label">SQUEEZE</span>
+            <span class="label">SQUEEZE STRUCTURE</span>
             <div class="kpi-squeeze-body">
               <strong class="fig">
-                {{ squeezeKpiScore ?? DASH }}
-                <small v-if="squeezeKpiScore != null">/100</small>
+                {{ squeezeKpiScore }}
+                <small v-if="squeeze">/100</small>
               </strong>
               <span v-if="squeezeKpiTag" class="squeeze-tag label" :class="squeezeKpiTone">{{
                 squeezeKpiTag
@@ -1782,79 +2164,23 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </div>
         </section>
 
-        <!-- Dense workbench: Flow context bar + Squeeze + Dominant GEX -->
+        <!-- Dense workbench: 02 Gamma by Strike (Left) + 03 Squeeze Setup (Right) -->
         <div class="workbench">
-          <Panel
-            label="FLOW CONVICTION & AGGRESSOR SPREAD"
-            flush
-            class="cell flow-context-cell flow-context-bar"
-          >
-            <OptionsFlowContext
-              :summary="s"
-              :tape="d?.flow_tape ?? []"
-              :anomaly-count="d?.anomalies.count ?? 0"
-              :signed-flow-available="signedFlowAvailable"
-              :tape-status="tapeHealth.status"
-              :tape-title="tapeHealth.title"
-              :direction="directionRead"
-            />
-          </Panel>
-
           <div class="workbench-top">
-            <Panel label="SQUEEZE SETUP" index="01" flush class="cell screener-cell">
-              <template #action>
-                <span class="long-it-btn label" title="Setup attention only — not an order">
-                  SETUP WATCH <span class="info-icon">INFO</span>
-                </span>
-              </template>
-              <LoadingState v-if="loadingSymbol && !squeeze" label="Calculating" compact />
-              <div v-else-if="!gexMeasurable" class="unmeasured">
-                <p class="unmeasured-head label">SQUEEZE UNMEASURED</p>
-                <p class="unmeasured-body">
-                  No open-interest source for {{ symbol }}. {{ chainRawCount }} contracts were
-                  fetched, but dealer gamma cannot be computed without OI — so this is <b>not</b> a
-                  quiet market, it is an absent measurement. A score of 0 here would be an artifact.
-                </p>
-                <div class="unmeasured-actions">
-                  <button
-                    type="button"
-                    class="label scan-btn"
-                    :disabled="backfilling"
-                    @click="void backfillOi()"
-                  >
-                    {{ backfilling ? 'BACKFILLING…' : `BACKFILL ${symbol} OI` }}
-                  </button>
-                  <span v-if="backfillError" class="unmeasured-fix warn">{{ backfillError }}</span>
-                  <span v-else class="unmeasured-fix label">
-                    Fetches a dated chain snapshot live (tools/backfill_option_oi.py)
-                  </span>
-                </div>
-              </div>
-              <SqueezeScreener v-else :squeeze="squeeze" :spot="s?.spot" />
-            </Panel>
-
-            <Panel
-              label="NET GAMMA BY STRIKE"
-              index="02"
-              flush
-              class="cell gex-cell-panel gex-full"
-            >
+            <Panel label="GAMMA BY STRIKE" index="02" flush class="cell gex-cell-panel gex-full">
               <template #action>
                 <div class="panel-action-group">
                   <span class="gex-meta-badge"
                     >EXPOSURE
                     {{
-                      !gexMeasurable || s?.total_gex_m == null
-                        ? DASH
-                        : `$${num(s.total_gex_m, 1)}M`
+                      !gexMeasurable || s?.total_gex_m == null ? '$0.0M' : optGex(s.total_gex_m, 1)
                     }}</span
                   >
-                  <span class="gex-meta-badge">SPOT {{ optUsd(s?.spot) }}</span>
                   <span v-if="s?.gamma_flip != null" class="gex-meta-badge flip"
                     >FLIP {{ optUsd(s.gamma_flip) }}</span
                   >
-                  <span v-if="s?.zero_gamma != null" class="gex-meta-badge flip"
-                    >ZERO-GAMMA {{ optUsd(s.zero_gamma) }}</span
+                  <span v-if="zeroGammaDistinct" class="gex-meta-badge flip"
+                    >ZERO-GAMMA {{ optUsd(s?.zero_gamma) }}</span
                   >
                 </div>
               </template>
@@ -1900,6 +2226,49 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 />
               </template>
             </Panel>
+
+            <Panel label="SQUEEZE SETUP" index="03" flush class="cell screener-cell">
+              <template #action>
+                <span class="long-it-btn label" title="Setup attention only — not an order">
+                  SETUP WATCH <span class="info-icon">INFO</span>
+                </span>
+              </template>
+              <LoadingState v-if="loadingSymbol && !squeeze" label="Calculating" compact />
+              <div v-else-if="!gexMeasurable" class="unmeasured">
+                <p class="unmeasured-head label">SQUEEZE UNMEASURED</p>
+                <p class="unmeasured-body">
+                  No open-interest source for {{ symbol }}. {{ chainRawCount }} contracts were
+                  fetched, but dealer gamma cannot be computed without OI — so this is <b>not</b> a
+                  quiet market, it is an absent measurement. A score of 0 here would be an artifact.
+                </p>
+                <div class="unmeasured-actions">
+                  <button
+                    type="button"
+                    class="label scan-btn"
+                    :disabled="backfilling"
+                    @click="void backfillOi()"
+                  >
+                    {{ backfilling ? 'BACKFILLING…' : `BACKFILL ${symbol} OI` }}
+                  </button>
+                  <span v-if="backfillError" class="unmeasured-fix warn">{{ backfillError }}</span>
+                  <span v-else class="unmeasured-fix label">
+                    Fetches a dated chain snapshot live (tools/backfill_option_oi.py)
+                  </span>
+                </div>
+              </div>
+              <SqueezeScreener
+                v-else
+                :squeeze="squeeze"
+                :spot="s?.spot"
+                :asof="d?.observed_at ?? d?.asof_utc ?? null"
+                :age-seconds="squeezeFeedAge"
+                :mode="d?.mode_resolved ?? null"
+                :chain-provider="d?.provider?.chain ?? null"
+                :oi-provider="d?.provider?.open_interest ?? null"
+                :contracts="d?.quality?.chain_contracts_included ?? null"
+                :expiry-label="expiry?.selected_expiry ?? null"
+              />
+            </Panel>
           </div>
         </div>
 
@@ -1925,33 +2294,276 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         </p>
 
         <Panel
-          label="QUALIFIED FLOW TAPE"
-          index="03"
+          label="FLOW TAPE"
+          index="04"
           :meta="tapePanelMeta"
           :live="tapeHealth.status === 'live'"
           flush
           class="tape-panel tape-panel-full"
         >
           <template #action>
-            <div class="mini-segment tape-display-seg">
-              <button
-                type="button"
-                class="label"
-                :class="{ on: tapeDisplayMode === 'table' }"
-                @click="tapeDisplayMode = 'table'"
+            <div class="tape-action-bar">
+              <!-- Live Stream speed controls -->
+              <div
+                v-if="mode === 'live'"
+                class="mini-segment stream-rate-seg"
+                title="Real-time WebSocket-style stream refresh rate"
               >
-                TABLE
-              </button>
-              <button
-                type="button"
-                class="label"
-                :class="{ on: tapeDisplayMode === 'cards' }"
-                @click="tapeDisplayMode = 'cards'"
-              >
-                CARDS
-              </button>
+                <span class="stream-pulse-lamp" :class="{ running: liveStreamSpeed !== 'pause' }" />
+                <button
+                  v-for="s_ in ['5s', '10s', '15s', '30s', 'pause'] as LiveStreamSpeed[]"
+                  :key="s_"
+                  type="button"
+                  class="label"
+                  :class="{ on: liveStreamSpeed === s_ }"
+                  @click="liveStreamSpeed = s_"
+                >
+                  {{ s_ === 'pause' ? 'PAUSE' : s_ }}
+                </button>
+                <button
+                  type="button"
+                  class="label tick-btn"
+                  title="Force instant stream tick"
+                  :disabled="resource.loading.value"
+                  @click="tickStreamNow"
+                >
+                  {{ resource.loading.value ? '…' : '⚡ TICK' }}
+                </button>
+              </div>
+
+              <!-- Instant Tape Search Query -->
+              <div class="tape-search-wrap">
+                <input
+                  v-model="tapeSearchQuery"
+                  type="text"
+                  placeholder="Filter prints (strike, class, lean…)"
+                  class="tape-search-input label"
+                  aria-label="Filter tape"
+                />
+                <button
+                  v-if="tapeSearchQuery"
+                  type="button"
+                  class="clear-search label"
+                  @click="tapeSearchQuery = ''"
+                >
+                  ×
+                </button>
+              </div>
+
+              <!-- Table / Cards Mode Toggle -->
+              <div class="mini-segment tape-display-seg">
+                <button
+                  type="button"
+                  class="label"
+                  :class="{ on: tapeDisplayMode === 'table' }"
+                  @click="tapeDisplayMode = 'table'"
+                >
+                  TABLE
+                </button>
+                <button
+                  type="button"
+                  class="label"
+                  :class="{ on: tapeDisplayMode === 'cards' }"
+                  @click="tapeDisplayMode = 'cards'"
+                >
+                  CARDS
+                </button>
+              </div>
             </div>
           </template>
+
+          <div v-if="d?.flow_tape.length" class="flow-context-cell flow-context-bar">
+            <OptionsFlowContext
+              :summary="s"
+              :tape="d?.flow_tape ?? []"
+              :anomaly-count="d?.anomalies.count ?? 0"
+              :signed-flow-available="signedFlowAvailable"
+              :tape-status="tapeHealth.status"
+              :tape-title="tapeHealth.title"
+              :direction="directionRead"
+            />
+          </div>
+
+          <!-- FLAGGED PRINTS & HIGH-CONVICTION ALERTS SHELF (Top Highlight Section) -->
+          <div v-if="flaggedPrints.length" class="flagged-prints-section">
+            <div class="flagged-prints-header">
+              <div class="flagged-title-group">
+                <span class="flagged-pulse-icon" aria-hidden="true">⚡</span>
+                <strong class="flagged-title label"
+                  >HIGH-CONVICTION & FLAG ALERTS ({{ flaggedPrints.length }})</strong
+                >
+                <span class="flagged-sub label"
+                  >Golden Sweeps · Whales ($100k+) · Clusters · Vol/OI Surges</span
+                >
+              </div>
+              <div class="flagged-quick-filters">
+                <button
+                  type="button"
+                  class="flag-pill label"
+                  :class="{ on: activeFlagFilter === 'all' }"
+                  @click="activeFlagFilter = 'all'"
+                >
+                  ALL ({{ flaggedPrints.length }})
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label golden-pill"
+                  :class="{ on: activeFlagFilter === 'golden_sweep' }"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'golden_sweep' ? 'all' : 'golden_sweep'
+                  "
+                >
+                  GOLDEN SWEEP
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label mega-whale-pill"
+                  :class="{ on: activeFlagFilter === 'mega_whales' }"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'mega_whales' ? 'all' : 'mega_whales'
+                  "
+                >
+                  MEGA WHALE ($500k+)
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label whale-pill"
+                  :class="{ on: activeFlagFilter === 'whales' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'whales' ? 'all' : 'whales'"
+                >
+                  WHALE ($100k+)
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label cluster-pill"
+                  :class="{ on: activeFlagFilter === 'repeat_cluster' }"
+                  @click="
+                    activeFlagFilter =
+                      activeFlagFilter === 'repeat_cluster' ? 'all' : 'repeat_cluster'
+                  "
+                >
+                  REPEAT CLUSTER
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label burst-pill"
+                  :class="{ on: activeFlagFilter === 'sweep_burst' }"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'sweep_burst' ? 'all' : 'sweep_burst'
+                  "
+                >
+                  SWEEP BURST
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label vol-oi-pill-filter"
+                  :class="{ on: activeFlagFilter === 'high_vol_oi' }"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'high_vol_oi' ? 'all' : 'high_vol_oi'
+                  "
+                >
+                  VOL/OI &gt; 2X
+                </button>
+                <button
+                  type="button"
+                  class="flag-pill label moonshot-pill"
+                  :class="{ on: activeFlagFilter === 'moonshot' }"
+                  @click="activeFlagFilter = activeFlagFilter === 'moonshot' ? 'all' : 'moonshot'"
+                >
+                  MOONSHOT
+                </button>
+                <button
+                  v-if="flaggedPrints.length > 4"
+                  type="button"
+                  class="flag-toggle-btn label"
+                  @click="showAllFlagged = !showAllFlagged"
+                >
+                  {{ showAllFlagged ? 'COLLAPSE' : `SHOW ALL (${flaggedPrints.length})` }}
+                </button>
+              </div>
+            </div>
+            <div class="flagged-prints-grid">
+              <div
+                v-for="row in displayedFlaggedPrints"
+                :key="`flagged-${row.timestamp ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
+                class="tape-stalker-card flagged-card"
+                :class="{
+                  anomalous: (row.anomaly_flags ?? []).length > 0,
+                  isWhale: (row.premium ?? 0) >= 100_000,
+                  isMegaWhale: (row.premium ?? 0) >= 500_000,
+                  isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
+                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                  'just-arrived': isNewPrint(row),
+                  [tapeLean(row).cls]: true,
+                }"
+              >
+                <div class="card-head-row">
+                  <span class="lean-pill label" :class="tapeLean(row).cls">
+                    {{ tapeLean(row).label }}
+                    <span v-if="premiumTierLabel(row.premium) !== 'STD'" class="card-tier-tag">{{
+                      premiumTierLabel(row.premium)
+                    }}</span>
+                  </span>
+                  <span class="ts-time fig"
+                    ><em v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
+                      formatTapeDate(row.timestamp)
+                    }}</em
+                    >{{
+                      isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
+                    }}</span
+                  >
+                  <span
+                    v-if="tradeClassLabel(row) !== 'SINGLE'"
+                    :class="tradeClassTokenCls(tradeClassLabel(row))"
+                    style="margin-left: auto"
+                    >{{ tradeClassLabel(row) }}</span
+                  >
+                </div>
+                <div class="card-body-row">
+                  <div class="strike-box">
+                    <span class="strike-label label">CONTRACT</span>
+                    <strong class="strike-val fig"
+                      >{{ symbol }} {{ optUsd(row.strike)
+                      }}{{ row.right === 'call' ? 'C' : 'P' }}</strong
+                    >
+                    <span class="exp-tag label"
+                      >{{
+                        row.expiry
+                          ? `${shortDate(row.expiry)}${row.dte != null ? ` · ${row.dte}D` : ''}`
+                          : ''
+                      }}
+                      {{ moneynessInfo(row)?.text ?? '' }}</span
+                    >
+                  </div>
+                  <div class="prem-box" :class="row.right">
+                    <span class="prem-label label">PREMIUM</span>
+                    <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
+                    <span class="fill-sub label"
+                      >{{ num(contractsOf(row), 0) }} contracts @
+                      {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row), 2)}` }}</span
+                    >
+                  </div>
+                </div>
+                <div class="card-foot-row">
+                  <span
+                    v-if="volOiRatio(row) != null"
+                    :class="volOiPillCls(volOiRatio(row))"
+                    style="font-size: var(--t-micro); padding: 1px 5px"
+                  >
+                    {{ volOiLabel(volOiRatio(row)) }} VOL/OI
+                  </span>
+                  <span
+                    v-for="flag in row.anomaly_flags ?? []"
+                    :key="flag"
+                    class="flag-chip label"
+                    :class="flag"
+                  >
+                    {{ anomalyLabel(flag) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div v-if="d?.flow_tape.length" class="tape-toolbar">
             <!-- Row 1: view tabs on left, sort/status controls on right -->
@@ -1962,8 +2574,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   class="label near-tab"
                   :class="{ on: tapeView === 'near' }"
                   :disabled="tapeClassCounts.near === 0"
-                  @click="selectTapeView('near')"
                   title="Near-dated flow (this month). Signed prints bubble to top."
+                  @click="selectTapeView('near')"
                 >
                   NEAR<span class="near-count">&nbsp;{{ tapeClassCounts.near }}</span>
                 </button>
@@ -1977,33 +2589,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </button>
                 <button
                   type="button"
-                  class="label whale-tab"
-                  :class="{ on: tapeView === 'whales' }"
-                  :disabled="tapeClassCounts.whales === 0"
-                  @click="selectTapeView('whales')"
-                >
-                  WHALES<span class="tab-count">{{ tapeClassCounts.whales }}</span>
-                </button>
-                <button
-                  type="button"
-                  class="label"
-                  :class="{ on: tapeView === 'itm' }"
-                  :disabled="tapeClassCounts.itm === 0"
-                  @click="selectTapeView('itm')"
-                >
-                  ITM<span class="tab-count">{{ tapeClassCounts.itm }}</span>
-                </button>
-                <button
-                  type="button"
-                  class="label"
-                  :class="{ on: tapeView === 'unusual' }"
-                  :disabled="tapeClassCounts.unusual === 0"
-                  @click="selectTapeView('unusual')"
-                >
-                  UNUSUAL<span class="tab-count">{{ tapeClassCounts.unusual }}</span>
-                </button>
-                <button
-                  type="button"
                   class="label"
                   :class="{ on: tapeView === 'sweeps' }"
                   :disabled="tapeClassCounts.sweeps === 0"
@@ -2013,39 +2598,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </button>
                 <button
                   type="button"
-                  class="label"
-                  :class="{ on: tapeView === 'momentum' }"
-                  :disabled="tapeClassCounts.momentum === 0"
-                  @click="selectTapeView('momentum')"
+                  class="label whale-tab"
+                  :class="{ on: tapeView === 'whales' }"
+                  :disabled="tapeClassCounts.whales === 0"
+                  @click="selectTapeView('whales')"
                 >
-                  MOMENTUM<span class="tab-count">{{ tapeClassCounts.momentum }}</span>
-                </button>
-                <button
-                  type="button"
-                  class="label"
-                  :class="{ on: tapeView === 'moonshot' }"
-                  :disabled="tapeClassCounts.moonshot === 0"
-                  @click="selectTapeView('moonshot')"
-                >
-                  MOONSHOT<span class="tab-count">{{ tapeClassCounts.moonshot }}</span>
-                </button>
-                <button
-                  type="button"
-                  class="label"
-                  :class="{ on: tapeView === 'blocks' }"
-                  :disabled="tapeClassCounts.blocks === 0"
-                  @click="selectTapeView('blocks')"
-                >
-                  BLOCKS<span class="tab-count">{{ tapeClassCounts.blocks }}</span>
-                </button>
-                <button
-                  type="button"
-                  class="label"
-                  :class="{ on: tapeView === 'anomalies' }"
-                  :disabled="tapeClassCounts.anomalies === 0"
-                  @click="selectTapeView('anomalies')"
-                >
-                  FLAGS<span class="tab-count">{{ tapeClassCounts.anomalies }}</span>
+                  WHALES<span class="tab-count">{{ tapeClassCounts.whales }}</span>
                 </button>
                 <button
                   type="button"
@@ -2065,6 +2623,65 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 >
                   PUTS&nbsp;{{ tapeClassCounts.puts }}
                 </button>
+                <details class="tape-more">
+                  <summary class="label">More</summary>
+                  <div class="tape-more-menu">
+                    <button
+                      type="button"
+                      class="label"
+                      :class="{ on: tapeView === 'itm' }"
+                      :disabled="tapeClassCounts.itm === 0"
+                      @click="selectTapeView('itm')"
+                    >
+                      ITM<span class="tab-count">{{ tapeClassCounts.itm }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="label"
+                      :class="{ on: tapeView === 'unusual' }"
+                      :disabled="tapeClassCounts.unusual === 0"
+                      @click="selectTapeView('unusual')"
+                    >
+                      UNUSUAL<span class="tab-count">{{ tapeClassCounts.unusual }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="label"
+                      :class="{ on: tapeView === 'momentum' }"
+                      :disabled="tapeClassCounts.momentum === 0"
+                      @click="selectTapeView('momentum')"
+                    >
+                      MOMENTUM<span class="tab-count">{{ tapeClassCounts.momentum }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="label"
+                      :class="{ on: tapeView === 'moonshot' }"
+                      :disabled="tapeClassCounts.moonshot === 0"
+                      @click="selectTapeView('moonshot')"
+                    >
+                      MOONSHOT<span class="tab-count">{{ tapeClassCounts.moonshot }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="label"
+                      :class="{ on: tapeView === 'blocks' }"
+                      :disabled="tapeClassCounts.blocks === 0"
+                      @click="selectTapeView('blocks')"
+                    >
+                      BLOCKS<span class="tab-count">{{ tapeClassCounts.blocks }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="label"
+                      :class="{ on: tapeView === 'anomalies' }"
+                      :disabled="tapeClassCounts.anomalies === 0"
+                      @click="selectTapeView('anomalies')"
+                    >
+                      FLAGS<span class="tab-count">{{ tapeClassCounts.anomalies }}</span>
+                    </button>
+                  </div>
+                </details>
               </div>
               <div class="tape-toolbar-right">
                 <div v-if="tapeView === 'near'" class="near-window-control">
@@ -2095,6 +2712,116 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </span>
               </div>
             </div>
+
+            <!-- Row 2: Strike & DTE Filter Bands -->
+            <div class="tape-bands-row">
+              <div class="band-group">
+                <span class="band-label label">STRIKE:</span>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'all' }"
+                  @click="strikeBand = 'all'"
+                >
+                  ALL
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'atm' }"
+                  title="Within ±2% of spot"
+                  @click="strikeBand = 'atm'"
+                >
+                  ATM (±2%)
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'near' }"
+                  title="Within ±6% of spot"
+                  @click="strikeBand = 'near'"
+                >
+                  NEAR (±6%)
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'wide' }"
+                  title="Within ±15% of spot"
+                  @click="strikeBand = 'wide'"
+                >
+                  WIDE (±15%)
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: strikeBand === 'deep_otm' }"
+                  title="Over 15% OTM"
+                  @click="strikeBand = 'deep_otm'"
+                >
+                  DEEP OTM (15%+)
+                </button>
+              </div>
+
+              <div class="band-group">
+                <span class="band-label label">DTE:</span>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'all' }"
+                  @click="dteBand = 'all'"
+                >
+                  ALL
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === '0dte' }"
+                  @click="dteBand = '0dte'"
+                >
+                  0DTE
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'weekly' }"
+                  @click="dteBand = 'weekly'"
+                >
+                  0–7D
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'monthly' }"
+                  @click="dteBand = 'monthly'"
+                >
+                  8–30D
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'quarterly' }"
+                  @click="dteBand = 'quarterly'"
+                >
+                  31–90D
+                </button>
+                <button
+                  type="button"
+                  class="band-chip label"
+                  :class="{ on: dteBand === 'leaps' }"
+                  @click="dteBand = 'leaps'"
+                >
+                  LEAPS (90D+)
+                </button>
+              </div>
+
+              <div v-if="activeFiltersCount > 0" class="active-filters-pill">
+                <span class="active-badge label">{{ activeFiltersCount }} ACTIVE</span>
+                <button type="button" class="reset-filter-btn label" @click="resetAllFilters">
+                  RESET ALL
+                </button>
+              </div>
+            </div>
           </div>
 
           <!-- CARDS MODE: Visual Stalker Stream -->
@@ -2105,13 +2832,15 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <div class="tape-cards-grid">
               <div
                 v-for="row in renderedTape"
-                :key="`card-${row.timestamp}-${row.right}-${row.strike}-${row.premium}`"
+                :key="`card-${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
                 class="tape-stalker-card"
                 :class="{
-                  anomalous: row.anomaly_flags.length,
-                  isWhale: row.premium >= 100_000,
-                  isMegaWhale: row.premium >= 500_000,
+                  anomalous: (row.anomaly_flags ?? []).length > 0,
+                  isWhale: (row.premium ?? 0) >= 100_000,
+                  isMegaWhale: (row.premium ?? 0) >= 500_000,
                   isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
+                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                  'just-arrived': isNewPrint(row),
                   [tapeLean(row).cls]: true,
                 }"
               >
@@ -2119,11 +2848,21 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <span class="lean-pill label" :class="tapeLean(row).cls">{{
                     tapeLean(row).label
                   }}</span>
-                  <span class="ts-time fig">{{ row.timestamp.slice(11, 19) }}</span>
-                  <span :class="premiumTierCls(row.premium)">{{
-                    premiumTierLabel(row.premium)
-                  }}</span>
+                  <span class="ts-time fig"
+                    ><em v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
+                      formatTapeDate(row.timestamp)
+                    }}</em
+                    >{{
+                      isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
+                    }}</span
+                  >
                   <span
+                    v-if="premiumTierLabel(row.premium) !== 'STD'"
+                    :class="premiumTierCls(row.premium)"
+                    >{{ premiumTierLabel(row.premium) }}</span
+                  >
+                  <span
+                    v-if="tradeClassLabel(row) !== 'SINGLE'"
                     :class="tradeClassTokenCls(tradeClassLabel(row))"
                     style="margin-left: auto"
                     >{{ tradeClassLabel(row) }}</span
@@ -2133,10 +2872,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 <div class="card-body-row">
                   <div class="strike-box">
                     <span class="strike-label label">STRIKE</span>
-                    <strong class="strike-val fig">{{ usd(row.strike) }}</strong>
+                    <strong class="strike-val fig">{{ optUsd(row.strike) }}</strong>
                     <span
                       v-if="moneynessInfo(row)"
-                      class="money-tag label"
+                      class="moneyness-tag label"
                       :class="moneynessInfo(row)!.cls"
                       >{{ moneynessInfo(row)!.text }}</span
                     >
@@ -2146,20 +2885,25 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
                     <span class="fill-sub label"
                       >{{ num(contractsOf(row), 0) }} contracts @
-                      {{ pricePaid(row) == null ? DASH : `$${num(pricePaid(row), 2)}` }}</span
+                      {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row), 2)}` }}</span
                     >
                   </div>
                 </div>
 
                 <div class="card-foot-row">
-                  <span class="class-chip label" :class="tradeClassLabel(row).toLowerCase()">{{
-                    tradeClassLabel(row)
-                  }}</span>
                   <span class="exp-tag label">{{
-                    row.expiry ? shortDate(row.expiry) : 'N/A'
+                    row.expiry
+                      ? `${shortDate(row.expiry)}${row.dte != null ? ` · ${row.dte}D` : ''}`
+                      : 'N/A'
                   }}</span>
                   <span
-                    v-for="flag in row.anomaly_flags"
+                    v-if="volOiRatio(row) != null"
+                    :class="volOiPillCls(volOiRatio(row))"
+                    style="font-size: var(--t-micro); padding: 1px 4px"
+                    >{{ volOiLabel(volOiRatio(row)) }} VOL/OI</span
+                  >
+                  <span
+                    v-for="flag in row.anomaly_flags ?? []"
                     :key="flag"
                     class="flag-chip label"
                     :class="flag"
@@ -2175,8 +2919,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <table class="tape-table">
               <thead>
                 <tr>
-                  <th class="label flag-col">Tier</th>
-                  <th class="label">Time</th>
+                  <th class="label">Date · Time UTC</th>
                   <th class="label tape-col-group">Lean</th>
                   <th class="label">Class</th>
                   <th class="label tape-col-group">Expiry</th>
@@ -2191,23 +2934,34 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <tbody>
                 <tr
                   v-for="row in renderedTape"
-                  :key="`${row.timestamp}-${row.right}-${row.strike}-${row.premium}`"
+                  :key="`${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
                   :class="{
-                    anomalous: row.anomaly_flags.length,
-                    isWhale: row.premium >= 100_000,
-                    isMegaWhale: row.premium >= 500_000,
+                    anomalous: (row.anomaly_flags ?? []).length > 0,
+                    isWhale: (row.premium ?? 0) >= 100_000,
+                    isMegaWhale: (row.premium ?? 0) >= 500_000,
                     isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
+                    isSweep: tradeClassLabel(row) === 'SWEEP',
+                    'just-arrived': isNewPrint(row),
                     [tapeLean(row).cls]: true,
                   }"
                 >
-                  <td class="flag-col">
+                  <td class="fig dim ts-cell">
+                    <span v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
+                      formatTapeDate(row.timestamp)
+                    }}</span>
                     <span
-                      :class="premiumTierCls(row.premium)"
-                      :title="`Premium tier: ${premiumTierLabel(row.premium)}`"
-                      >{{ premiumTierLabel(row.premium) }}</span
+                      class="ts-clock"
+                      :class="{ 'ts-eod': isDateOnlyStamp(row.timestamp) }"
+                      :title="
+                        isDateOnlyStamp(row.timestamp)
+                          ? 'End-of-day roll-up — the provider gave no intraday timestamp'
+                          : String(row.timestamp ?? '')
+                      "
+                      >{{
+                        isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
+                      }}</span
                     >
                   </td>
-                  <td class="fig dim ts-cell">{{ row.timestamp.slice(11, 19) }}</td>
                   <td class="tape-col-group">
                     <span
                       class="bias-chip label"
@@ -2218,21 +2972,28 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     </span>
                   </td>
                   <td>
-                    <span :class="tradeClassTokenCls(tradeClassLabel(row))">
+                    <span
+                      v-if="tradeClassLabel(row) !== 'SINGLE'"
+                      :class="tradeClassTokenCls(tradeClassLabel(row))"
+                    >
                       {{ tradeClassLabel(row) }}
                     </span>
                   </td>
                   <td class="fig dim tape-col-group expiry-cell">
                     {{ row.expiry ? shortDate(row.expiry) : 'N/A' }}
                   </td>
-                  <td class="fig num-col strike-cell">{{ usd(row.strike) }}</td>
+                  <td class="fig num-col strike-cell">{{ optUsd(row.strike) }}</td>
                   <td class="fig num-col tape-col-group stock-cell">
                     <div class="stock-lockup">
-                      <span class="stock-val">{{
-                        (row.underlying_price ?? s?.spot) == null
-                          ? DASH
-                          : usd(row.underlying_price ?? s?.spot)
-                      }}</span>
+                      <span
+                        class="stock-val"
+                        :class="{ 'cell-na': (row.underlying_price ?? s?.spot) == null }"
+                        >{{
+                          (row.underlying_price ?? s?.spot) == null
+                            ? '—'
+                            : optUsd(row.underlying_price ?? s?.spot)
+                        }}</span
+                      >
                       <span
                         v-if="moneynessInfo(row)"
                         class="moneyness-tag label"
@@ -2243,11 +3004,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   </td>
                   <td
                     class="fig num-col tape-col-group"
+                    :class="{ 'cell-na': pricePaid(row) == null }"
                     :title="
                       row.premium_estimated ? 'Back-solved from notional' : 'Per-contract fill'
                     "
                   >
-                    {{ pricePaid(row) == null ? DASH : `$${num(pricePaid(row)!, 2)}` }}
+                    {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row)!, 2)}` }}
                   </td>
                   <td class="fig num-col">{{ num(contractsOf(row), 0) }}</td>
                   <td class="num-col">
@@ -2264,18 +3026,29 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   </td>
                   <td
                     class="fig num-col premium-cell"
-                    :class="[row.right, { 'whale-prem': row.premium >= 100_000 }]"
+                    :class="[
+                      row.right,
+                      { 'whale-prem': row.premium >= 100_000, 'cell-na': !(row.premium > 0) },
+                    ]"
                   >
-                    ${{ compact(row.premium || 0) }}
-                    <small v-if="row.premium_estimated" class="est">≈</small>
+                    {{ row.premium > 0 ? `$${compact(row.premium)}` : '—' }}
+                    <small v-if="row.premium_estimated && row.premium > 0" class="est">≈</small>
                   </td>
                 </tr>
               </tbody>
             </table>
-            <p v-if="tapeTruncated" class="label dim tape-cap-note">
-              Showing first {{ TAPE_RENDER_CAP }} of {{ visibleTape.length }} matching prints.
-              Narrow the view or raise the premium floor.
-            </p>
+            <div v-if="tapeTruncated" class="tape-cap-bar">
+              <span class="label dim tape-cap-note">
+                Showing {{ renderedTape.length }} of {{ visibleTape.length }} matching prints.
+              </span>
+              <button
+                type="button"
+                class="label expand-tape-btn"
+                @click="tapeShowAll = !tapeShowAll"
+              >
+                {{ tapeShowAll ? 'COLLAPSE TAPE' : `SHOW ALL ${visibleTape.length} PRINTS` }}
+              </button>
+            </div>
           </div>
           <div v-else-if="d?.flow_tape.length" class="no-tape compact-empty">
             <strong>NO PRINTS MATCH THIS TABLE VIEW</strong>
@@ -2291,7 +3064,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               (unsigned proxy), not a trade tape.
             </p>
             <p v-else>No prints cleared the current time and noise filters.</p>
-            <p class="reject-hint label" v-if="d?.quality?.flow_rejected">
+            <p v-if="d?.quality?.flow_rejected" class="reject-hint label">
               Rejected:
               <template v-for="(n, k) in d.quality.flow_rejected" :key="k">
                 <span v-if="typeof n === 'number' && n > 0"> {{ k }}={{ n }}</span>
@@ -2302,7 +3075,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               </template>
               <template v-else> · try <b>RAW</b> noise filter or lower min premium </template>
             </p>
-            <p class="reject-hint label" v-if="d?.quality?.flow_rejected?.print_ts_min">
+            <p v-if="d?.quality?.flow_rejected?.print_ts_min" class="reject-hint label">
               Prints span {{ d.quality.flow_rejected.print_ts_min }} →
               {{ d.quality.flow_rejected.print_ts_max }} · window
               {{ d.quality.flow_rejected.window_lower }} →
@@ -2327,14 +3100,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </div>
         </Panel>
 
-        <Panel label="On-demand historical tape" index="05b" class="rise">
+        <Panel label="On-demand historical tape" index="—" class="rise">
           <template #action>
             <button
               v-if="historyTape.length"
               type="button"
               class="panel-action label"
-              @click="downloadHistoryTapeCsv"
               title="Export complete historical tape to CSV"
+              @click="downloadHistoryTapeCsv"
             >
               EXPORT CSV
             </button>
@@ -2627,11 +3400,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               type="button"
               class="label scan-btn"
               :disabled="unusual.loading.value"
-              @click="unusualOpen = true; scanLiveFlow()"
+              @click="openUnusualScan"
             >
               {{ unusual.loading.value ? 'SCANNING…' : 'SCAN LIVE FLOW' }}
             </button>
-            <span class="label cov" v-if="unusual.data.value?.asof">
+            <span v-if="unusual.data.value?.asof" class="label cov">
               AS OF {{ shortDate(unusual.data.value?.asof) }}
             </span>
           </div>
@@ -2734,7 +3507,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             </table>
             <p v-else class="note pad">
               No unusual flow rows yet.
-              <button type="button" class="label scan-btn inline" @click="scanLiveFlow()">
+              <button type="button" class="label scan-btn inline" @click="void scanLiveFlow()">
                 SCAN LIVE FLOW
               </button>
               across liquid names + hottest local activity.
@@ -2769,11 +3542,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               type="button"
               class="label scan-btn"
               :disabled="opportunities.loading.value"
-              @click="opportunitiesOpen = true; scanLiveOpportunities()"
+              @click="openOpportunitiesScan"
             >
               {{ opportunities.loading.value ? 'SCANNING…' : 'SCAN LIVE' }}
             </button>
-            <span class="label cov" v-if="opportunities.data.value?.asof_utc">
+            <span v-if="opportunities.data.value?.asof_utc" class="label cov">
               AS OF {{ shortDate(opportunities.data.value?.asof_utc) }}
             </span>
           </div>
@@ -2868,7 +3641,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               to recombine the latest conviction board + unusual flow boards.
             </p>
           </div>
-          <p class="note tiny pad" v-if="opportunityRows.length">
+          <p v-if="opportunityRows.length" class="note tiny pad">
             Click a row to load that underlier. NO-TRADE rows failed the gate on measured chain
             fields — shown, not hidden. Hover a gate chip for the reason.
           </p>
@@ -2896,20 +3669,25 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   margin: calc(var(--s5) * -1);
   padding: var(--s5) var(--s5) var(--s7);
   min-width: 0;
+  overflow-x: hidden;
   background: var(--void);
 }
 
 .options-view :deep(.panel) {
-  border-radius: 0;
-  padding: var(--s1);
+  border-radius: var(--r-content);
+  border: var(--hair) solid var(--rule);
+  background: var(--panel);
+  overflow: hidden;
 }
 .options-view :deep(.panel > .head) {
-  min-height: 38px;
-  padding: var(--s1) var(--s2);
-  border-bottom: var(--hair) solid var(--rule);
+  min-height: 40px;
+  padding: var(--s2) var(--s4);
+  border-bottom: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface-hi);
 }
 .options-view :deep(.panel > .head .idx) {
   color: var(--phosphor);
+  font-weight: 750;
 }
 
 /* ---- view tabs ----------------------------------------------------------- */
@@ -2931,14 +3709,31 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 
 .command {
   display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-height: 56px;
+  padding: var(--s2) var(--s4);
+  border: var(--hair) solid var(--glass-border);
+  border-left: 3px solid var(--phosphor);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-lg);
+  -webkit-backdrop-filter: var(--glass-blur-lg);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  border-radius: var(--r-chrome);
+}
+.command-row {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--s2) var(--s3);
-  min-height: 56px;
-  padding: var(--s2) var(--s4);
-  border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--phosphor-dim);
-  background-color: var(--panel);
+  min-width: 0;
+}
+.command-primary {
+  justify-content: space-between;
+}
+.command-secondary {
+  padding-top: var(--s1);
+  border-top: var(--hair) solid var(--glass-border-subtle);
 }
 .identity {
   display: flex;
@@ -2948,33 +3743,46 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .quick-tickers {
   display: flex;
   align-items: center;
-  gap: 3px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.quick-tickers::-webkit-scrollbar {
+  display: none;
 }
 .ticker-chip {
-  padding: 3px 7px;
-  min-height: 26px;
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  min-height: 32px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
   color: var(--ink-dim);
   font: 700 9.5px var(--font-data);
   letter-spacing: 0.04em;
   cursor: pointer;
-  border-radius: var(--r-xs, 2px);
+  border-radius: 9999px;
+  box-shadow: var(--glass-specular-subtle);
   transition:
-    color 0.12s ease,
-    background 0.12s ease,
-    border-color 0.12s ease;
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 .ticker-chip:hover {
   color: var(--ink);
-  background: var(--panel-hi);
-  border-color: var(--rule);
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-hi);
+  transform: translateY(-0.5px);
 }
 .ticker-chip.on {
   color: var(--void);
   background: var(--phosphor);
   border-color: var(--phosphor);
+  box-shadow: var(--glass-specular);
 }
 .command-right {
   display: flex;
@@ -2992,16 +3800,27 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .book-pin {
   justify-self: start;
-  min-height: 22px;
-  padding: 0 7px;
+  min-height: 32px;
+  padding: 0 9px;
   color: var(--ink-dim);
-  border: var(--hair) solid var(--rule-hi);
-  background: transparent;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  border-radius: 9999px;
   cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.book-pin:hover {
+  color: var(--ink);
+  border-color: var(--glass-border-hi);
+  background: var(--glass-surface-hi);
 }
 .book-pin.on {
   color: var(--phosphor);
   border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
 }
 .history-tape-container {
   display: flex;
@@ -3017,6 +3836,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: var(--s3);
   background: var(--void-lift);
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-md);
 }
 .history-controls-group {
   display: flex;
@@ -3031,6 +3851,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--panel);
   padding: 2px 8px;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-sm);
 }
 .history-controls-group input[type='date'],
 .history-controls-group select {
@@ -3056,6 +3877,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 8px var(--s3);
   background: var(--panel-raise);
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-md);
   font-size: var(--t-tiny);
 }
 .h-stat-item {
@@ -3092,6 +3914,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink);
   font-family: var(--font-data);
   font-size: var(--t-tiny);
+  border-radius: var(--r-sm);
 }
 .history-search-input:focus {
   outline: none;
@@ -3123,7 +3946,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .symbol-form {
   position: relative;
-  flex: 0 1 120px;
+  flex: 0 1 130px;
   min-width: 110px;
 }
 .mode-seg,
@@ -3134,11 +3957,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   display: flex;
   align-items: center;
   gap: var(--s3);
-  min-height: 32px;
-  padding: 2px var(--s3);
+  min-height: 34px;
+  padding: 3px var(--s3);
   border: var(--hair) solid var(--rule);
   border-left: 3px solid var(--phosphor-dim);
   background: var(--phosphor-wash);
+  border-radius: var(--r-md);
   flex-wrap: wrap;
 }
 .history-day-select {
@@ -3148,6 +3972,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink);
   border: var(--hair) solid var(--rule-hi);
   background: var(--panel-hi);
+  border-radius: var(--r-sm);
 }
 .history-day-meta {
   color: var(--ink-dim);
@@ -3158,6 +3983,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--phosphor);
   border: var(--hair) solid var(--phosphor-dim);
   background: var(--phosphor-wash);
+  border-radius: var(--r-sm);
 }
 .jump-last-good:hover {
   color: var(--void);
@@ -3165,10 +3991,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .symbol-entry {
   display: flex;
-  height: 34px;
-  border: var(--hair) solid var(--rule-hi);
+  height: 40px;
+  min-height: 40px;
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-sm);
   overflow: hidden;
-  background: var(--void-lift);
+  background: var(--glass-base);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.4),
+    var(--glass-specular-subtle);
 }
 .symbol-entry input {
   min-width: 0;
@@ -3177,6 +4010,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font: 600 0.95rem var(--font-data);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+}
+.symbol-entry input:focus {
+  outline: none;
 }
 .load-btn {
   min-width: 52px;
@@ -3186,6 +4025,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--phosphor);
   font-size: var(--t-micro);
   font-weight: 800;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .load-btn:hover:not(:disabled) {
   background: var(--phosphor-dim);
@@ -3195,15 +4036,19 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .search-hits {
   position: absolute;
-  top: calc(100% + 2px);
+  top: calc(100% + 4px);
   left: 0;
   right: 0;
   z-index: 40;
   margin: 0;
   padding: 0;
   list-style: none;
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--panel-raise);
+  border: var(--hair) solid var(--glass-border-hi);
+  background: var(--glass-surface-hi);
+  backdrop-filter: var(--glass-blur-lg);
+  -webkit-backdrop-filter: var(--glass-blur-lg);
+  border-radius: var(--r-md);
+  box-shadow: var(--glass-shadow-lg), var(--glass-specular-subtle);
   max-height: 220px;
   overflow: auto;
 }
@@ -3214,8 +4059,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   align-items: center;
   padding: 8px 10px;
   cursor: pointer;
-  border-bottom: var(--hair) solid var(--rule);
+  border-bottom: var(--hair) solid var(--glass-border-subtle);
   color: var(--ink-dim);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .search-hits li:hover,
 .search-hits li.on {
@@ -3235,6 +4083,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border-color: var(--phosphor-dim);
   color: var(--ink-soft);
   background: var(--phosphor-wash);
+  border-radius: var(--r-md);
 }
 .loading-strip.soft {
   opacity: 0.9;
@@ -3304,9 +4153,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--phosphor-wash);
   letter-spacing: 0.08em;
   cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .scan-btn:hover {
   border-color: var(--phosphor);
+  background: color-mix(in srgb, var(--phosphor) 18%, transparent);
 }
 .scan-btn:disabled {
   opacity: 0.5;
@@ -3541,42 +4393,67 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-ghost);
 }
 .segment {
-  display: flex;
-  border: 1px solid var(--rule-hi);
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: var(--hair) solid var(--glass-border);
   height: 34px;
-  overflow: hidden;
-  background: var(--void-lift);
+  background: var(--glass-base);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 .seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  min-height: 32px;
   padding: 0 var(--s2);
   color: var(--ink-faint);
-  border-right: var(--hair) solid var(--rule);
+  border: none;
   font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  background: transparent;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
-.seg:last-child {
-  border-right: 0;
-}
-.seg:hover {
+.seg:hover:not(.on) {
   color: var(--ink);
-  background: var(--panel-hi);
+  background: var(--glass-surface-hi);
 }
 .seg.on {
   color: var(--void);
   background: var(--phosphor);
   font-weight: 800;
+  box-shadow: var(--glass-specular);
 }
 .expiry-select {
   height: 34px;
   min-width: 120px;
   max-width: 160px;
-  padding: 0 22px 0 8px;
+  padding: 0 24px 0 10px;
   color: var(--ink);
-  border: 1px solid var(--rule-hi);
-  background: var(--panel-hi);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  border-radius: var(--r-sm);
   font-size: var(--t-micro);
+  font-family: var(--font-data);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--glass-specular-subtle);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .expiry-select:hover {
-  border-color: var(--rule);
+  border-color: var(--glass-border-hi);
 }
 .seg:focus-visible,
 .expiry-select:focus-visible,
@@ -3590,10 +4467,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   align-items: center;
   gap: var(--s2) var(--s3);
   flex-wrap: wrap;
-  min-height: 46px;
+  min-height: 48px;
   padding: var(--s2) var(--s3);
-  border: 1px solid var(--rule-hi);
-  background: var(--panel);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+  border-radius: var(--r-lg);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   overflow: hidden;
 }
 .live-filter-bar.live {
@@ -3620,6 +4501,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid var(--warn);
   border-left-width: 3px;
   background: var(--warn-wash);
+  border-radius: var(--r-xs);
 }
 .filter-recovery > span {
   flex: 0 0 auto;
@@ -3635,6 +4517,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 3px 7px;
   color: var(--warn);
   border: var(--hair) solid var(--warn);
+  border-radius: var(--r-xs);
 }
 .live-badge {
   display: flex;
@@ -3699,8 +4582,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   align-items: flex-end;
   gap: 0;
   padding: 2px 8px;
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void-lift);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  border-radius: var(--r-xs);
   min-width: 52px;
 }
 .live-lag .label {
@@ -3724,7 +4610,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .quick-filters {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex: 0 0 auto;
   flex-wrap: nowrap;
   margin-left: auto;
@@ -3737,34 +4623,50 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .qf-chip {
   min-height: 28px;
-  padding: 0 var(--s2);
-  border: var(--hair) solid var(--rule-hi);
+  padding: 0 10px;
+  border: var(--hair) solid var(--glass-border);
   color: var(--ink-dim);
-  background: var(--void-lift);
+  background: var(--glass-base);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  border-radius: 9999px;
   font-size: var(--t-micro);
   font-weight: 700;
   cursor: pointer;
+  box-shadow: var(--glass-specular-subtle);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 .qf-chip:hover {
   color: var(--ink);
-  border-color: var(--rule);
+  border-color: var(--glass-border-hi);
+  background: var(--glass-surface-hi);
+  transform: translateY(-0.5px);
 }
 .qf-chip.on {
   color: var(--void);
   background: var(--phosphor);
   border-color: var(--phosphor);
+  box-shadow: var(--glass-specular);
 }
 .qf-sep {
   width: 1px;
   height: 18px;
-  background: var(--rule-hi);
+  background: var(--glass-border-hi);
   margin: 0 4px;
 }
 
 .filter-deck {
-  border: var(--hair) solid var(--rule);
-  background: var(--void-lift);
-  padding: var(--s3);
+  border: var(--hair) solid var(--glass-border-hi);
+  background: var(--glass-surface-hi);
+  backdrop-filter: var(--glass-blur-lg);
+  -webkit-backdrop-filter: var(--glass-blur-lg);
+  border-radius: var(--r-lg);
+  box-shadow: var(--glass-shadow-lg), var(--glass-specular);
+  padding: var(--s3) var(--s4);
   display: flex;
   flex-direction: column;
   gap: var(--s3);
@@ -3788,33 +4690,46 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .raw-btn.inline {
   margin-top: 0;
-  padding: var(--s1) var(--s2);
+  padding: 4px 10px;
   font-size: var(--t-micro);
+  border-radius: var(--r-xs);
 }
 .tune {
   color: var(--phosphor);
   padding: 0 var(--s3);
-  height: 34px;
+  height: 40px;
+  min-height: 40px;
   border: 1px solid var(--phosphor-dim);
   background: var(--phosphor-wash);
   font-size: var(--t-micro);
+  font-weight: 700;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  box-shadow: var(--glass-specular-subtle);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.tune:hover {
+  background: color-mix(in srgb, var(--phosphor) 16%, transparent);
+  border-color: var(--phosphor);
 }
 .tune.on {
-  background: var(--phosphor-wash);
+  background: color-mix(in srgb, var(--phosphor) 20%, transparent);
 }
 .filters {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-  gap: 1px;
-  background: var(--rule);
-  border: var(--hair) solid var(--rule);
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 2px;
+  background: var(--glass-border);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-md);
+  overflow: hidden;
 }
 .filters label {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 6px 8px;
-  background: var(--panel);
+  padding: 8px 10px;
+  background: var(--glass-base);
   min-width: 0;
 }
 .filters input,
@@ -3836,9 +4751,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: var(--s4);
   min-height: 0;
   padding: var(--s3) var(--s4);
-  border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--warn);
-  background: var(--panel);
+  border: var(--hair) solid var(--glass-border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-md);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
 }
 .recovery-copy {
   display: flex;
@@ -3928,14 +4847,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 /* ---- compact KPI rail ------------------------------------------------- */
 .kpi-rail {
-  display: grid;
+  display: none;
   grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 1px;
   padding: 1px;
-  background: var(--rule);
-  border: var(--hair) solid var(--rule-hi);
+  background: var(--glass-border);
+  border: var(--hair) solid var(--glass-border);
   border-radius: 0;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
   overflow: hidden;
 }
 @media (max-width: 1380px) {
@@ -3966,8 +4884,15 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 48px;
   padding: 4px 8px;
   border: 0;
-  background: var(--panel);
+  background: var(--glass-surface);
   overflow: hidden;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.kpi:hover {
+  background: var(--glass-surface-hi);
+  box-shadow: var(--glass-specular);
 }
 .kpi .label {
   color: var(--ink-faint);
@@ -4082,10 +5007,18 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   align-items: center;
   gap: var(--s3);
   padding: var(--s3) var(--s4);
-  border: var(--hair) solid var(--rule);
-  border-radius: 0;
-  background: var(--panel);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+}
+.positioning-panel {
+  width: 100%;
+}
+.positioning-panel :deep(.body) {
+  padding: 0;
 }
 .workbench {
   display: flex;
@@ -4095,17 +5028,444 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .workbench-top {
   display: grid;
-  grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
-  grid-template-rows: minmax(560px, 62vh);
+  /* The gamma map is the read on this page, so it takes the column. The squeeze
+     board stays a full peer at a fixed floor rather than shrinking to a strip. */
+  grid-template-columns: minmax(0, 2.4fr) minmax(320px, 1fr);
+  grid-template-rows: minmax(660px, 74vh);
   gap: 8px;
   min-width: 0;
   align-items: stretch;
 }
+.workbench-top .gex-cell-panel {
+  grid-column: 1;
+}
+.workbench-top .screener-cell {
+  grid-column: 2;
+}
 @media (max-width: 1180px) {
   .workbench-top {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(520px, 58vh);
+    grid-template-rows: minmax(560px, 64vh) minmax(520px, 58vh);
   }
+  .workbench-top .gex-cell-panel {
+    grid-column: 1;
+  }
+  .workbench-top .screener-cell {
+    grid-column: 1;
+  }
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* Stream Status and Pulse */
+.stream-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  min-height: 28px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  border-radius: 9999px;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--ink-dim);
+}
+.stream-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-ghost);
+}
+.stream-pulse-dot.active {
+  background: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+}
+.stream-sec {
+  font-size: var(--t-micro);
+  color: var(--phosphor);
+  font-weight: 750;
+}
+
+/* Historical Replay Banner */
+.historical-replay-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4);
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-md);
+  flex-wrap: wrap;
+}
+.hist-banner-content {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.hist-lamp-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 70%, var(--rule));
+}
+.hist-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.hist-title {
+  color: var(--warn);
+  font-size: var(--t-micro);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.hist-sub {
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
+}
+.hist-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-left: auto;
+}
+.jump-last-good {
+  padding: 4px 10px;
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink-soft);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.return-live-btn {
+  padding: 4px 12px;
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+  color: var(--phosphor);
+  font-weight: 750;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  box-shadow: var(--glass-specular-subtle);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.return-live-btn:hover {
+  background: var(--phosphor);
+  color: var(--void);
+  border-color: var(--phosphor);
+}
+.history-quick-pick {
+  display: inline-flex;
+  align-items: center;
+}
+.history-quick-select {
+  min-height: 28px;
+  padding: 0 10px;
+  border: var(--hair) solid var(--warn);
+  background: var(--warn-wash);
+  color: var(--warn);
+  font-weight: 700;
+  border-radius: var(--r-sm);
+  font-size: var(--t-micro);
+}
+
+/* Tape Action Bar (Panel 04 Action Slot) */
+.tape-action-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.stream-rate-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.stream-pulse-lamp {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-ghost);
+  margin: 0 4px;
+}
+.stream-pulse-lamp.running {
+  background: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+}
+.tick-btn {
+  color: var(--phosphor) !important;
+  font-weight: 800 !important;
+}
+.tape-search-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.tape-search-input {
+  min-height: 26px;
+  width: 180px;
+  padding: 0 20px 0 8px;
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: var(--t-micro);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.tape-search-input:focus {
+  width: 220px;
+  border-color: var(--phosphor);
+  outline: none;
+}
+.clear-search {
+  position: absolute;
+  right: 4px;
+  background: transparent;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* Flagged Prints & High Conviction Shelf */
+.flagged-prints-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  border-bottom: var(--hair) solid var(--glass-border);
+}
+.flagged-prints-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.flagged-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.flagged-pulse-icon {
+  color: var(--badge-golden);
+}
+.flagged-title {
+  font-weight: 800;
+  color: var(--badge-golden);
+  letter-spacing: 0.08em;
+  font-size: var(--t-micro);
+}
+.flagged-sub {
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+}
+.flagged-quick-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.flag-pill {
+  min-height: 22px;
+  padding: 0 8px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  color: var(--ink-dim);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.flag-pill:hover {
+  background: var(--glass-surface-hi);
+  color: var(--ink);
+  border-color: var(--glass-border-hi);
+}
+.flag-pill.on {
+  color: var(--void);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+}
+.flag-pill.golden-pill.on {
+  color: var(--void);
+  background: var(--badge-golden);
+  border-color: var(--badge-golden);
+}
+.flag-pill.mega-whale-pill.on,
+.flag-pill.whale-pill.on {
+  color: var(--void);
+  background: var(--warn);
+  border-color: var(--warn);
+}
+.flag-toggle-btn {
+  min-height: 22px;
+  padding: 0 8px;
+  background: var(--glass-surface-hi);
+  border: var(--hair) solid var(--glass-border-hi);
+  color: var(--ink-soft);
+  font-size: 9px;
+  font-weight: 750;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  margin-left: 4px;
+}
+.flagged-prints-grid {
+  display: grid;
+  /* 285px floor keeps contract + premium on one row without hitting the
+     truncation path for typical strike/expiry strings. */
+  grid-template-columns: repeat(auto-fill, minmax(285px, 1fr));
+  gap: var(--s2);
+}
+.flagged-card {
+  background: var(--glass-surface-hi);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-md);
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.flagged-card:hover {
+  border-color: var(--glass-border-hi);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular);
+  transform: translateY(-1px);
+}
+.flagged-card.isGoldenSweep {
+  border: 1px solid var(--badge-golden-border);
+  border-left: 4px solid var(--badge-golden);
+  background: var(--badge-golden-wash);
+}
+.flagged-card.isMegaWhale {
+  border-left: 4px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--glass-surface-hi));
+}
+
+/* Tape Filter Bands Row */
+.tape-bands-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 4px var(--s3);
+  background: var(--glass-base);
+  border-top: var(--hair) solid var(--glass-border-subtle);
+  flex-wrap: wrap;
+}
+.band-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.band-label {
+  font-size: 9px;
+  font-weight: 750;
+  color: var(--ink-faint);
+  letter-spacing: 0.05em;
+  margin-right: 2px;
+}
+.band-chip {
+  min-height: 22px;
+  padding: 0 7px;
+  border: var(--hair) solid var(--glass-border);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.band-chip:hover {
+  color: var(--ink);
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-hi);
+}
+.band-chip.on {
+  color: var(--void);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+  box-shadow: var(--glass-specular-subtle);
+}
+.active-filters-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.active-badge {
+  font-size: 9px;
+  font-weight: 750;
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+  padding: 1px 6px;
+  border-radius: 9999px;
+}
+.reset-filter-btn {
+  font-size: 9px;
+  font-weight: 750;
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid var(--warn);
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+/* Streaming Arrival Flash Animation */
+@keyframes printArrivalFlash {
+  0% {
+    background-color: color-mix(in srgb, var(--phosphor) 28%, var(--glass-surface-hi));
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.just-arrived {
+  animation: printArrivalFlash 3.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.card-tier-tag {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  font-size: 8px;
+  font-weight: 700;
+}
+.remaining-tape-header {
+  display: flex;
+  align-items: center;
+  padding: 6px var(--s4);
+  background: var(--void-lift);
+  border-bottom: var(--hair) solid var(--rule);
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 .workbench .cell {
@@ -4118,7 +5478,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .workbench .gex-full {
   width: 100%;
-  min-height: 560px;
+  min-height: 660px;
 }
 .workbench .gex-full :deep(.body) {
   overflow: hidden;
@@ -4259,27 +5619,30 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-toolbar {
   display: flex;
   flex-direction: column;
-  min-height: 36px;
-  border-block: var(--hair) solid var(--rule);
-  background: var(--void-lift);
+  min-height: 38px;
+  border-block: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
 }
 /* Main row: tabs flush left, right controls flush right */
 .tape-toolbar-main {
   display: flex;
   align-items: stretch;
-  min-height: 36px;
+  min-height: 38px;
 }
 .tape-toolbar-right {
   display: flex;
   align-items: center;
   gap: var(--s2);
-  padding: 0 var(--s2);
+  padding: 0 var(--s3);
   margin-left: auto;
   flex-shrink: 0;
 }
 .tape-tabs {
   display: flex;
-  align-self: stretch;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px;
+  align-self: center;
   overflow-x: auto;
   /* Hide scrollbar but keep scrollable — avoids layout jump on narrow panes */
   scrollbar-width: none;
@@ -4287,33 +5650,91 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-tabs::-webkit-scrollbar {
   display: none;
 }
-.tape-tabs button {
+.tape-more {
+  position: relative;
+  flex: 0 0 auto;
+}
+.tape-more > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
   padding: 0 10px;
   color: var(--ink-faint);
-  border-right: var(--hair) solid var(--rule);
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--r-capsule);
+}
+.tape-more > summary::-webkit-details-marker {
+  display: none;
+}
+.tape-more[open] > summary,
+.tape-more > summary:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+}
+.tape-more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-chrome);
+  background: var(--glass-overlay);
+  backdrop-filter: var(--chrome-optics-md);
+  -webkit-backdrop-filter: var(--chrome-optics-md);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular-subtle);
+}
+.tape-more-menu button {
+  justify-content: flex-start;
+  width: 100%;
+}
+.tape-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--ink-faint);
+  border: var(--hair) solid transparent;
   white-space: nowrap;
   flex-shrink: 0;
   cursor: pointer;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
   transition:
     color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .tape-tabs button:first-child {
-  border-left: var(--hair) solid var(--rule);
+  border-left: var(--hair) solid transparent;
 }
-.tape-tabs button:hover:not(.on) {
+.tape-tabs button:hover:not(.on):not(:disabled) {
   color: var(--ink-soft);
-  background: var(--panel-hi);
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-subtle);
 }
 .tape-tabs button.on {
   color: var(--ink);
-  background: var(--panel-hi);
-  font-weight: 700;
-  box-shadow: inset 0 -2px var(--phosphor);
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-hi);
+  font-weight: 750;
+  box-shadow:
+    var(--glass-specular),
+    inset 0 -2px var(--phosphor);
 }
 .tape-tabs button:disabled {
   color: var(--ink-ghost);
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
   background: transparent;
 }
@@ -4323,14 +5744,19 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 /* Tab count badge */
 .tab-count {
-  display: inline-block;
-  margin-left: 4px;
-  padding: 0 4px;
-  background: var(--panel-raise);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 5px;
+  padding: 0 5px;
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
   color: var(--ink-ghost);
-  font-size: var(--t-micro);
-  font-weight: 700;
-  vertical-align: middle;
+  font-size: 9px;
+  font-weight: 750;
+  border-radius: 9999px;
 }
 /* NEAR tab: slightly more prominent than the generic tabs — it's the actionable default */
 .tape-tabs .near-tab {
@@ -4344,6 +5770,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-tabs .near-tab.on {
   color: var(--call-hi, var(--call));
   background: var(--call-wash);
+  border-color: color-mix(in srgb, var(--call) 40%, var(--rule));
   box-shadow: inset 0 -2px var(--call);
 }
 .near-count {
@@ -4357,22 +5784,25 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   align-items: center;
   gap: 3px;
   padding: 0 6px;
-  border-left: var(--hair) solid var(--rule-hi);
+  border-left: var(--hair) solid var(--glass-border);
 }
 .near-dte-chip {
   min-height: 26px;
-  padding: 0 6px;
-  border: var(--hair) solid var(--rule-hi);
+  padding: 0 8px;
+  border: var(--hair) solid var(--glass-border);
   color: var(--ink-faint);
-  background: transparent;
+  background: var(--glass-base);
+  border-radius: 9999px;
   font-size: var(--t-micro);
   font-weight: 700;
   cursor: pointer;
   letter-spacing: 0.05em;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .near-dte-chip:hover {
   color: var(--call-hi, var(--call));
   border-color: var(--call);
+  background: var(--glass-surface-hi);
 }
 .near-dte-chip.on {
   color: var(--call-hi, var(--call));
@@ -4385,15 +5815,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: var(--s2);
 }
 .sort-control select {
-  min-height: 26px;
-  padding: 0 18px 0 6px;
+  min-height: 28px;
+  padding: 0 20px 0 8px;
   color: var(--ink);
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--panel);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  border-radius: var(--r-sm);
   font-size: var(--t-micro);
+  font-family: var(--font-data);
 }
 .sort-control select:hover {
-  border-color: var(--rule);
+  border-color: var(--glass-border-hi);
 }
 .anomaly-method {
   display: inline-flex;
@@ -4426,6 +5858,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .table-scroll {
   overflow: auto;
   max-height: 420px;
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--surface-base);
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-hi) transparent;
 }
 table {
   width: 100%;
@@ -4442,103 +5879,46 @@ td {
 th {
   position: sticky;
   top: 0;
-  background: var(--panel-hi);
-  z-index: 1;
+  background: var(--surface-overlay);
+  box-shadow: inset 0 -1px 0 var(--border-strong);
+  z-index: 2;
   color: var(--ink-dim);
+  font-weight: 750;
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 td.fig,
 th.num-col,
 td.num-col {
   font-size: var(--t-small);
-}
-.flag-col {
-  min-width: 80px;
-}
-/* One consistent anomaly-flag treatment. The abbreviation (PRM/VOL/CLU/SWP)
-   already carries the sub-type, so color stays a single "flagged" signal
-   instead of four competing hues — and never phosphor, which means
-   live-now everywhere else on this page. */
-.flag-chip {
-  display: inline-block;
-  margin: 1px 4px 2px 0;
-  padding: 2px 6px;
-  color: var(--void);
-  background: var(--warn);
-  border: var(--hair) solid var(--warn);
-  font-size: var(--t-micro);
-  font-weight: 800;
-  letter-spacing: 0.04em;
-}
-/* Legacy flag-chip sizes stay (anomaly flags) */
-.no-flag {
-  color: var(--ink-ghost);
-}
-/* Vol/OI head column */
-.vol-oi-head {
-  color: var(--ink-dim);
-}
-/* Timestamp column: trimmed to time only, tighter */
-.ts-cell {
-  font-size: var(--t-micro);
-  letter-spacing: 0.03em;
-}
-/* Expiry cell: compact mono */
-.expiry-cell {
-  font-size: var(--t-micro);
-  letter-spacing: 0.02em;
-}
-/* Type chip: abbreviated C/P takes less space */
-.type-chip {
-  min-width: 24px;
-}
-/* Golden sweep rows: left amber rule + subtle gold wash */
-tr.isGoldenSweep {
-  background: var(--badge-golden-wash);
-  box-shadow: inset 4px 0 0 var(--badge-golden);
-}
-tr.isGoldenSweep td {
-  color: var(--ink);
-}
-.tape-stalker-card.isGoldenSweep {
-  border-left: 3px solid var(--badge-golden);
-  background: color-mix(in srgb, var(--badge-golden) 8%, var(--panel));
-}
-/* Anomalous rows: left rule only, no gradient wash */
-tr.anomalous {
-  box-shadow: inset 3px 0 0 var(--warn);
-}
-/* Whale row thresholds — $100k and $500k+ (previously $250k) */
-/* Whale rows: progressively heavier left rule, flat background */
-tr.isWhale {
-  background: var(--warn-wash);
-  box-shadow: inset 3px 0 0 var(--warn);
-}
-tr.isMegaWhale {
-  background: color-mix(in srgb, var(--warn) 16%, var(--panel));
-  box-shadow: inset 5px 0 0 var(--warn);
-}
-tr.anomalous td,
-tr.isWhale td,
-tr.isMegaWhale td {
-  color: var(--ink);
-}
-.num-col {
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
-.dim {
-  color: var(--ink-dim);
+.tape-table {
+  min-width: 980px;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 .tape-table th {
+  padding: var(--s2) var(--s3);
+  color: var(--ink-dim);
+  background: var(--surface-overlay);
+  box-shadow: inset 0 -1px 0 var(--border-strong);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  font-weight: 750;
   font-size: var(--t-micro);
   letter-spacing: 0.06em;
-  border-bottom: var(--hair) solid var(--rule-hi);
+  text-transform: uppercase;
 }
 .tape-table td {
   padding: var(--s2) var(--s3);
-  font-size: var(--t-tiny);
+  border-bottom: var(--hair) solid var(--border-subtle);
+  vertical-align: middle;
 }
-/* Row states: hover lifts the surface; anomalous rows keep their warn wash
-   underneath so the flag cue never gets washed out by the hover state. */
+/* Row states: hover lifts the surface; anomalous rows keep their warn wash */
 .tape-table tbody tr {
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -4548,9 +5928,107 @@ tr.isMegaWhale td {
 .tape-table tbody tr.anomalous:hover {
   background: color-mix(in srgb, var(--warn) 14%, var(--panel-hi));
 }
-/* Quiet column-group dividers — Lean/Side/Class, Expiry/Strike, the
-   economics group, then Aggressor/edge — so the eye can chunk the row
-   instead of parsing twelve flat columns in one pass. */
+tr.anomalous {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+tr.isSweep {
+  background: var(--badge-sweep-wash);
+  box-shadow: inset 3px 0 0 var(--badge-sweep);
+}
+tr.isWhale {
+  background: var(--warn-wash);
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+tr.isMegaWhale {
+  background: color-mix(in srgb, var(--warn) 16%, var(--panel));
+  box-shadow: inset 5px 0 0 var(--warn);
+}
+tr.isGoldenSweep {
+  background: var(--badge-golden-wash);
+  box-shadow: inset 4px 0 0 var(--badge-golden);
+}
+tr.anomalous td,
+tr.isWhale td,
+tr.isMegaWhale td,
+tr.isSweep td,
+tr.isGoldenSweep td {
+  color: var(--ink);
+}
+.ts-cell {
+  font-size: var(--t-micro);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.ts-cell .ts-date {
+  display: block;
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+}
+.ts-cell .ts-clock {
+  display: block;
+}
+.ts-eod {
+  color: var(--ink-faint);
+  font-style: normal;
+  letter-spacing: 0.08em;
+}
+.ts-time .ts-date {
+  font-style: normal;
+  color: var(--ink-faint);
+  margin-right: 4px;
+}
+.expiry-cell {
+  font-size: var(--t-micro);
+  letter-spacing: 0.02em;
+}
+.stock-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.moneyness-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: var(--t-micro);
+  font-weight: 750;
+  border-radius: var(--r-xs);
+}
+.moneyness-tag.itm {
+  color: var(--call-hi);
+  background: var(--call-wash);
+}
+.moneyness-tag.otm {
+  color: var(--ink-dim);
+  background: var(--surface-raised);
+}
+.moneyness-tag.atm {
+  color: var(--warn);
+  background: var(--warn-wash);
+}
+.flag-chip {
+  display: inline-block;
+  margin: 1px 4px 2px 0;
+  padding: 2px 6px;
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 45%, var(--rule));
+  font-size: var(--t-micro);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.num-col {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dim {
+  color: var(--ink-dim);
+}
+.cell-na {
+  color: var(--ink-ghost);
+  font-weight: 400;
+}
+/* Quiet column-group dividers */
 .tape-table th.tape-col-group,
 .tape-table td.tape-col-group {
   border-left: var(--hair) solid var(--rule-faint);
@@ -4773,14 +6251,8 @@ td.put {
 }
 
 @media (max-width: 1100px) {
-  .command {
-    grid-template-columns: auto minmax(120px, 1fr) auto auto;
-  }
-  .expiry-select {
-    grid-column: 1 / 2;
-  }
   .command-right {
-    grid-column: 2 / -1;
+    margin-left: 0;
   }
   .kpi-rail {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4808,6 +6280,14 @@ td.put {
 }
 
 @media (max-width: 840px) {
+  .symbol-entry,
+  .tune,
+  .load-btn,
+  .book-pin,
+  .seg {
+    min-height: 44px;
+    height: 44px;
+  }
   .kpi-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4968,26 +6448,38 @@ tr.isMegaWhale:hover {
 .tape-cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 1px;
-  background: var(--rule);
-  border: var(--hair) solid var(--rule);
+  gap: var(--s2);
+  background: transparent;
+  border: 0;
 }
 .tape-stalker-card {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
   padding: var(--s3);
-  background: var(--panel);
-  border: 0;
-  transition: background var(--dur-fast) var(--ease-out);
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.tape-stalker-card:hover {
+  background: var(--glass-surface-hi);
+  border-color: var(--glass-border-hi);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular);
+  transform: translateY(-1px);
 }
 .tape-stalker-card.bull {
   border-left: 3px solid var(--long);
-  background: var(--panel);
 }
 .tape-stalker-card.bear {
   border-left: 3px solid var(--short);
-  background: var(--panel);
 }
 .tape-stalker-card.isWhale {
   border-color: color-mix(in srgb, var(--warn) 55%, var(--rule));
@@ -5000,11 +6492,12 @@ tr.isMegaWhale:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
+  gap: 6px;
 }
 .type-pill {
   font: 800 10px var(--font-display);
   padding: 1px 6px;
+  border-radius: var(--r-xs);
 }
 .type-pill.call {
   color: var(--call-hi, var(--call));
@@ -5018,13 +6511,19 @@ tr.isMegaWhale:hover {
 }
 .lean-pill {
   font: 700 9px var(--font-display);
-  padding: 1px 5px;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  letter-spacing: 0.04em;
 }
 .lean-pill.bull {
   color: var(--long);
+  background: var(--long-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--long) 35%, var(--rule));
 }
 .lean-pill.bear {
   color: var(--short);
+  background: var(--short-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--short) 35%, var(--rule));
 }
 .ts-time {
   font: 500 10px var(--font-data);
@@ -5036,30 +6535,51 @@ tr.isMegaWhale:hover {
   align-items: flex-end;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 0;
-  border-top: var(--hair) solid var(--rule-faint);
-  border-bottom: var(--hair) solid var(--rule-faint);
+  padding: 6px 0;
+  border-top: var(--hair) solid var(--glass-border-subtle);
+  border-bottom: var(--hair) solid var(--glass-border-subtle);
 }
 .strike-box,
 .prem-box {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* Flex children default to min-width:auto, so a long contract string pushed
+     the premium box past the card edge and its value rendered clipped. Allow
+     both boxes to shrink and truncate their overflow instead. */
+  min-width: 0;
+}
+.strike-box {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+.prem-box {
+  flex: 0 1 auto;
+  align-items: flex-end;
 }
 .strike-box .strike-label,
 .prem-box .prem-label {
-  font: 700 8px var(--font-display);
+  font: 700 8.5px var(--font-display);
   color: var(--ink-dim);
+  letter-spacing: 0.05em;
 }
 .strike-box .strike-val {
   font: 700 15px var(--font-data);
   color: var(--ink);
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
-.prem-box {
-  align-items: flex-end;
+.prem-box .prem-val,
+.prem-box .fill-sub,
+.strike-box .exp-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .prem-box .prem-val {
   font: 700 15px var(--font-data);
+  letter-spacing: -0.02em;
 }
 .prem-box.call .prem-val {
   color: var(--call-hi, var(--call));
@@ -5080,5 +6600,71 @@ tr.isMegaWhale:hover {
 .exp-tag {
   font: 500 9px var(--font-data);
   color: var(--ink-dim);
+}
+.tape-cap-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  background: var(--surface-subtle, rgba(255, 255, 255, 0.02));
+  border-top: var(--hair) solid var(--glass-border);
+  margin-top: var(--s2);
+}
+.expand-tape-btn {
+  background: var(--surface-base);
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink);
+  padding: 4px 10px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  box-shadow: var(--glass-specular-subtle);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.expand-tape-btn:hover {
+  background: var(--panel);
+  border-color: var(--phosphor-dim);
+  color: var(--phosphor);
+}
+
+/* The tape display switch uses the shared .mini-segment shape, but the class was
+   never defined in this view's scoped styles — the two buttons rendered as bare
+   run-on text ("TABLECARDS") with no segmented-control affordance. */
+.mini-segment {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  min-height: 28px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.mini-segment button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 9px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--ink-dim);
+  font: 600 var(--t-micro) var(--font-display);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.mini-segment button:hover {
+  color: var(--ink);
+  background: var(--glass-surface-hi);
+}
+.mini-segment button.on {
+  color: var(--void);
+  background: var(--phosphor);
+  font-weight: 750;
+  box-shadow: var(--glass-specular);
 }
 </style>

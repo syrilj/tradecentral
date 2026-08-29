@@ -9,7 +9,8 @@ import HelpTip from '@/components/HelpTip.vue'
 import { num, usd } from '@/format'
 
 type FilterMode = 'QUALIFYING' | 'WATCHLIST' | 'TOP_RVOL' | 'TOP_GAP' | 'ALL'
-type SortKey = 'symbol' | 'price' | 'gap_pct' | 'day_change_pct' | 'rvol' | 'float_shares' | 'pillars_met'
+type SortKey =
+  'symbol' | 'price' | 'gap_pct' | 'day_change_pct' | 'rvol' | 'float_shares' | 'pillars_met'
 
 const scan = useResource(() => api.momentumScan(), { intervalMs: 300_000 })
 
@@ -27,7 +28,9 @@ const allRawCandidates = computed<MomentumCandidate[]>(() => {
   return payload.candidates ?? []
 })
 
-const qualifyingCount = computed(() => (scan.data.value?.candidates ?? []).filter((c) => c.pillars_met === 3).length)
+const qualifyingCount = computed(
+  () => (scan.data.value?.candidates ?? []).filter((c) => c.pillars_met === 3).length,
+)
 const universeSize = computed(() => scan.data.value?.universe_size ?? 0)
 
 const topRvolSymbol = computed(() => {
@@ -66,14 +69,22 @@ function sortArrow(key: SortKey): string {
 
 function sortValue(c: MomentumCandidate, key: SortKey): number | string {
   switch (key) {
-    case 'symbol': return c.symbol
-    case 'price': return c.price
-    case 'gap_pct': return c.gap_pct ?? -Infinity
-    case 'day_change_pct': return c.day_change_pct ?? -Infinity
-    case 'rvol': return c.rvol ?? -Infinity
-    case 'float_shares': return c.float_shares ?? -Infinity
-    case 'pillars_met': return c.pillars_met
-    default: return 0
+    case 'symbol':
+      return c.symbol
+    case 'price':
+      return c.price
+    case 'gap_pct':
+      return c.gap_pct ?? -Infinity
+    case 'day_change_pct':
+      return c.day_change_pct ?? -Infinity
+    case 'rvol':
+      return c.rvol ?? -Infinity
+    case 'float_shares':
+      return c.float_shares ?? -Infinity
+    case 'pillars_met':
+      return c.pillars_met
+    default:
+      return 0
   }
 }
 
@@ -134,8 +145,9 @@ const filteredCandidates = computed(() => {
 
       <div class="banner label">
         <span>
-          Pre-market watchlist · Ross Cameron Five Pillars (Price $2–$20, Gap ≥2%, RVOL >5×, Low Float) ·
-          Scanning {{ scan.data.value ? num(scan.data.value.universe_size, 0) : '—' }} symbols
+          Pre-market watchlist · Ross Cameron Five Pillars (Price $2–$20, Gap ≥2%, RVOL >5×, Low
+          Float) · Scanning
+          {{ scan.data.value ? num(scan.data.value.universe_size, 0) : '—' }} symbols
         </span>
         <HelpTip
           label="Five Pillars Criteria"
@@ -143,7 +155,7 @@ const filteredCandidates = computed(() => {
         />
       </div>
 
-      <div class="readout-grid" v-if="scan.data.value">
+      <div v-if="scan.data.value" class="readout-grid">
         <Readout
           label="Qualifying (3/3)"
           :value="String(qualifyingCount)"
@@ -230,12 +242,16 @@ const filteredCandidates = computed(() => {
         </div>
       </div>
 
-      <LoadingState v-if="scan.loading.value && !scan.data.value" label="Scanning universe for momentum candidates..." />
+      <LoadingState
+        v-if="scan.loading.value && !scan.data.value"
+        label="Scanning universe for momentum candidates..."
+      />
       <p v-else-if="scan.error.value" class="state err label">{{ scan.error.value }}</p>
 
       <div v-else-if="!filteredCandidates.length" class="empty-state">
         <p class="state label">
-          No candidates match filter "{{ filterMode }}" {{ searchFilter ? `for search '${searchFilter}'` : '' }}.
+          No candidates match filter "{{ filterMode }}"
+          {{ searchFilter ? `for search '${searchFilter}'` : '' }}.
         </p>
         <p class="subnote label">Try switching to the Watchlist or All Universe tab above.</p>
       </div>
@@ -246,16 +262,28 @@ const filteredCandidates = computed(() => {
             <tr>
               <th class="sortable" @click="setSort('symbol')">Symbol {{ sortArrow('symbol') }}</th>
               <th class="sortable fig" @click="setSort('price')">Price {{ sortArrow('price') }}</th>
-              <th class="sortable fig" @click="setSort('gap_pct')">Gap % {{ sortArrow('gap_pct') }}</th>
-              <th class="sortable fig" @click="setSort('day_change_pct')">Day Chg {{ sortArrow('day_change_pct') }}</th>
+              <th class="sortable fig" @click="setSort('gap_pct')">
+                Gap % {{ sortArrow('gap_pct') }}
+              </th>
+              <th class="sortable fig" @click="setSort('day_change_pct')">
+                Day Chg {{ sortArrow('day_change_pct') }}
+              </th>
               <th class="sortable fig" @click="setSort('rvol')">RVOL {{ sortArrow('rvol') }}</th>
-              <th class="sortable fig" @click="setSort('float_shares')">Float {{ sortArrow('float_shares') }}</th>
-              <th class="sortable fig" @click="setSort('pillars_met')">Pillars {{ sortArrow('pillars_met') }}</th>
+              <th class="sortable fig" @click="setSort('float_shares')">
+                Float {{ sortArrow('float_shares') }}
+              </th>
+              <th class="sortable fig" @click="setSort('pillars_met')">
+                Pillars {{ sortArrow('pillars_met') }}
+              </th>
               <th>Quick Links</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="c in filteredCandidates" :key="c.symbol" :class="{ qualifying: c.pillars_met === 3 }">
+            <tr
+              v-for="c in filteredCandidates"
+              :key="c.symbol"
+              :class="{ qualifying: c.pillars_met === 3 }"
+            >
               <td class="sym">
                 <span class="sym-ticker">{{ c.symbol }}</span>
               </td>
@@ -265,15 +293,26 @@ const filteredCandidates = computed(() => {
                 </span>
               </td>
               <td class="fig">
-                <span :class="['pillar-pill', c.gap_qualifies ? 'pass' : 'fail', { sweet: c.gap_sweet_spot }]">
+                <span
+                  :class="[
+                    'pillar-pill',
+                    c.gap_qualifies ? 'pass' : 'fail',
+                    { sweet: c.gap_sweet_spot },
+                  ]"
+                >
                   {{ pct(c.gap_pct) }}
                 </span>
               </td>
-              <td class="fig" :class="[ (c.day_change_pct ?? 0) >= 0 ? 'pos' : 'neg']">
+              <td class="fig" :class="[(c.day_change_pct ?? 0) >= 0 ? 'pos' : 'neg']">
                 {{ pct(c.day_change_pct) }}
               </td>
               <td class="fig">
-                <span :class="['pillar-pill', c.rvol_qualifies ? 'pass' : (c.rvol ?? 0) >= 1.5 ? 'warn' : 'fail']">
+                <span
+                  :class="[
+                    'pillar-pill',
+                    c.rvol_qualifies ? 'pass' : (c.rvol ?? 0) >= 1.5 ? 'warn' : 'fail',
+                  ]"
+                >
                   {{ rvolTxt(c.rvol) }}
                 </span>
               </td>
@@ -286,9 +325,21 @@ const filteredCandidates = computed(() => {
                 </span>
               </td>
               <td class="links-cell">
-                <RouterLink :to="{ name: 'market', query: { symbol: c.symbol } }" class="qlink label">Market</RouterLink>
-                <RouterLink :to="{ name: 'options', query: { symbol: c.symbol } }" class="qlink label">Options</RouterLink>
-                <RouterLink :to="{ name: 'changepoints', query: { symbol: c.symbol } }" class="qlink label">Breaks</RouterLink>
+                <RouterLink
+                  :to="{ name: 'market', query: { symbol: c.symbol } }"
+                  class="qlink label"
+                  >Market</RouterLink
+                >
+                <RouterLink
+                  :to="{ name: 'options', query: { symbol: c.symbol } }"
+                  class="qlink label"
+                  >Options</RouterLink
+                >
+                <RouterLink
+                  :to="{ name: 'changepoints', query: { symbol: c.symbol } }"
+                  class="qlink label"
+                  >Breaks</RouterLink
+                >
               </td>
             </tr>
           </tbody>
@@ -308,7 +359,10 @@ const filteredCandidates = computed(() => {
   min-width: 0;
 }
 
-.w-full { width: 100%; min-width: 0; }
+.w-full {
+  width: 100%;
+  min-width: 0;
+}
 
 .banner {
   display: flex;
@@ -369,7 +423,8 @@ const filteredCandidates = computed(() => {
   gap: var(--s2);
 }
 
-.refresh-btn, .scan-action-btn {
+.refresh-btn,
+.scan-action-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -385,11 +440,13 @@ const filteredCandidates = computed(() => {
   cursor: pointer;
   transition: all 0.12s ease;
 }
-.refresh-btn:hover:not(:disabled), .scan-action-btn:hover:not(:disabled) {
+.refresh-btn:hover:not(:disabled),
+.scan-action-btn:hover:not(:disabled) {
   background: var(--phosphor);
   color: var(--void);
 }
-.refresh-btn:disabled, .scan-action-btn:disabled {
+.refresh-btn:disabled,
+.scan-action-btn:disabled {
   opacity: 0.6;
   cursor: wait;
 }
@@ -400,11 +457,15 @@ const filteredCandidates = computed(() => {
   line-height: 1;
 }
 .refresh-icon.spinning {
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .search-box {
@@ -441,10 +502,19 @@ const filteredCandidates = computed(() => {
   border-bottom: var(--hair) solid var(--rule);
   user-select: none;
 }
-.mtable th.sortable { cursor: pointer; }
-.mtable th.sortable:hover { color: var(--ink); }
-.mtable th:first-child, .mtable td.sym { text-align: left; }
-.mtable th:last-child { text-align: center; }
+.mtable th.sortable {
+  cursor: pointer;
+}
+.mtable th.sortable:hover {
+  color: var(--ink);
+}
+.mtable th:first-child,
+.mtable td.sym {
+  text-align: left;
+}
+.mtable th:last-child {
+  text-align: center;
+}
 
 .mtable td {
   text-align: right;
@@ -466,10 +536,21 @@ const filteredCandidates = computed(() => {
   font-family: var(--font-data);
   border-radius: 2px;
 }
-.pillar-pill.pass { color: var(--go); background: var(--long-wash); }
-.pillar-pill.sweet { color: var(--phosphor); font-weight: 700; background: var(--phosphor-wash); }
-.pillar-pill.warn { color: var(--warn); }
-.pillar-pill.fail { color: var(--ink-faint); }
+.pillar-pill.pass {
+  color: var(--go);
+  background: var(--long-wash);
+}
+.pillar-pill.sweet {
+  color: var(--phosphor);
+  font-weight: 700;
+  background: var(--phosphor-wash);
+}
+.pillar-pill.warn {
+  color: var(--warn);
+}
+.pillar-pill.fail {
+  color: var(--ink-faint);
+}
 
 .badge {
   padding: 1px 6px;
@@ -477,20 +558,41 @@ const filteredCandidates = computed(() => {
   font-size: var(--t-micro);
   font-family: var(--font-data);
 }
-.badge.optimal { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
-.badge.qualifies { color: var(--ink); }
-.badge.no { color: var(--ink-faint); }
-.badge.unknown { color: var(--ink-ghost); font-style: italic; }
+.badge.optimal {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
+.badge.qualifies {
+  color: var(--ink);
+}
+.badge.no {
+  color: var(--ink-faint);
+}
+.badge.unknown {
+  color: var(--ink-ghost);
+  font-style: italic;
+}
 
 .pillar-score {
   font-family: var(--font-data);
   font-weight: 700;
   padding: 2px 6px;
 }
-.pillar-score.p-3 { color: var(--phosphor); background: var(--phosphor-wash); border: var(--hair) solid var(--phosphor-dim); }
-.pillar-score.p-2 { color: var(--warn); }
-.pillar-score.p-1 { color: var(--ink-dim); }
-.pillar-score.p-0 { color: var(--ink-ghost); }
+.pillar-score.p-3 {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border: var(--hair) solid var(--phosphor-dim);
+}
+.pillar-score.p-2 {
+  color: var(--warn);
+}
+.pillar-score.p-1 {
+  color: var(--ink-dim);
+}
+.pillar-score.p-0 {
+  color: var(--ink-ghost);
+}
 
 .links-cell {
   display: flex;
@@ -509,8 +611,12 @@ const filteredCandidates = computed(() => {
   border-color: var(--phosphor-dim);
 }
 
-.pos { color: var(--long); }
-.neg { color: var(--short); }
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
 
 .empty-state {
   padding: var(--s6) var(--s4);
@@ -522,4 +628,3 @@ const filteredCandidates = computed(() => {
   font-size: var(--t-small);
 }
 </style>
-

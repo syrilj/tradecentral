@@ -40,7 +40,7 @@ describe('desk and market live operator contract', () => {
     expect(app).toContain('api.sectorFlow')
     expect(app).toContain('refreshSectorFlow({ force: true })')
     expect(app).toContain('intervalMs: 180_000')
-    expect(sectors).toContain("refresh({ force: true })")
+    expect(sectors).toContain('refresh({ force: true })')
     expect(sectors).toContain('RE-RUN')
     expect(sectors).toContain('rotationMeta')
   })

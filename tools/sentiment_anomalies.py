@@ -17,19 +17,24 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import math
+import re
 import ssl
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Paths — match api_server / data_sources layout (repo root = parent of edge/)
@@ -1013,6 +1018,356 @@ def sec_filings_for_symbol(symbol: str) -> dict[str, Any]:
         "filings": filings[:30],
         "edgar_company_url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={meta['cik10']}&owner=include&count=40",
         "from_cache_hours": _round(cache_age, 1) if cache_age else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# SEC XBRL segment / geography revenue (dimensioned facts from the 10-K instance)
+#
+# The companyfacts/frames APIs strip XBRL dimensions entirely, so segment and
+# geographic revenue is only available inside the filing's own instance
+# document. Facts are dimension-qualified there via contexts on the
+# ProductOrServiceAxis / StatementBusinessSegmentsAxis / StatementGeographicalAxis.
+# ---------------------------------------------------------------------------
+XBRL_SEGMENT_CACHE_DIR = CACHE_DIR / "xbrl_instances"
+_XBRL_NS = "{http://www.xbrl.org/2003/instance}"
+# <segment> lives in the xbrli namespace; only <explicitMember> is xbrldi.
+_XBRLDI_NS = "{http://xbrl.org/2006/xbrldi}"
+_REVENUE_TAGS = (
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "Revenues",
+    "SalesRevenueNet",
+)
+_GEOGRAPHY_AXIS = "srt:StatementGeographicalAxis"
+_PRODUCT_AXIS = "srt:ProductOrServiceAxis"
+_SEGMENTS_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
+
+_MEMBER_LABEL_ROLES = (
+    "{http://www.xbrl.org/2003/role/terseLabel}",
+    "{http://www.xbrl.org/2003/role/label}",
+)
+
+
+def _xbrl_instance_cache_path(cik10: str, accession_nodash: str) -> Path:
+    return XBRL_SEGMENT_CACHE_DIR / f"CIK{cik10}_{accession_nodash}.xml"
+
+
+def _member_pretty_name(member_qname: str) -> str:
+    """`aapl:WearablesHomeandAccessoriesMember` -> `Wearables Homeand Accessories`.
+
+    CamelCase split with a small fix-up list for the acronyms filers actually
+    use. Falls back to the raw qname tail when nothing sensible emerges.
+    """
+    tail = member_qname.split(":")[-1]
+    name = re.sub(r"(?<!^)(?=[A-Z])", " ", tail).replace(" Member", "").strip()
+    fixes = {
+        "I Phone": "iPhone",
+        "I Pad": "iPad",
+        "I Messege": "iMessage",
+        "Mac": "Mac",
+        "E MEA": "EMEA",
+        "Apac": "APAC",
+        "Gics": "GICS",
+        "Sic": "SIC",
+        "U S": "US",
+        "R & D": "R&D",
+    }
+    for bad_word, good_word in fixes.items():
+        name = re.sub(rf"\b{re.escape(bad_word)}\b", good_word, name)
+    return name or tail
+
+
+def _parse_label_linkbase(xml_bytes: bytes) -> dict[str, str]:
+    """QName -> terse human label from a filing's label linkbase."""
+    LB = "{http://www.xbrl.org/2003/linkbase}"
+    XLINK = "{http://www.w3.org/1999/xlink}"
+    labels: dict[str, str] = {}
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return labels
+    locs: dict[str, str] = {}
+    for loc in root.iter(f"{LB}loc"):
+        href = loc.get(f"{XLINK}href") or ""
+        # href="https://xbrl.fasb.org/.../us-gaap-2025.xsd#us-gaap_NontradeReceivablesCurrent"
+        frag = href.split("#", 1)[1] if "#" in href else ""
+        if not frag or "_" not in frag:
+            continue
+        prefix, local = frag.split("_", 1)
+        locs[loc.get(f"{XLINK}label") or ""] = f"{prefix}:{local}"
+
+    # xlink:from (loc label) -> best label text on that arc.
+    by_loc: dict[str, str] = {}
+    for arc in root.iter(f"{LB}labelArc"):
+        src = arc.get(f"{XLINK}from")
+        dst = arc.get(f"{XLINK}to")
+        if not (src and dst):
+            continue
+        for label in root.iter(f"{LB}label"):
+            if label.get(f"{XLINK}label") != dst:
+                continue
+            role = label.get(f"{XLINK}role") or ""
+            if not (role.endswith("/terseLabel") or role.endswith("/label")):
+                continue
+            text = (label.text or "").strip()
+            if not text or text.endswith("[Domain]") or text.endswith("[Table]") or text.endswith("[Axis]"):
+                continue
+            # Prefer the terse label; keep the first acceptable one otherwise.
+            if src not in by_loc or role.endswith("/terseLabel"):
+                by_loc[src] = text
+
+    for loc_ref, text in by_loc.items():
+        qname = locs.get(loc_ref)
+        if not qname:
+            continue
+        cleaned = re.sub(r"\s*\[(Member|Domain|Table|Axis)\]\s*$", "", text).strip()
+        labels[qname] = cleaned or _member_pretty_name(qname)
+    return labels
+
+
+def _iter_filing_documents(submission: Mapping[str, Any], cik10: str) -> list[dict[str, Any]]:
+    """Annual + quarterly primary filings, newest first.
+
+    Only annual 10-Ks carry full segment note disclosures; quarterlies carry
+    the year-to-date geography table at best. Both are listed; the caller picks.
+    """
+    recent = ((submission.get("filings") or {}).get("recent")) or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    accessions = recent.get("accessionNumber") or []
+    primaries = recent.get("primaryDocument") or []
+
+    docs: list[dict[str, Any]] = []
+    for i, form in enumerate(forms):
+        f = str(form)
+        if i >= len(dates) or f not in {"10-K", "10-K/A", "10-Q", "10-Q/A"}:
+            continue
+        acc = accessions[i] if i < len(accessions) else ""
+        primary = primaries[i] if i < len(primaries) else ""
+        if not acc or not primary:
+            continue
+        acc_nodash = acc.replace("-", "")
+        stem = primary[:-4] if primary.endswith(".htm") else primary
+        docs.append(
+            {
+                "form": f,
+                "filed": dates[i],
+                "accession": acc,
+                "accession_nodash": acc_nodash,
+                "instance_url": (
+                    f"https://www.sec.gov/Archives/edgar/data/{int(cik10)}/"
+                    f"{acc_nodash}/{stem}_htm.xml"
+                ),
+                "labels_url": (
+                    f"https://www.sec.gov/Archives/edgar/data/{int(cik10)}/"
+                    f"{acc_nodash}/{stem}_lab.xml"
+                ),
+            }
+        )
+        if len(docs) >= 8:
+            break
+    return docs
+
+
+def _extract_segment_revenue_from_instance(
+    xml_bytes: bytes,
+    labels: Mapping[str, str],
+) -> dict[str, dict[str, tuple[float | None, str]]]:
+    """Parse dimensioned revenue facts grouped by axis.
+
+    Returns `{axis_qname: {member_label: (value, period_end)}}`. Only facts
+    carrying an explicit dimension qualify; the consolidated total has none
+    and never enters the map.
+    """
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return {}
+
+    contexts: dict[str, dict[str, Any]] = {}
+    for ctx in root.iter(f"{_XBRL_NS}context"):
+        cid = ctx.get("id")
+        if not cid:
+            continue
+        dims: dict[str, str] = {}
+        seg = ctx.find(f"{_XBRL_NS}entity/{_XBRL_NS}segment")
+        if seg is not None:
+            for member in seg.iter(f"{_XBRLDI_NS}explicitMember"):
+                axis = member.get("dimension")
+                text = (member.text or "").strip()
+                if axis and text:
+                    dims[axis] = text
+        period = ctx.find(f"{_XBRL_NS}period")
+        end_el = period.find(f"{_XBRL_NS}endDate") if period is not None else None
+        start_el = period.find(f"{_XBRL_NS}startDate") if period is not None else None
+        inst_el = period.find(f"{_XBRL_NS}instant") if period is not None else None
+        end = (end_el.text if end_el is not None else None) or (
+            inst_el.text if inst_el is not None else None
+        )
+        start = start_el.text if start_el is not None else None
+        if end:
+            contexts[cid] = {"dims": dims, "end": end.strip(), "start": (start or "").strip()}
+
+    out: dict[str, dict[str, tuple[float | None, str]]] = {}
+    for tag in root.iter():
+        local = tag.tag.rsplit("}", 1)[-1]
+        if local not in _REVENUE_TAGS:
+            continue
+        cid = tag.get("contextRef")
+        scale_raw = (tag.get("scale") or "").strip()
+        sign = -1.0 if (tag.get("sign") or "").strip() == "-" else 1.0
+        ctx = contexts.get(cid or "")
+        if not ctx or not ctx["dims"]:
+            continue
+        try:
+            val = float((tag.text or "").strip())
+        except ValueError:
+            continue
+        if scale_raw.endswith("%"):
+            val *= 100.0
+        elif scale_raw.isdigit():
+            val *= 10 ** int(scale_raw)
+        value = sign * val
+
+        for axis, member in ctx["dims"].items():
+            if axis in {_SEGMENTS_AXIS, _PRODUCT_AXIS, _GEOGRAPHY_AXIS}:
+                bucket = out.setdefault(axis, {})
+                label = labels.get(member) or _member_pretty_name(member)
+                prev = bucket.get(label)
+                # Prefer the longest reported duration per member (annual over YTD).
+                if prev is None or (ctx["end"] > prev[1]):
+                    bucket[label] = (value, ctx["end"])
+    return out
+
+
+def xbrl_revenue_breakdown_for_symbol(symbol: str) -> dict[str, Any]:
+    """Dimensioned segment / product / geography revenue from the latest 10-K.
+
+    Reads the filing's own XBRL instance document because every other SEC API
+    (companyfacts, frames) strips dimension qualifiers, which is exactly where
+    segment membership lives. Missing inputs stay empty lists — never splits
+    synthesised from a sector string.
+    """
+    sym = symbol.strip().upper()
+    empty = {
+        "symbol": sym,
+        "quality": "missing",
+        "asof": None,
+        "source": "SEC EDGAR data.sec.gov XBRL",
+        "lag_note": "No dimensioned revenue facts available.",
+        "by_segment": [],
+        "by_product": [],
+        "by_geography": [],
+        "cik": None,
+    }
+    try:
+        tmap = _sec_ticker_map()
+        meta = tmap[sym]
+    except Exception as e:
+        return {**empty, "error": f"{type(e).__name__}: {e}"}
+
+    cik10 = str(meta["cik10"])
+    try:
+        sub = _sec_submissions(cik10)
+    except Exception as e:
+        return {
+            **empty,
+            "cik": meta["cik"],
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+    for doc in _iter_filing_documents(sub, cik10):
+        cache_path = _xbrl_instance_cache_path(cik10, doc["accession_nodash"])
+        xml_bytes: bytes | None = None
+        fetched_live = False
+        try:
+            resp = urllib.request.Request(
+                doc["instance_url"], headers={"User-Agent": _SEC_UA, "Accept": "*/*"}
+            )
+            with urllib.request.urlopen(resp, timeout=_HTTP_TIMEOUT_S, context=_ssl_context()) as r:
+                xml_bytes = r.read()
+                fetched_live = True
+        except Exception as e:
+            logger.debug("XBRL instance fetch failed for %s (%s): %s", sym, doc["form"], e)
+            if cache_path.exists():
+                xml_bytes = cache_path.read_bytes()
+
+        if xml_bytes is None:
+            continue
+        if fetched_live:
+            try:
+                XBRL_SEGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cache_path.write_bytes(xml_bytes)
+            except Exception:
+                pass
+
+        try:
+            lab_resp = urllib.request.Request(
+                doc["labels_url"], headers={"User-Agent": _SEC_UA, "Accept": "*/*"}
+            )
+            with urllib.request.urlopen(lab_resp, timeout=_HTTP_TIMEOUT_S, context=_ssl_context()) as r:
+                labels = _parse_label_linkbase(r.read())
+        except Exception:
+            labels = {}
+
+        parsed = _extract_segment_revenue_from_instance(xml_bytes, labels)
+        by_geo = parsed.get(_GEOGRAPHY_AXIS) or {}
+        by_seg = parsed.get(_SEGMENTS_AXIS) or {}
+        by_prod = parsed.get(_PRODUCT_AXIS) or {}
+        if not (by_geo or by_seg or by_prod):
+            continue  # try the next filing back
+
+        def _rows(bucket: Mapping[str, tuple[float | None, str]]) -> list[dict[str, Any]]:
+            rows = [
+                {
+                    "segment": label,
+                    "revenue": value,
+                    "period_end": end,
+                }
+                for label, (value, end) in sorted(
+                    bucket.items(), key=lambda kv: -(kv[1][0] or 0.0)
+                )
+            ]
+            positive_total = sum(v for v, _ in bucket.values() if v and v > 0.0)
+            for row in rows:
+                row["pct"] = (
+                    round(row["revenue"] / positive_total * 100.0, 2)
+                    if positive_total > 0 and row["revenue"] is not None
+                    else None
+                )
+            return [r for r in rows if r["revenue"] is not None]
+
+        ends = [
+            d["period_end"]
+            for d in (*_rows(by_seg), *_rows(by_prod), *_rows(by_geo))
+            if d.get("period_end")
+        ]
+        return {
+            "symbol": sym,
+            "quality": "ok",
+            "asof": max(ends) if ends else None,
+            "source": f"SEC EDGAR XBRL {doc['form']} {doc['accession']}",
+            "lag_note": (
+                f"Segment and geography revenue as filed in the latest {doc['form']} "
+                f"({doc['filed']}). Segment notes are typically annual; quarterly "
+                "filings rarely repeat them."
+            ),
+            "by_segment": _rows(by_seg),
+            "by_product": _rows(by_prod),
+            "by_geography": _rows(by_geo),
+            "cik": meta["cik"],
+            "filing_date": doc["filed"],
+            "filing_form": doc["form"],
+        }
+
+    return {
+        **empty,
+        "cik": meta["cik"],
+        "lag_note": (
+            "Latest filings contain no dimensioned revenue facts "
+            "(common for single-segment issuers)."
+        ),
     }
 
 

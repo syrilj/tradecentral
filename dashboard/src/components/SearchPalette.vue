@@ -29,9 +29,13 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'market', title: 'Market', idx: '02', hint: 'Search · VWAP · EMA' },
   { name: 'sectors', title: 'Sectors', idx: '03', hint: 'Sector rotation & flow' },
   { name: 'sentiment', title: 'Pulse', idx: '04', hint: 'Structure · COT · outliers' },
+  { name: 'macro', title: 'Macro', idx: '04', hint: 'Cross-asset regime board' },
   { name: 'options', title: 'Options', idx: '05', hint: 'Flow · gamma · density' },
   { name: 'drift', title: 'Drift', idx: '05', hint: 'Buying vs selling pressure' },
+  { name: 'regime', title: 'Regime', idx: '05', hint: 'Dealer-gamma surface & density' },
   { name: 'flow', title: 'Flow', idx: '06', hint: 'Market-wide options tape' },
+  { name: 'absorption', title: 'Absorption', idx: '07', hint: 'Heavy flow, held level' },
+  { name: 'livestack', title: 'Live Stack', idx: '07', hint: 'All lenses, one tape' },
   { name: 'gates', title: 'Gates', idx: '06', hint: 'Pre-registered verdicts' },
   { name: 'cloud', title: 'Cloud', idx: '07', hint: 'Vertex AI training' },
   { name: 'evolution', title: 'Evolution', idx: '08', hint: 'GA survivors lab' },
@@ -55,7 +59,11 @@ const err = ref<string | null>(null)
 const input = ref<HTMLInputElement | null>(null)
 
 function cleanTicker(term: string): string {
-  return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  return term
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
 }
 
 const matchingViews = computed(() => {
@@ -66,7 +74,7 @@ const matchingViews = computed(() => {
       v.title.toLowerCase().includes(term) ||
       v.name.toLowerCase().includes(term) ||
       v.hint.toLowerCase().includes(term) ||
-      v.idx.includes(term)
+      v.idx.includes(term),
   )
 })
 
@@ -118,9 +126,7 @@ onMounted(async () => {
 function move(delta: number): void {
   if (!displayHits.value.length) return
   cursor.value = (cursor.value + delta + displayHits.value.length) % displayHits.value.length
-  document
-    .getElementById(`hit-${cursor.value}`)
-    ?.scrollIntoView({ block: 'nearest' })
+  document.getElementById(`hit-${cursor.value}`)?.scrollIntoView({ block: 'nearest' })
 }
 
 function commit(): void {
@@ -151,7 +157,9 @@ function commit(): void {
           @keydown.enter.prevent="commit"
           @keydown.esc.prevent="emit('close')"
         />
-        <span class="label state">{{ busy ? 'SCANNING' : `${displayHits.length} TICKER${displayHits.length === 1 ? '' : 'S'}` }}</span>
+        <span class="label state">{{
+          busy ? 'SCANNING' : `${displayHits.length} TICKER${displayHits.length === 1 ? '' : 'S'}`
+        }}</span>
       </div>
 
       <p v-if="err" class="err label">{{ err }}</p>
@@ -160,10 +168,7 @@ function commit(): void {
         <div v-if="matchingViews.length" class="section-block">
           <header class="section-head label">VIEWS &amp; COMMANDS</header>
           <ul class="cmd-list">
-            <li
-              v-for="v in matchingViews"
-              :key="v.name"
-            >
+            <li v-for="v in matchingViews" :key="v.name">
               <button class="cmd-hit" type="button" @click="openView(v.name)">
                 <span class="cmd-idx fig">{{ v.idx }}</span>
                 <span class="cmd-title label">{{ v.title }}</span>
@@ -176,10 +181,7 @@ function commit(): void {
         <div class="section-block">
           <header class="section-head label">SYMBOLS &amp; TICKERS</header>
           <ul class="hits">
-            <li
-              v-for="(h, i) in displayHits"
-              :key="h.symbol + String(h.n_bars)"
-            >
+            <li v-for="(h, i) in displayHits" :key="h.symbol + String(h.n_bars)">
               <button
                 :id="`hit-${i}`"
                 type="button"
@@ -189,15 +191,21 @@ function commit(): void {
                 @click="emit('select', h.symbol)"
               >
                 <span class="sym fig">{{ h.symbol }}</span>
-                <span class="tier label" :class="h.tier || (h.n_bars ? 'wide' : 'live')">{{ h.n_bars ? h.tier : (h.tier === 'live' ? 'LIVE' : 'OPEN') }}</span>
+                <span class="tier label" :class="h.tier || (h.n_bars ? 'wide' : 'live')">{{
+                  h.n_bars ? h.tier : h.tier === 'live' ? 'LIVE' : 'OPEN'
+                }}</span>
                 <span class="span label">
-                  <template v-if="h.n_bars">{{ shortDate(h.first_date) }} to {{ shortDate(h.last_date) }}</template>
+                  <template v-if="h.n_bars"
+                    >{{ shortDate(h.first_date) }} to {{ shortDate(h.last_date) }}</template
+                  >
                   <template v-else>not in local catalog — open via live bars</template>
                 </span>
                 <span class="bars fig">{{ h.n_bars || '—' }}</span>
               </button>
             </li>
-            <li v-if="!displayHits.length && !busy" class="empty label">No ticker matches “{{ q }}”</li>
+            <li v-if="!displayHits.length && !busy" class="empty label">
+              No ticker matches “{{ q }}”
+            </li>
           </ul>
         </div>
       </div>
@@ -227,11 +235,13 @@ function commit(): void {
   max-height: 66vh;
   display: flex;
   flex-direction: column;
-  border: var(--hair) solid var(--rule-hi);
+  border: var(--hair) solid var(--glass-border-hi);
   border-radius: var(--r-xl);
   padding: 0;
   background: var(--panel);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.85),
+    var(--glass-specular);
   overflow: hidden;
   animation: rise var(--dur) var(--ease-out) both;
 }
@@ -245,7 +255,9 @@ function commit(): void {
   background: var(--void-lift);
 }
 
-.glyph { color: var(--phosphor); }
+.glyph {
+  color: var(--phosphor);
+}
 
 .input {
   flex: 1 1 auto;
@@ -255,8 +267,14 @@ function commit(): void {
   letter-spacing: 0.01em;
   min-width: 0;
 }
-.input::placeholder { color: var(--ink-ghost); font-family: var(--font-ui); letter-spacing: 0; }
-.input:focus-visible { outline: none; }
+.input::placeholder {
+  color: var(--ink-ghost);
+  font-family: var(--font-ui);
+  letter-spacing: 0;
+}
+.input:focus-visible {
+  outline: none;
+}
 
 .state {
   color: var(--ink-faint);
@@ -355,11 +373,23 @@ function commit(): void {
   background: var(--phosphor-wash);
   border-left-color: var(--phosphor);
 }
-.hit.free .sym { color: var(--ink-dim); }
-.hit.free .tier { color: var(--warn); border-color: var(--warn); }
+.hit.free .sym {
+  color: var(--ink-dim);
+}
+.hit.free .tier {
+  color: var(--warn);
+  border-color: var(--warn);
+}
 
-.sym { font-family: var(--font-data); font-size: var(--t-body); font-weight: 600; color: var(--ink); }
-.hit.on .sym { color: var(--phosphor); }
+.sym {
+  font-family: var(--font-data);
+  font-size: var(--t-body);
+  font-weight: 600;
+  color: var(--ink);
+}
+.hit.on .sym {
+  color: var(--phosphor);
+}
 
 .tier {
   justify-self: start;
@@ -369,15 +399,41 @@ function commit(): void {
   font-family: var(--font-data);
   color: var(--ink-faint);
 }
-.tier.core { color: var(--phosphor-dim); border-color: var(--phosphor-dim); }
-.tier.live { color: var(--warn); border-color: var(--warn); }
-.track-badge { color: var(--warn); border-color: var(--warn); font-weight: 600; font-size: 0.7rem; letter-spacing: 0.05em; }
+.tier.core {
+  color: var(--phosphor-dim);
+  border-color: var(--phosphor-dim);
+}
+.tier.live {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.track-badge {
+  color: var(--warn);
+  border-color: var(--warn);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+}
 
-.span { color: var(--ink-ghost); letter-spacing: 0.03em; }
-.bars { font-family: var(--font-data); font-size: var(--t-tiny); color: var(--ink-faint); }
+.span {
+  color: var(--ink-ghost);
+  letter-spacing: 0.03em;
+}
+.bars {
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  color: var(--ink-faint);
+}
 
-.empty, .err { padding: var(--s5) var(--s4); color: var(--ink-faint); text-align: center; }
-.err { color: var(--short); }
+.empty,
+.err {
+  padding: var(--s5) var(--s4);
+  color: var(--ink-faint);
+  text-align: center;
+}
+.err {
+  color: var(--short);
+}
 
 .keys {
   display: flex;
@@ -404,11 +460,27 @@ kbd {
 }
 
 @media (max-width: 780px) {
-  .scrim { padding-top: var(--s3); }
-  .palette { width: calc(100vw - var(--s4)); max-height: calc(100dvh - var(--s6)); }
-  .state, .cmd-hint, .span { display: none; }
-  .cmd-hit, .hit { min-height: 44px; }
-  .hit { grid-template-columns: 7ch 4.5rem 1fr; }
-  .bars { justify-self: end; }
+  .scrim {
+    padding-top: var(--s3);
+  }
+  .palette {
+    width: calc(100vw - var(--s4));
+    max-height: calc(100dvh - var(--s6));
+  }
+  .state,
+  .cmd-hint,
+  .span {
+    display: none;
+  }
+  .cmd-hit,
+  .hit {
+    min-height: 44px;
+  }
+  .hit {
+    grid-template-columns: 7ch 4.5rem 1fr;
+  }
+  .bars {
+    justify-self: end;
+  }
 }
 </style>

@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const authSource = readFileSync(join(root, 'auth.ts'), 'utf8')
 const viewSource = readFileSync(join(root, 'views', 'AuthView.vue'), 'utf8')
-const accessVisualSource = readFileSync(join(root, 'components', 'OperatorAccessVisual.vue'), 'utf8')
+const accessVisualSource = readFileSync(
+  join(root, 'components', 'OperatorAccessVisual.vue'),
+  'utf8',
+)
 const appSource = readFileSync(join(root, 'App.vue'), 'utf8')
 const mainSource = readFileSync(join(root, 'main.ts'), 'utf8')
 
@@ -15,7 +18,7 @@ describe('Clerk operator access contract', () => {
     expect(mainSource).toContain('clerkPlugin')
     expect(mainSource).toContain("signInUrl: '/auth'")
     expect(viewSource).toContain('SignIn')
-    expect(viewSource).toContain('from \'@clerk/vue\'')
+    expect(viewSource).toContain("from '@clerk/vue'")
     expect(authSource).not.toContain('PBKDF2')
     expect(viewSource).not.toContain('createOperatorCredential')
   })
@@ -30,9 +33,9 @@ describe('Clerk operator access contract', () => {
   })
 
   it('offers a direct sidebar sign-out action in addition to the account menu', () => {
-    expect(appSource).toContain('const clerk = useClerk()')
+    expect(appSource).toContain('const clerk = localMode ? ref(null) : useClerk()')
     expect(appSource).toContain('async function signOut')
-    expect(appSource).toContain('await clerk.value?.signOut()')
+    expect(appSource).toContain('if (!localMode) await clerk.value?.signOut()')
     expect(appSource).toContain("'SIGN OUT'")
   })
 

@@ -18,7 +18,16 @@ const available = computed(() => data.value?.available === true)
 
 /* ------------------------------------------------------------- state chips */
 
-const STATE_ORDER = ['NORMAL', 'PRESSURE', 'SHOCK', 'TEST', 'CASCADE', 'ABSORB', 'EXHAUSTION', 'FADE'] as const
+const STATE_ORDER = [
+  'NORMAL',
+  'PRESSURE',
+  'SHOCK',
+  'TEST',
+  'CASCADE',
+  'ABSORB',
+  'EXHAUSTION',
+  'FADE',
+] as const
 
 /** CASCADE/SHOCK read as the --short family (breakdown risk), ABSORB/FADE as
  * --long (the flow being absorbed / reverting), NORMAL dim/muted, and the
@@ -90,7 +99,10 @@ const ciChart = computed(() => {
   const pad = 28
   const scale = linearScale(domain, [pad, Math.max(pad + 1, ciW.value - pad)])
   const midY = ciH.value / 2
-  const ticks = niceTicks(domain[0], domain[1], 4).map((t) => ({ x: scale(t), label: pctFrac(t, 1) }))
+  const ticks = niceTicks(domain[0], domain[1], 4).map((t) => ({
+    x: scale(t),
+    label: pctFrac(t, 1),
+  }))
   return {
     zeroX: scale(0),
     loX: scale(lo),
@@ -105,9 +117,19 @@ const ciChart = computed(() => {
 /* ------------------------------------------------------------- state board */
 
 type SortKey =
-  | 'symbol' | 'current_state' | 'days_in_state' | 'flow_z' | 'persistence_5d'
-  | 'amihud_z' | 'cs_spread' | 'continuation_score' | 'barrier_proximity'
-  | 'impact_beta_z' | 'air_pocket_up' | 'air_pocket_down' | 'stress_rank'
+  | 'symbol'
+  | 'current_state'
+  | 'days_in_state'
+  | 'flow_z'
+  | 'persistence_5d'
+  | 'amihud_z'
+  | 'cs_spread'
+  | 'continuation_score'
+  | 'barrier_proximity'
+  | 'impact_beta_z'
+  | 'air_pocket_up'
+  | 'air_pocket_down'
+  | 'stress_rank'
 
 const sortKey = ref<SortKey>('continuation_score')
 const sortDir = ref<'asc' | 'desc'>('desc')
@@ -169,14 +191,19 @@ const sortedStates = computed<FlowStateRow[]>(() => {
 
 const selectedSymbol = ref<string | null>(null)
 
-const detailSymbols = computed(() => [...new Set([
-  ...(data.value?.states ?? []).map((row) => row.symbol),
-  ...Object.keys(data.value?.timelines ?? {}),
-  ...Object.keys(data.value?.barrier_fields ?? {}),
-])].sort())
+const detailSymbols = computed(() =>
+  [
+    ...new Set([
+      ...(data.value?.states ?? []).map((row) => row.symbol),
+      ...Object.keys(data.value?.timelines ?? {}),
+      ...Object.keys(data.value?.barrier_fields ?? {}),
+    ]),
+  ].sort(),
+)
 
 const effectiveSymbol = computed<string | null>(() => {
-  if (selectedSymbol.value && detailSymbols.value.includes(selectedSymbol.value)) return selectedSymbol.value
+  if (selectedSymbol.value && detailSymbols.value.includes(selectedSymbol.value))
+    return selectedSymbol.value
   return sortedStates.value[0]?.symbol ?? detailSymbols.value[0] ?? null
 })
 
@@ -184,9 +211,13 @@ function selectSymbol(sym: string): void {
   selectedSymbol.value = sym
 }
 
-const timeline = computed(() => (effectiveSymbol.value ? data.value?.timelines[effectiveSymbol.value] ?? [] : []))
+const timeline = computed(() =>
+  effectiveSymbol.value ? (data.value?.timelines[effectiveSymbol.value] ?? []) : [],
+)
 
-const barrierField = computed(() => (effectiveSymbol.value ? data.value?.barrier_fields[effectiveSymbol.value] ?? null : null))
+const barrierField = computed(() =>
+  effectiveSymbol.value ? (data.value?.barrier_fields[effectiveSymbol.value] ?? null) : null,
+)
 
 /* ----------------------------------------------------------- timeline strip */
 
@@ -217,7 +248,10 @@ const barrierChart = computed<BarrierChartGeom | null>(() => {
   const priceDomain = niceDomain(Math.min(...bf.grid), Math.max(...bf.grid), 0.02)
   const priceScale = linearScale(priceDomain, [barH.value - padBottom, padTop])
   const maxDensity = Math.max(...bf.density, 1e-9)
-  const densityScale = linearScale([0, maxDensity], [padLeft, Math.max(padLeft + 1, barW.value - padRight)])
+  const densityScale = linearScale(
+    [0, maxDensity],
+    [padLeft, Math.max(padLeft + 1, barW.value - padRight)],
+  )
 
   const bars = bf.grid.map((price, i) => ({
     y: priceScale(price),
@@ -304,7 +338,10 @@ const impactChart = computed(() => {
   })
 
   const zeroY = yScale(0)
-  const yTicks = niceTicks(yDomain[0], yDomain[1], 4).map((t) => ({ y: yScale(t), label: pctFrac(t, 1) }))
+  const yTicks = niceTicks(yDomain[0], yDomain[1], 4).map((t) => ({
+    y: yScale(t),
+    label: pctFrac(t, 1),
+  }))
 
   return {
     linePath: linePath(meanPts),
@@ -318,14 +355,22 @@ const impactChart = computed(() => {
 /* ---------------------------------------------------------------- caveats */
 
 const staleReason = computed(() =>
-  isStale.value ? `Artifact is ${staleDays.value}d old — rebuild with tools/build_flow_state.py.` : null,
+  isStale.value
+    ? `Artifact is ${staleDays.value}d old — rebuild with tools/build_flow_state.py.`
+    : null,
 )
 </script>
 
 <template>
   <div class="flowstate-view">
     <!-- 1. Header strip -->
-    <Panel label="Barrier Sleeve · Flow State" index="15" :meta="data?.as_of ? `as of ${data.as_of}` : 'barrier-conditioned continuation monitor'" class="w-full" :live="!fs.error.value">
+    <Panel
+      label="Barrier Sleeve · Flow State"
+      index="15"
+      :meta="data?.as_of ? `as of ${data.as_of}` : 'barrier-conditioned continuation monitor'"
+      class="w-full"
+      :live="!fs.error.value"
+    >
       <template #action>
         <button
           type="button"
@@ -348,8 +393,8 @@ const staleReason = computed(() =>
         </p>
         <div class="banner label">
           <span>
-            Evidence-backed sleeve: abnormal flow × elevated impact × barrier proximity → continuation candidate.
-            Cascade/fade are research-only; this is not a bottom predictor.
+            Evidence-backed sleeve: abnormal flow × elevated impact × barrier proximity →
+            continuation candidate. Cascade/fade are research-only; this is not a bottom predictor.
           </span>
           <HelpTip
             label="Continuation score"
@@ -358,58 +403,117 @@ const staleReason = computed(() =>
         </div>
 
         <div class="readout-grid">
-          <Readout label="Tier" :value="tierLabel" :sub="data?.tier ? 'validated vs matched controls' : 'states + events only'" :tone="data?.tier ? 'accent' : 'flat'" />
+          <Readout
+            label="Tier"
+            :value="tierLabel"
+            :sub="data?.tier ? 'validated vs matched controls' : 'states + events only'"
+            :tone="data?.tier ? 'accent' : 'flat'"
+          />
           <Readout
             label="Decision authorized"
             :value="data?.decision_authorized ? 'YES' : 'NO'"
             sub="never true below tier 2"
             :tone="data?.decision_authorized ? 'pos' : 'flat'"
           />
-          <Readout label="As of" :value="data?.as_of ?? DASH" :sub="isStale ? `${staleDays}d old — stale` : 'current'" :tone="isStale ? 'neg' : 'flat'" />
+          <Readout
+            label="As of"
+            :value="data?.as_of ?? DASH"
+            :sub="isStale ? `${staleDays}d old — stale` : 'current'"
+            :tone="isStale ? 'neg' : 'flat'"
+          />
           <Readout label="Symbols" :value="num(sortedStates.length, 0)" sub="in this run" />
         </div>
         <p v-if="staleReason" class="stale-note label">{{ staleReason }}</p>
       </template>
 
       <div v-else class="empty-state">
-        <p class="state label">No flow-state artifact yet{{ data?.reason ? ` — ${data.reason}` : '' }}.</p>
+        <p class="state label">
+          No flow-state artifact yet{{ data?.reason ? ` — ${data.reason}` : '' }}.
+        </p>
         <ul class="cmds">
           <li>
             <code>PYTHONPATH=&lt;repo&gt; python3 edge/tools/build_flow_state.py</code>
             <span class="dim">writes runs/flow_state/</span>
           </li>
         </ul>
-        <p class="subnote label">producing_script: {{ data?.producing_script ?? 'tools/build_flow_state.py' }}</p>
+        <p class="subnote label">
+          producing_script: {{ data?.producing_script ?? 'tools/build_flow_state.py' }}
+        </p>
       </div>
     </Panel>
 
     <template v-if="available">
       <!-- 2. Validation / phenomenon panel -->
-      <Panel label="Validation — matched-control phenomenon" index="—" meta="Phase 2 statistical test, not ML" :delay="30">
+      <Panel
+        label="Validation — matched-control phenomenon"
+        index="—"
+        meta="Phase 2 statistical test, not ML"
+        :delay="30"
+      >
         <template v-if="phenomenon?.tested">
           <div class="readout-grid">
-            <Readout label="Effect (Δ terminal return)" :value="signed(phenomenon.effect != null ? phenomenon.effect * 100 : null, 2) + '%'" :tone="(phenomenon.effect ?? 0) > 0 ? 'pos' : (phenomenon.effect ?? 0) < 0 ? 'neg' : 'flat'" />
+            <Readout
+              label="Effect (Δ terminal return)"
+              :value="signed(phenomenon.effect != null ? phenomenon.effect * 100 : null, 2) + '%'"
+              :tone="
+                (phenomenon.effect ?? 0) > 0 ? 'pos' : (phenomenon.effect ?? 0) < 0 ? 'neg' : 'flat'
+              "
+            />
             <Readout label="Newey-West t" :value="num(phenomenon.nw_t, 2)" />
-            <Readout label="Permutation p (deflated)" :value="num(phenomenon.perm_p, 4)" :tone="(phenomenon.perm_p ?? 1) < 0.01 ? 'pos' : 'flat'" />
-            <Readout label="n events / controls" :value="`${num(phenomenon.n_events, 0)} / ${num(phenomenon.n_controls, 0)}`" />
+            <Readout
+              label="Permutation p (deflated)"
+              :value="num(phenomenon.perm_p, 4)"
+              :tone="(phenomenon.perm_p ?? 1) < 0.01 ? 'pos' : 'flat'"
+            />
+            <Readout
+              label="n events / controls"
+              :value="`${num(phenomenon.n_events, 0)} / ${num(phenomenon.n_controls, 0)}`"
+            />
             <Readout label="Prereg id" :value="phenomenon.prereg_id ?? DASH" size="sm" />
-            <Readout label="T1 result" :value="phenomenon.passed ? 'PASS' : 'FAIL'" :tone="phenomenon.passed ? 'pos' : 'neg'" sub="CI excludes 0 AND deflated p < 0.01" />
+            <Readout
+              label="T1 result"
+              :value="phenomenon.passed ? 'PASS' : 'FAIL'"
+              :tone="phenomenon.passed ? 'pos' : 'neg'"
+              sub="CI excludes 0 AND deflated p < 0.01"
+            />
           </div>
 
           <div v-if="ciChart" ref="ciHostRef" class="ci-chart-host">
             <svg :width="ciW" :height="ciH" class="ci-svg">
               <line :x1="0" :x2="ciW" :y1="ciChart.midY" :y2="ciChart.midY" class="ci-axis" />
               <line :x1="ciChart.zeroX" :x2="ciChart.zeroX" :y1="6" :y2="ciH - 6" class="ci-zero" />
-              <line :x1="ciChart.loX" :x2="ciChart.hiX" :y1="ciChart.midY" :y2="ciChart.midY" class="ci-whisker" :class="{ excludes: ciChart.excludesZero }" />
-              <line :x1="ciChart.loX" :x2="ciChart.loX" :y1="ciChart.midY - 7" :y2="ciChart.midY + 7" class="ci-cap" />
-              <line :x1="ciChart.hiX" :x2="ciChart.hiX" :y1="ciChart.midY - 7" :y2="ciChart.midY + 7" class="ci-cap" />
+              <line
+                :x1="ciChart.loX"
+                :x2="ciChart.hiX"
+                :y1="ciChart.midY"
+                :y2="ciChart.midY"
+                class="ci-whisker"
+                :class="{ excludes: ciChart.excludesZero }"
+              />
+              <line
+                :x1="ciChart.loX"
+                :x2="ciChart.loX"
+                :y1="ciChart.midY - 7"
+                :y2="ciChart.midY + 7"
+                class="ci-cap"
+              />
+              <line
+                :x1="ciChart.hiX"
+                :x2="ciChart.hiX"
+                :y1="ciChart.midY - 7"
+                :y2="ciChart.midY + 7"
+                class="ci-cap"
+              />
               <circle :cx="ciChart.effectX" :cy="ciChart.midY" r="4" class="ci-effect" />
               <g v-for="t in ciChart.ticks" :key="t.x">
                 <text :x="t.x" :y="ciH - 4" class="ci-tick label">{{ t.label }}</text>
               </g>
             </svg>
           </div>
-          <p class="chart-caption label">Bootstrap CI whisker for Δ terminal return, event vs matched controls (date-block bootstrap, 95%). Descriptive of the study result — not a forecast.</p>
+          <p class="chart-caption label">
+            Bootstrap CI whisker for Δ terminal return, event vs matched controls (date-block
+            bootstrap, 95%). Descriptive of the study result — not a forecast.
+          </p>
         </template>
         <div v-else class="empty-state">
           <p class="state label">Study not yet run.</p>
@@ -424,7 +528,8 @@ const staleReason = computed(() =>
         <div class="gate-block">
           <p class="gate-title label">Development gate (Phase 3)</p>
           <p v-if="!gate?.evaluated" class="gate-pending label">
-            Not yet evaluated — Phase 3 (cascade/fade models) does not exist yet. Expected checks once it does:
+            Not yet evaluated — Phase 3 (cascade/fade models) does not exist yet. Expected checks
+            once it does:
           </p>
           <ul class="checks">
             <li v-for="label in GATE_CHECK_LABELS" :key="label" class="check pending">
@@ -437,28 +542,54 @@ const staleReason = computed(() =>
       </Panel>
 
       <!-- 3. State board -->
-      <Panel label="Barrier sleeve board" index="—" :meta="`${sortedStates.length} symbols · ranked by continuation_score`" flush :delay="50">
+      <Panel
+        label="Barrier sleeve board"
+        index="—"
+        :meta="`${sortedStates.length} symbols · ranked by continuation_score`"
+        flush
+        :delay="50"
+      >
         <div class="table-scroll">
           <table class="grid">
             <thead>
               <tr>
-                <th class="sortable" @click="setSort('symbol')">Symbol {{ sortArrow('symbol') }}</th>
-                <th class="sortable" @click="setSort('current_state')">State {{ sortArrow('current_state') }}</th>
+                <th class="sortable" @click="setSort('symbol')">
+                  Symbol {{ sortArrow('symbol') }}
+                </th>
+                <th class="sortable" @click="setSort('current_state')">
+                  State {{ sortArrow('current_state') }}
+                </th>
                 <th class="num sortable" @click="setSort('continuation_score')">
                   Cont. S {{ sortArrow('continuation_score') }}
-                  <HelpTip label="Continuation score" text="|flow_z| × max(impact_beta_z,0) × persistence × barrier proximity. High S means persistent abnormal pressure with elevated impact near a structural barrier — the continuation candidate, not a fade/bottom signal." />
+                  <HelpTip
+                    label="Continuation score"
+                    text="|flow_z| × max(impact_beta_z,0) × persistence × barrier proximity. High S means persistent abnormal pressure with elevated impact near a structural barrier — the continuation candidate, not a fade/bottom signal."
+                  />
                 </th>
                 <th class="label">Dir</th>
-                <th class="num sortable" @click="setSort('flow_z')">Flow z {{ sortArrow('flow_z') }}</th>
-                <th class="num sortable" @click="setSort('impact_beta_z')">Impact z {{ sortArrow('impact_beta_z') }}</th>
-                <th class="num sortable" @click="setSort('persistence_5d')">Persist 5d {{ sortArrow('persistence_5d') }}</th>
-                <th class="num sortable" @click="setSort('barrier_proximity')">Near barrier {{ sortArrow('barrier_proximity') }}</th>
-                <th class="num sortable" @click="setSort('amihud_z')">Amihud z {{ sortArrow('amihud_z') }}</th>
+                <th class="num sortable" @click="setSort('flow_z')">
+                  Flow z {{ sortArrow('flow_z') }}
+                </th>
+                <th class="num sortable" @click="setSort('impact_beta_z')">
+                  Impact z {{ sortArrow('impact_beta_z') }}
+                </th>
+                <th class="num sortable" @click="setSort('persistence_5d')">
+                  Persist 5d {{ sortArrow('persistence_5d') }}
+                </th>
+                <th class="num sortable" @click="setSort('barrier_proximity')">
+                  Near barrier {{ sortArrow('barrier_proximity') }}
+                </th>
+                <th class="num sortable" @click="setSort('amihud_z')">
+                  Amihud z {{ sortArrow('amihud_z') }}
+                </th>
                 <th class="num">Support</th>
                 <th class="num">Resistance</th>
                 <th class="num sortable" @click="setSort('stress_rank')">
                   Rank {{ sortArrow('stress_rank') }}
-                  <HelpTip label="Stress rank" text="Ordinal rank across the symbols in this run (1 = highest continuation_score) — never a probability or expected value." />
+                  <HelpTip
+                    label="Stress rank"
+                    text="Ordinal rank across the symbols in this run (1 = highest continuation_score) — never a probability or expected value."
+                  />
                 </th>
               </tr>
             </thead>
@@ -476,7 +607,13 @@ const staleReason = computed(() =>
               >
                 <td class="fig sym">{{ row.symbol }}</td>
                 <td>
-                  <span class="state-chip label" :style="{ color: stateColorVar(row.current_state), borderColor: stateColorVar(row.current_state) }">
+                  <span
+                    class="state-chip label"
+                    :style="{
+                      color: stateColorVar(row.current_state),
+                      borderColor: stateColorVar(row.current_state),
+                    }"
+                  >
                     {{ row.current_state }}
                   </span>
                 </td>
@@ -491,8 +628,12 @@ const staleReason = computed(() =>
                 <td class="fig num">{{ num(row.persistence_5d, 0) }}</td>
                 <td class="fig num">{{ num(row.barrier_proximity ?? null, 2) }}</td>
                 <td class="fig num">{{ num(row.amihud_z, 2) }}</td>
-                <td class="fig num dim">{{ row.next_support != null ? num(row.next_support, 2) : DASH }}</td>
-                <td class="fig num dim">{{ row.next_resistance != null ? num(row.next_resistance, 2) : DASH }}</td>
+                <td class="fig num dim">
+                  {{ row.next_support != null ? num(row.next_support, 2) : DASH }}
+                </td>
+                <td class="fig num dim">
+                  {{ row.next_resistance != null ? num(row.next_resistance, 2) : DASH }}
+                </td>
                 <td class="fig num">{{ row.stress_rank }}</td>
               </tr>
             </tbody>
@@ -501,10 +642,20 @@ const staleReason = computed(() =>
       </Panel>
 
       <!-- 4. State timeline strip -->
-      <Panel :label="effectiveSymbol ? `State timeline — ${effectiveSymbol}` : 'State timeline'" index="—" :meta="`${timelineTotalDays} sessions`" :delay="70">
+      <Panel
+        :label="effectiveSymbol ? `State timeline — ${effectiveSymbol}` : 'State timeline'"
+        index="—"
+        :meta="`${timelineTotalDays} sessions`"
+        :delay="70"
+      >
         <div class="symbol-picker">
           <label class="label" for="fs-symbol-select">Symbol</label>
-          <select id="fs-symbol-select" class="symbol-select" :value="effectiveSymbol ?? ''" @change="selectSymbol(($event.target as HTMLSelectElement).value)">
+          <select
+            id="fs-symbol-select"
+            class="symbol-select"
+            :value="effectiveSymbol ?? ''"
+            @change="selectSymbol(($event.target as HTMLSelectElement).value)"
+          >
             <option v-for="sym in detailSymbols" :key="sym" :value="sym">{{ sym }}</option>
           </select>
         </div>
@@ -518,7 +669,10 @@ const staleReason = computed(() =>
             :title="`${pt.date}: ${pt.state}`"
           />
         </div>
-        <p v-else class="state label dim">No timeline available for this symbol (timelines are kept for the top-N symbols by stress_rank).</p>
+        <p v-else class="state label dim">
+          No timeline available for this symbol (timelines are kept for the top-N symbols by
+          stress_rank).
+        </p>
 
         <div class="legend">
           <span v-for="s in STATE_ORDER" :key="s" class="legend-item label">
@@ -528,7 +682,12 @@ const staleReason = computed(() =>
       </Panel>
 
       <!-- 5. Barrier-field chart -->
-      <Panel :label="effectiveSymbol ? `Barrier field — ${effectiveSymbol}` : 'Barrier field'" index="—" meta="B(p) density profile" :delay="90">
+      <Panel
+        :label="effectiveSymbol ? `Barrier field — ${effectiveSymbol}` : 'Barrier field'"
+        index="—"
+        meta="B(p) density profile"
+        :delay="90"
+      >
         <template v-if="barrierChart">
           <div ref="barrierHostRef" class="barrier-chart-host">
             <svg :width="barW" :height="barH" class="barrier-svg">
@@ -545,21 +704,55 @@ const staleReason = computed(() =>
                 height="2"
                 class="barrier-bar"
               />
-              <line v-if="barrierChart.priceLineY != null" :x1="52" :x2="barW" :y1="barrierChart.priceLineY" :y2="barrierChart.priceLineY" class="barrier-price-line" />
-              <circle v-for="(n, i) in barrierChart.nodeMarks" :key="i" :cx="barrierChart.densityScale((n.mass ?? 0))" :cy="n.y" r="3" class="barrier-node" />
-              <line v-for="(y, i) in barrierChart.strikeMarks" :key="`strike-${i}`" :x1="52" :x2="barW" :y1="y" :y2="y" class="barrier-strike" />
+              <line
+                v-if="barrierChart.priceLineY != null"
+                :x1="52"
+                :x2="barW"
+                :y1="barrierChart.priceLineY"
+                :y2="barrierChart.priceLineY"
+                class="barrier-price-line"
+              />
+              <circle
+                v-for="(n, i) in barrierChart.nodeMarks"
+                :key="i"
+                :cx="barrierChart.densityScale(n.mass ?? 0)"
+                :cy="n.y"
+                r="3"
+                class="barrier-node"
+              />
+              <line
+                v-for="(y, i) in barrierChart.strikeMarks"
+                :key="`strike-${i}`"
+                :x1="52"
+                :x2="barW"
+                :y1="y"
+                :y2="y"
+                class="barrier-strike"
+              />
             </svg>
           </div>
           <p class="chart-caption label">
-            Horizontal profile is B(p) mass by price level; the phosphor line marks the last close, dots mark local-maxima nodes.
-            <template v-if="barrierField?.strikes_overlay">Amber ticks: today's option chain strikes only.</template>
+            Horizontal profile is B(p) mass by price level; the phosphor line marks the last close,
+            dots mark local-maxima nodes.
+            <template v-if="barrierField?.strikes_overlay"
+              >Amber ticks: today's option chain strikes only.</template
+            >
           </p>
         </template>
-        <p v-else class="state label dim">No barrier field kept for this symbol (top-N by stress_rank only, to keep payload size sane).</p>
+        <p v-else class="state label dim">
+          No barrier field kept for this symbol (top-N by stress_rank only, to keep payload size
+          sane).
+        </p>
       </Panel>
 
       <!-- 6. Event table -->
-      <Panel label="Events" index="—" :meta="`${visibleEvents.length}/${filteredEvents.length} filtered · ${data?.events.length ?? 0} total`" flush :delay="110">
+      <Panel
+        label="Events"
+        index="—"
+        :meta="`${visibleEvents.length}/${filteredEvents.length} filtered · ${data?.events.length ?? 0} total`"
+        flush
+        :delay="110"
+      >
         <template #action>
           <select v-model="outcomeFilter" class="outcome-filter">
             <option value="ALL">All outcomes</option>
@@ -588,10 +781,20 @@ const staleReason = computed(() =>
               <tr v-for="(e, i) in visibleEvents" :key="`${e.symbol}-${e.t0}-${i}`">
                 <td class="fig sym">{{ e.symbol }}</td>
                 <td class="fig">{{ e.t0 }}</td>
-                <td class="fig num" :class="e.direction > 0 ? 'pos' : e.direction < 0 ? 'neg' : ''">{{ e.direction > 0 ? '+1' : e.direction < 0 ? '-1' : '0' }}</td>
+                <td class="fig num" :class="e.direction > 0 ? 'pos' : e.direction < 0 ? 'neg' : ''">
+                  {{ e.direction > 0 ? '+1' : e.direction < 0 ? '-1' : '0' }}
+                </td>
                 <td class="path-cell">
-                  <span v-for="(s, j) in e.state_path.slice(0, 8)" :key="j" class="path-dot" :style="{ background: stateColorVar(s) }" :title="s" />
-                  <span v-if="e.state_path.length > 8" class="dim label">+{{ e.state_path.length - 8 }}</span>
+                  <span
+                    v-for="(s, j) in e.state_path.slice(0, 8)"
+                    :key="j"
+                    class="path-dot"
+                    :style="{ background: stateColorVar(s) }"
+                    :title="s"
+                  />
+                  <span v-if="e.state_path.length > 8" class="dim label"
+                    >+{{ e.state_path.length - 8 }}</span
+                  >
                 </td>
                 <td :class="outcomeTone(e.outcome)">{{ e.outcome ?? 'MISSING' }}</td>
                 <td class="fig num">{{ e.time_to_hit != null ? num(e.time_to_hit, 0) : DASH }}</td>
@@ -612,7 +815,12 @@ const staleReason = computed(() =>
       </Panel>
 
       <!-- 7. Impact response panel -->
-      <Panel label="Impact response" index="—" meta="event-study, pooled across symbols" :delay="130">
+      <Panel
+        label="Impact response"
+        index="—"
+        meta="event-study, pooled across symbols"
+        :delay="130"
+      >
         <template v-if="impactChart">
           <div ref="impactHostRef" class="impact-chart-host">
             <svg :width="impW" :height="impH" class="impact-svg">
@@ -620,7 +828,13 @@ const staleReason = computed(() =>
                 <line :x1="44" :x2="impW" :y1="t.y" :y2="t.y" class="barrier-gridline" />
                 <text :x="0" :y="t.y + 3" class="barrier-tick label">{{ t.label }}</text>
               </g>
-              <line :x1="44" :x2="impW" :y1="impactChart.zeroY" :y2="impactChart.zeroY" class="impact-zero" />
+              <line
+                :x1="44"
+                :x2="impW"
+                :y1="impactChart.zeroY"
+                :y2="impactChart.zeroY"
+                class="impact-zero"
+              />
               <path :d="impactChart.bandPath" class="impact-band" />
               <path :d="impactChart.linePath" class="impact-line" />
               <g v-for="t in impactChart.xTicks" :key="t.x">
@@ -630,15 +844,24 @@ const staleReason = computed(() =>
           </div>
         </template>
         <p v-else class="state label dim">No impact-curve samples in this run.</p>
-        <p class="chart-caption label">Mean cumulative return at lags 1–10 sessions after a SHOCK, with a normal-approximation 95% band, pooled sample-size-weighted across symbols. Descriptive event-study curve — not a causal impact estimate.</p>
+        <p class="chart-caption label">
+          Mean cumulative return at lags 1–10 sessions after a SHOCK, with a normal-approximation
+          95% band, pooled sample-size-weighted across symbols. Descriptive event-study curve — not
+          a causal impact estimate.
+        </p>
       </Panel>
 
       <!-- 8. Model / EV panel — permanently locked while tier < 2 -->
       <Panel label="Model / EV" index="—" meta="locked" :delay="150">
         <div class="locked-panel">
           <span class="lock-glyph" aria-hidden="true">🔒</span>
-          <p class="state label">Unlocks when the development gate passes (see the Validation panel above).</p>
-          <p class="subnote label">P(Cascade), P(Fade|Cascade), calibration, ablation, and per-event EV all require Phase-3 models, which do not exist yet — models is always null at tier &lt; 2.</p>
+          <p class="state label">
+            Unlocks when the development gate passes (see the Validation panel above).
+          </p>
+          <p class="subnote label">
+            P(Cascade), P(Fade|Cascade), calibration, ablation, and per-event EV all require Phase-3
+            models, which do not exist yet — models is always null at tier &lt; 2.
+          </p>
         </div>
       </Panel>
 
@@ -647,7 +870,10 @@ const staleReason = computed(() =>
         <ul class="caveats-list">
           <li v-for="(c, i) in data?.caveats ?? []" :key="i" class="label">{{ c }}</li>
         </ul>
-        <p class="subnote label">producing_script: {{ data?.producing_script }} · last refreshed {{ age(fs.fetchedAt.value) }} ago</p>
+        <p class="subnote label">
+          producing_script: {{ data?.producing_script }} · last refreshed
+          {{ age(fs.fetchedAt.value) }} ago
+        </p>
       </Panel>
     </template>
   </div>
@@ -663,7 +889,10 @@ const staleReason = computed(() =>
   min-width: 0;
 }
 
-.w-full { width: 100%; min-width: 0; }
+.w-full {
+  width: 100%;
+  min-width: 0;
+}
 
 .banner {
   display: flex;
@@ -704,16 +933,42 @@ const staleReason = computed(() =>
   border: var(--hair) solid var(--phosphor-dim);
   cursor: pointer;
 }
-.refresh-btn:hover:not(:disabled) { background: var(--phosphor); color: var(--void); }
-.refresh-btn:disabled { opacity: 0.6; cursor: wait; }
-.refresh-icon { display: inline-block; font-size: 0.9rem; line-height: 1; }
-.refresh-icon.spinning { animation: spin 0.8s linear infinite; }
-@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.refresh-btn:hover:not(:disabled) {
+  background: var(--phosphor);
+  color: var(--void);
+}
+.refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.refresh-icon {
+  display: inline-block;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.refresh-icon.spinning {
+  animation: spin var(--dur-spin) linear infinite;
+}
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .empty-state {
   padding: var(--s5) var(--s4);
 }
-.cmds { list-style: none; margin: var(--s2) 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cmds {
+  list-style: none;
+  margin: var(--s2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .cmds code {
   display: inline-block;
   padding: 3px 8px;
@@ -723,35 +978,115 @@ const staleReason = computed(() =>
   font-family: var(--font-data);
   font-size: var(--t-tiny);
 }
-.cmds .dim { margin-left: var(--s2); color: var(--ink-faint); font-size: var(--t-micro); }
-.subnote { margin-top: var(--s2); color: var(--ink-ghost); font-size: var(--t-small); }
+.cmds .dim {
+  margin-left: var(--s2);
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+}
+.subnote {
+  margin-top: var(--s2);
+  color: var(--ink-ghost);
+  font-size: var(--t-small);
+}
 
-.state.err { color: var(--short); padding: var(--s4); }
-.state.err.stale-artifact { border-bottom: var(--hair) solid var(--rule); background: color-mix(in srgb, var(--short) 7%, var(--void-lift)); }
+.state.err {
+  color: var(--short);
+  padding: var(--s4);
+}
+.state.err.stale-artifact {
+  border-bottom: var(--hair) solid var(--rule);
+  background: color-mix(in srgb, var(--short) 7%, var(--void-lift));
+}
 
 /* ---- validation panel ---- */
-.ci-chart-host { width: 100%; height: 64px; }
-.ci-svg { display: block; width: 100%; height: 100%; }
-.ci-axis { stroke: var(--rule); stroke-width: 1; }
-.ci-zero { stroke: var(--rule-hi); stroke-width: 1; stroke-dasharray: 3 3; }
-.ci-whisker { stroke: var(--ink-dim); stroke-width: 3; }
-.ci-whisker.excludes { stroke: var(--phosphor); }
-.ci-cap { stroke: var(--ink-dim); stroke-width: 2; }
-.ci-effect { fill: var(--ink); }
-.ci-tick { fill: var(--ink-faint); font-size: var(--t-micro); text-anchor: middle; }
-.chart-caption { padding: var(--s2) var(--s3) 0; color: var(--ink-faint); font-size: var(--t-small); line-height: 1.5; }
+.ci-chart-host {
+  width: 100%;
+  height: 64px;
+}
+.ci-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ci-axis {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.ci-zero {
+  stroke: var(--rule-hi);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.ci-whisker {
+  stroke: var(--ink-dim);
+  stroke-width: 3;
+}
+.ci-whisker.excludes {
+  stroke: var(--phosphor);
+}
+.ci-cap {
+  stroke: var(--ink-dim);
+  stroke-width: 2;
+}
+.ci-effect {
+  fill: var(--ink);
+}
+.ci-tick {
+  fill: var(--ink-faint);
+  font-size: var(--t-micro);
+  text-anchor: middle;
+}
+.chart-caption {
+  padding: var(--s2) var(--s3) 0;
+  color: var(--ink-faint);
+  font-size: var(--t-small);
+  line-height: 1.5;
+}
 
-.gate-block { padding: var(--s3); border-top: var(--hair) solid var(--rule); margin-top: var(--s2); }
-.gate-title { color: var(--ink-dim); margin-bottom: var(--s2); font-weight: 700; }
-.gate-pending { color: var(--ink-faint); margin-bottom: var(--s2); }
-.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.check { display: flex; align-items: center; gap: var(--s2); }
-.check .c-mark { color: var(--ink-ghost); width: 14px; text-align: center; }
-.check.pending .c-mark { color: var(--ink-ghost); }
-.check .c-k { color: var(--ink-dim); }
+.gate-block {
+  padding: var(--s3);
+  border-top: var(--hair) solid var(--rule);
+  margin-top: var(--s2);
+}
+.gate-title {
+  color: var(--ink-dim);
+  margin-bottom: var(--s2);
+  font-weight: 700;
+}
+.gate-pending {
+  color: var(--ink-faint);
+  margin-bottom: var(--s2);
+}
+.checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.check .c-mark {
+  color: var(--ink-ghost);
+  width: 14px;
+  text-align: center;
+}
+.check.pending .c-mark {
+  color: var(--ink-ghost);
+}
+.check .c-k {
+  color: var(--ink-dim);
+}
 
 /* ---- state board ---- */
-.table-scroll { max-height: 560px; overflow: auto; }
+.table-scroll {
+  max-height: 560px;
+  overflow: auto;
+}
 .state-chip {
   display: inline-block;
   padding: 1px 7px;
@@ -761,16 +1096,39 @@ const staleReason = computed(() =>
   font-size: var(--t-micro);
   letter-spacing: 0.04em;
 }
-.grid tbody tr { cursor: pointer; }
-.grid tbody tr:hover { background: var(--panel-hi); }
-.grid tbody tr:focus-visible { outline: 1px solid var(--phosphor); outline-offset: -1px; background: var(--phosphor-wash); }
-.grid tbody tr.active { background: var(--phosphor-wash); }
-.grid th.sortable { cursor: pointer; user-select: none; }
-.grid th.sortable:hover { color: var(--ink); }
-.pos { color: var(--long); }
-.neg { color: var(--short); }
-.flat { color: var(--ink-dim); }
-.dim { color: var(--ink-faint); }
+.grid tbody tr {
+  cursor: pointer;
+}
+.grid tbody tr:hover {
+  background: var(--panel-hi);
+}
+.grid tbody tr:focus-visible {
+  outline: 1px solid var(--phosphor);
+  outline-offset: -1px;
+  background: var(--phosphor-wash);
+}
+.grid tbody tr.active {
+  background: var(--phosphor-wash);
+}
+.grid th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.grid th.sortable:hover {
+  color: var(--ink);
+}
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
+.flat {
+  color: var(--ink-dim);
+}
+.dim {
+  color: var(--ink-faint);
+}
 .dir-chip {
   display: inline-flex;
   align-items: center;
@@ -780,12 +1138,25 @@ const staleReason = computed(() =>
   font-size: var(--t-micro);
   letter-spacing: 0.04em;
 }
-.dir-chip.pos { color: var(--long); border-color: color-mix(in srgb, var(--long) 40%, transparent); }
-.dir-chip.neg { color: var(--short); border-color: color-mix(in srgb, var(--short) 40%, transparent); }
-.dir-chip.flat { color: var(--ink-faint); }
+.dir-chip.pos {
+  color: var(--long);
+  border-color: color-mix(in srgb, var(--long) 40%, transparent);
+}
+.dir-chip.neg {
+  color: var(--short);
+  border-color: color-mix(in srgb, var(--short) 40%, transparent);
+}
+.dir-chip.flat {
+  color: var(--ink-faint);
+}
 
 /* ---- timeline ---- */
-.symbol-picker { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s3) 0; }
+.symbol-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s3) var(--s3) 0;
+}
 .symbol-select {
   height: 26px;
   padding: 0 6px;
@@ -802,20 +1173,64 @@ const staleReason = computed(() =>
   margin: var(--s3);
   border: var(--hair) solid var(--rule);
 }
-.timeline-cell { flex: 1 1 0; min-width: 1px; }
-.legend { display: flex; flex-wrap: wrap; gap: var(--s3); padding: 0 var(--s3) var(--s3); }
-.legend-item { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-dim); font-size: var(--t-micro); }
-.legend-swatch { width: 9px; height: 9px; display: inline-block; }
+.timeline-cell {
+  flex: 1 1 0;
+  min-width: 1px;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  padding: 0 var(--s3) var(--s3);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+}
+.legend-swatch {
+  width: 9px;
+  height: 9px;
+  display: inline-block;
+}
 
 /* ---- barrier chart ---- */
-.barrier-chart-host { width: 100%; height: 320px; }
-.barrier-svg { display: block; width: 100%; height: 100%; }
-.barrier-gridline { stroke: var(--grid); stroke-width: 1; }
-.barrier-tick { fill: var(--ink-faint); font-size: var(--t-micro); dominant-baseline: middle; }
-.barrier-bar { fill: var(--phosphor-dim); opacity: 0.7; }
-.barrier-price-line { stroke: var(--phosphor); stroke-width: 1.5; }
-.barrier-node { fill: var(--ink-soft); }
-.barrier-strike { stroke: var(--put); stroke-width: 1; stroke-dasharray: 2 2; }
+.barrier-chart-host {
+  width: 100%;
+  height: 320px;
+}
+.barrier-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.barrier-gridline {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+.barrier-tick {
+  fill: var(--ink-faint);
+  font-size: var(--t-micro);
+  dominant-baseline: middle;
+}
+.barrier-bar {
+  fill: var(--phosphor-dim);
+  opacity: 0.7;
+}
+.barrier-price-line {
+  stroke: var(--phosphor);
+  stroke-width: 1.5;
+}
+.barrier-node {
+  fill: var(--ink-soft);
+}
+.barrier-strike {
+  stroke: var(--put);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
 
 /* ---- events ---- */
 .outcome-filter {
@@ -827,16 +1242,48 @@ const staleReason = computed(() =>
   font-family: var(--font-data);
   font-size: var(--t-small);
 }
-.path-cell { display: flex; align-items: center; gap: 2px; }
-.path-dot { width: 8px; height: 8px; border-radius: 1px; display: inline-block; }
-.event-more { display: flex; justify-content: center; padding: var(--s3); border-top: var(--hair) solid var(--rule); }
+.path-cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.path-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+}
+.event-more {
+  display: flex;
+  justify-content: center;
+  padding: var(--s3);
+  border-top: var(--hair) solid var(--rule);
+}
 
 /* ---- impact response ---- */
-.impact-chart-host { width: 100%; height: 220px; }
-.impact-svg { display: block; width: 100%; height: 100%; }
-.impact-zero { stroke: var(--rule-hi); stroke-width: 1; stroke-dasharray: 3 3; }
-.impact-band { fill: var(--phosphor-glow); stroke: none; }
-.impact-line { fill: none; stroke: var(--phosphor); stroke-width: 1.75; }
+.impact-chart-host {
+  width: 100%;
+  height: 220px;
+}
+.impact-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.impact-zero {
+  stroke: var(--rule-hi);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.impact-band {
+  fill: var(--phosphor-glow);
+  stroke: none;
+}
+.impact-line {
+  fill: none;
+  stroke: var(--phosphor);
+  stroke-width: 1.75;
+}
 
 /* ---- model/EV lock ---- */
 .locked-panel {
@@ -849,9 +1296,22 @@ const staleReason = computed(() =>
   color: var(--ink-faint);
   opacity: 0.75;
 }
-.lock-glyph { font-size: 1.75rem; }
+.lock-glyph {
+  font-size: 1.75rem;
+}
 
 /* ---- caveats ---- */
-.caveats-list { list-style: none; margin: 0; padding: var(--s3); display: flex; flex-direction: column; gap: 6px; }
-.caveats-list li { color: var(--ink-dim); font-size: var(--t-small); line-height: 1.5; }
+.caveats-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.caveats-list li {
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  line-height: 1.5;
+}
 </style>

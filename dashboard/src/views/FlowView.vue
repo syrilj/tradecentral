@@ -4,9 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, type StatusPayload } from '@/api'
 import { useResource, type Resource } from '@/composables/useResource'
 import FlowDashboard from '@/components/FlowDashboard.vue'
-import FlowSuggestionDrawer from '@/components/FlowSuggestionDrawer.vue'
 
-const FLOW_LIMIT = 80
+const FLOW_LIMIT = 500
 const BASE_FLOW_FLOOR = 25_000
 const FLOW_POLL_MS = 15_000
 
@@ -17,30 +16,37 @@ const statusPayload = computed(() => sharedStatus?.data.value ?? null)
 const minPremium = ref(BASE_FLOW_FLOOR)
 const forceNext = ref(false)
 
-function queryTicker(key: 'setup' | 'symbol'): string {
+function queryTicker(key: 'symbol' | 'setup'): string {
   const raw = route.query[key]
   const value = Array.isArray(raw) ? raw[0] : raw
-  return String(value || '').trim().toUpperCase()
+  return String(value || '')
+    .trim()
+    .toUpperCase()
 }
 
 function focusNameFromQuery(): string {
-  return queryTicker('setup') || queryTicker('symbol')
+  return queryTicker('symbol') || queryTicker('setup')
 }
 
-const selectedSetup = ref(focusNameFromQuery())
+const focusSymbol = ref(focusNameFromQuery())
 
 const unusual = useResource(
-  () => api.unusualFlow({
-    limit: FLOW_LIMIT,
-    minPremium: BASE_FLOW_FLOOR,
-    force: forceNext.value,
-  }),
+  () =>
+    api.unusualFlow({
+      limit: FLOW_LIMIT,
+      minPremium: minPremium.value,
+      force: forceNext.value,
+    }),
   { intervalMs: FLOW_POLL_MS },
 )
 
 function setPremium(value: number): void {
   minPremium.value = value
 }
+
+watch(minPremium, () => {
+  void refreshFlow()
+})
 
 async function refreshFlow(): Promise<void> {
   forceNext.value = true
@@ -52,41 +58,39 @@ async function refreshFlow(): Promise<void> {
 }
 
 function openSymbol(symbol: string): void {
-  selectedSetup.value = symbol
+  focusSymbol.value = symbol
   void router.replace({
     name: 'flow',
-    query: { ...route.query, setup: symbol, symbol },
+    query: { ...route.query, symbol },
   })
 }
 
-function closeSetup(): void {
-  selectedSetup.value = ''
-  const query = { ...route.query }
-  delete query.setup
-  delete query.symbol
-  void router.replace({ name: 'flow', query })
-}
-
-watch(() => [route.query.setup, route.query.symbol], () => {
-  selectedSetup.value = focusNameFromQuery()
-})
+watch(
+  () => [route.query.symbol, route.query.setup],
+  () => {
+    focusSymbol.value = focusNameFromQuery()
+  },
+)
 </script>
 
 <template>
   <div class="flow-view">
     <header class="flow-head ticked rise">
       <div class="flow-title">
-        <span class="label eyebrow"><i aria-hidden="true" class="live-dot" /> LIVE OPTIONS FLOW</span>
+        <span class="label eyebrow"
+          ><i aria-hidden="true" class="live-dot" /> LIVE OPTIONS FLOW</span
+        >
         <h1>Market-Wide Order Flow</h1>
         <p>
-          Real-time institutional order activity across liquid names.
-          Sweeps, blocks, and unusual prints. Signed buy/sell when the feed marks it.
+          Real-time institutional order activity across liquid names. Sweeps, blocks, and unusual
+          prints. Signed buy/sell when the feed marks it.
         </p>
       </div>
       <div class="scope-stack">
         <span class="scope-chip label live"><i aria-hidden="true" /> LIVE TAPE</span>
         <span class="scope-chip label">SWEEPS &amp; BLOCKS</span>
         <span class="scope-chip label">GOLDEN SWEEPS</span>
+        <span class="scope-chip label">POWER ALERTS</span>
         <span class="scope-chip label">WATCHLIST ALERTS</span>
         <span class="scope-chip label">15s POLL</span>
       </div>
@@ -99,16 +103,10 @@ watch(() => [route.query.setup, route.query.symbol], () => {
       :error="unusual.error.value"
       :min-premium="minPremium"
       :poll-ms="FLOW_POLL_MS"
-      :focus-symbol="selectedSetup"
+      :focus-symbol="focusSymbol"
       @refresh="void refreshFlow()"
       @threshold="setPremium"
       @open-symbol="openSymbol"
-    />
-
-    <FlowSuggestionDrawer
-      v-if="selectedSetup"
-      :symbol="selectedSetup"
-      @close="closeSetup"
     />
   </div>
 </template>
@@ -119,9 +117,12 @@ watch(() => [route.query.setup, route.query.symbol], () => {
   flex-direction: column;
   gap: var(--s3);
   min-width: 0;
+  overflow-x: hidden;
   padding-bottom: var(--s6);
 }
 
+/* Content-layer hero: opaque standard material, concentric corners,
+   phosphor leading edge marks the live feed. No backdrop blur here. */
 .flow-head {
   position: relative;
   display: flex;
@@ -131,8 +132,11 @@ watch(() => [route.query.setup, route.query.symbol], () => {
   padding: var(--s4) var(--s5);
   border: var(--hair) solid var(--rule);
   border-left: 2px solid var(--phosphor-dim);
-  border-radius: var(--r-md);
-  background: var(--surface-base);
+  border-radius: var(--r-xl);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 48px),
+    var(--surface-base);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .flow-title {
@@ -146,8 +150,8 @@ watch(() => [route.query.setup, route.query.symbol], () => {
 h1 {
   margin: var(--s2) 0 0;
   color: var(--ink);
-  font: 700 var(--t-display) / 1.15 var(--font-display);
-  letter-spacing: var(--track-tight);
+  font: 700 calc(var(--t-display) + 4px) / 1.12 var(--font-display);
+  letter-spacing: -0.02em;
 }
 
 .flow-title p {
@@ -160,21 +164,31 @@ h1 {
 
 .scope-stack {
   display: flex;
-  align-content: flex-start;
+  align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: var(--s2);
-  max-width: 390px;
+  max-width: 28rem;
   padding-bottom: var(--s1);
 }
 
 .scope-chip {
   display: inline-flex;
   align-items: center;
-  min-height: var(--density-control-h);
-  padding: var(--s1) var(--s2);
+  min-height: 32px;
+  padding: var(--s1) 10px;
+  white-space: nowrap;
   color: var(--ink-dim);
-  border: var(--hair) solid var(--rule);
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface);
+  box-shadow: var(--glass-specular-subtle);
+  border-radius: var(--r-capsule);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .scope-chip {
+    background: var(--panel-hi);
+  }
 }
 
 .scope-chip.live {
@@ -200,11 +214,16 @@ h1 {
   background: var(--phosphor);
   margin-right: 6px;
   vertical-align: middle;
-  animation: dot-pulse 2s ease-in-out infinite;
+  animation: dot-pulse var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .scope-chip.warn {
@@ -225,6 +244,7 @@ h1 {
 
   .scope-stack {
     justify-content: flex-start;
+    flex-wrap: wrap;
     max-width: none;
   }
 }

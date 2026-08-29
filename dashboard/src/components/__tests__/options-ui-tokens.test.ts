@@ -87,9 +87,11 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(flow).toMatch(/\.call-fill\s*\{\s*background:\s*var\(--call\)/)
     expect(flow).toMatch(/\.put-fill\s*\{\s*background:\s*var\(--put\)/)
     expect(flow).toMatch(/\.flow-context\.call\s*\{[^}]*--flow-tone:\s*var\(--call\)/s)
-    expect(flow).toMatch(/\.flow-context\.put\s*\{[^}]*--flow-tone:\s*var\(--put\)/s)
-    expect(view).toMatch(/grid-template-columns:\s*minmax\(320px,\s*360px\)\s+minmax\(0,\s*1fr\)/)
-    expect(view).toMatch(/grid-template-rows:\s*minmax\(560px,\s*62vh\)/)
+    // The gamma map owns the workbench; the squeeze board keeps a 320px floor
+    // so it stays a readable peer rather than collapsing to a strip.
+    expect(view).toMatch(/grid-template-columns:\s*minmax\(0,\s*2\.4fr\)\s+minmax\(320px,\s*1fr\)/)
+    expect(view).toMatch(/grid-template-rows:\s*minmax\(660px,\s*74vh\)/)
+    expect(view).toMatch(/\.workbench \.gex-full\s*\{[^}]*min-height:\s*660px/s)
     expect(view).not.toMatch(/minmax\(240px,\s*280px\)/)
     expect(view).not.toMatch(/minmax\(260px,\s*300px\)/)
     expect(view).not.toMatch(/minmax\(250px,\s*290px\)/)
@@ -118,7 +120,7 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(view).toContain('Showing all expiries.')
     expect(view).toContain(':disabled="tapeClassCounts.calls === 0"')
     expect(view).toContain(':disabled="tapeClassCounts.puts === 0"')
-    expect(view).not.toContain('else if (v === 0) preset.value = \'raw\'\n  void resource.refresh()')
+    expect(view).not.toContain("else if (v === 0) preset.value = 'raw'\n  void resource.refresh()")
   })
 
   it('collapses the empty Options desk to one recovery panel instead of fake-zero boxes', () => {
@@ -139,7 +141,9 @@ describe('Options UI token gate (shipped SFCs)', () => {
     const brief = readSrc('components/OptionsDirectionBrief.vue')
     const flow = readSrc('components/OptionsFlowContext.vue')
     expect(view).toContain('OptionsDirectionBrief')
-    expect(view.indexOf('<OptionsDirectionBrief')).toBeLessThan(view.indexOf('class="kpi-rail rise"'))
+    expect(view.indexOf('<OptionsDirectionBrief')).toBeLessThan(
+      view.indexOf('class="kpi-rail rise"'),
+    )
     expect(brief).toContain('UNDERLYING DIRECTION')
     expect(brief).toContain('SIGNED FLOW')
     expect(brief).toContain('PRICE MOMENTUM')
@@ -157,8 +161,12 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(view).toMatch(/\.side-pill\.neg\s*\{\s*color:\s*var\(--short\)/)
     expect(view).toMatch(/\.bias-chip\.bull,\s*\.edge-chip\.bull\s*\{\s*color:\s*var\(--long\)/)
     expect(view).toMatch(/\.bias-chip\.bear,\s*\.edge-chip\.bear\s*\{\s*color:\s*var\(--short\)/)
-    expect(view).toMatch(/\.tape-stalker-card\.bull\s*\{[^}]*border-left:\s*3px solid var\(--long\)/s)
-    expect(view).toMatch(/\.tape-stalker-card\.bear\s*\{[^}]*border-left:\s*3px solid var\(--short\)/s)
+    expect(view).toMatch(
+      /\.tape-stalker-card\.bull\s*\{[^}]*border-left:\s*3px solid var\(--long\)/s,
+    )
+    expect(view).toMatch(
+      /\.tape-stalker-card\.bear\s*\{[^}]*border-left:\s*3px solid var\(--short\)/s,
+    )
     expect(view).not.toMatch(/\.bias-chip\.bull[^}]*var\(--call\)/)
     expect(view).not.toMatch(/\.bias-chip\.bear[^}]*var\(--put\)/)
     expect(brief).toMatch(/\.direction-brief\.bullish\s*\{\s*--direction-tone:\s*var\(--long\)/)
@@ -193,7 +201,7 @@ describe('Options UI token gate (shipped SFCs)', () => {
     const surface = readSrc('components/RiskNeutral3DModel.vue')
     expect(density).toContain('const canRender3d = computed(() => model.value !== null)')
     expect(density).toContain(':disabled="!canRender3d"')
-    expect(density).toContain("v-if=\"viewMode === '3d' && canRender3d\"")
+    expect(density).toContain('v-if="viewMode === \'3d\' && canRender3d"')
     expect(surface).not.toContain('props.spot || 100')
     expect(surface).not.toContain('atm_iv || 0.25')
     expect(surface).not.toContain('horizon_days || 30')
@@ -203,7 +211,9 @@ describe('Options UI token gate (shipped SFCs)', () => {
     const density = readSrc('components/ProbabilityDensityChart.vue')
     expect(density).toContain('defineAsyncComponent')
     expect(density).toContain("() => import('@/components/RiskNeutral3DModel.vue')")
-    expect(density).not.toContain("import RiskNeutral3DModel from '@/components/RiskNeutral3DModel.vue'")
+    expect(density).not.toContain(
+      "import RiskNeutral3DModel from '@/components/RiskNeutral3DModel.vue'",
+    )
   })
 
   it('Options inherits the global instrument palette and labels setup status truthfully', () => {

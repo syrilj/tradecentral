@@ -52,7 +52,14 @@ const props = withDefaults(
     /** Horizontal reference prices (bear / mark / base / bull). */
     levels?: TrajectoryLevel[]
   }>(),
-  { mode: 'price', renderAs: 'candles', height: 340, showVwap: true, showEma: true, levels: () => [] },
+  {
+    mode: 'price',
+    renderAs: 'candles',
+    height: 340,
+    showVwap: true,
+    showEma: true,
+    levels: () => [],
+  },
 )
 
 const W = 1000
@@ -78,7 +85,8 @@ const values = computed(() =>
 
 /** Cumulative VWAP from typical price (H+L+C)/3 · volume — daily bars proxy. */
 const vwapSeries = computed(() => {
-  if (props.mode !== 'price' || !props.showVwap || !plotSeries.value.length) return null as number[] | null
+  if (props.mode !== 'price' || !props.showVwap || !plotSeries.value.length)
+    return null as number[] | null
   let pv = 0
   let vol = 0
   return plotSeries.value.map((b) => {
@@ -151,16 +159,17 @@ const plottedLevels = computed(() => {
 
 /** Candle geometry — body + wick for each bar. */
 const candles = computed(() => {
-  if (!useCandles.value) return [] as {
-    x: number
-    mid: number
-    bodyTop: number
-    bodyBot: number
-    high: number
-    low: number
-    up: boolean
-    w: number
-  }[]
+  if (!useCandles.value)
+    return [] as {
+      x: number
+      mid: number
+      bodyTop: number
+      bodyBot: number
+      high: number
+      low: number
+      up: boolean
+      w: number
+    }[]
   const n = plotSeries.value.length
   const slot = Math.max(1, (W - PAD.l - PAD.r) / Math.max(1, n))
   const bodyW = Math.max(1.5, Math.min(10, slot * 0.68))
@@ -181,17 +190,13 @@ const candles = computed(() => {
   })
 })
 
-const y = computed(() =>
-  linearScale(yDomain.value, [PAD.t + priceH.value, PAD.t]),
-)
+const y = computed(() => linearScale(yDomain.value, [PAD.t + priceH.value, PAD.t]))
 
 const ddTop = computed(() => PAD.t + priceH.value + GAP)
 const ddMin = computed(() => Math.min(-0.01, ...plotSeries.value.map((b) => b.dd)))
 const yDd = computed(() => linearScale([ddMin.value, 0], [ddTop.value + DD_H, ddTop.value]))
 
-const pts = computed(() =>
-  values.value.map((v, i) => ({ x: x.value(i), y: y.value(v) })),
-)
+const pts = computed(() => values.value.map((v, i) => ({ x: x.value(i), y: y.value(v) })))
 const ddPts = computed(() =>
   plotSeries.value.map((b, i) => ({ x: x.value(i), y: yDd.value(b.dd) })),
 )
@@ -225,7 +230,12 @@ const lastOverlays = computed(() => {
 })
 
 const yTicks = computed(() => niceTicks(yDomain.value[0], yDomain.value[1], 5))
-const xTicks = computed(() => dateTicks(plotSeries.value.map((b) => b.d), 6))
+const xTicks = computed(() =>
+  dateTicks(
+    plotSeries.value.map((b) => b.d),
+    6,
+  ),
+)
 
 /* The trace is up if it finished above where it started. Colouring the whole
    line by net direction (rather than per-segment) keeps it readable at 1000+
@@ -249,11 +259,9 @@ function onMove(e: MouseEvent): void {
   hover.value = Math.max(0, Math.min(plotSeries.value.length - 1, i))
 }
 
-const cur = computed(() => (hover.value === null ? null : plotSeries.value[hover.value] ?? null))
+const cur = computed(() => (hover.value === null ? null : (plotSeries.value[hover.value] ?? null)))
 const curX = computed(() => (hover.value === null ? 0 : x.value(hover.value)))
-const curY = computed(() =>
-  hover.value === null ? 0 : y.value(values.value[hover.value] ?? 0),
-)
+const curY = computed(() => (hover.value === null ? 0 : y.value(values.value[hover.value] ?? 0)))
 /* Flip the readout to the left half once the cursor passes centre so it never
    runs off the plot. */
 const flip = computed(() => curX.value > W * 0.62)
@@ -371,10 +379,19 @@ const flip = computed(() => curX.value > W * 0.62)
 
     <div v-if="mode === 'price' && lastOverlays" class="legend label">
       <span class="leg-px">PRICE {{ num(lastOverlays.px, 2) }}</span>
-      <span v-if="lastOverlays.vwap != null" class="vwap-c">VWAP {{ num(lastOverlays.vwap, 2) }}</span>
+      <span v-if="lastOverlays.vwap != null" class="vwap-c"
+        >VWAP {{ num(lastOverlays.vwap, 2) }}</span
+      >
       <span v-if="lastOverlays.e9 != null" class="ema9-c">EMA9 {{ num(lastOverlays.e9, 2) }}</span>
-      <span v-if="lastOverlays.e21 != null" class="ema21-c">EMA21 {{ num(lastOverlays.e21, 2) }}</span>
-      <span v-for="lv in plottedLevels" :key="`leg-${lv.label}`" class="leg-lv" :class="lv.tone || 'flat'">
+      <span v-if="lastOverlays.e21 != null" class="ema21-c"
+        >EMA21 {{ num(lastOverlays.e21, 2) }}</span
+      >
+      <span
+        v-for="lv in plottedLevels"
+        :key="`leg-${lv.label}`"
+        class="leg-lv"
+        :class="lv.tone || 'flat'"
+      >
         {{ lv.label }} {{ num(lv.price, 2) }}
       </span>
     </div>
@@ -382,9 +399,17 @@ const flip = computed(() => curX.value > W * 0.62)
 </template>
 
 <style scoped>
-.chart { position: relative; width: 100%; }
+.chart {
+  position: relative;
+  width: 100%;
+}
 
-.svg { display: block; width: 100%; height: auto; overflow: visible; }
+.svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
 
 .grid line {
   stroke: var(--rule-faint);
@@ -408,10 +433,18 @@ const flip = computed(() => curX.value > W * 0.62)
   stroke-width: 0;
   vector-effect: non-scaling-stroke;
 }
-.candle.up .wick { stroke: var(--long); }
-.candle.up .body { fill: var(--long); }
-.candle.dn .wick { stroke: var(--short); }
-.candle.dn .body { fill: var(--short); }
+.candle.up .wick {
+  stroke: var(--long);
+}
+.candle.up .body {
+  fill: var(--long);
+}
+.candle.dn .wick {
+  stroke: var(--short);
+}
+.candle.dn .body {
+  fill: var(--short);
+}
 
 .overlay {
   fill: none;
@@ -421,9 +454,17 @@ const flip = computed(() => curX.value > W * 0.62)
   opacity: 0.92;
 }
 /* Series hues stay on-token: warn / call / put. No rainbow chart defaults. */
-.overlay.vwap { stroke: var(--warn); stroke-dasharray: 5 3; }
-.overlay.ema9 { stroke: var(--call-hi); }
-.overlay.ema21 { stroke: var(--put); opacity: 0.85; }
+.overlay.vwap {
+  stroke: var(--warn);
+  stroke-dasharray: 5 3;
+}
+.overlay.ema9 {
+  stroke: var(--call-hi);
+}
+.overlay.ema21 {
+  stroke: var(--put);
+  opacity: 0.85;
+}
 
 .legend {
   display: flex;
@@ -432,14 +473,30 @@ const flip = computed(() => curX.value > W * 0.62)
   padding: 6px 2px 0;
   color: var(--ink-faint);
 }
-.leg-px { color: var(--ink-dim); }
-.vwap-c { color: var(--warn); }
-.ema9-c { color: var(--call-hi); }
-.ema21-c { color: var(--put); }
-.leg-lv.neg { color: var(--short); }
-.leg-lv.pos { color: var(--long); }
-.leg-lv.accent { color: var(--phosphor); }
-.leg-lv.flat { color: var(--ink-dim); }
+.leg-px {
+  color: var(--ink-dim);
+}
+.vwap-c {
+  color: var(--warn);
+}
+.ema9-c {
+  color: var(--call-hi);
+}
+.ema21-c {
+  color: var(--put);
+}
+.leg-lv.neg {
+  color: var(--short);
+}
+.leg-lv.pos {
+  color: var(--long);
+}
+.leg-lv.accent {
+  color: var(--phosphor);
+}
+.leg-lv.flat {
+  color: var(--ink-dim);
+}
 
 .level line {
   stroke-width: 1;
@@ -451,11 +508,29 @@ const flip = computed(() => curX.value > W * 0.62)
   font-size: 8px;
   letter-spacing: 0.08em;
 }
-.level.neg line, .level.neg text { stroke: var(--short); fill: var(--short); }
-.level.pos line, .level.pos text { stroke: var(--long); fill: var(--long); }
-.level.accent line, .level.accent text { stroke: var(--phosphor); fill: var(--phosphor); }
-.level.flat line, .level.flat text { stroke: var(--ink-dim); fill: var(--ink-dim); }
-.r-ov { font-size: 10px; }
+.level.neg line,
+.level.neg text {
+  stroke: var(--short);
+  fill: var(--short);
+}
+.level.pos line,
+.level.pos text {
+  stroke: var(--long);
+  fill: var(--long);
+}
+.level.accent line,
+.level.accent text {
+  stroke: var(--phosphor);
+  fill: var(--phosphor);
+}
+.level.flat line,
+.level.flat text {
+  stroke: var(--ink-dim);
+  fill: var(--ink-dim);
+}
+.r-ov {
+  font-size: 10px;
+}
 
 .dd {
   fill: var(--short);
@@ -479,8 +554,13 @@ text {
   user-select: none;
 }
 
-.ylab text { text-anchor: start; }
-.xlab text { text-anchor: middle; fill: var(--ink-ghost); }
+.ylab text {
+  text-anchor: start;
+}
+.xlab text {
+  text-anchor: middle;
+  fill: var(--ink-ghost);
+}
 
 .pane-lab {
   font-family: var(--font-display);
@@ -488,7 +568,10 @@ text {
   letter-spacing: 0.14em;
   fill: var(--ink-ghost);
 }
-.pane-lab.dim { fill: var(--short); opacity: 0.7; }
+.pane-lab.dim {
+  fill: var(--short);
+  opacity: 0.7;
+}
 
 .cross line {
   stroke: var(--phosphor);
@@ -497,7 +580,9 @@ text {
   vector-effect: non-scaling-stroke;
   opacity: 0.75;
 }
-.dd-dot { fill: var(--short); }
+.dd-dot {
+  fill: var(--short);
+}
 
 .readout {
   position: absolute;
@@ -510,10 +595,25 @@ text {
   pointer-events: none;
   background: var(--panel);
 }
-.readout.flip { right: auto; left: 8px; background: var(--panel); }
+.readout.flip {
+  right: auto;
+  left: 8px;
+  background: var(--panel);
+}
 
-.r-date { color: var(--ink-ghost); }
-.r-px { font-size: var(--t-body); color: var(--ink); font-weight: 500; }
-.r-chg, .r-dd { font-size: var(--t-tiny); }
-.r-dd { opacity: 0.8; }
+.r-date {
+  color: var(--ink-ghost);
+}
+.r-px {
+  font-size: var(--t-body);
+  color: var(--ink);
+  font-weight: 500;
+}
+.r-chg,
+.r-dd {
+  font-size: var(--t-tiny);
+}
+.r-dd {
+  opacity: 0.8;
+}
 </style>

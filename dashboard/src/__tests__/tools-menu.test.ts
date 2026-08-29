@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  TOOLS_MENU_PREFERRED_MAX,
-  placeToolsMenuStyle,
-} from '@/toolsMenu'
+import { TOOLS_MENU_PREFERRED_MAX, placeToolsMenuStyle } from '@/toolsMenu'
 
 function buttonNearRailFoot(viewportHeight = 900): DOMRect {
   // Tools sits above the pinned Account block — near the bottom of a desktop rail.
@@ -15,7 +12,9 @@ function buttonNearRailFoot(viewportHeight = 900): DOMRect {
     height: 48,
     x: 0,
     y: viewportHeight - 140,
-    toJSON() { return this },
+    toJSON() {
+      return this
+    },
   }
 }
 

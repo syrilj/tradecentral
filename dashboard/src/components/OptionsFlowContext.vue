@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { OptionsIntelligence, OptionsTapeRow } from '@/api'
 import type { OptionsDirectionRead } from '@/optionsDirection'
-import { optCompact, pctFrac } from '@/format'
+import { DASH, optCompact, pctFrac } from '@/format'
 
 const props = defineProps<{
   summary: OptionsIntelligence['summary'] | null | undefined
@@ -15,49 +15,64 @@ const props = defineProps<{
 }>()
 
 const premium = computed(() => {
-  // Always sum the tape this panel is paired with. Summary aggregates can
-  // include prints truncated off the returned tape (tape_limit), which made
-  // C/P ratio disagree with the actual flow list on screen.
+  // Prefer full backend session summary aggregates (call_premium, put_premium)
+  // so the C/P mix and total premium reflect the complete qualified session flow,
+  // matching FlowDashboard and API summary metrics.
+  // Fall back to summing the displayed tape slice only if session summary is absent.
   let call = 0
   let put = 0
-  let fromTape = false
-  let classifiedCount = 0
+  let fromSummary = false
 
-  if (props.tape.length) {
-    fromTape = true
+  const hasSummary =
+    props.summary != null &&
+    (props.summary.call_premium != null || props.summary.put_premium != null)
+
+  if (hasSummary) {
+    call = Number(props.summary?.call_premium) || 0
+    put = Number(props.summary?.put_premium) || 0
+    fromSummary = call + put > 0
+  }
+
+  let classifiedTapeCount = 0
+  if (!fromSummary && props.tape.length) {
     for (const row of props.tape) {
       const prem = Number(row.premium)
       if (!Number.isFinite(prem) || prem < 0) continue
       if (row.right === 'call') {
         call += prem
-        classifiedCount += 1
+        classifiedTapeCount += 1
       } else if (row.right === 'put') {
         put += prem
-        classifiedCount += 1
+        classifiedTapeCount += 1
       }
     }
   }
 
-  if (!fromTape || call + put <= 0) {
-    call = props.summary?.call_premium ?? 0
-    put = props.summary?.put_premium ?? 0
-    fromTape = false
-  }
-
   const total = call + put
-  const hasPrem = total > 0 && (fromTape ? classifiedCount > 0 : (call > 0 || put > 0))
+  const hasPrem = total > 0 && (fromSummary || classifiedTapeCount > 0)
   const callPct = hasPrem ? Math.round((call / total) * 100) : 0
   const putPct = hasPrem ? 100 - callPct : 0
   const dominantPct = Math.max(callPct, putPct)
   const tone = !hasPrem ? 'neutral' : callPct >= 58 ? 'call' : putPct >= 58 ? 'put' : 'neutral'
-  const conviction = hasPrem ? (dominantPct >= 72 ? 'HIGH' : dominantPct >= 62 ? 'MED' : 'LOW') : 'NONE'
-  const ratio = (hasPrem && put > 0) ? call / put : null
+  const conviction = hasPrem
+    ? dominantPct >= 72
+      ? 'HIGH'
+      : dominantPct >= 62
+        ? 'MED'
+        : 'LOW'
+    : 'NONE'
+  const ratio = hasPrem && put > 0 ? call / put : null
 
-  const label = tone === 'call'
-    ? 'CALL-HEAVY ACTIVITY'
-    : tone === 'put'
-      ? 'PUT-HEAVY ACTIVITY'
-      : total > 0 ? 'BALANCED ACTIVITY' : 'NO ACTIVITY MIX'
+  const label =
+    tone === 'call'
+      ? 'CALL-HEAVY ACTIVITY'
+      : tone === 'put'
+        ? 'PUT-HEAVY ACTIVITY'
+        : total > 0
+          ? 'BALANCED ACTIVITY'
+          : 'NO ACTIVITY MIX'
+
+  const netCall = call - put
 
   return {
     call,
@@ -66,7 +81,9 @@ const premium = computed(() => {
     callPct,
     putPct,
     ratio,
-    fromTape,
+    fromTape: !fromSummary,
+    fromSummary,
+    netCall,
     tone,
     conviction,
     label,
@@ -77,7 +94,8 @@ const tapeStats = computed(() => {
   let signed = 0
 
   for (const row of props.tape) {
-    if (row.signed_premium != null || row.aggressor === 'buy' || row.aggressor === 'sell') signed += 1
+    if (row.signed_premium != null || row.aggressor === 'buy' || row.aggressor === 'sell')
+      signed += 1
   }
 
   return { signed }
@@ -124,16 +142,20 @@ const deskAction = computed(() => {
 
   let priority: 'now' | 'soon' | 'watch' = 'watch'
   if (props.tapeStatus === 'stale' || props.tapeStatus === 'warm') priority = 'watch'
-  else if (direction === 'bullish' || direction === 'bearish') priority = anomalies > 0 || signed ? 'now' : 'soon'
+  else if (direction === 'bullish' || direction === 'bearish')
+    priority = anomalies > 0 || signed ? 'now' : 'soon'
   else if (direction === 'mixed') priority = 'soon'
 
   const levels: string[] = []
-  if (callDist != null && Math.abs(callDist) <= 0.03) levels.push(`call wall ${pctFrac(callDist, 1)} away`)
-  if (putDist != null && Math.abs(putDist) <= 0.03) levels.push(`put wall ${pctFrac(putDist, 1)} away`)
+  if (callDist != null && Math.abs(callDist) <= 0.03)
+    levels.push(`call wall ${pctFrac(callDist, 1)} away`)
+  if (putDist != null && Math.abs(putDist) <= 0.03)
+    levels.push(`put wall ${pctFrac(putDist, 1)} away`)
   if (flipDist != null && Math.abs(flipDist) <= 0.02) levels.push(`near gamma flip`)
 
   let title = 'No clear lean — map walls, then wait for signed side'
-  let body = 'Use put/call walls and net GEX as structure context. Do not invent direction from identity alone.'
+  let body =
+    'Use put/call walls and net GEX as structure context. Do not invent direction from identity alone.'
 
   if (direction === 'bullish') {
     title = signed
@@ -172,22 +194,31 @@ const deskAction = computed(() => {
   <div class="flow-context flow-evidence-bar" :class="premium.tone">
     <section class="flow-hero">
       <div class="flow-hero-copy">
-        <span class="label eyebrow">DISPLAYED TAPE · CONTRACT MIX</span>
+        <span class="label eyebrow">{{
+          premium.fromSummary ? 'SESSION TOTAL · CONTRACT MIX' : 'DISPLAYED TAPE · CONTRACT MIX'
+        }}</span>
         <strong class="fig dominant" :class="premium.tone">{{ premium.label }}</strong>
-        <small class="label identity-note">CALL = EMERALD · PUT = CRIMSON · IDENTITY, NOT DIRECTION</small>
+        <small class="label identity-note"
+          >CALL = EMERALD · PUT = CRIMSON · IDENTITY, NOT DIRECTION</small
+        >
       </div>
       <div class="flow-hero-badges">
         <span class="label feed-state" :class="tapeStatus">
           <i aria-hidden="true" />{{ tapeTitle }}
         </span>
-        <span class="label conviction" :class="premium.tone">{{ premium.conviction === 'NONE' ? 'NO SKEW' : `${premium.conviction} SKEW` }}</span>
+        <span class="label conviction" :class="premium.tone">{{
+          premium.conviction === 'NONE' ? 'NO SKEW' : `${premium.conviction} SKEW`
+        }}</span>
       </div>
     </section>
 
     <section class="premium-section">
       <div class="section-head label">
         <span>PREMIUM SPLIT</span>
-        <span>TOTAL <b class="fig">${{ optCompact(premium.total) }}</b></span>
+        <span
+          >{{ premium.fromSummary ? 'SESSION TOTAL' : 'TOTAL' }}
+          <b class="fig">${{ optCompact(premium.total) }}</b></span
+        >
       </div>
       <div class="premium-track" aria-label="Call versus put premium split">
         <i class="call-fill" :style="{ width: `${premium.callPct}%` }" />
@@ -209,9 +240,13 @@ const deskAction = computed(() => {
       <div class="metric">
         <span class="label">C/P IMBALANCE</span>
         <strong class="fig" :class="premium.call >= premium.put ? 'call' : 'put'">
-          {{ (premium.call - premium.put >= 0 ? '+' : '') + '$' + optCompact(premium.call - premium.put) }}
+          {{
+            (premium.call - premium.put >= 0 ? '+' : '') +
+            '$' +
+            optCompact(premium.call - premium.put)
+          }}
         </strong>
-        <small class="label">IDENTITY MIX</small>
+        <small class="label">{{ premium.fromSummary ? 'SESSION MIX' : 'IDENTITY MIX' }}</small>
       </div>
       <div class="metric">
         <span class="label">QUALIFIED</span>
@@ -220,7 +255,9 @@ const deskAction = computed(() => {
       </div>
       <div class="metric">
         <span class="label">BUY / SELL SIDE</span>
-        <strong class="fig">{{ signedCoverage == null ? '0.00%' : pctFrac(signedCoverage, 0) }}</strong>
+        <strong class="fig">{{
+          signedCoverage == null ? DASH : pctFrac(signedCoverage, 0)
+        }}</strong>
         <small class="label">{{ signedFlowAvailable ? 'COVERAGE' : 'NOT SUPPLIED' }}</small>
       </div>
       <div class="metric">
@@ -241,70 +278,240 @@ const deskAction = computed(() => {
 </template>
 
 <style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
 .flow-context {
   --flow-tone: var(--ink-dim);
   display: grid;
-  grid-template-columns: minmax(180px, 0.95fr) minmax(180px, 1fr) minmax(220px, 1.1fr) minmax(200px, 1.15fr);
+  grid-template-columns: minmax(190px, 1.05fr) minmax(150px, 0.8fr) minmax(300px, 1.4fr) minmax(
+      210px,
+      1.15fr
+    );
   align-items: stretch;
-  min-height: 0;
-  max-height: 74px;
-  overflow: hidden;
-  background: var(--panel);
+  min-height: 74px;
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  border-radius: var(--r-md);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   color: var(--ink);
 }
-.flow-context.call { --flow-tone: var(--call); }
-.flow-context.put { --flow-tone: var(--put); }
-.flow-context.bullish { --flow-tone: var(--long); }
-.flow-context.bearish { --flow-tone: var(--short); }
-.flow-context.mixed, .flow-context.neutral { --flow-tone: var(--ink); }
-.dominant.bullish { color: var(--long); }
-.dominant.bearish { color: var(--short); }
-.dominant.mixed, .dominant.neutral { color: var(--ink); }
-.conviction.bullish { color: var(--long); }
-.conviction.bearish { color: var(--short); }
-.identity-note { overflow: hidden; color: var(--ink-ghost); font-size: var(--t-micro); white-space: nowrap; text-overflow: ellipsis; }
+.flow-context.call {
+  --flow-tone: var(--call);
+}
+.flow-context.put {
+  --flow-tone: var(--put);
+}
+.flow-context.bullish {
+  --flow-tone: var(--long);
+}
+.flow-context.bearish {
+  --flow-tone: var(--short);
+}
+.flow-context.mixed,
+.flow-context.neutral {
+  --flow-tone: var(--ink);
+}
+.dominant.bullish {
+  color: var(--long);
+}
+.dominant.bearish {
+  color: var(--short);
+}
+.dominant.mixed,
+.dominant.neutral {
+  color: var(--ink);
+}
+.conviction.bullish {
+  color: var(--long);
+}
+.conviction.bearish {
+  color: var(--short);
+}
+.identity-note {
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+  line-height: 1.35;
+  white-space: normal;
+}
 
 .flow-hero {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
   min-width: 0;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-left: 3px solid var(--flow-tone);
-  background: var(--void-lift);
+  background: var(--glass-surface-hi);
 }
-.flow-hero-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; flex: 1 1 auto; overflow: hidden; }
-.flow-hero-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
-.eyebrow { color: var(--ink-faint); font-size: var(--t-micro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dominant { color: var(--flow-tone); font-size: var(--t-small); line-height: 1.15; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.feed-state { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-ghost); font-size: var(--t-micro); white-space: nowrap; }
-.feed-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-ghost); }
-.feed-state.live i { background: var(--phosphor); }
-.feed-state.stale i, .feed-state.warm i { background: var(--warn); }
-.conviction { padding: 1px 5px; border: var(--hair) solid var(--rule-hi); color: var(--ink-dim); background: var(--void-lift); font-size: var(--t-micro); white-space: nowrap; }
-.conviction.call { color: var(--call-hi); border-color: color-mix(in srgb, var(--call) 50%, var(--rule)); }
-.conviction.put { color: var(--put-hi); border-color: color-mix(in srgb, var(--put) 50%, var(--rule)); }
+.flow-hero-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.flow-hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+.eyebrow {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.3;
+  letter-spacing: 0.05em;
+  white-space: normal;
+}
+.dominant {
+  color: var(--flow-tone);
+  font-size: var(--t-small);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  white-space: normal;
+  font-weight: 750;
+}
+.feed-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+  white-space: nowrap;
+}
+.feed-state i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-ghost);
+}
+.feed-state.live i {
+  background: var(--phosphor);
+}
+.feed-state.stale i,
+.feed-state.warm i {
+  background: var(--warn);
+}
+.conviction {
+  padding: 1px 6px;
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink-dim);
+  background: var(--glass-base);
+  font-size: var(--t-micro);
+  white-space: nowrap;
+  border-radius: 9999px;
+  font-weight: 700;
+}
+.conviction.call {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call) 50%, var(--rule));
+  background: var(--call-wash);
+}
+.conviction.put {
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put) 50%, var(--rule));
+  background: var(--put-wash);
+}
 
-.premium-section { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 10px; border-left: var(--hair) solid var(--rule); }
-.section-head { display: flex; justify-content: space-between; gap: var(--s2); color: var(--ink-faint); font-size: var(--t-micro); }
-.section-head b { color: var(--ink-soft); }
-.premium-track { display: flex; height: 7px; overflow: hidden; background: var(--rule); border: var(--hair) solid var(--rule-hi); }
-.premium-track i { height: 100%; }
-.call-fill { background: var(--call); }
-.put-fill { background: var(--put); }
-.premium-values { display: flex; justify-content: space-between; gap: 8px; }
-.premium-side { display: flex; align-items: baseline; gap: 4px; }
-.premium-side strong { font-size: var(--t-small); }
-.premium-side.call strong { color: var(--call-hi); }
-.premium-side.put strong { color: var(--put-hi); }
+.premium-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 12px;
+  border-left: var(--hair) solid var(--glass-border);
+}
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+}
+.section-head b {
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.premium-track {
+  display: flex;
+  height: 7px;
+  overflow: hidden;
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: 9999px;
+}
+.premium-track i {
+  height: 100%;
+}
+.call-fill {
+  background: var(--call);
+}
+.put-fill {
+  background: var(--put);
+}
+.premium-values {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.premium-side {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.premium-side strong {
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+}
+.premium-side.call strong {
+  color: var(--call-hi);
+}
+.premium-side.put strong {
+  color: var(--put-hi);
+}
 
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; min-width: 0; background: var(--rule); border-left: var(--hair) solid var(--rule); }
-.metric { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 1px; padding: 6px 8px; background: var(--void-lift); }
-.metric .label { color: var(--ink-faint); font-size: var(--t-micro); }
-.metric strong { color: var(--ink-soft); font-size: var(--t-small); }
-.metric small { color: var(--ink-ghost); font-size: var(--t-micro); }
-.metric .warn { color: var(--warn); }
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  min-width: 0;
+  background: var(--glass-border);
+  border-left: var(--hair) solid var(--glass-border);
+}
+.metric {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 6px 8px;
+  background: var(--glass-surface);
+}
+.metric .label {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  line-height: 1.25;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+}
+.metric strong {
+  color: var(--ink-soft);
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.metric small {
+  color: var(--ink-ghost);
+  font-size: var(--t-micro);
+}
+.metric .warn {
+  color: var(--warn);
+}
 
 .desk-action {
   --action-tone: var(--ink-dim);
@@ -313,46 +520,56 @@ const deskAction = computed(() => {
   flex-direction: column;
   justify-content: center;
   gap: 2px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-left: 3px solid var(--action-tone);
-  background: var(--void-lift);
+  background: var(--glass-surface-hi);
 }
-.desk-action.bullish { --action-tone: var(--long); }
-.desk-action.bearish { --action-tone: var(--short); }
-.desk-action.mixed { --action-tone: var(--warn); }
+.desk-action.bullish {
+  --action-tone: var(--long);
+}
+.desk-action.bearish {
+  --action-tone: var(--short);
+}
+.desk-action.mixed {
+  --action-tone: var(--warn);
+}
 .priority-tag {
-  padding: 1px 5px;
-  border: var(--hair) solid var(--rule-hi);
+  padding: 1px 6px;
+  border: var(--hair) solid var(--glass-border);
   color: var(--ink-dim);
   font-weight: 750;
   letter-spacing: 0.05em;
+  border-radius: var(--r-xs);
+  background: var(--glass-base);
 }
 .desk-action.now .priority-tag {
   color: var(--phosphor);
   border-color: color-mix(in srgb, var(--phosphor) 50%, var(--rule));
+  background: var(--phosphor-wash);
 }
 .desk-action.soon .priority-tag {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
+  background: var(--warn-wash);
 }
 .action-title {
-  overflow: hidden;
   color: var(--ink);
   font-size: var(--t-micro);
-  line-height: 1.25;
+  line-height: 1.3;
   letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  font-weight: 600;
 }
 
 @media (max-width: 1180px) {
   .flow-context {
     grid-template-columns: 1fr 1fr;
-    max-height: none;
   }
 }
 
 @media (max-width: 700px) {
-  .flow-context { grid-template-columns: 1fr; }
+  .flow-context {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

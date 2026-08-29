@@ -368,8 +368,12 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
     <div v-if="available" class="split">
       <Panel label="Chord map" index="—" :meta="`${placed.length} placed`" :delay="40" flush>
         <div class="stage">
-          <svg :viewBox="`0 0 ${SIZE} ${SIZE}`" class="chart" role="img"
-               aria-label="Repository knowledge graph as a chord diagram">
+          <svg
+            :viewBox="`0 0 ${SIZE} ${SIZE}`"
+            class="chart"
+            role="img"
+            aria-label="Repository knowledge graph as a chord diagram"
+          >
             <g class="chords">
               <path
                 v-for="c in chords"
@@ -386,7 +390,14 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
                 v-for="s in sectors"
                 :key="s.id"
                 :d="s.d"
-                :class="['sector', { on: activeCommunity === s.id, off: activeCommunity && activeCommunity !== s.id, tail: s.id === OTHER }]"
+                :class="[
+                  'sector',
+                  {
+                    on: activeCommunity === s.id,
+                    off: activeCommunity && activeCommunity !== s.id,
+                    tail: s.id === OTHER,
+                  },
+                ]"
                 :style="s.id === OTHER ? undefined : { stroke: `var(--cat-${s.colorIndex + 1})` }"
                 @click="pickCommunity(s.id)"
               />
@@ -397,7 +408,9 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
                 :y="s.labelY"
                 :text-anchor="s.anchor"
                 :class="['sector-label', { on: activeCommunity === s.id }]"
-              >{{ s.label }}</text>
+              >
+                {{ s.label }}
+              </text>
             </g>
 
             <g class="nodes">
@@ -430,7 +443,11 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
         <Panel
           label="Communities"
           index="—"
-          :meta="collapsed ? `top ${TOP_COMMUNITIES} of ${rawCommunities.length}` : `${communities.length}`"
+          :meta="
+            collapsed
+              ? `top ${TOP_COMMUNITIES} of ${rawCommunities.length}`
+              : `${communities.length}`
+          "
           :delay="80"
           flush
         >
@@ -453,7 +470,11 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
                   <span
                     class="swatch"
                     :class="{ tail: c.id === OTHER }"
-                    :style="c.id === OTHER ? undefined : { background: `var(--cat-${((c.color_index ?? i) % 8) + 1})` }"
+                    :style="
+                      c.id === OTHER
+                        ? undefined
+                        : { background: `var(--cat-${((c.color_index ?? i) % 8) + 1})` }
+                    "
                   />
                   <span class="cname" :class="{ tail: c.id === OTHER }">{{ c.label }}</span>
                 </td>
@@ -564,8 +585,12 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   opacity: 0.16;
   transition: opacity var(--dur-fast) var(--ease-out);
 }
-.chord.lit { opacity: 0.85; }
-.chord.mute { opacity: 0.04; }
+.chord.lit {
+  opacity: 0.85;
+}
+.chord.mute {
+  opacity: 0.04;
+}
 
 /* ---- the collapsed tail --------------------------------------------------
    107 of this repo's 118 Louvain communities are two- or three-file clusters.
@@ -581,7 +606,9 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   stroke: var(--ink-ghost);
   opacity: 0.05;
 }
-.chord.tail.lit { opacity: 0.4; }
+.chord.tail.lit {
+  opacity: 0.4;
+}
 
 /* ---- sectors ------------------------------------------------------------- */
 .sector {
@@ -592,8 +619,12 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   transition: opacity var(--dur-fast) var(--ease-out);
 }
 .sector:hover,
-.sector.on { opacity: 1; }
-.sector.off { opacity: 0.14; }
+.sector.on {
+  opacity: 1;
+}
+.sector.off {
+  opacity: 0.14;
+}
 .sector.tail {
   stroke: var(--rule-hi);
   stroke-width: 3;
@@ -608,7 +639,9 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   fill: var(--ink-faint);
   pointer-events: none;
 }
-.sector-label.on { fill: var(--ink); }
+.sector-label.on {
+  fill: var(--ink);
+}
 
 /* ---- node ticks ---------------------------------------------------------- */
 .tick {
@@ -617,15 +650,23 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   cursor: pointer;
   transition: opacity var(--dur-fast) var(--ease-out);
 }
-.tick:hover { opacity: 1; }
-.tick.lit { opacity: 1; }
-.tick.mute { opacity: 0.12; }
+.tick:hover {
+  opacity: 1;
+}
+.tick.lit {
+  opacity: 1;
+}
+.tick.mute {
+  opacity: 0.12;
+}
 .tick.tail {
   stroke: var(--ink-ghost);
   opacity: 0.3;
   stroke-width: 1.5;
 }
-.tick.tail:hover { opacity: 1; }
+.tick.tail:hover {
+  opacity: 1;
+}
 .tick.focus {
   stroke: var(--phosphor) !important;
   stroke-width: 3;
@@ -648,9 +689,15 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
 }
 
 /* ---- side panels --------------------------------------------------------- */
-.row-click { cursor: pointer; }
-.row-click:hover td { background: var(--panel-hi); }
-.row-click.active td { background: var(--phosphor-glow); }
+.row-click {
+  cursor: pointer;
+}
+.row-click:hover td {
+  background: var(--panel-hi);
+}
+.row-click.active td {
+  background: var(--phosphor-glow);
+}
 
 .swatch {
   display: inline-block;
@@ -664,7 +711,9 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   background: none;
   border: var(--hair) solid var(--ink-ghost);
 }
-.cname.tail { color: var(--ink-faint); }
+.cname.tail {
+  color: var(--ink-faint);
+}
 
 .cname {
   overflow: hidden;
@@ -698,9 +747,13 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   gap: var(--s3);
   margin-bottom: var(--s3);
 }
-.links { margin: 0 calc(-1 * var(--s4)); }
+.links {
+  margin: 0 calc(-1 * var(--s4));
+}
 
-.empty { padding-top: var(--s2); }
+.empty {
+  padding-top: var(--s2);
+}
 .cmds {
   list-style: none;
   display: flex;
@@ -722,12 +775,25 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
   color: var(--ink-soft);
 }
 
-.note { font-size: var(--t-small); color: var(--ink-dim); }
-.err { font-size: var(--t-small); color: var(--short); }
-.dim { color: var(--ink-faint); font-size: var(--t-tiny); }
+.note {
+  font-size: var(--t-small);
+  color: var(--ink-dim);
+}
+.err {
+  font-size: var(--t-small);
+  color: var(--short);
+}
+.dim {
+  color: var(--ink-faint);
+  font-size: var(--t-tiny);
+}
 
 @media (max-width: 1100px) {
-  .split { grid-template-columns: 1fr; }
-  .counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split {
+    grid-template-columns: 1fr;
+  }
+  .counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

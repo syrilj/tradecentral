@@ -349,8 +349,8 @@ def setup_level_model(
     _append_level(resistances, call_wall, LEVEL_SOURCE_GEX, side="above", spot=spot_n)
     _append_level(supports, ta_support, LEVEL_SOURCE_TA, side="below", spot=spot_n)
     _append_level(resistances, ta_resistance, LEVEL_SOURCE_TA, side="above", spot=spot_n)
-    _append_level(supports, gamma_flip, LEVEL_SOURCE_TA, side="below", spot=spot_n)
-    _append_level(resistances, gamma_flip, LEVEL_SOURCE_TA, side="above", spot=spot_n)
+    _append_level(supports, gamma_flip, LEVEL_SOURCE_GEX, side="below", spot=spot_n)
+    _append_level(resistances, gamma_flip, LEVEL_SOURCE_GEX, side="above", spot=spot_n)
 
     best_oi_below: tuple[float, float] | None = None
     best_oi_above: tuple[float, float] | None = None
@@ -441,7 +441,7 @@ def setup_level_model(
     ):
         source_status[LEVEL_SOURCE_SUPPORT] = "wrong-side"
     if source_status[LEVEL_SOURCE_GEX] == "unmeasured" and (
-        _level(call_wall) is not None or _level(put_wall) is not None
+        _level(call_wall) is not None or _level(put_wall) is not None or _level(gamma_flip) is not None
     ):
         source_status[LEVEL_SOURCE_GEX] = "wrong-side"
 
@@ -1273,6 +1273,34 @@ def build_live_opportunities(
             )
         else:
             target_source = invalidation_source = None
+
+        if playbook_target is not None and target_source is None:
+            matching_zone = next(
+                (z for z in (level_model.get("take_profit_zones") or ()) if _finite(z.get("price")) == playbook_target),
+                None,
+            )
+            if matching_zone:
+                target_source = matching_zone.get("source")
+            elif level_model.get("take_profit_zones"):
+                target_source = level_model["take_profit_zones"][0].get("source")
+            elif playbook_target == _level(level_model.get("gex_target")):
+                target_source = LEVEL_SOURCE_GEX
+            else:
+                target_source = LEVEL_SOURCE_GEX
+
+        if playbook_invalidation is not None and invalidation_source is None:
+            if playbook_invalidation == _finite(level_model.get("invalidation")):
+                invalidation_source = level_model.get("invalidation_source")
+            else:
+                matching_support = next(
+                    (s for s in (level_model.get("supports") or ()) if _finite(s.get("price")) == playbook_invalidation),
+                    None,
+                )
+                if matching_support:
+                    invalidation_source = matching_support.get("source")
+                else:
+                    invalidation_source = level_model.get("invalidation_source") or LEVEL_SOURCE_GEX
+
         suggestion.update({
             "plan_target": playbook_target,
             "plan_target_source": target_source,
@@ -1295,6 +1323,8 @@ def build_live_opportunities(
         if suggestion.get("invalidation") is None and level_model.get("invalidation") is not None:
             suggestion["invalidation"] = level_model["invalidation"]
             suggestion["invalidation_source"] = level_model["invalidation_source"]
+        elif suggestion.get("invalidation") is not None and suggestion.get("invalidation_source") is None:
+            suggestion["invalidation_source"] = invalidation_source or level_model.get("invalidation_source")
         highlighted = bool(playbook.get("status") == "candidate")
         suggestion_plan = (
             suggestion.get("contract_plan")

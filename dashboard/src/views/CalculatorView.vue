@@ -11,7 +11,11 @@ function numQuery(name: string): number | null {
   return Number.isFinite(value) ? value : null
 }
 
-const symbol = computed(() => String(route.query.symbol || '').trim().toUpperCase())
+const symbol = computed(() =>
+  String(route.query.symbol || '')
+    .trim()
+    .toUpperCase(),
+)
 const strategy = computed(() => String(route.query.strategy || route.query.right || 'long_call'))
 const spot = computed(() => numQuery('spot'))
 const strike = computed(() => numQuery('strike'))
@@ -27,9 +31,8 @@ const fromSetup = computed(() => Boolean(symbol.value || strike.value || premium
       <span class="label">Options toolkit</span>
       <h1>Portfolio calculator</h1>
       <p>
-        The book lives here — not on the Options tape. Each contract is a row.
-        Setups open this page with the exact contract prefilled. Closed-form P/L and Greeks.
-        No live order path.
+        The book lives here — not on the Options tape. Each contract is a row. Setups open this page
+        with the exact contract prefilled. Closed-form P/L and Greeks. No live order path.
       </p>
       <p v-if="fromSetup" class="from-setup label">
         Prefill from {{ symbol || 'setup' }} · {{ strategy.replaceAll('_', ' ') }}
@@ -49,7 +52,11 @@ const fromSetup = computed(() => Boolean(symbol.value || strike.value || premium
 </template>
 
 <style scoped>
-.calc-view { display: grid; gap: var(--s5); }
+/* Surface glass token: var(--glass-surface-hi) */
+.calc-view {
+  display: grid;
+  gap: var(--s5);
+}
 .calc-view header {
   padding: var(--s5);
   border: var(--hair) solid var(--rule);
@@ -66,5 +73,7 @@ const fromSetup = computed(() => Boolean(symbol.value || strike.value || premium
   color: var(--ink-dim);
   font-size: var(--t-small);
 }
-.from-setup { color: var(--phosphor); }
+.from-setup {
+  color: var(--phosphor);
+}
 </style>

@@ -47,7 +47,15 @@ def test_financials_valid_symbols_contract(api_client: DirectApiClient, symbol: 
     assert data["symbol"] == symbol
     assert data["period_type"] == period
     assert isinstance(data["periods"], list)
-    assert len(data["periods"]) > 0
+    # No assertion that periods is non-empty. When the provider returns no
+    # fundamentals the payload is empty and says so; it used to be filled with
+    # statements synthesised from the ticker string, and asserting non-empty
+    # here is what required that fabrication to exist.
+    if data.get("available") is False:
+        assert data["periods"] == []
+        assert data["income_statement"]["rows"] == []
+        assert data["source"] == "unavailable"
+        assert data["reason"]
     assert "income_statement" in data and isinstance(data["income_statement"]["rows"], list)
     assert "balance_sheet" in data and isinstance(data["balance_sheet"]["rows"], list)
     assert "cash_flow" in data and isinstance(data["cash_flow"]["rows"], list)
@@ -81,7 +89,11 @@ def test_company_profile_valid_symbols_contract(api_client: DirectApiClient, sym
     assert "compensation" in data and isinstance(data["compensation"]["rows"], list)
     assert "forecast" in data and isinstance(data["forecast"], dict)
     assert "smart_score" in data and isinstance(data["smart_score"], dict)
-    assert 1 <= data["smart_score"]["score"] <= 10
+    # None when too few pillars were measured to compose a score. Pillars used
+    # to fall back to rng.normal(), which made a partly-invented score
+    # indistinguishable from a measured one.
+    _score = data["smart_score"]["score"]
+    assert _score is None or 1 <= _score <= 10
     assert "bull_bear" in data
     assert isinstance(data["bull_bear"]["bulls_say"], list)
     assert isinstance(data["bull_bear"]["bears_say"], list)
@@ -95,7 +107,12 @@ def test_insiders_valid_symbols_contract(api_client: DirectApiClient, symbol: st
     data = res.json()
     assert data["symbol"] == symbol
     assert "transactions" in data and isinstance(data["transactions"], list)
-    assert len(data["transactions"]) > 0
+    # Not asserted non-empty: a symbol the provider has no Form 4 rows for
+    # used to be padded with 16 invented filings attributed to real named
+    # executives. Empty is the correct answer there.
+    if not data["transactions"]:
+        assert data.get("available") is False
+        assert data["source"] == "unavailable"
     for tx in data["transactions"]:
         assert "date" in tx
         assert "insider_name" in tx
@@ -104,9 +121,12 @@ def test_insiders_valid_symbols_contract(api_client: DirectApiClient, symbol: st
         assert "value" in tx
     assert "quarterly_net" in data and isinstance(data["quarterly_net"], list)
     assert "summary" in data
-    assert "strategy" in data
-    assert "cagr" in data["strategy"]
-    assert "sharpe" in data["strategy"]
+    # `strategy` is absent unless a real backtest produced it. It used to be a
+    # fixed block -- CAGR 28.4%, Sharpe 1.84, win rate 68.2% -- identical for
+    # every symbol, from no backtest at all.
+    if "strategy" in data:
+        assert data["strategy"].get("cagr") is not None
+        assert data["strategy"].get("sharpe") is not None
 
 
 @pytest.mark.parametrize("symbol", VALID_SYMBOLS)
@@ -116,16 +136,21 @@ def test_government_valid_symbols_contract(api_client: DirectApiClient, symbol: 
     data = res.json()
     assert data["symbol"] == symbol
     assert "congress" in data and isinstance(data["congress"], list)
-    assert len(data["congress"]) > 0
-    for c in data["congress"]:
-        assert "politician_name" in c
-        assert "party" in c
-        assert "chamber" in c
-        assert "type" in c
+    # Explicitly NOT asserted non-empty. This assertion is what kept the
+    # fabricated congressional-trade generator alive: invented trades, dates
+    # and dollar brackets attributed to real, named, living members of
+    # Congress, each stamped with a real disclosures-clerk.house.gov URL.
+    # No disclosure feed is wired up, so the honest answer is an empty list.
+    assert data["congress"] == []
+    assert data.get("available") is False
+    assert data["source"] == "unavailable"
+    assert data["reason"]
     assert "lobbying" in data and isinstance(data["lobbying"], dict)
     assert "history" in data["lobbying"]
     assert "contracts" in data and isinstance(data["contracts"], list)
     assert "patents" in data and isinstance(data["patents"], list)
+    assert data["contracts"] == []
+    assert data["patents"] == []
 
 
 @pytest.mark.parametrize("symbol", VALID_SYMBOLS)
@@ -313,9 +338,13 @@ def test_financials_graceful_when_yfinance_raises():
         payload = financial_data.get_financials_payload("ASTS_OFFLINE_TEST", period="quarterly")
         assert payload is not None
         assert payload["symbol"] == "ASTS_OFFLINE_TEST"
-        assert len(payload["income_statement"]["rows"]) > 0
-        assert len(payload["balance_sheet"]["rows"]) > 0
-        assert len(payload["cash_flow"]["rows"]) > 0
+        # An upstream outage must not be papered over with synthetic
+        # statements. Same rule the ownership test below already applies.
+        assert payload["income_statement"]["rows"] == []
+        assert payload["balance_sheet"]["rows"] == []
+        assert payload["cash_flow"]["rows"] == []
+        assert payload["available"] is False
+        assert payload["source"] == "unavailable"
 
 
 def test_company_profile_graceful_when_yfinance_raises():
@@ -333,7 +362,9 @@ def test_insiders_graceful_when_yfinance_raises():
         payload = financial_data.get_insiders_payload("ASTS_OFFLINE_TEST")
         assert payload is not None
         assert payload["symbol"] == "ASTS_OFFLINE_TEST"
-        assert len(payload["transactions"]) > 0
+        # An outage must not invent Form 4 filings for real executives.
+        assert payload["transactions"] == []
+        assert payload["available"] is False
         assert "quarterly_net" in payload
 
 
@@ -351,11 +382,19 @@ def test_ownership_graceful_when_yfinance_raises():
         assert "breakdown" in payload
 
 
-def test_government_payload_always_deterministic():
+def test_government_payload_reports_unavailable_rather_than_inventing():
+    """The payload was 'deterministic' because it was seeded from the ticker.
+
+    Determinism was never the property worth testing here -- it only made the
+    fabrication stable across reloads, and therefore more convincing. What
+    matters is that nothing is invented.
+    """
     payload = financial_data.get_government_payload("ASTS_OFFLINE_TEST")
     assert payload is not None
     assert payload["symbol"] == "ASTS_OFFLINE_TEST"
-    assert len(payload["congress"]) > 0
-    assert "lobbying" in payload
-    assert len(payload["contracts"]) > 0
-    assert len(payload["patents"]) > 0
+    assert payload["available"] is False
+    assert payload["congress"] == []
+    assert payload["contracts"] == []
+    assert payload["patents"] == []
+    assert payload["lobbying"]["history"] == []
+    assert payload["source"] == "unavailable"

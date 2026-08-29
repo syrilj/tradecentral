@@ -30,41 +30,26 @@ import {
   type PnlPoint,
 } from '@/optionsCalculator'
 
-import {
-  flowLeanTokenClass,
-  flowPriorityTokenClass,
-} from '@/flowDisplay'
+import { flowLeanTokenClass, flowPriorityTokenClass } from '@/flowDisplay'
 
-import {
-  collectWatchlistAlerts,
-} from '@/flowAlerts'
+import { collectWatchlistAlerts } from '@/flowAlerts'
 
-import {
-  buildOptionsDirection,
-  type OptionsDirectionSummary,
-} from '@/optionsDirection'
+import { buildOptionsDirection, type OptionsDirectionSummary } from '@/optionsDirection'
 
-import {
-  nextResourceData,
-} from '@/composables/useResource'
+import { nextResourceData } from '@/composables/useResource'
 
-import {
-  toggleWatchlistSymbol,
-  watchlistHas,
-} from '@/watchlist'
+import { toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
-import type {
-  GexStrikeRow,
-  MarketFlowPrint,
-  OptionsBoardRow,
-  UnusualFlowRow,
-} from '@/api'
+import type { GexStrikeRow, MarketFlowPrint, OptionsBoardRow, UnusualFlowRow } from '@/api'
 
 // Standard Black-Scholes Reference Oracle
 function standardNormalCdf(x: number): number {
   const t = 1 / (1 + 0.2316419 * Math.abs(x))
   const d = 0.3989422804014327 * Math.exp((-x * x) / 2)
-  const p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+  const p =
+    d *
+    t *
+    (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
   return x >= 0 ? 1 - p : p
 }
 
@@ -107,7 +92,8 @@ function solveBs(
   } else {
     theo = K * disc * standardNormalCdf(-d2) - S * standardNormalCdf(-d1)
     delta = nd1 - 1
-    theta = (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
+    theta =
+      (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
     rho = (-K * T * disc * standardNormalCdf(-d2)) / 100
   }
 
@@ -123,10 +109,42 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
   // =========================================================================
   it('Pair 01: filters for 0DTE contracts with $1M+ whale premium threshold simultaneously', () => {
     const prints = [
-      { timestamp: '09:30:00', symbol: 'SPY', right: 'call', strike: 550, dte: 0, premium: 1_500_000, trade_class: 'sweep' },
-      { timestamp: '09:31:00', symbol: 'SPY', right: 'put', strike: 540, dte: 0, premium: 350_000, trade_class: 'sweep' },
-      { timestamp: '09:32:00', symbol: 'QQQ', right: 'call', strike: 480, dte: 3, premium: 2_000_000, trade_class: 'block' },
-      { timestamp: '09:33:00', symbol: 'IWM', right: 'put', strike: 210, dte: 0, premium: 1_200_000, trade_class: 'sweep' },
+      {
+        timestamp: '09:30:00',
+        symbol: 'SPY',
+        right: 'call',
+        strike: 550,
+        dte: 0,
+        premium: 1_500_000,
+        trade_class: 'sweep',
+      },
+      {
+        timestamp: '09:31:00',
+        symbol: 'SPY',
+        right: 'put',
+        strike: 540,
+        dte: 0,
+        premium: 350_000,
+        trade_class: 'sweep',
+      },
+      {
+        timestamp: '09:32:00',
+        symbol: 'QQQ',
+        right: 'call',
+        strike: 480,
+        dte: 3,
+        premium: 2_000_000,
+        trade_class: 'block',
+      },
+      {
+        timestamp: '09:33:00',
+        symbol: 'IWM',
+        right: 'put',
+        strike: 210,
+        dte: 0,
+        premium: 1_200_000,
+        trade_class: 'sweep',
+      },
     ] as unknown as MarketFlowPrint[]
 
     const matches0DteAndWhale = (p: MarketFlowPrint) => p.dte === 0 && (p.premium ?? 0) >= 1_000_000
@@ -147,7 +165,7 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
     const shortStrike = 90 // OTM put @ 30% IV (skewed)
 
     const longLeg = solveBs('put', spot, longStrike, dte, 0.25)
-    const shortLeg = solveBs('put', spot, shortStrike, dte, 0.30)
+    const shortLeg = solveBs('put', spot, shortStrike, dte, 0.3)
 
     const spreadPrice = longLeg.theo - shortLeg.theo
     const netDelta = longLeg.delta - shortLeg.delta
@@ -163,10 +181,42 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
   // =========================================================================
   it('Pair 03: combines Conviction Board ticker search query with Net GEX column sorting', () => {
     const boardRows = [
-      { rank: 1, symbol: 'NVDA', spot: 120, net_gex_m: 85.0, squeeze_score: 4.0, available: true, gex_measurable: true },
-      { rank: 2, symbol: 'NVDL', spot: 60, net_gex_m: 12.0, squeeze_score: 1.5, available: true, gex_measurable: true },
-      { rank: 3, symbol: 'TSLA', spot: 220, net_gex_m: 95.0, squeeze_score: -2.0, available: true, gex_measurable: true },
-      { rank: 4, symbol: 'NVDS', spot: 30, net_gex_m: 4.5, squeeze_score: -0.5, available: true, gex_measurable: true },
+      {
+        rank: 1,
+        symbol: 'NVDA',
+        spot: 120,
+        net_gex_m: 85.0,
+        squeeze_score: 4.0,
+        available: true,
+        gex_measurable: true,
+      },
+      {
+        rank: 2,
+        symbol: 'NVDL',
+        spot: 60,
+        net_gex_m: 12.0,
+        squeeze_score: 1.5,
+        available: true,
+        gex_measurable: true,
+      },
+      {
+        rank: 3,
+        symbol: 'TSLA',
+        spot: 220,
+        net_gex_m: 95.0,
+        squeeze_score: -2.0,
+        available: true,
+        gex_measurable: true,
+      },
+      {
+        rank: 4,
+        symbol: 'NVDS',
+        spot: 30,
+        net_gex_m: 4.5,
+        squeeze_score: -0.5,
+        available: true,
+        gex_measurable: true,
+      },
     ] as unknown as OptionsBoardRow[]
 
     const query = 'NVD'
@@ -218,7 +268,8 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
       { timestamp: '10:03', symbol: 'IWM', right: 'put', strike: 210, premium: 200_000 },
     ] as unknown as MarketFlowPrint[]
 
-    const isNewIncoming = (p: MarketFlowPrint) => newPrintKeys.has(`${p.symbol}|${p.right}|${p.strike}`)
+    const isNewIncoming = (p: MarketFlowPrint) =>
+      newPrintKeys.has(`${p.symbol}|${p.right}|${p.strike}`)
     const isPut = (p: MarketFlowPrint) => p.right === 'put'
 
     const matched = tapePrints.filter((p) => isNewIncoming(p) && isPut(p))
@@ -247,9 +298,9 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
     const series: PnlPoint[] = [
       { spot: 80, pnl: -400 },
       { spot: 90, pnl: -400 },
-      { spot: 94, pnl: 0 },    // Lower BE
+      { spot: 94, pnl: 0 }, // Lower BE
       { spot: 100, pnl: 600 }, // Max Profit @ 100
-      { spot: 106, pnl: 0 },   // Upper BE
+      { spot: 106, pnl: 0 }, // Upper BE
       { spot: 110, pnl: -400 },
       { spot: 120, pnl: -400 },
     ]
@@ -283,13 +334,15 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
       open_interest?: number
     }) => {
       const isSweep = print.trade_class?.toLowerCase() === 'sweep'
-      const isAskSide = print.aggressor?.toLowerCase() === 'ask' || print.aggressor?.toLowerCase() === 'above_ask'
+      const isAskSide =
+        print.aggressor?.toLowerCase() === 'ask' || print.aggressor?.toLowerCase() === 'above_ask'
       const isWhale = (print.premium ?? 0) >= 500_000
       const isGoldenSweep = isSweep && isAskSide && isWhale
 
-      const ratio = (print.volume != null && print.open_interest != null && print.open_interest > 0)
-        ? print.volume / print.open_interest
-        : 0
+      const ratio =
+        print.volume != null && print.open_interest != null && print.open_interest > 0
+          ? print.volume / print.open_interest
+          : 0
       const isHighVolOi = ratio >= 1.0
 
       return { isGoldenSweep, isHighVolOi, ratio }
@@ -313,15 +366,15 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
   // =========================================================================
   it('Pair 08: resolves directional read when signed flow is bullish but price momentum is bearish (mixed conflict)', () => {
     const summary: OptionsDirectionSummary = {
-      activity_imbalance: 0.20,
-      signed_flow_imbalance: 0.70, // Bullish signed flow
+      activity_imbalance: 0.2,
+      signed_flow_imbalance: 0.7, // Bullish signed flow
       signed_flow_confidence: 0.85,
       gamma_flip: 100,
       call_wall: 110,
       put_wall: 90,
       squeeze: {
-        bullish: 0.50,
-        bearish: 0.50,
+        bullish: 0.5,
+        bearish: 0.5,
         score: 0,
         label: 'mixed',
         primary: 'two_way',
@@ -348,7 +401,7 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
       bias_right: 'call',
       strike: 130,
       expiry: '2026-08-21',
-      sizing_debit: 3.50,
+      sizing_debit: 3.5,
       max_contracts: 10,
       priority: 'now',
     }
@@ -371,8 +424,24 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
     expect(watchlistHas(currentBook, 'NVDA')).toBe(true)
 
     const tape = [
-      { timestamp: '10:00', symbol: 'NVDA', right: 'call', strike: 130, premium: 500_000, trade_class: 'sweep', is_sweep: true },
-      { timestamp: '10:01', symbol: 'TSLA', right: 'put', strike: 220, premium: 200_000, trade_class: 'sweep', is_sweep: true },
+      {
+        timestamp: '10:00',
+        symbol: 'NVDA',
+        right: 'call',
+        strike: 130,
+        premium: 500_000,
+        trade_class: 'sweep',
+        is_sweep: true,
+      },
+      {
+        timestamp: '10:01',
+        symbol: 'TSLA',
+        right: 'put',
+        strike: 220,
+        premium: 200_000,
+        trade_class: 'sweep',
+        is_sweep: true,
+      },
     ] as unknown as MarketFlowPrint[]
 
     const bookPrints = tape.filter((p) => watchlistHas(currentBook, p.symbol))
@@ -394,10 +463,38 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
   // =========================================================================
   it('Pair 11: filters moonshot presets within 1-week expiry and sorts by DTE ascending', () => {
     const prints = [
-      { timestamp: '10:00', symbol: 'NVDA', strike: 180, dte: 4, is_moonshot: true, presets: ['moonshot'] },
-      { timestamp: '10:01', symbol: 'TSLA', strike: 350, dte: 1, is_moonshot: true, presets: ['moonshot'] },
-      { timestamp: '10:02', symbol: 'AMD', strike: 250, dte: 25, is_moonshot: true, presets: ['moonshot'] }, // > 7d
-      { timestamp: '10:03', symbol: 'AAPL', strike: 240, dte: 3, is_moonshot: false, presets: ['sweeps'] },
+      {
+        timestamp: '10:00',
+        symbol: 'NVDA',
+        strike: 180,
+        dte: 4,
+        is_moonshot: true,
+        presets: ['moonshot'],
+      },
+      {
+        timestamp: '10:01',
+        symbol: 'TSLA',
+        strike: 350,
+        dte: 1,
+        is_moonshot: true,
+        presets: ['moonshot'],
+      },
+      {
+        timestamp: '10:02',
+        symbol: 'AMD',
+        strike: 250,
+        dte: 25,
+        is_moonshot: true,
+        presets: ['moonshot'],
+      }, // > 7d
+      {
+        timestamp: '10:03',
+        symbol: 'AAPL',
+        strike: 240,
+        dte: 3,
+        is_moonshot: false,
+        presets: ['sweeps'],
+      },
     ] as unknown as MarketFlowPrint[]
 
     const matches = prints
@@ -414,9 +511,30 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
   // =========================================================================
   it('Pair 12: filters Conviction Board for live options flow basis and scores squeeze spark width', () => {
     const rows = [
-      { rank: 1, symbol: 'NVDA', selection_basis: 'live_options_flow', squeeze_score: 5.5, available: true, gex_measurable: true },
-      { rank: 2, symbol: 'TSLA', selection_basis: 'pead_ordinal', squeeze_score: 2.0, available: true, gex_measurable: true },
-      { rank: 3, symbol: 'AAPL', selection_basis: 'live_options_flow', squeeze_score: -3.0, available: true, gex_measurable: true },
+      {
+        rank: 1,
+        symbol: 'NVDA',
+        selection_basis: 'live_options_flow',
+        squeeze_score: 5.5,
+        available: true,
+        gex_measurable: true,
+      },
+      {
+        rank: 2,
+        symbol: 'TSLA',
+        selection_basis: 'pead_ordinal',
+        squeeze_score: 2.0,
+        available: true,
+        gex_measurable: true,
+      },
+      {
+        rank: 3,
+        symbol: 'AAPL',
+        selection_basis: 'live_options_flow',
+        squeeze_score: -3.0,
+        available: true,
+        gex_measurable: true,
+      },
     ] as unknown as OptionsBoardRow[]
 
     const liveFlowRows = rows.filter((r) => r.selection_basis === 'live_options_flow')
@@ -458,7 +576,7 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
     const dte = 45
 
     // Leg 1: Long 95 Call @ 20% IV
-    const leg1 = solveBs('call', spot, 95, dte, 0.20)
+    const leg1 = solveBs('call', spot, 95, dte, 0.2)
     // Leg 2: Short 105 Call @ 25% IV (Smile elevated)
     const leg2 = solveBs('call', spot, 105, dte, 0.25)
 
@@ -498,15 +616,13 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
     const spot = 100
     const prints = [
       { symbol: 'NVDA', right: 'call', strike: 115, trade_class: 'sweep', premium: 400_000 }, // OTM Call Sweep
-      { symbol: 'NVDA', right: 'call', strike: 90, trade_class: 'sweep', premium: 800_000 },  // ITM Call Sweep
+      { symbol: 'NVDA', right: 'call', strike: 90, trade_class: 'sweep', premium: 800_000 }, // ITM Call Sweep
       { symbol: 'NVDA', right: 'call', strike: 120, trade_class: 'block', premium: 500_000 }, // OTM Call Block
-      { symbol: 'NVDA', right: 'put', strike: 85, trade_class: 'sweep', premium: 300_000 },   // OTM Put Sweep
+      { symbol: 'NVDA', right: 'put', strike: 85, trade_class: 'sweep', premium: 300_000 }, // OTM Put Sweep
     ] as unknown as MarketFlowPrint[]
 
     const isOtmCallSweep = (p: MarketFlowPrint) =>
-      p.right === 'call'
-      && (p.strike ?? 0) > spot
-      && p.trade_class === 'sweep'
+      p.right === 'call' && (p.strike ?? 0) > spot && p.trade_class === 'sweep'
 
     const matched = prints.filter(isOtmCallSweep)
     expect(matched).toHaveLength(1)
@@ -529,7 +645,7 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
     } as unknown as UnusualFlowRow
 
     const satisfiesTier = (row.premium ?? 0) >= 500_000
-    const isSweepHeavy = ((row.sweep_premium ?? 0) / (row.premium ?? 1)) >= 0.75
+    const isSweepHeavy = (row.sweep_premium ?? 0) / (row.premium ?? 1) >= 0.75
     const token = flowLeanTokenClass(row.activity_lean)
 
     expect(satisfiesTier).toBe(true)

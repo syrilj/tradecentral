@@ -54,14 +54,29 @@ fi
 backend_is_current() {
   local code path health
   health="$(curl -fsS "${API_URL}/api/health" 2>/dev/null)" || return 1
-  case "$health" in
-    *'"flow_feed_contract": "market-wide-v1"'*) ;;
+  # /api/health is serialized with compact separators (`{"k":"v"}`), so match
+  # against a space-stripped copy rather than assuming `"k": "v"` spacing --
+  # a spacing-sensitive pattern here never matches, and the caller then kills
+  # the healthy backend it just started as "stale".
+  local health_nospace="${health// /}"
+  case "$health_nospace" in
+    *'"flow_feed_contract":"market-wide-v1"'*) ;;
     *) return 1 ;;
   esac
-  case "$health" in
-    *'"suggestion_contract": "paper-candidate-contract-v9"'*) ;;
+  case "$health_nospace" in
+    *'"suggestion_contract":"paper-candidate-contract-v9"'*) ;;
     *) return 1 ;;
   esac
+  case "$health_nospace" in
+    *'"gamma_regime_contract":"gamma-regime-v1"'*) ;;
+    *) return 1 ;;
+  esac
+  # A backend that answers /api/* can still be unable to read the SPA bundle:
+  # a process launched without filesystem access to this tree returns
+  # 500 PermissionError on every static read while /api/health stays green.
+  # Probe the root document so such a process is treated as stale.
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "${API_URL}/" 2>/dev/null || echo 000)"
+  [ "$code" = "200" ] || return 1
   for path in /api/ga /api/factors /api/graph /api/changepoints /api/flow-state /api/scan_status; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' "${API_URL}${path}" 2>/dev/null || echo 000)"
     [ "$code" = "200" ] || return 1

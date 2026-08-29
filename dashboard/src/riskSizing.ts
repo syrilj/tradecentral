@@ -53,13 +53,15 @@ export function sizeDefinedRisk(input: DefinedRiskSizingInput): DefinedRiskSizin
   else if (perContractRisk == null) state = 'quote_required'
   else if (effectiveBudget < perContractRisk) state = 'no_capacity'
 
-  const contracts = state === 'ready' && perContractRisk != null
-    ? Math.max(0, Math.floor(effectiveBudget / perContractRisk))
-    : 0
+  const contracts =
+    state === 'ready' && perContractRisk != null
+      ? Math.max(0, Math.floor(effectiveBudget / perContractRisk))
+      : 0
   const maxLoss = contracts * (perContractRisk ?? 0)
-  const maxProfit = contracts > 0 && width != null && debit != null && width > debit
-    ? contracts * (width - debit) * 100
-    : null
+  const maxProfit =
+    contracts > 0 && width != null && debit != null && width > debit
+      ? contracts * (width - debit) * 100
+      : null
   const rewardRisk = maxProfit != null && maxLoss > 0 ? maxProfit / maxLoss : null
 
   return {
