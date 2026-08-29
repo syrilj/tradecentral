@@ -65,7 +65,9 @@ const featured = computed(() =>
  */
 const measured = computed(() => isSetupMeasured(featured.value.setup))
 const boardScore = computed(() => (measured.value ? (featured.value.setup?.score ?? 0) : null))
-const likelihood = computed(() => (measured.value ? featured.value.setup?.likelihood ?? null : null))
+const likelihood = computed(() =>
+  measured.value ? (featured.value.setup?.likelihood ?? null) : null,
+)
 const factors = computed(() => featured.value.setup?.factors ?? [])
 const analysis = computed(() => featured.value.setup?.setup_analysis ?? [])
 const spectrumPct = computed(() =>
@@ -91,7 +93,9 @@ function factorCls(f: SqueezeFactor): string {
   return scoreCls((Number(f.score ?? 0) / max) * 100)
 }
 
-const spotPrice = computed(() => props.spot ?? levels.value?.spot ?? featured.value.setup?.spot ?? null)
+const spotPrice = computed(
+  () => props.spot ?? levels.value?.spot ?? featured.value.setup?.spot ?? null,
+)
 
 const featuredWall = computed(() => {
   const setup = featured.value.setup
@@ -126,8 +130,12 @@ const ladder = computed(() =>
   buildLevelLadder({
     side: featured.value.side,
     spot: spotPrice.value,
-    callWall: levels.value?.call_wall ?? (featured.value.side === 'bullish' ? featuredWall.value.level : null),
-    putWall: levels.value?.put_wall ?? (featured.value.side === 'bearish' ? featuredWall.value.level : null),
+    callWall:
+      levels.value?.call_wall ??
+      (featured.value.side === 'bullish' ? featuredWall.value.level : null),
+    putWall:
+      levels.value?.put_wall ??
+      (featured.value.side === 'bearish' ? featuredWall.value.level : null),
     gammaFlip: levels.value?.gamma_flip ?? null,
     pinStrike: levels.value?.pin_strike ?? null,
   }),
@@ -258,9 +266,26 @@ const otherSide = computed(() => {
       <!-- 3-Segment Conviction Gauge: LOW | MODERATE | HIGH -->
       <div class="prob-track">
         <div class="prob-zones" :class="[likelihood ?? 'unscored', featured.side]">
-          <span class="zone" :class="{ active: likelihood === 'unlikely' || (boardScore ?? 0) < 40 }">LOW</span>
-          <span class="zone" :class="{ active: likelihood === 'possible' || likelihood === 'likely' || ((boardScore ?? 0) >= 40 && (boardScore ?? 0) < 75) }">MODERATE</span>
-          <span class="zone" :class="{ active: likelihood === 'imminent' || (boardScore ?? 0) >= 75 }">HIGH</span>
+          <span
+            class="zone"
+            :class="{ active: likelihood === 'unlikely' || (boardScore ?? 0) < 40 }"
+            >LOW</span
+          >
+          <span
+            class="zone"
+            :class="{
+              active:
+                likelihood === 'possible' ||
+                likelihood === 'likely' ||
+                ((boardScore ?? 0) >= 40 && (boardScore ?? 0) < 75),
+            }"
+            >MODERATE</span
+          >
+          <span
+            class="zone"
+            :class="{ active: likelihood === 'imminent' || (boardScore ?? 0) >= 75 }"
+            >HIGH</span
+          >
           <i
             v-if="boardScore != null"
             class="prob-thumb"
@@ -286,33 +311,13 @@ const otherSide = computed(() => {
         </svg>
       </div>
 
-      <!-- Distance to Trigger Bar -->
-      <div v-if="triggerRow" class="squeeze-metric-bar">
-        <div class="metric-bar-head label">
-          <span class="trig-label">DISTANCE TO TRIGGER</span>
-          <strong class="fig trig-pct" :class="featured.side === 'bullish' ? 'call' : 'put'">
-            {{ distPct(triggerRow.distance?.pct) }}
-          </strong>
-        </div>
-        <div class="trigger-track-container">
-          <div class="track-bar">
-            <span class="track-pocket-chip label" :class="featured.side">
-              POCKET {{ optUsd(spotPrice) }}–{{ optUsd(triggerRow.level) }}
-            </span>
-          </div>
-          <div class="track-labels label">
-            <span>SPOT {{ optUsd(spotPrice) }}</span>
-            <span>TRIGGER {{ optUsd(triggerRow.level) }}</span>
-          </div>
-        </div>
-      </div>
-
-
       <!-- Retain semantic hook for signed score and regime audit -->
       <div class="signed-block label visually-hidden" aria-hidden="true">
         <span class="signed-key">SIGNED</span>
         <strong class="fig">{{ formatSignedScore(signedScore) }}</strong>
-        <span v-if="levels?.near_spot_net_gex_m != null">{{ formatNearSpotGex(levels.near_spot_net_gex_m) }}</span>
+        <span v-if="levels?.near_spot_net_gex_m != null">{{
+          formatNearSpotGex(levels.near_spot_net_gex_m)
+        }}</span>
         <span :class="regimeCopy.tone">{{ regimeCopy.text }} {{ fuel }}</span>
       </div>
     </section>
@@ -332,7 +337,12 @@ const otherSide = computed(() => {
         </div>
 
         <div v-if="triggerRow" class="trigger-strip" :class="featured.side">
-          <span class="label trig-key">DISTANCE TO {{ triggerRow.label }}</span>
+          <span class="label trig-key">
+            DISTANCE TO {{ triggerRow.label }}
+            <span class="pocket-tag"
+              >POCKET {{ optUsd(spotPrice) }}–{{ optUsd(triggerRow.level) }}</span
+            >
+          </span>
           <span class="trig-figs">
             <strong class="fig trig-pct" :class="featured.side === 'bullish' ? 'call' : 'put'">{{
               distPct(triggerRow.distance?.pct)
@@ -403,12 +413,16 @@ const otherSide = computed(() => {
         </p>
       </section>
 
-
       <!-- Takeaways -->
       <section class="block takeaways-block">
         <div class="block-hdr label">KEY TAKEAWAYS</div>
         <ul class="takeaways-list">
-          <li v-for="(item, i) in displayTakeaways" :key="i" class="takeaway-item" :class="item.type">
+          <li
+            v-for="(item, i) in displayTakeaways"
+            :key="i"
+            class="takeaway-item"
+            :class="item.type"
+          >
             <span class="takeaway-dot" :class="item.type" aria-hidden="true" />
             <span class="takeaway-text">{{ item.line }}</span>
           </li>
@@ -426,12 +440,17 @@ const otherSide = computed(() => {
       <div v-if="otherSide.setup" class="other-side" :class="otherSide.side">
         <i class="side-dot" :class="otherSide.side === 'bullish' ? 'call' : 'put'" />
         <span class="label">{{ otherSide.side === 'bullish' ? 'BULL' : 'BEAR' }} ALT</span>
-        <span class="fig">{{ otherSide.setup.score == null ? DASH : `${otherSide.setup.score}/100` }}</span>
+        <span class="fig">{{
+          otherSide.setup.score == null ? DASH : `${otherSide.setup.score}/100`
+        }}</span>
         <span class="lik label">{{
           otherSide.setup.likelihood ? otherSide.setup.likelihood.toUpperCase() : 'UNSCORED'
         }}</span>
         <div class="otrack">
-          <i :class="otherSide.side" :style="{ width: `${calculateTrackWidthPct(otherSide.setup.score, 100)}%` }" />
+          <i
+            :class="otherSide.side"
+            :style="{ width: `${calculateTrackWidthPct(otherSide.setup.score, 100)}%` }"
+          />
         </div>
       </div>
     </div>
@@ -493,14 +512,18 @@ const otherSide = computed(() => {
 .sq.bullish::before {
   content: '';
   position: absolute;
-  left: 0; top: 0; bottom: 0;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 3px;
   background: var(--call);
 }
 .sq.bearish::before {
   content: '';
   position: absolute;
-  left: 0; top: 0; bottom: 0;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 3px;
   background: var(--put);
 }
@@ -538,8 +561,12 @@ const otherSide = computed(() => {
   scrollbar-width: thin;
   scrollbar-color: var(--rule-hi) transparent;
 }
-.sq-scroll::-webkit-scrollbar { width: 6px; }
-.sq-scroll::-webkit-scrollbar-track { background: transparent; }
+.sq-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.sq-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
 .sq-scroll::-webkit-scrollbar-thumb {
   background: var(--rule-hi);
   border-radius: 3px;
@@ -598,8 +625,12 @@ const otherSide = computed(() => {
   stroke-linecap: round;
   transition: stroke-dashoffset 0.6s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.ring-fill.bullish { stroke: var(--call-hi); }
-.ring-fill.bearish { stroke: var(--put-hi); }
+.ring-fill.bullish {
+  stroke: var(--call-hi);
+}
+.ring-fill.bearish {
+  stroke: var(--put-hi);
+}
 .ring-center {
   position: absolute;
   inset: 0;
@@ -620,13 +651,28 @@ const otherSide = computed(() => {
   font-family: var(--font-data);
   letter-spacing: -0.04em;
 }
-.sq.bullish .score-num { color: var(--call-hi); }
-.sq.bearish .score-num { color: var(--put-hi); }
-.sq.bullish .score-num.hot { color: var(--call-hi); }
-.sq.bearish .score-num.hot { color: var(--put-hi); }
-.score-num.elev { color: inherit; }
-.score-num.mid { color: inherit; opacity: 0.9; }
-.score-num.low { color: var(--ink-faint); }
+.sq.bullish .score-num {
+  color: var(--call-hi);
+}
+.sq.bearish .score-num {
+  color: var(--put-hi);
+}
+.sq.bullish .score-num.hot {
+  color: var(--call-hi);
+}
+.sq.bearish .score-num.hot {
+  color: var(--put-hi);
+}
+.score-num.elev {
+  color: inherit;
+}
+.score-num.mid {
+  color: inherit;
+  opacity: 0.9;
+}
+.score-num.low {
+  color: var(--ink-faint);
+}
 .score-denom {
   font-size: var(--t-micro);
   color: var(--ink-faint);
@@ -651,8 +697,16 @@ const otherSide = computed(() => {
   border-radius: 50%;
   flex: 0 0 auto;
 }
-.side-dot.call { background: var(--call-hi); outline: var(--hair) solid color-mix(in srgb, var(--call) 35%, transparent); outline-offset: 2px; }
-.side-dot.put { background: var(--put-hi); outline: var(--hair) solid color-mix(in srgb, var(--put) 35%, transparent); outline-offset: 2px; }
+.side-dot.call {
+  background: var(--call-hi);
+  outline: var(--hair) solid color-mix(in srgb, var(--call) 35%, transparent);
+  outline-offset: 2px;
+}
+.side-dot.put {
+  background: var(--put-hi);
+  outline: var(--hair) solid color-mix(in srgb, var(--put) 35%, transparent);
+  outline-offset: 2px;
+}
 .bias-copy {
   display: flex;
   flex-direction: column;
@@ -669,8 +723,12 @@ const otherSide = computed(() => {
   letter-spacing: 0.08em;
   color: var(--ink);
 }
-.bias-lock.bullish .bias-heading { color: var(--call-hi); }
-.bias-lock.bearish .bias-heading { color: var(--put-hi); }
+.bias-lock.bullish .bias-heading {
+  color: var(--call-hi);
+}
+.bias-lock.bearish .bias-heading {
+  color: var(--put-hi);
+}
 
 .prob-zones {
   display: grid;
@@ -713,8 +771,12 @@ const otherSide = computed(() => {
   font-family: var(--font-data);
   font-weight: 800;
 }
-.trig-pct.call { color: var(--call-hi); }
-.trig-pct.put { color: var(--put-hi); }
+.trig-pct.call {
+  color: var(--call-hi);
+}
+.trig-pct.put {
+  color: var(--put-hi);
+}
 
 .trigger-track-container {
   display: flex;
@@ -803,9 +865,20 @@ const otherSide = computed(() => {
   background: var(--glass-base);
   box-shadow: var(--glass-specular-subtle);
 }
-.regime-tag.live { color: var(--call-hi); border-color: color-mix(in srgb, var(--call) 45%, var(--rule)); background: var(--call-wash); }
-.regime-tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--rule)); background: var(--warn-wash); }
-.regime-tag.unknown { color: var(--ink-faint); border-style: dashed; }
+.regime-tag.live {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call) 45%, var(--rule));
+  background: var(--call-wash);
+}
+.regime-tag.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
+  background: var(--warn-wash);
+}
+.regime-tag.unknown {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
 
 .tag {
   padding: 4px 10px;
@@ -815,7 +888,11 @@ const otherSide = computed(() => {
   font: 700 var(--t-micro) var(--font-display);
   box-shadow: var(--glass-specular-subtle);
 }
-.tag.damp { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.tag.damp {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
 .tag.fuel {
   color: var(--phosphor);
   border-color: var(--phosphor-dim);
@@ -882,15 +959,33 @@ const otherSide = computed(() => {
   color: var(--ink);
   font-weight: 800;
 }
-.prob-zones.unlikely .zone[data-zone='unlikely'] > i { background: var(--ink-faint); border-color: var(--rule-hi); }
-.prob-zones.possible .zone[data-zone='possible'] > i { background: var(--warn); border-color: var(--warn); }
-.prob-zones.likely .zone[data-zone='likely'] > i { background: var(--warn); border-color: var(--warn); }
-.prob-zones.imminent .zone[data-zone='imminent'] > i { background: var(--put); border-color: var(--put); }
+.prob-zones.unlikely .zone[data-zone='unlikely'] > i {
+  background: var(--ink-faint);
+  border-color: var(--rule-hi);
+}
+.prob-zones.possible .zone[data-zone='possible'] > i {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+.prob-zones.likely .zone[data-zone='likely'] > i {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+.prob-zones.imminent .zone[data-zone='imminent'] > i {
+  background: var(--put);
+  border-color: var(--put);
+}
 /* Side-tinted fill for the featured direction on the active segment. */
 .prob-zones.bullish .zone[data-zone='likely'] > i,
-.prob-zones.bullish .zone[data-zone='imminent'] > i { background: var(--call-hi); border-color: var(--call); }
+.prob-zones.bullish .zone[data-zone='imminent'] > i {
+  background: var(--call-hi);
+  border-color: var(--call);
+}
 .prob-zones.bearish .zone[data-zone='likely'] > i,
-.prob-zones.bearish .zone[data-zone='imminent'] > i { background: var(--put-hi); border-color: var(--put); }
+.prob-zones.bearish .zone[data-zone='imminent'] > i {
+  background: var(--put-hi);
+  border-color: var(--put);
+}
 /* Marker thumb that slides across the zone track to the score position. */
 .prob-thumb {
   position: absolute;
@@ -903,11 +998,15 @@ const otherSide = computed(() => {
   transform: translate(-50%, 0);
   pointer-events: none;
   outline: var(--hair) solid var(--rule-hi);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   transition: left var(--dur) var(--ease-out);
 }
-.prob-thumb.bullish { background: var(--call-hi); }
-.prob-thumb.bearish { background: var(--put-hi); }
+.prob-thumb.bullish {
+  background: var(--call-hi);
+}
+.prob-thumb.bearish {
+  background: var(--put-hi);
+}
 
 /* Signed block: stacked so the figure and the near-spot GEX never collide. */
 .signed-block {
@@ -928,7 +1027,10 @@ const otherSide = computed(() => {
   color: var(--ink-faint);
   letter-spacing: 0.08em;
 }
-.signed-line .signed-key { font-size: var(--t-micro); font-weight: 600; }
+.signed-line .signed-key {
+  font-size: var(--t-micro);
+  font-weight: 600;
+}
 .signed-line .fig {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -936,8 +1038,12 @@ const otherSide = computed(() => {
   font-weight: 700;
   font-size: var(--t-small);
 }
-.signed-line .fig.call { color: var(--call-hi); }
-.signed-line .fig.put { color: var(--put-hi); }
+.signed-line .fig.call {
+  color: var(--call-hi);
+}
+.signed-line .fig.put {
+  color: var(--put-hi);
+}
 .signed-block .near {
   color: var(--ink-ghost);
   font-size: var(--t-micro);
@@ -981,8 +1087,22 @@ const otherSide = computed(() => {
   box-shadow: var(--glass-specular-subtle);
   min-width: 0;
 }
-.trigger-strip.bullish { border-left-color: var(--call); }
-.trigger-strip.bearish { border-left-color: var(--put); }
+.pocket-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  background: var(--void-lift);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-xs);
+  color: var(--ink-soft);
+  font: 700 var(--t-micro) var(--font-data);
+}
+.trigger-strip.bullish {
+  border-left-color: var(--call);
+}
+.trigger-strip.bearish {
+  border-left-color: var(--put);
+}
 .trig-key {
   color: var(--ink-ghost);
   font-size: var(--t-micro);
@@ -1009,10 +1129,21 @@ const otherSide = computed(() => {
   font-weight: 700;
   color: var(--ink);
 }
-.trig-pct.call { color: var(--call-hi); }
-.trig-pct.put { color: var(--put-hi); }
-.trig-abs { font-size: var(--t-small); color: var(--ink-soft); }
-.trig-lvl { font-size: var(--t-small); color: var(--ink-dim); margin-left: auto; }
+.trig-pct.call {
+  color: var(--call-hi);
+}
+.trig-pct.put {
+  color: var(--put-hi);
+}
+.trig-abs {
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+}
+.trig-lvl {
+  font-size: var(--t-small);
+  color: var(--ink-dim);
+  margin-left: auto;
+}
 
 /* The ladder is a container query, not a media query: this panel sits in a
    workbench cell whose width has nothing to do with the viewport. Narrow cells
@@ -1051,12 +1182,24 @@ const otherSide = computed(() => {
   border-top: var(--hair) solid var(--glass-border-subtle);
   transition: background var(--dur-fast) var(--ease-out);
 }
-.ladder-row:first-of-type { border-top: 0; }
-.ladder-row:hover { background: var(--glass-surface-hi); }
+.ladder-row:first-of-type {
+  border-top: 0;
+}
+.ladder-row:hover {
+  background: var(--glass-surface-hi);
+}
 /* Spot is the reference row — emphasis, not colour. */
-.ladder-row.spot { background: var(--glass-surface-hi); box-shadow: var(--glass-specular-subtle); }
-.ladder-row.spot .ld-price { color: var(--ink); font-weight: 700; }
-.ladder-row.unmeasured { opacity: 0.55; }
+.ladder-row.spot {
+  background: var(--glass-surface-hi);
+  box-shadow: var(--glass-specular-subtle);
+}
+.ladder-row.spot .ld-price {
+  color: var(--ink);
+  font-weight: 700;
+}
+.ladder-row.unmeasured {
+  opacity: 0.55;
+}
 
 .ld-label {
   grid-area: label;
@@ -1076,10 +1219,18 @@ const otherSide = computed(() => {
   flex: 0 0 auto;
   background: var(--rule-hi);
 }
-.ld-tick.tone-call { background: var(--call); }
-.ld-tick.tone-put { background: var(--put); }
-.ld-tick.tone-accent { background: var(--phosphor-dim); }
-.ld-tick.tone-ink { background: var(--ink-dim); }
+.ld-tick.tone-call {
+  background: var(--call);
+}
+.ld-tick.tone-put {
+  background: var(--put);
+}
+.ld-tick.tone-accent {
+  background: var(--phosphor-dim);
+}
+.ld-tick.tone-ink {
+  background: var(--ink-dim);
+}
 
 .ld-price {
   grid-area: price;
@@ -1091,9 +1242,15 @@ const otherSide = computed(() => {
   color: var(--ink-soft);
   white-space: nowrap;
 }
-.ladder-row.tone-call .ld-price { color: var(--call-hi); }
-.ladder-row.tone-put .ld-price { color: var(--put-hi); }
-.ladder-row.tone-accent .ld-price { color: var(--phosphor); }
+.ladder-row.tone-call .ld-price {
+  color: var(--call-hi);
+}
+.ladder-row.tone-put .ld-price {
+  color: var(--put-hi);
+}
+.ladder-row.tone-accent .ld-price {
+  color: var(--phosphor);
+}
 
 .ld-dist {
   grid-area: dist;
@@ -1106,8 +1263,15 @@ const otherSide = computed(() => {
   font-size: var(--t-micro);
   white-space: nowrap;
 }
-.ld-dist .ld-pct { color: var(--ink-soft); font-weight: 600; font-style: normal; }
-.ld-dist .ld-abs { color: var(--ink-ghost); font-style: normal; }
+.ld-dist .ld-pct {
+  color: var(--ink-soft);
+  font-weight: 600;
+  font-style: normal;
+}
+.ld-dist .ld-abs {
+  color: var(--ink-ghost);
+  font-style: normal;
+}
 
 .ld-role {
   grid-area: role;
@@ -1117,8 +1281,12 @@ const otherSide = computed(() => {
   font-weight: 600;
   white-space: nowrap;
 }
-.ladder-row.trigger .ld-role { color: var(--ink); }
-.ladder-row.invalidation .ld-role { color: var(--warn); }
+.ladder-row.trigger .ld-role {
+  color: var(--ink);
+}
+.ladder-row.invalidation .ld-role {
+  color: var(--warn);
+}
 
 @container (min-width: 400px) {
   .ladder-head,
@@ -1131,8 +1299,13 @@ const otherSide = computed(() => {
   }
   .ladder-head .ld-price,
   .ladder-head .ld-dist,
-  .ladder-head .ld-role { text-align: right; justify-content: flex-end; }
-  .ld-role { text-align: right; }
+  .ladder-head .ld-role {
+    text-align: right;
+    justify-content: flex-end;
+  }
+  .ld-role {
+    text-align: right;
+  }
 }
 
 /* ---- provenance strip --------------------------------------------------- */
@@ -1158,19 +1331,48 @@ const otherSide = computed(() => {
   flex: 0 0 auto;
   background: var(--ink-faint);
 }
-.prov-lamp.live { background: var(--call-hi); }
-.prov-lamp.delayed { background: var(--warn); }
-.prov-lamp.stale { background: var(--put-hi); }
-.prov-lamp.history { background: var(--phosphor-dim); }
-.prov-state { font-weight: 700; letter-spacing: 0.1em; color: var(--ink-dim); }
-.prov-state.live { color: var(--call-hi); }
-.prov-state.delayed { color: var(--warn); }
-.prov-state.stale { color: var(--put-hi); }
-.prov-state.history { color: var(--phosphor); }
-.prob-zones.unscored { opacity: 0.4; }
-.prov-sep { color: var(--rule-hi); }
-.prov-item { color: var(--ink-ghost); white-space: nowrap; }
-.prov :deep(.help) { margin-left: auto; }
+.prov-lamp.live {
+  background: var(--call-hi);
+}
+.prov-lamp.delayed {
+  background: var(--warn);
+}
+.prov-lamp.stale {
+  background: var(--put-hi);
+}
+.prov-lamp.history {
+  background: var(--phosphor-dim);
+}
+.prov-state {
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+}
+.prov-state.live {
+  color: var(--call-hi);
+}
+.prov-state.delayed {
+  color: var(--warn);
+}
+.prov-state.stale {
+  color: var(--put-hi);
+}
+.prov-state.history {
+  color: var(--phosphor);
+}
+.prob-zones.unscored {
+  opacity: 0.4;
+}
+.prov-sep {
+  color: var(--rule-hi);
+}
+.prov-item {
+  color: var(--ink-ghost);
+  white-space: nowrap;
+}
+.prov :deep(.help) {
+  margin-left: auto;
+}
 
 /* ---- factors: weighted readouts with groove tracks --------------------- */
 .factors-list {
@@ -1199,7 +1401,7 @@ const otherSide = computed(() => {
   border: var(--hair) solid var(--glass-border);
   border-radius: 9999px;
   overflow: hidden;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 .factor-fill {
   display: block;
@@ -1208,14 +1410,30 @@ const otherSide = computed(() => {
   border-radius: 9999px;
   transition: width var(--dur) var(--ease-out);
 }
-.factor-fill.bullish { background: var(--call); }
-.factor-fill.bearish { background: var(--put); }
-.factor-fill.warn { background: var(--warn); }
-.factor-fill.accent { background: var(--phosphor); }
-.factor-fill.hot { opacity: 1; }
-.factor-fill.elev { opacity: 0.92; }
-.factor-fill.mid { opacity: 0.78; }
-.factor-fill.low { opacity: 0.5; }
+.factor-fill.bullish {
+  background: var(--call);
+}
+.factor-fill.bearish {
+  background: var(--put);
+}
+.factor-fill.warn {
+  background: var(--warn);
+}
+.factor-fill.accent {
+  background: var(--phosphor);
+}
+.factor-fill.hot {
+  opacity: 1;
+}
+.factor-fill.elev {
+  opacity: 0.92;
+}
+.factor-fill.mid {
+  opacity: 0.78;
+}
+.factor-fill.low {
+  opacity: 0.5;
+}
 .factor-score {
   font: 700 var(--t-micro) var(--font-data);
   color: var(--ink);
@@ -1256,11 +1474,21 @@ const otherSide = computed(() => {
   border-radius: 50%;
   background: var(--ink-faint);
 }
-.takeaway-dot.pos { background: var(--call-hi); }
-.takeaway-dot.neg { background: var(--put); }
-.takeaway-dot.warn { background: var(--warn); }
-.takeaway-dot.info { background: var(--phosphor); }
-.takeaway-text { min-width: 0; }
+.takeaway-dot.pos {
+  background: var(--call-hi);
+}
+.takeaway-dot.neg {
+  background: var(--put);
+}
+.takeaway-dot.warn {
+  background: var(--warn);
+}
+.takeaway-dot.info {
+  background: var(--phosphor);
+}
+.takeaway-text {
+  min-width: 0;
+}
 
 .impl-line {
   margin: 0;
@@ -1288,8 +1516,12 @@ const otherSide = computed(() => {
   font-size: var(--t-tiny);
   line-height: 1.45;
 }
-.stronger li { margin-bottom: 3px; }
-.stronger li:last-child { margin-bottom: 0; }
+.stronger li {
+  margin-bottom: 3px;
+}
+.stronger li:last-child {
+  margin-bottom: 0;
+}
 
 /* ---- Float & Cover Gauge Block ------------------------------------------ */
 .float-cover-block {
@@ -1336,9 +1568,15 @@ const otherSide = computed(() => {
   height: 100%;
   border-radius: 9999px;
 }
-.float-fill.warn { background: var(--warn); }
-.float-fill.bullish { background: var(--call); }
-.float-fill.bearish { background: var(--put); }
+.float-fill.warn {
+  background: var(--warn);
+}
+.float-fill.bullish {
+  background: var(--call);
+}
+.float-fill.bearish {
+  background: var(--put);
+}
 .float-stat-cell .stat-footer {
   display: flex;
   align-items: center;
@@ -1395,7 +1633,10 @@ const otherSide = computed(() => {
   font-weight: 700;
   justify-self: end;
 }
-.other-side .lik { color: var(--ink-faint); font-weight: 600; }
+.other-side .lik {
+  color: var(--ink-faint);
+  font-weight: 600;
+}
 .other-side .otrack {
   grid-column: 1 / -1;
   height: 4px;
@@ -1410,13 +1651,27 @@ const otherSide = computed(() => {
   border-radius: 9999px;
   opacity: 0.8;
 }
-.other-side .otrack i.bullish { background: var(--call); }
-.other-side .otrack i.bearish { background: var(--put); }
+.other-side .otrack i.bullish {
+  background: var(--call);
+}
+.other-side .otrack i.bearish {
+  background: var(--put);
+}
 
 @media (max-width: 520px) {
-  .hero { grid-template-columns: 1fr; justify-items: center; text-align: center; }
-  .bias-lock { justify-content: center; }
-  .hero-meta { width: 100%; }
-  .signed-block .near { margin-left: 0; }
+  .hero {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+  .bias-lock {
+    justify-content: center;
+  }
+  .hero-meta {
+    width: 100%;
+  }
+  .signed-block .near {
+    margin-left: 0;
+  }
 }
 </style>

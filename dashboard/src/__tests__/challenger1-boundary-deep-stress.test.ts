@@ -44,7 +44,8 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
         side: 'bullish',
         score,
         score_01: score / 100,
-        likelihood: score >= 75 ? 'imminent' : score >= 55 ? 'likely' : score >= 35 ? 'possible' : 'unlikely',
+        likelihood:
+          score >= 75 ? 'imminent' : score >= 55 ? 'likely' : score >= 35 ? 'possible' : 'unlikely',
         factors: [],
         setup_analysis: [],
         for_stronger: [],
@@ -266,12 +267,30 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
       expect(concentrationLabel('Unavailable', 'NO STRIKE')).toBe('NO STRIKE')
       expect(concentrationLabel('$500 Call', 'NO STRIKE')).toBe('$500 Call')
 
-      expect(pulseWindowCopy({ baseline: true, newPrints: 5, newPremiumLabel: '$1M', windowDeltaLabel: '+$500k' }))
-        .toBe('first window baseline')
-      expect(pulseWindowCopy({ baseline: false, newPrints: 12, newPremiumLabel: '$2.5M', windowDeltaLabel: '+$1M' }))
-        .toBe('$2.5M · 12 new vs previous provider window')
-      expect(pulseWindowCopy({ baseline: false, newPrints: 0, newPremiumLabel: '$0', windowDeltaLabel: '+$0' }))
-        .toBe('+$0 vs previous provider window')
+      expect(
+        pulseWindowCopy({
+          baseline: true,
+          newPrints: 5,
+          newPremiumLabel: '$1M',
+          windowDeltaLabel: '+$500k',
+        }),
+      ).toBe('first window baseline')
+      expect(
+        pulseWindowCopy({
+          baseline: false,
+          newPrints: 12,
+          newPremiumLabel: '$2.5M',
+          windowDeltaLabel: '+$1M',
+        }),
+      ).toBe('$2.5M · 12 new vs previous provider window')
+      expect(
+        pulseWindowCopy({
+          baseline: false,
+          newPrints: 0,
+          newPremiumLabel: '$0',
+          windowDeltaLabel: '+$0',
+        }),
+      ).toBe('+$0 vs previous provider window')
     })
   })
 
@@ -432,27 +451,42 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
       ]
 
       // maxAbs calculation
-      const maxAbs = Math.max(1e-9, ...negRows.map((r) => Math.max(Math.abs(r.call_gex_m), Math.abs(r.put_gex_m), Math.abs(r.net_gex_m))))
+      const maxAbs = Math.max(
+        1e-9,
+        ...negRows.map((r) =>
+          Math.max(Math.abs(r.call_gex_m), Math.abs(r.put_gex_m), Math.abs(r.net_gex_m)),
+        ),
+      )
       expect(maxAbs).toBe(80)
 
       const halfPlotH = 100
       const zeroY = 150
 
       const barCalculations = negRows.map((r) => {
-        const putH = Math.max(r.put_gex_m !== 0 ? 2 : 0, (Math.abs(r.put_gex_m) / maxAbs) * halfPlotH)
+        const putH = Math.max(
+          r.put_gex_m !== 0 ? 2 : 0,
+          (Math.abs(r.put_gex_m) / maxAbs) * halfPlotH,
+        )
         const netY = zeroY - (r.net_gex_m / maxAbs) * halfPlotH
         return { putH, netY }
       })
 
       expect(barCalculations[1].putH).toBe(100) // 80/80 * 100
       expect(barCalculations[1].netY).toBe(250) // 150 - (-80/80)*100 = 250 (placed below zero line)
-      expect(barCalculations.every((b) => Number.isFinite(b.putH) && Number.isFinite(b.netY))).toBe(true)
+      expect(barCalculations.every((b) => Number.isFinite(b.putH) && Number.isFinite(b.netY))).toBe(
+        true,
+      )
     })
 
     it('generates valid SVG linePath for empty, single point, and multi-point series', () => {
       expect(linePath([])).toBe('')
       expect(linePath([{ x: 10, y: 20 }])).toBe('M10,20')
-      expect(linePath([{ x: 10, y: 20 }, { x: 30, y: 40 }])).toBe('M10,20L30,40')
+      expect(
+        linePath([
+          { x: 10, y: 20 },
+          { x: 30, y: 40 },
+        ]),
+      ).toBe('M10,20L30,40')
     })
   })
 })

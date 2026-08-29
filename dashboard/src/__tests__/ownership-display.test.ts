@@ -159,9 +159,9 @@ describe('ownership display — last-quarter change and % bars', () => {
     expect(formatHolderChange({ change_label: 'New', change_shares: 11_573_878 })).toBe(
       'New · +11,573,878',
     )
-    expect(formatHolderChange({ change_label: 'Sold Out', change_pct: -100, change_shares: -2500 })).toBe(
-      'Sold Out · -100.00% · -2,500',
-    )
+    expect(
+      formatHolderChange({ change_label: 'Sold Out', change_pct: -100, change_shares: -2500 }),
+    ).toBe('Sold Out · -100.00% · -2,500')
     expect(formatHolderChange({})).toBe('—')
     expect(formatHolderShareDelta(0)).toBe('0')
     expect(holderChangeTone(row)).toBe('pos')

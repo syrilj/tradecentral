@@ -17,7 +17,12 @@ const props = withDefaults(
 )
 
 const containerRef = ref<HTMLDivElement | null>(null)
-const probeInfo = ref<{ price: number; density: number; probAbove: number; probBelow: number } | null>(null)
+const probeInfo = ref<{
+  price: number
+  density: number
+  probAbove: number
+  probBelow: number
+} | null>(null)
 
 let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
@@ -33,7 +38,7 @@ let distance = 8
 
 function cdfNormal(x: number): number {
   const t = 1 / (1 + 0.2316419 * Math.abs(x))
-  const d = 0.3989423 * Math.exp(-x * x / 2)
+  const d = 0.3989423 * Math.exp((-x * x) / 2)
   const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
   return x >= 0 ? 1 - p : p
 }
@@ -168,7 +173,7 @@ function buildSurfaceModel() {
     const price = lowPrice + u * (highPrice - lowPrice)
 
     // Map z to time factor
-    const tScale = 0.5 + (z + 2) / 4 * 0.8
+    const tScale = 0.5 + ((z + 2) / 4) * 0.8
     const currSigma = sigma * tScale
     const d = density(price, mu, currSigma)
 
@@ -180,10 +185,10 @@ function buildSurfaceModel() {
     const color = new THREE.Color()
     if (price < spot) {
       const t = Math.min(1, (spot - price) / (spot * 0.2))
-      color.setHSL(0.09, 0.45 + 0.15 * t, 0.40 + 0.12 * Math.min(1, h / 2)) // --put family
+      color.setHSL(0.09, 0.45 + 0.15 * t, 0.4 + 0.12 * Math.min(1, h / 2)) // --put family
     } else {
       const t = Math.min(1, (price - spot) / (spot * 0.2))
-      color.setHSL(0.56, 0.40 + 0.15 * t, 0.42 + 0.12 * Math.min(1, h / 2)) // --call family
+      color.setHSL(0.56, 0.4 + 0.15 * t, 0.42 + 0.12 * Math.min(1, h / 2)) // --call family
     }
     colors.push(color.r, color.g, color.b)
   }
@@ -203,7 +208,12 @@ function buildSurfaceModel() {
   scene.add(mesh)
 
   // Overlay wireframe
-  const wireMat = new THREE.MeshBasicMaterial({ color: 0xa9c46c, wireframe: true, transparent: true, opacity: 0.15 })
+  const wireMat = new THREE.MeshBasicMaterial({
+    color: 0xa9c46c,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.15,
+  })
   const wireMesh = new THREE.Mesh(geometry, wireMat)
   scene.add(wireMesh)
 
@@ -213,7 +223,12 @@ function buildSurfaceModel() {
     if (u < 0 || u > 1) return
     const xPos = -3 + u * 6
 
-    const lineMat = new THREE.LineDashedMaterial({ color: colorHex, dashSize: 0.1, gapSize: 0.05, linewidth: 2 })
+    const lineMat = new THREE.LineDashedMaterial({
+      color: colorHex,
+      dashSize: 0.1,
+      gapSize: 0.05,
+      linewidth: 2,
+    })
     const lineGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(xPos, -1.2, 0),
       new THREE.Vector3(xPos, 2.0, 0),
@@ -261,7 +276,11 @@ function onMouseMove(e: MouseEvent) {
     const raycaster = new THREE.Raycaster()
     raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera)
 
-    const surfaceMeshes = scene.children.filter((c) => c instanceof THREE.Mesh && !(c.material as THREE.Material & { wireframe?: boolean })?.wireframe)
+    const surfaceMeshes = scene.children.filter(
+      (c) =>
+        c instanceof THREE.Mesh &&
+        !(c.material as THREE.Material & { wireframe?: boolean })?.wireframe,
+    )
     const intersects = raycaster.intersectObjects(surfaceMeshes)
     if (intersects.length > 0) {
       const hit = intersects[0]
@@ -269,7 +288,10 @@ function onMouseMove(e: MouseEvent) {
         const lowPrice = spot * 0.8
         const highPrice = spot * 1.2
         const u = (hit.point.x + 3) / 6
-        const probedPrice = Math.max(lowPrice, Math.min(highPrice, lowPrice + u * (highPrice - lowPrice)))
+        const probedPrice = Math.max(
+          lowPrice,
+          Math.min(highPrice, lowPrice + u * (highPrice - lowPrice)),
+        )
 
         const T = Math.max(horizon, 1) / 365
         const sigma = iv * Math.sqrt(T)
@@ -318,9 +340,12 @@ onMounted(() => {
   initThree()
 })
 
-watch([() => props.spot, () => props.probability, () => props.callWall, () => props.putWall], () => {
-  buildSurfaceModel()
-})
+watch(
+  [() => props.spot, () => props.probability, () => props.callWall, () => props.putWall],
+  () => {
+    buildSurfaceModel()
+  },
+)
 
 onBeforeUnmount(() => {
   if (animFrameId != null) {
@@ -361,7 +386,9 @@ onBeforeUnmount(() => {
       <span class="label model-tag">3D RISK-NEUTRAL MODEL (INTERACTIVE)</span>
       <span class="label hint">DRAG TO ROTATE · SCROLL TO ZOOM · HOVER SURFACE TO PROBE</span>
       <div v-if="probeInfo" class="probe-tag">
-        <span>PROBE: <strong class="fig">{{ usd(probeInfo.price) }}</strong></span>
+        <span
+          >PROBE: <strong class="fig">{{ usd(probeInfo.price) }}</strong></span
+        >
         <span class="call">P(S&gt;) {{ pctFrac(probeInfo.probAbove, 0) }}</span>
         <span class="put">P(S&lt;) {{ pctFrac(probeInfo.probBelow, 0) }}</span>
       </div>
@@ -420,9 +447,15 @@ onBeforeUnmount(() => {
   padding: 3px 8px;
   border-radius: 2px;
 }
-.probe-tag .fig { color: var(--phosphor); }
-.probe-tag .call { color: var(--call-hi); }
-.probe-tag .put { color: var(--put-hi); }
+.probe-tag .fig {
+  color: var(--phosphor);
+}
+.probe-tag .call {
+  color: var(--call-hi);
+}
+.probe-tag .put {
+  color: var(--put-hi);
+}
 .canvas-3d-container {
   width: 100%;
   cursor: grab;

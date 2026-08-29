@@ -19,7 +19,8 @@ function mockSetup(score: number, overrides: Partial<SqueezeSetup> = {}): Squeez
     side: 'bullish',
     score,
     score_01: score / 100,
-    likelihood: score >= 75 ? 'imminent' : score >= 55 ? 'likely' : score >= 35 ? 'possible' : 'unlikely',
+    likelihood:
+      score >= 75 ? 'imminent' : score >= 55 ? 'likely' : score >= 35 ? 'possible' : 'unlikely',
     factors: [],
     setup_analysis: [],
     for_stronger: [],
@@ -284,12 +285,16 @@ describe('Squeeze Screener Calculation Suite', () => {
     })
 
     it('defines crimson takeaway dot class for bearish setups', () => {
-      expect(vueSrc).toContain('.takeaway-dot.neg { background: var(--put); }')
+      expect(vueSrc).toMatch(/\.takeaway-dot\.neg\s*\{\s*background:\s*var\(--put\);?\s*\}/)
     })
 
     it('preserves emerald and crimson score highlights for hot scores without amber override', () => {
-      expect(vueSrc).toContain('.sq.bullish .score-num.hot { color: var(--call-hi); }')
-      expect(vueSrc).toContain('.sq.bearish .score-num.hot { color: var(--put-hi); }')
+      expect(vueSrc).toMatch(
+        /\.sq\.bullish\s+\.score-num\.hot\s*\{\s*color:\s*var\(--call-hi\);?\s*\}/,
+      )
+      expect(vueSrc).toMatch(
+        /\.sq\.bearish\s+\.score-num\.hot\s*\{\s*color:\s*var\(--put-hi\);?\s*\}/,
+      )
       expect(vueSrc).not.toContain('.score-num.hot { color: var(--warn); }')
     })
 

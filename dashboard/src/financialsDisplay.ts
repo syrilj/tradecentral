@@ -55,7 +55,13 @@ export function calculateGrowth(
   curr: number | null | undefined,
   prev: number | null | undefined,
 ): number | null {
-  if (curr == null || prev == null || prev === 0 || !Number.isFinite(curr) || !Number.isFinite(prev)) {
+  if (
+    curr == null ||
+    prev == null ||
+    prev === 0 ||
+    !Number.isFinite(curr) ||
+    !Number.isFinite(prev)
+  ) {
     return null
   }
   return ((curr - prev) / Math.abs(prev)) * 100
@@ -92,7 +98,13 @@ export function formatSourceLabel(source: string | null | undefined): string {
   if (s.includes('SYNTHETIC')) return 'SYNTHETIC BARS'
   if (s.includes('YFINANCE')) return 'EXCHANGE BARS'
   if (s.includes('POLYGON') || s.includes('ALPACA')) return 'REAL-TIME FEED'
-  if (s.includes('REGULATORY_DISCLOSURES') || s.includes('STOCK_ACT') || s.includes('USASPENDING') || s.includes('USPTO') || s.includes('LDA')) {
+  if (
+    s.includes('REGULATORY_DISCLOSURES') ||
+    s.includes('STOCK_ACT') ||
+    s.includes('USASPENDING') ||
+    s.includes('USPTO') ||
+    s.includes('LDA')
+  ) {
     return 'REGULATORY DISCLOSURES (STOCK ACT / LDA / USASPENDING / USPTO)'
   }
   return s.replace(/_/g, ' ')
@@ -104,7 +116,11 @@ export function getDerivedRatio(
   incRows: Array<{ key?: string; label?: string; values?: (number | null)[] }> | undefined,
   key: string,
 ): number | null {
-  if (ratios && (ratios as Record<string, unknown>)[key] != null && Number.isFinite((ratios as Record<string, number>)[key])) {
+  if (
+    ratios &&
+    (ratios as Record<string, unknown>)[key] != null &&
+    Number.isFinite((ratios as Record<string, number>)[key])
+  ) {
     return (ratios as Record<string, number>)[key]
   }
   if (!incRows || !incRows.length) return null
@@ -224,7 +240,10 @@ function finiteOrNull(val: number | null | undefined): number | null {
 
 const EMPTY_CASE: ModelForecastCaseView = { price: null, label: '', thesis: null }
 
-function presentCase(raw: ModelForecastCase | null | undefined, fallback: string): ModelForecastCaseView {
+function presentCase(
+  raw: ModelForecastCase | null | undefined,
+  fallback: string,
+): ModelForecastCaseView {
   if (!raw) return { ...EMPTY_CASE, label: fallback }
   const thesis = raw.thesis && raw.thesis.trim() && raw.thesis !== '0' ? raw.thesis : null
   return {
@@ -412,12 +431,13 @@ export function presentCaseRange(opts: {
 }): CaseRangeView | null {
   const scale = presentPriceScale([opts.spot, opts.bear, opts.base, opts.bull])
   if (!scale) return null
-  const raw: Array<{ key: CaseRangeMark['key']; label: string; price: number | null | undefined }> = [
-    { key: 'bear', label: 'Bear', price: opts.bear },
-    { key: 'spot', label: 'Mark', price: opts.spot },
-    { key: 'base', label: 'Base', price: opts.base },
-    { key: 'bull', label: 'Bull', price: opts.bull },
-  ]
+  const raw: Array<{ key: CaseRangeMark['key']; label: string; price: number | null | undefined }> =
+    [
+      { key: 'bear', label: 'Bear', price: opts.bear },
+      { key: 'spot', label: 'Mark', price: opts.spot },
+      { key: 'base', label: 'Base', price: opts.base },
+      { key: 'bull', label: 'Bull', price: opts.bull },
+    ]
   const marks: CaseRangeMark[] = []
   for (const row of raw) {
     const pct = scaleLeftPct(row.price, scale)
@@ -441,4 +461,3 @@ export function presentCaseRange(opts: {
     spanWidth: `${Math.max(2, right - left).toFixed(1)}%`,
   }
 }
-

@@ -101,8 +101,7 @@ export function useResource<T>(
     } catch (e) {
       if (mine !== seq || disposed) return
       data.value = nextResourceData(data.value, null, { ...opts, failed: true })
-      error.value =
-        e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
+      error.value = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
     } finally {
       if (mine === seq) {
         loading.value = false

@@ -13,24 +13,27 @@ import { compact, DASH, num } from '@/format'
  * Shares one ordinal (session-continuous) time axis so nights/weekends collapse.
  * Hover crosshair + dense readout so the graph is practically readable.
  */
-const props = withDefaults(defineProps<{
-  symbol: string
-  price: OptionsPricePoint[]
-  flow: OptionsFlowPoint[]
-  height?: number
-  selectedExpiry?: string | null
-  callWall?: number | null
-  putWall?: number | null
-  spot?: number | null
-  gammaFlip?: number | null
-}>(), {
-  height: 360,
-  selectedExpiry: null,
-  callWall: null,
-  putWall: null,
-  spot: null,
-  gammaFlip: null,
-})
+const props = withDefaults(
+  defineProps<{
+    symbol: string
+    price: OptionsPricePoint[]
+    flow: OptionsFlowPoint[]
+    height?: number
+    selectedExpiry?: string | null
+    callWall?: number | null
+    putWall?: number | null
+    spot?: number | null
+    gammaFlip?: number | null
+  }>(),
+  {
+    height: 360,
+    selectedExpiry: null,
+    callWall: null,
+    putWall: null,
+    spot: null,
+    gammaFlip: null,
+  },
+)
 
 const frameEl = ref<HTMLDivElement | null>(null)
 const svgEl = ref<SVGSVGElement | null>(null)
@@ -50,7 +53,7 @@ const pad = computed(() => {
   const narrow = W.value < 480
   return {
     l: narrow ? 42 : 50,
-    r: showCumPrem.value ? (narrow ? 46 : 54) : (narrow ? 12 : 16),
+    r: showCumPrem.value ? (narrow ? 46 : 54) : narrow ? 12 : 16,
     t: 18,
     b: 20,
     gap: 10,
@@ -78,13 +81,15 @@ function time(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-const orderedPrice = computed(() => [...props.price]
-  .filter((p) => Number.isFinite(p.close) && time(p.t))
-  .sort((a, b) => time(a.t) - time(b.t)))
+const orderedPrice = computed(() =>
+  [...props.price]
+    .filter((p) => Number.isFinite(p.close) && time(p.t))
+    .sort((a, b) => time(a.t) - time(b.t)),
+)
 
-const orderedFlow = computed(() => [...props.flow]
-  .filter((p) => time(p.t))
-  .sort((a, b) => time(a.t) - time(b.t)))
+const orderedFlow = computed(() =>
+  [...props.flow].filter((p) => time(p.t)).sort((a, b) => time(a.t) - time(b.t)),
+)
 
 const timeline = computed<number[]>(() => {
   const set = new Set<number>()
@@ -99,10 +104,9 @@ const timelineIndex = computed(() => {
   return map
 })
 
-const xScale = computed(() => linearScale(
-  [0, Math.max(timeline.value.length - 1, 0)],
-  [pad.value.l, W.value - pad.value.r],
-))
+const xScale = computed(() =>
+  linearScale([0, Math.max(timeline.value.length - 1, 0)], [pad.value.l, W.value - pad.value.r]),
+)
 
 function ordinalIndex(ts: number): number {
   const arr = timeline.value
@@ -187,25 +191,23 @@ const bucketPremMax = computed(() => {
   return max
 })
 
-const priceScale = computed(() => linearScale(
-  [priceDomain.value.lo, priceDomain.value.hi],
-  [priceBot.value, priceTop.value],
-))
+const priceScale = computed(() =>
+  linearScale([priceDomain.value.lo, priceDomain.value.hi], [priceBot.value, priceTop.value]),
+)
 function priceY(value: number): number {
   return priceScale.value(value)
 }
 
-const premiumScale = computed(() => linearScale(
-  [premiumDomain.value.lo, premiumDomain.value.hi],
-  [priceBot.value, priceTop.value],
-))
+const premiumScale = computed(() =>
+  linearScale([premiumDomain.value.lo, premiumDomain.value.hi], [priceBot.value, priceTop.value]),
+)
 function premiumY(value: number): number {
   return premiumScale.value(value)
 }
 
-const pricePath = computed(() => linePath(
-  orderedPrice.value.map((p) => ({ x: xOf(time(p.t)), y: priceY(p.close) })),
-))
+const pricePath = computed(() =>
+  linePath(orderedPrice.value.map((p) => ({ x: xOf(time(p.t)), y: priceY(p.close) }))),
+)
 
 function premiumPath(key: 'calls' | 'puts'): string {
   return linePath(cumulativeFlow.value.map((p) => ({ x: xOf(p.ts), y: premiumY(p[key]) })))
@@ -214,11 +216,19 @@ function premiumPath(key: 'calls' | 'puts'): string {
 const callPath = computed(() => premiumPath('calls'))
 const putPath = computed(() => premiumPath('puts'))
 
-const priceTicks = computed(() => niceTicks(priceDomain.value.lo, priceDomain.value.hi, 5)
-  .map((value) => ({ value, y: priceY(value) })))
+const priceTicks = computed(() =>
+  niceTicks(priceDomain.value.lo, priceDomain.value.hi, 5).map((value) => ({
+    value,
+    y: priceY(value),
+  })),
+)
 
-const premiumTicks = computed(() => niceTicks(premiumDomain.value.lo, premiumDomain.value.hi, 3)
-  .map((value) => ({ value, y: premiumY(value) })))
+const premiumTicks = computed(() =>
+  niceTicks(premiumDomain.value.lo, premiumDomain.value.hi, 3).map((value) => ({
+    value,
+    y: premiumY(value),
+  })),
+)
 
 /** Activity bars: side-by-side call/put per bucket. */
 const activityBars = computed(() => {
@@ -250,12 +260,19 @@ function timeLabel(timestamp: number): string {
   const date = new Date(timestamp)
   if (domain.value.span <= 2 * 86_400_000) {
     return date.toLocaleTimeString('en-US', {
-      hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'UTC',
     })
   }
-  return date.toLocaleDateString('en-US', {
-    month: 'short', day: '2-digit', timeZone: 'UTC',
-  }).toUpperCase()
+  return date
+    .toLocaleDateString('en-US', {
+      month: 'short',
+      day: '2-digit',
+      timeZone: 'UTC',
+    })
+    .toUpperCase()
 }
 
 const timeTicks = computed(() => {
@@ -288,7 +305,8 @@ const netActivity = computed(() => {
 
 const opexMarkers = computed(() => {
   const { lo, hi } = domain.value
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return [] as { ts: number; x: number; label: string }[]
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo)
+    return [] as { ts: number; x: number; label: string }[]
   const out: { ts: number; x: number; label: string }[] = []
   const start = new Date(lo)
   const end = new Date(hi)
@@ -306,11 +324,16 @@ const opexMarkers = computed(() => {
       out.push({
         ts,
         x: xOf(ts),
-        label: new Date(ts).toLocaleDateString('en-US', { month: 'short', day: '2-digit', timeZone: 'UTC' }).toUpperCase(),
+        label: new Date(ts)
+          .toLocaleDateString('en-US', { month: 'short', day: '2-digit', timeZone: 'UTC' })
+          .toUpperCase(),
       })
     }
     m += 1
-    if (m > 11) { m = 0; y += 1 }
+    if (m > 11) {
+      m = 0
+      y += 1
+    }
   }
   return out
 })
@@ -327,13 +350,31 @@ const selectedExpiryMarker = computed(() => {
 const levelGuides = computed(() => {
   const raw: { value: number; y: number; cls: string; label: string; labelY: number }[] = []
   if (props.putWall != null && Number.isFinite(props.putWall)) {
-    raw.push({ value: props.putWall, y: priceY(props.putWall), cls: 'put', label: 'PUT', labelY: 0 })
+    raw.push({
+      value: props.putWall,
+      y: priceY(props.putWall),
+      cls: 'put',
+      label: 'PUT',
+      labelY: 0,
+    })
   }
   if (props.gammaFlip != null && Number.isFinite(props.gammaFlip)) {
-    raw.push({ value: props.gammaFlip, y: priceY(props.gammaFlip), cls: 'flip', label: 'FLIP', labelY: 0 })
+    raw.push({
+      value: props.gammaFlip,
+      y: priceY(props.gammaFlip),
+      cls: 'flip',
+      label: 'FLIP',
+      labelY: 0,
+    })
   }
   if (props.callWall != null && Number.isFinite(props.callWall)) {
-    raw.push({ value: props.callWall, y: priceY(props.callWall), cls: 'call', label: 'CALL', labelY: 0 })
+    raw.push({
+      value: props.callWall,
+      y: priceY(props.callWall),
+      cls: 'call',
+      label: 'CALL',
+      labelY: 0,
+    })
   }
   if (props.spot != null && Number.isFinite(props.spot)) {
     raw.push({ value: props.spot, y: priceY(props.spot), cls: 'spot', label: 'SPOT', labelY: 0 })
@@ -425,10 +466,10 @@ function onMove(e: MouseEvent): void {
         <i class="key price" />{{ symbol }}
         <b class="fig">{{ lastPrice != null ? num(lastPrice) : DASH }}</b>
       </span>
-      <span class="struct call" v-if="callWall != null">C-WALL {{ num(callWall) }}</span>
-      <span class="struct put" v-if="putWall != null">P-WALL {{ num(putWall) }}</span>
-      <span class="struct flip" v-if="gammaFlip != null">FLIP {{ num(gammaFlip) }}</span>
-      <span class="struct spot" v-if="spot != null">SPOT {{ num(spot) }}</span>
+      <span v-if="callWall != null" class="struct call">C-WALL {{ num(callWall) }}</span>
+      <span v-if="putWall != null" class="struct put">P-WALL {{ num(putWall) }}</span>
+      <span v-if="gammaFlip != null" class="struct flip">FLIP {{ num(gammaFlip) }}</span>
+      <span v-if="spot != null" class="struct spot">SPOT {{ num(spot) }}</span>
       <span class="prem-sum call">ΣC ${{ compact(totalCallPrem) }}</span>
       <span class="prem-sum put">ΣP ${{ compact(totalPutPrem) }}</span>
       <span
@@ -439,13 +480,24 @@ function onMove(e: MouseEvent): void {
       >
         IMB {{ netActivity > 0 ? '+' : '' }}{{ (netActivity * 100).toFixed(0) }}%
       </span>
-      <button type="button" class="prem-toggle label" :class="{ on: showCumPrem }" @click="showCumPrem = !showCumPrem">
+      <button
+        type="button"
+        class="prem-toggle label"
+        :class="{ on: showCumPrem }"
+        @click="showCumPrem = !showCumPrem"
+      >
         {{ showCumPrem ? 'HIDE Σ' : 'Σ PREM' }}
       </button>
       <span v-if="focus" class="probe-inline">
-        <span class="label">{{ new Date(focus.ts).toISOString().slice(0, 16).replace('T', ' ') }}Z</span>
-        <span v-if="focus.price != null"> <b class="fig">{{ num(focus.price) }}</b></span>
-        <span v-if="focus.bucketCall != null" class="call"> C ${{ compact(focus.bucketCall) }}</span>
+        <span class="label"
+          >{{ new Date(focus.ts).toISOString().slice(0, 16).replace('T', ' ') }}Z</span
+        >
+        <span v-if="focus.price != null">
+          <b class="fig">{{ num(focus.price) }}</b></span
+        >
+        <span v-if="focus.bucketCall != null" class="call">
+          C ${{ compact(focus.bucketCall) }}</span
+        >
         <span v-if="focus.bucketPut != null" class="put"> P ${{ compact(focus.bucketPut) }}</span>
         <span v-if="focus.signed != null" :class="focus.signed >= 0 ? 'call' : 'put'">
           · signed ${{ compact(focus.signed) }}
@@ -513,7 +565,12 @@ function onMove(e: MouseEvent): void {
               :y2="g.labelY - 8"
               :class="['level-leader', g.cls]"
             />
-            <text :x="W - pad.r - 4" :y="g.labelY - 3" text-anchor="end" :class="['level-label', g.cls]">
+            <text
+              :x="W - pad.r - 4"
+              :y="g.labelY - 3"
+              text-anchor="end"
+              :class="['level-label', g.cls]"
+            >
               {{ g.label }} {{ num(g.value) }}
             </text>
           </g>
@@ -527,9 +584,21 @@ function onMove(e: MouseEvent): void {
         </g>
 
         <g v-if="showCumPrem" class="premium-axis">
-          <line class="premium-axis-rule" :x1="W - pad.r" :x2="W - pad.r" :y1="priceTop" :y2="priceBot" />
+          <line
+            class="premium-axis-rule"
+            :x1="W - pad.r"
+            :x2="W - pad.r"
+            :y1="priceTop"
+            :y2="priceBot"
+          />
           <template v-for="tick in premiumTicks" :key="`f-${tick.y}`">
-            <line class="premium-axis-tick" :x1="W - pad.r" :x2="W - pad.r + 4" :y1="tick.y" :y2="tick.y" />
+            <line
+              class="premium-axis-tick"
+              :x1="W - pad.r"
+              :x2="W - pad.r + 4"
+              :y1="tick.y"
+              :y2="tick.y"
+            />
             <text :x="W - pad.r + 6" :y="tick.y + 3">${{ compact(tick.value) }}</text>
           </template>
         </g>
@@ -558,7 +627,11 @@ function onMove(e: MouseEvent): void {
         <line class="pane-div" :x1="pad.l" :x2="W - pad.r" :y1="flowTop" :y2="flowTop" />
 
         <g class="activity-bars">
-          <g v-for="bar in activityBars" :key="bar.t" :class="{ 'is-active': focus && Math.abs(focus.x - bar.x) < (bar.half + 2) }">
+          <g
+            v-for="bar in activityBars"
+            :key="bar.t"
+            :class="{ 'is-active': focus && Math.abs(focus.x - bar.x) < bar.half + 2 }"
+          >
             <rect
               class="bar call"
               :x="bar.x - bar.half - 0.5"
@@ -586,12 +659,27 @@ function onMove(e: MouseEvent): void {
             />
           </g>
         </g>
-        <text class="axis-cap flow-y" :x="pad.l - 6" :y="flowTop + flowH / 2" text-anchor="end">$</text>
+        <text class="axis-cap flow-y" :x="pad.l - 6" :y="flowTop + flowH / 2" text-anchor="end">
+          $
+        </text>
 
         <g v-if="focus" class="crosshair">
           <line :x1="focus.x" :x2="focus.x" :y1="priceTop" :y2="flowBot" class="crosshair-v" />
-          <line v-if="focus.price != null" :x1="pad.l" :x2="W - pad.r" :y1="priceY(focus.price)" :y2="priceY(focus.price)" class="crosshair-h" />
-          <circle v-if="focus.price != null" :cx="focus.x" :cy="priceY(focus.price)" r="4" class="price-dot" />
+          <line
+            v-if="focus.price != null"
+            :x1="pad.l"
+            :x2="W - pad.r"
+            :y1="priceY(focus.price)"
+            :y2="priceY(focus.price)"
+            class="crosshair-h"
+          />
+          <circle
+            v-if="focus.price != null"
+            :cx="focus.x"
+            :cy="priceY(focus.price)"
+            r="4"
+            class="price-dot"
+          />
           <g v-if="focus.price != null" class="crosshair-badge">
             <rect
               :x="pad.l - (W < 480 ? 40 : 48)"
@@ -605,7 +693,9 @@ function onMove(e: MouseEvent): void {
               :y="priceY(focus.price) + 3.5"
               text-anchor="end"
               class="crosshair-pill-text"
-            >{{ num(focus.price) }}</text>
+            >
+              {{ num(focus.price) }}
+            </text>
           </g>
         </g>
 
@@ -616,7 +706,13 @@ function onMove(e: MouseEvent): void {
           </template>
         </g>
 
-        <text v-if="!pricePath" class="empty" :x="W / 2" :y="priceTop + priceH / 2" text-anchor="middle">
+        <text
+          v-if="!pricePath"
+          class="empty"
+          :x="W / 2"
+          :y="priceTop + priceH / 2"
+          text-anchor="middle"
+        >
           NO PRICE TRACE IN SELECTED RANGE
         </text>
         <text
@@ -651,22 +747,56 @@ function onMove(e: MouseEvent): void {
   padding: 3px 6px 2px;
   font-family: var(--font-display);
   font-size: 10px;
-  letter-spacing: .04em;
+  letter-spacing: 0.04em;
   color: var(--ink-dim);
   border-bottom: var(--hair) solid var(--rule-faint);
   background: var(--panel-hi);
 }
-.chart-readout span { display: inline-flex; align-items: center; gap: 3px; }
-.chart-readout b { color: var(--ink); font-weight: 650; }
-.main-px { font-weight: 700; color: var(--ink); }
-.struct { font-size: 9px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 4px; border: var(--hair) solid var(--rule); }
-.struct.call { color: var(--call); }
-.struct.put { color: var(--put); }
-.struct.flip { color: var(--warn); }
-.struct.spot { color: var(--ink); }
-.prem-sum.call, .chart-readout .call, .probe-inline .call { color: var(--call); }
-.prem-sum.put, .chart-readout .put, .probe-inline .put { color: var(--put); }
-.imbalance { font-weight: 700; }
+.chart-readout span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.chart-readout b {
+  color: var(--ink);
+  font-weight: 650;
+}
+.main-px {
+  font-weight: 700;
+  color: var(--ink);
+}
+.struct {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border: var(--hair) solid var(--rule);
+}
+.struct.call {
+  color: var(--call);
+}
+.struct.put {
+  color: var(--put);
+}
+.struct.flip {
+  color: var(--warn);
+}
+.struct.spot {
+  color: var(--ink);
+}
+.prem-sum.call,
+.chart-readout .call,
+.probe-inline .call {
+  color: var(--call);
+}
+.prem-sum.put,
+.chart-readout .put,
+.probe-inline .put {
+  color: var(--put);
+}
+.imbalance {
+  font-weight: 700;
+}
 .probe-inline {
   margin-left: auto;
   padding: 1px 6px;
@@ -674,10 +804,17 @@ function onMove(e: MouseEvent): void {
   background: var(--void-lift);
   color: var(--ink);
   min-height: 20px;
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+  transition:
+    transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.15s ease;
 }
-.scale-note { margin-left: auto; color: var(--ink-faint); }
-.anomaly-readout { color: var(--warn); }
+.scale-note {
+  margin-left: auto;
+  color: var(--ink-faint);
+}
+.anomaly-readout {
+  color: var(--warn);
+}
 .prem-toggle {
   padding: 1px 6px;
   min-height: 20px;
@@ -687,41 +824,77 @@ function onMove(e: MouseEvent): void {
   cursor: pointer;
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.prem-toggle.on { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
-.key { width: 12px; height: 2px; display: inline-block; border-radius: 1px; }
-.key.price { background: var(--ink); }
+.prem-toggle.on {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
+.key {
+  width: 12px;
+  height: 2px;
+  display: inline-block;
+  border-radius: 1px;
+}
+.key.price {
+  background: var(--ink);
+}
 .drift-canvas {
   position: relative;
   width: 100%;
   min-width: 0;
   overflow: hidden;
 }
-.drift-svg { display: block; width: 100%; height: 100%; overflow: visible; background: var(--void-lift); cursor: crosshair; }
+.drift-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  background: var(--void-lift);
+  cursor: crosshair;
+}
 .pane-cap {
   fill: var(--ink-faint);
   font: 600 9px var(--font-display);
   letter-spacing: 0.1em;
 }
-.pane-div { stroke: var(--rule-hi); stroke-width: 1px; vector-effect: non-scaling-stroke; }
-.flow-pane-bg { fill: var(--panel); }
+.pane-div {
+  stroke: var(--rule-hi);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+.flow-pane-bg {
+  fill: var(--panel);
+}
 .grid-lines line {
   stroke: var(--rule);
   stroke-width: 1px;
   vector-effect: non-scaling-stroke;
 }
-.grid-lines text, .premium-axis text, .time-axis text, .axis-cap {
+.grid-lines text,
+.premium-axis text,
+.time-axis text,
+.axis-cap {
   fill: var(--ink-dim);
   font: 600 10px var(--font-data);
-  letter-spacing: .03em;
+  letter-spacing: 0.03em;
 }
-.premium-axis text { fill: var(--ink-faint); }
-.premium-axis-rule, .premium-axis-tick {
+.premium-axis text {
+  fill: var(--ink-faint);
+}
+.premium-axis-rule,
+.premium-axis-tick {
   stroke: var(--rule-faint);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
-.axis-cap.flow-y { fill: var(--ink-faint); font-size: 9px; }
-.time-axis line { stroke: var(--rule-hi); vector-effect: non-scaling-stroke; }
+.axis-cap.flow-y {
+  fill: var(--ink-faint);
+  font-size: 9px;
+}
+.time-axis line {
+  stroke: var(--rule-hi);
+  vector-effect: non-scaling-stroke;
+}
 .price-trace {
   fill: none;
   stroke: var(--ink);
@@ -730,89 +903,150 @@ function onMove(e: MouseEvent): void {
   stroke-linejoin: round;
   stroke-linecap: round;
 }
-.last-dot { fill: var(--ink); stroke: var(--void); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.last-dot {
+  fill: var(--ink);
+  stroke: var(--void);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
 .flow-trace {
   fill: none;
   vector-effect: non-scaling-stroke;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.3;
-  opacity: .4;
+  opacity: 0.4;
 }
-.flow-trace.call { stroke: var(--call-hi); stroke-width: 1.75; }
-.flow-trace.put { stroke: var(--put-hi); stroke-width: 1.75; }
+.flow-trace.call {
+  stroke: var(--call-hi);
+  stroke-width: 1.75;
+}
+.flow-trace.put {
+  stroke: var(--put-hi);
+  stroke-width: 1.75;
+}
 
 /* Activity bars: crisp solid fills, border strokes, and responsive hover transitions */
 .activity-bars .bar {
   vector-effect: non-scaling-stroke;
   stroke-width: 1px;
   opacity: 0.92;
-  transition: opacity 0.15s cubic-bezier(0.16, 1, 0.3, 1), stroke-width 0.15s ease, fill 0.15s ease;
+  transition:
+    opacity 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+    stroke-width 0.15s ease,
+    fill 0.15s ease;
 }
-.activity-bars .bar.call { fill: var(--call); stroke: var(--call-hi); }
-.activity-bars .bar.put { fill: var(--put); stroke: var(--put-hi); }
+.activity-bars .bar.call {
+  fill: var(--call);
+  stroke: var(--call-hi);
+}
+.activity-bars .bar.put {
+  fill: var(--put);
+  stroke: var(--put-hi);
+}
 .activity-bars g:hover .bar,
 .activity-bars g.is-active .bar {
   opacity: 1;
   stroke-width: 1.5px;
 }
 .activity-bars g:hover .bar.call,
-.activity-bars g.is-active .bar.call { fill: var(--call-hi); }
+.activity-bars g.is-active .bar.call {
+  fill: var(--call-hi);
+}
 .activity-bars g:hover .bar.put,
-.activity-bars g.is-active .bar.put { fill: var(--put-hi); }
+.activity-bars g.is-active .bar.put {
+  fill: var(--put-hi);
+}
 
-.anomaly-dot { fill: var(--warn); }
+.anomaly-dot {
+  fill: var(--warn);
+}
 .opex-marks .opex-line {
   stroke: var(--phosphor-dim);
   stroke-width: 1;
   stroke-dasharray: 5 5;
-  opacity: .5;
+  opacity: 0.5;
   vector-effect: non-scaling-stroke;
 }
 .opex-marks .selected-exp-line {
   stroke: var(--phosphor);
   stroke-width: 1.3;
   stroke-dasharray: 2 3;
-  opacity: .85;
+  opacity: 0.85;
   vector-effect: non-scaling-stroke;
 }
-.opex-label, .selected-exp-label {
+.opex-label,
+.selected-exp-label {
   fill: var(--phosphor-dim);
   font: 600 9px var(--font-display);
-  letter-spacing: .05em;
+  letter-spacing: 0.05em;
   paint-order: stroke;
   stroke: var(--void);
   stroke-width: 3px;
 }
-.selected-exp-label { fill: var(--phosphor); }
+.selected-exp-label {
+  fill: var(--phosphor);
+}
 .level-line {
   stroke-width: 1.25px;
   stroke-dasharray: 5 4;
-  opacity: .9;
+  opacity: 0.9;
   vector-effect: non-scaling-stroke;
   transition: stroke 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.level-line.put { stroke: var(--put); }
-.level-line.call { stroke: var(--call); }
-.level-line.flip { stroke: var(--warn); stroke-dasharray: 3 3; }
-.level-line.spot { stroke: var(--ink); stroke-dasharray: none; stroke-width: 1.15px; opacity: .5; }
-.level-leader { stroke-width: 1px; opacity: .55; vector-effect: non-scaling-stroke; }
-.level-leader.put { stroke: var(--put); }
-.level-leader.call { stroke: var(--call); }
-.level-leader.flip { stroke: var(--warn); }
-.level-leader.spot { stroke: var(--ink); }
+.level-line.put {
+  stroke: var(--put);
+}
+.level-line.call {
+  stroke: var(--call);
+}
+.level-line.flip {
+  stroke: var(--warn);
+  stroke-dasharray: 3 3;
+}
+.level-line.spot {
+  stroke: var(--ink);
+  stroke-dasharray: none;
+  stroke-width: 1.15px;
+  opacity: 0.5;
+}
+.level-leader {
+  stroke-width: 1px;
+  opacity: 0.55;
+  vector-effect: non-scaling-stroke;
+}
+.level-leader.put {
+  stroke: var(--put);
+}
+.level-leader.call {
+  stroke: var(--call);
+}
+.level-leader.flip {
+  stroke: var(--warn);
+}
+.level-leader.spot {
+  stroke: var(--ink);
+}
 .level-label {
   font: 700 10px var(--font-display);
-  letter-spacing: .04em;
+  letter-spacing: 0.04em;
   paint-order: stroke;
   stroke: var(--void);
   stroke-width: 3.5px;
   transition: fill 0.15s ease;
 }
-.level-label.put { fill: var(--put-hi); }
-.level-label.call { fill: var(--call-hi); }
-.level-label.flip { fill: var(--warn); }
-.level-label.spot { fill: var(--ink); }
+.level-label.put {
+  fill: var(--put-hi);
+}
+.level-label.call {
+  fill: var(--call-hi);
+}
+.level-label.flip {
+  fill: var(--warn);
+}
+.level-label.spot {
+  fill: var(--ink);
+}
 
 /* Crosshair overlay */
 .crosshair {
@@ -822,14 +1056,14 @@ function onMove(e: MouseEvent): void {
   stroke: var(--phosphor);
   stroke-width: 1px;
   stroke-dasharray: 2 3;
-  opacity: .85;
+  opacity: 0.85;
   vector-effect: non-scaling-stroke;
 }
 .crosshair .crosshair-h {
   stroke: var(--rule-hi);
   stroke-width: 1px;
   stroke-dasharray: 2 2;
-  opacity: .75;
+  opacity: 0.75;
   vector-effect: non-scaling-stroke;
 }
 .crosshair .price-dot {
@@ -848,11 +1082,27 @@ function onMove(e: MouseEvent): void {
   font: 700 9px var(--font-data);
 }
 
-.empty { fill: var(--ink-faint); font: 11px var(--font-display); letter-spacing: .1em; }
-.empty-soft { fill: var(--ink-ghost); font: 10px var(--font-display); letter-spacing: .08em; }
+.empty {
+  fill: var(--ink-faint);
+  font: 11px var(--font-display);
+  letter-spacing: 0.1em;
+}
+.empty-soft {
+  fill: var(--ink-ghost);
+  font: 10px var(--font-display);
+  letter-spacing: 0.08em;
+}
 @media (max-width: 900px) {
-  .chart-readout { gap: 3px 5px; }
-  .scale-note, .probe-inline { width: 100%; margin-left: 0; }
-  .struct { display: none; }
+  .chart-readout {
+    gap: 3px 5px;
+  }
+  .scale-note,
+  .probe-inline {
+    width: 100%;
+    margin-left: 0;
+  }
+  .struct {
+    display: none;
+  }
 }
 </style>

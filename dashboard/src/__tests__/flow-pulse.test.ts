@@ -48,19 +48,17 @@ function print(symbol: string, timestamp: string, premium: number): MarketFlowPr
   }
 }
 
-function snapshot(
-  asof: string,
-  rows: UnusualFlowRow[],
-  tape: MarketFlowPrint[],
-): FlowPulsePayload {
+function snapshot(asof: string, rows: UnusualFlowRow[], tape: MarketFlowPrint[]): FlowPulsePayload {
   return { asof, generated_at: asof, rows, tape }
 }
 
 describe('flow snapshot pulse', () => {
   it('treats the first snapshot as a baseline rather than invented new flow', () => {
-    const current = snapshot('2026-08-11T17:00:00Z', [aggregate('SPY', 1, 100_000)], [
-      print('SPY', '2026-08-11T16:59:59Z', 25_000),
-    ])
+    const current = snapshot(
+      '2026-08-11T17:00:00Z',
+      [aggregate('SPY', 1, 100_000)],
+      [print('SPY', '2026-08-11T16:59:59Z', 25_000)],
+    )
     const pulse = buildFlowPulse(null, current)
     expect(pulse.baseline).toBe(true)
     expect(pulse.newPrintCount).toBe(0)
@@ -101,16 +99,22 @@ describe('flow snapshot pulse', () => {
   it('handles duplicate provider prints as a multiset', () => {
     const duplicate = print('IWM', '2026-08-11T17:00:00Z', 40_000)
     const before = snapshot('2026-08-11T17:00:00Z', [aggregate('IWM', 1, 40_000)], [duplicate])
-    const after = snapshot('2026-08-11T17:00:15Z', [aggregate('IWM', 1, 80_000)], [duplicate, { ...duplicate }])
+    const after = snapshot(
+      '2026-08-11T17:00:15Z',
+      [aggregate('IWM', 1, 80_000)],
+      [duplicate, { ...duplicate }],
+    )
     const pulse = buildFlowPulse(before, after)
     expect(pulse.newPrintCount).toBe(1)
     expect(pulse.newPremium).toBe(40_000)
   })
 
   it('keeps the last good window when a poll arrives without a new payload', () => {
-    const current = snapshot('2026-08-11T17:00:00Z', [aggregate('SPY', 1, 100_000)], [
-      print('SPY', '2026-08-11T16:59:59Z', 25_000),
-    ])
+    const current = snapshot(
+      '2026-08-11T17:00:00Z',
+      [aggregate('SPY', 1, 100_000)],
+      [print('SPY', '2026-08-11T16:59:59Z', 25_000)],
+    )
     const held = applyFlowWindow(current, null)
     expect(held.window).toBe(current)
     expect(held.window?.rows).toHaveLength(1)
@@ -122,7 +126,11 @@ describe('flow snapshot pulse', () => {
     const retained = print('SPY', '2026-08-11T16:59:59Z', 25_000)
     const incoming = print('SPY', '2026-08-11T17:00:14Z', 80_000)
     const before = snapshot('2026-08-11T17:00:00Z', [aggregate('SPY', 1, 100_000)], [retained])
-    const after = snapshot('2026-08-11T17:00:14Z', [aggregate('SPY', 1, 180_000)], [incoming, retained])
+    const after = snapshot(
+      '2026-08-11T17:00:14Z',
+      [aggregate('SPY', 1, 180_000)],
+      [incoming, retained],
+    )
     const applied = applyFlowWindow(before, after)
     expect(applied.window).toBe(after)
     expect(applied.pulse?.baseline).toBe(false)

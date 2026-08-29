@@ -399,8 +399,8 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
                   <th class="label">Read</th>
                   <th
                     class="label num sortable"
-                    @click="setSort('abs_score')"
                     title="Ranked by |absorption_score| — the directional read, not raw magnitude"
+                    @click="setSort('abs_score')"
                   >
                     Score {{ sortArrow('abs_score') }}
                   </th>
@@ -409,8 +409,8 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
                   </th>
                   <th
                     class="label num sortable"
-                    @click="setSort('absorption_magnitude')"
                     title="Non-directional strength only — can be high with no signal. Never a signal on its own."
+                    @click="setSort('absorption_magnitude')"
                   >
                     Magnitude {{ sortArrow('absorption_magnitude') }}
                   </th>
@@ -477,7 +477,8 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
                   <td class="fig num">{{ num(row.vol_ratio, 2) }}×</td>
                   <td class="fig num">{{ signedPct(row.imbalance * 100, 1) }}</td>
                   <td class="fig num dim">
-                    {{ row.price_move != null ? signedPct(row.price_move * 100, 2) : DASH }} / {{ pctFrac(row.atr_frac, 1) }}
+                    {{ row.price_move != null ? signedPct(row.price_move * 100, 2) : DASH }} /
+                    {{ pctFrac(row.atr_frac, 1) }}
                   </td>
                 </tr>
               </tbody>

@@ -113,7 +113,9 @@ describe('landing route keeps three.js off its critical path', () => {
     // for a decorative figure below the fold. The operator desk already treats
     // three this way; see ProbabilityDensityChart.vue.
     expect(src).not.toMatch(/^\s*import\s+VolSurfaceCanvas\s+from/m)
-    expect(src).toMatch(/defineAsyncComponent\(\s*\(\)\s*=>\s*import\('@\/components\/VolSurfaceCanvas\.vue'\)/)
+    expect(src).toMatch(
+      /defineAsyncComponent\(\s*\(\)\s*=>\s*import\('@\/components\/VolSurfaceCanvas\.vue'\)/,
+    )
   })
 
   it('does not import three directly', () => {

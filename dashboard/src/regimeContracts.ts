@@ -50,6 +50,26 @@ export interface RegimeState {
    * rather than rendered as a confident neutral.
    */
   measurable: boolean
+  /**
+   * Symbol-relative scale references: the largest |net_gex_m| and |slope|
+   * observed across this symbol's own GEX profile.
+   *
+   * These exist because gamma magnitude is not comparable across instruments.
+   * SPX/SPY net gamma runs orders of magnitude above a single name's, so any
+   * fixed $M divisor either saturates instantly on an index or never engages
+   * on a small cap — and this surface's primary universe is indices and
+   * sector ETFs, the exact case a single-name constant gets wrong.
+   *
+   * Normalizing against the symbol's own profile makes the regime read
+   * scale-free. `GammaExposureMap.vue` already scales its bars by
+   * `net_gex_m / maxAbs` for the same reason; this is that idea, reused.
+   *
+   * Null when the profile is too sparse to establish a scale — consumers must
+   * then fall back to their own documented constant rather than dividing by
+   * zero or assuming a magnitude.
+   */
+  gammaScaleM: number | null
+  slopeScaleM: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +94,22 @@ export interface Smile {
   expiry: string
   /** Strikes that actually carried a usable IV, before interpolation. */
   observedStrikes: number
+  /**
+   * Half-width, in log-moneyness, of the horizon-scaled window the smile was
+   * restricted to, and how many quoted strikes fell outside it.
+   *
+   * Chains quote far wider than any one horizon can price. On a 1DTE SPY chain
+   * sigma*sqrt(T) is ~1.1%, yet the chain quotes strikes 35% out — thirty-odd
+   * standard deviations away, where the IVs are bid-ask noise (observed
+   * oscillating 0.93 -> 0.61 -> 0.85 -> 0.57 across adjacent strikes). Feeding
+   * that to an interpolator puts non-convexity into the repriced call curve,
+   * which surfaces as negative density and large `clippedMass`.
+   *
+   * Dropping those strikes is a judgment about relevance, so it is reported
+   * rather than done silently.
+   */
+  windowHalfWidth: number
+  strikesDropped: number
 }
 
 /**

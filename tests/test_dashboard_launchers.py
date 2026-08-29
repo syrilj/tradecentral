@@ -18,6 +18,7 @@ def test_dashboard_launchers_require_current_flow_contract_and_reuse_vite():
         source = launcher.read_text()
         assert '"flow_feed_contract":"market-wide-v1"' in source
         assert '"suggestion_contract":"paper-candidate-contract-v9"' in source
+        assert '"gamma_regime_contract":"gamma-regime-v1"' in source
         assert "frontend_is_current" in source
         assert "'/@vite/client'" in source
         assert "'/src/main.ts'" in source
@@ -35,6 +36,7 @@ def test_launchers_match_health_contract_without_assuming_json_spacing():
         assert "${health// /}" in source, f"{launcher.name} matches raw health JSON"
         assert '"flow_feed_contract": "market-wide-v1"' not in source
         assert '"suggestion_contract": "paper-candidate-contract-v9"' not in source
+        assert '"gamma_regime_contract": "gamma-regime-v1"' not in source
 
 
 def test_documented_launcher_executes_node_version_probe_instead_of_quoting_it():

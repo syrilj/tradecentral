@@ -1799,11 +1799,7 @@ const finChartData = computed(() => {
 
           <!-- 4. Revenue Breakdown -->
           <div v-else-if="finStatement === 'breakdown'" class="breakdown-grid">
-            <Panel
-              label="Revenue by Business Segment"
-              index="F4a"
-              :meta="breakdownSourceMeta"
-            >
+            <Panel label="Revenue by Business Segment" index="F4a" :meta="breakdownSourceMeta">
               <div v-if="finData.revenue_breakdown?.by_segment?.length" class="breakdown-list">
                 <div
                   v-for="seg in finData.revenue_breakdown.by_segment"
@@ -1846,13 +1842,12 @@ const finChartData = computed(() => {
               </div>
             </Panel>
 
-            <Panel
-              label="Revenue by Geography / Product"
-              index="F4b"
-              :meta="breakdownSourceMeta"
-            >
+            <Panel label="Revenue by Geography / Product" index="F4b" :meta="breakdownSourceMeta">
               <div
-                v-if="finData.revenue_breakdown?.by_geography?.length || finData.revenue_breakdown?.by_product?.length"
+                v-if="
+                  finData.revenue_breakdown?.by_geography?.length ||
+                  finData.revenue_breakdown?.by_product?.length
+                "
                 class="breakdown-list"
               >
                 <template v-if="finData.revenue_breakdown?.by_geography?.length">
@@ -1866,10 +1861,7 @@ const finChartData = computed(() => {
                       <strong class="seg-val fig">{{ formatBigUsd(geo.revenue) }}</strong>
                     </div>
                     <div class="breakdown-progress-track">
-                      <div
-                        class="breakdown-progress-fill"
-                        :style="{ width: `${geo.pct || 0}%` }"
-                      />
+                      <div class="breakdown-progress-fill" :style="{ width: `${geo.pct || 0}%` }" />
                     </div>
                     <div class="breakdown-item-sub">
                       <span class="label dim"
@@ -2219,11 +2211,7 @@ const finChartData = computed(() => {
 
           <!-- 4. Revenue Breakdown Charts -->
           <div v-else-if="finStatement === 'breakdown'" class="breakdown-grid">
-            <Panel
-              label="Revenue by Business Segment"
-              index="F4a"
-              :meta="breakdownSourceMeta"
-            >
+            <Panel label="Revenue by Business Segment" index="F4a" :meta="breakdownSourceMeta">
               <div v-if="finData.revenue_breakdown?.by_segment?.length" class="breakdown-list">
                 <div
                   v-for="seg in finData.revenue_breakdown.by_segment"
@@ -2257,13 +2245,12 @@ const finChartData = computed(() => {
               </div>
             </Panel>
 
-            <Panel
-              label="Revenue by Geography / Product"
-              index="F4b"
-              :meta="breakdownSourceMeta"
-            >
+            <Panel label="Revenue by Geography / Product" index="F4b" :meta="breakdownSourceMeta">
               <div
-                v-if="finData.revenue_breakdown?.by_geography?.length || finData.revenue_breakdown?.by_product?.length"
+                v-if="
+                  finData.revenue_breakdown?.by_geography?.length ||
+                  finData.revenue_breakdown?.by_product?.length
+                "
                 class="breakdown-list"
               >
                 <template v-if="finData.revenue_breakdown?.by_geography?.length">
@@ -2277,10 +2264,7 @@ const finChartData = computed(() => {
                       <strong class="seg-val fig">{{ formatBigUsd(geo.revenue) }}</strong>
                     </div>
                     <div class="breakdown-progress-track">
-                      <div
-                        class="breakdown-progress-fill"
-                        :style="{ width: `${geo.pct || 0}%` }"
-                      />
+                      <div class="breakdown-progress-fill" :style="{ width: `${geo.pct || 0}%` }" />
                     </div>
                     <div class="breakdown-item-sub">
                       <span class="label dim"
@@ -3080,7 +3064,10 @@ const finChartData = computed(() => {
                 :key="size"
                 class="seg-b label"
                 :class="{ on: institutionPageSize === size }"
-                @click="institutionPageSize = size; institutionPage = 1"
+                @click="
+                  institutionPageSize = size
+                  institutionPage = 1
+                "
               >
                 {{ size === 'all' ? 'All' : size }}
               </button>
@@ -3325,17 +3312,27 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">STOCK ACT DISCLOSURES</span>
           <h3 class="unavail-title lab">
-            {{ govData?.available ? 'No Congressional Disclosures on File' : 'Congressional Disclosures Not Connected' }}
+            {{
+              govData?.available
+                ? 'No Congressional Disclosures on File'
+                : 'Congressional Disclosures Not Connected'
+            }}
           </h3>
           <p class="unavail-desc">
             {{
               govData?.available
                 ? `No U.S. House or Senate financial disclosures recorded for ${symbol} in the active window.`
-                : (govData?.reason || `No U.S. House or Senate financial disclosures found for ${symbol}.`)
+                : govData?.reason ||
+                  `No U.S. House or Senate financial disclosures found for ${symbol}.`
             }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
+            <span
+              >Source:
+              <strong>{{
+                govData?.source ? formatSourceLabel(govData.source) : 'Not configured'
+              }}</strong></span
+            >
           </div>
         </div>
       </Panel>
@@ -3373,17 +3370,26 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">LOBBYING DISCLOSURES</span>
           <h3 class="unavail-title lab">
-            {{ govData?.available ? 'No Lobbying Filings on Record' : 'Lobbying Disclosures Not Connected' }}
+            {{
+              govData?.available
+                ? 'No Lobbying Filings on Record'
+                : 'Lobbying Disclosures Not Connected'
+            }}
           </h3>
           <p class="unavail-desc">
             {{
               govData?.available
                 ? `No LDA lobbying disclosures recorded for ${symbol} in the active window.`
-                : (govData?.reason || `No LDA filings on record for ${symbol}.`)
+                : govData?.reason || `No LDA filings on record for ${symbol}.`
             }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
+            <span
+              >Source:
+              <strong>{{
+                govData?.source ? formatSourceLabel(govData.source) : 'Not configured'
+              }}</strong></span
+            >
           </div>
         </div>
       </Panel>
@@ -3419,7 +3425,11 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">FEDERAL CONTRACTS</span>
           <h3 class="unavail-title lab">
-            {{ govData?.available ? 'No Federal Contracts on Record' : 'Federal Contract Data Not Connected' }}
+            {{
+              govData?.available
+                ? 'No Federal Contracts on Record'
+                : 'Federal Contract Data Not Connected'
+            }}
           </h3>
           <p class="unavail-desc">
             {{
@@ -3429,7 +3439,12 @@ const finChartData = computed(() => {
             }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
+            <span
+              >Source:
+              <strong>{{
+                govData?.source ? formatSourceLabel(govData.source) : 'Not configured'
+              }}</strong></span
+            >
           </div>
         </div>
       </Panel>
@@ -3463,7 +3478,9 @@ const finChartData = computed(() => {
         <div v-else class="institutional-unavailable-container">
           <span class="unavail-eyebrow label dim">USPTO PATENTS</span>
           <h3 class="unavail-title lab">
-            {{ govData?.available ? 'No Patent Grants on Record' : 'USPTO Patent Data Not Connected' }}
+            {{
+              govData?.available ? 'No Patent Grants on Record' : 'USPTO Patent Data Not Connected'
+            }}
           </h3>
           <p class="unavail-desc">
             {{
@@ -3473,7 +3490,12 @@ const finChartData = computed(() => {
             }}
           </p>
           <div class="unavail-meta label dim">
-            <span>Source: <strong>{{ govData?.source ? formatSourceLabel(govData.source) : 'Not configured' }}</strong></span>
+            <span
+              >Source:
+              <strong>{{
+                govData?.source ? formatSourceLabel(govData.source) : 'Not configured'
+              }}</strong></span
+            >
           </div>
         </div>
       </Panel>
@@ -4032,8 +4054,7 @@ const finChartData = computed(() => {
   gap: var(--s3);
   padding: var(--s5) var(--s5) var(--s4);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0) 56px),
-    var(--panel);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0) 56px), var(--panel);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xl);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -4066,8 +4087,7 @@ const finChartData = computed(() => {
   min-width: 52px;
   padding: 9px 14px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 60%),
-    var(--void-lift);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 60%), var(--void-lift);
   border: var(--hair) solid var(--rule-hi);
   border-radius: var(--r-lg);
   box-shadow: var(--glass-specular-subtle);
@@ -4231,8 +4251,7 @@ const finChartData = computed(() => {
   color: var(--ink);
   border-color: var(--rule-hi);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01)),
-    var(--panel-hi);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01)), var(--panel-hi);
 }
 
 .btn-action.on,
@@ -4490,8 +4509,7 @@ const finChartData = computed(() => {
   position: relative;
   padding: var(--s4);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 40px),
-    var(--panel);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 40px), var(--panel);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xl);
   cursor: pointer;
@@ -4508,8 +4526,7 @@ const finChartData = computed(() => {
 .quick-card:hover {
   border-color: var(--rule-hi);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 40px),
-    var(--panel-hi);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 40px), var(--panel-hi);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   transform: translateY(-1px);
 }

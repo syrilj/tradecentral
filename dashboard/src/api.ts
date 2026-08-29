@@ -12,6 +12,15 @@ const configuredTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000
 const REQUEST_TIMEOUT_MS =
   Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 30_000
 
+import type { RegimeBreadthPayload } from './regimeContracts'
+import type {
+  MicrostructureRegimeSnapshot,
+  StateEstimationPayload,
+  AnchoredVwapPayload,
+  SystematicSignalsPayload,
+  BacktestTearsheet,
+} from './microstructureContracts'
+
 type AuthTokenProvider = () => Promise<string | null>
 let authTokenProvider: AuthTokenProvider | null = null
 
@@ -2578,6 +2587,80 @@ export const api = {
     return req<OptionsIntelligence>(`/api/options?${params.toString()}`)
   },
 
+  microstructureRegime: (symbol: string, opts?: { rate?: number }) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.rate != null) q.set('rate', String(opts.rate))
+    return req<MicrostructureRegimeSnapshot>(`/api/microstructure-regime?${q.toString()}`)
+  },
+
+  stateEstimation: (
+    symbol: string,
+    opts?: {
+      window?: string
+      h?: number
+      alpha?: number
+      q?: number
+      sigma_r?: number
+      bars?: 'daily' | '1h'
+    },
+  ) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.window) q.set('window', opts.window)
+    if (opts?.h != null) q.set('h', String(opts.h))
+    if (opts?.alpha != null) q.set('alpha', String(opts.alpha))
+    if (opts?.q != null) q.set('q', String(opts.q))
+    if (opts?.sigma_r != null) q.set('sigma_r', String(opts.sigma_r))
+    if (opts?.bars) q.set('bars', opts.bars)
+    return req<StateEstimationPayload>(`/api/state-estimation?${q.toString()}`)
+  },
+
+  anchoredVwap: (symbol: string, opts?: { window?: string; bars?: 'daily' | '1h' }) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.window) q.set('window', opts.window)
+    if (opts?.bars) q.set('bars', opts.bars)
+    return req<AnchoredVwapPayload>(`/api/anchored-vwap?${q.toString()}`)
+  },
+
+  systematicSignals: (
+    symbol: string,
+    opts?: {
+      window?: string
+      h?: number
+      alpha?: number
+      breakout_z?: number
+      exhaustion_z?: number
+      bars?: 'daily' | '1h'
+    },
+  ) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.window) q.set('window', opts.window)
+    if (opts?.h != null) q.set('h', String(opts.h))
+    if (opts?.alpha != null) q.set('alpha', String(opts.alpha))
+    if (opts?.breakout_z != null) q.set('breakout_z', String(opts.breakout_z))
+    if (opts?.exhaustion_z != null) q.set('exhaustion_z', String(opts.exhaustion_z))
+    if (opts?.bars) q.set('bars', opts.bars)
+    return req<SystematicSignalsPayload>(`/api/systematic-execution/signals?${q.toString()}`)
+  },
+
+  systematicBacktest: (
+    symbol: string,
+    opts?: {
+      window?: string
+      capital?: number
+      risk_pct?: number
+      slippage_bps?: number
+      bars?: 'daily' | '1h'
+    },
+  ) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.window) q.set('window', opts.window)
+    if (opts?.capital != null) q.set('capital', String(opts.capital))
+    if (opts?.risk_pct != null) q.set('risk_pct', String(opts.risk_pct))
+    if (opts?.slippage_bps != null) q.set('slippage_bps', String(opts.slippage_bps))
+    if (opts?.bars) q.set('bars', opts.bars)
+    return req<BacktestTearsheet>(`/api/systematic-execution/backtest?${q.toString()}`)
+  },
+
   /**
    * Triggers a live OI capture for one symbol (`/api/options/backfill_oi`) so
    * a symbol with no cached open-interest snapshot can resolve out of the
@@ -2618,6 +2701,17 @@ export const api = {
     if (opts?.force) q.set('force', '1')
     const qs = q.toString()
     return req<OptionsBoard>(`/api/options/board${qs ? `?${qs}` : ''}`)
+  },
+
+  /**
+   * Dealer-gamma regime breadth across a fixed index + sector universe.
+   * Backed by GET /api/gamma/regime.
+   */
+  gammaRegime: (opts?: { force?: boolean; trend?: boolean }) => {
+    const q = new URLSearchParams({ universe: 'core' })
+    if (opts?.force) q.set('force', '1')
+    if (opts?.trend) q.set('trend', '1')
+    return req<RegimeBreadthPayload>(`/api/gamma/regime?${q.toString()}`)
   },
 
   /** Standalone market-wide options-flow window (one live LSE request). */

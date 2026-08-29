@@ -48,6 +48,13 @@ withDefaults(
     <template v-else-if="name === 'flow'">
       <path d="M3 12h3l2.2-6 4 12 2.4-7 1.7 4H21" />
     </template>
+    <template v-else-if="name === 'regime'">
+      <!-- A distribution sitting across a threshold: the flip line, and mass
+           on either side of it. -->
+      <path d="M3 13h18" stroke-dasharray="3 2.5" />
+      <path d="M3 19c4 0 3.5-13 9-13s5 13 9 13" />
+      <path d="M12 3v3" />
+    </template>
     <template v-else-if="name === 'drift'">
       <path d="M3 12h18" />
       <path d="M6 12V6.5M9 12V8M12 12V5M15 12V8.5M18 12V7" />
@@ -228,6 +235,12 @@ withDefaults(
       <path
         d="M12 3.5c2.4 2.2 3.7 5.2 3.7 8.5s-1.3 6.3-3.7 8.5c-2.4-2.2-3.7-5.2-3.7-8.5s1.3-6.3 3.7-8.5Z"
       />
+    </template>
+    <template v-else-if="name === 'absorption'">
+      <path d="M4 19h16" />
+      <path d="M4 12h16" stroke-dasharray="2 2" />
+      <path d="m8 6 4 4 4-4" />
+      <path d="M12 2v8" />
     </template>
     <template v-else>
       <circle cx="12" cy="12" r="8" />

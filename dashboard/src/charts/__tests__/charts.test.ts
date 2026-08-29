@@ -134,7 +134,17 @@ describe('path', () => {
   it('smoothPath falls back for tiny inputs and never emits NaN for real curves', () => {
     expect(smoothPath([])).toBe('')
     expect(smoothPath([{ x: 1, y: 1 }])).toBe('M1,1')
-    expect(smoothPath([{ x: 0, y: 0 }, { x: 10, y: 10 }])).toBe(linePath([{ x: 0, y: 0 }, { x: 10, y: 10 }]))
+    expect(
+      smoothPath([
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ]),
+    ).toBe(
+      linePath([
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ]),
+    )
 
     const d = smoothPath([
       { x: 0, y: 0 },

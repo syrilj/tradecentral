@@ -18,6 +18,9 @@ import { niceTicks } from '@/charts'
 import { useChartSize } from '@/composables/useChartSize'
 import { compact, DASH, num } from '@/format'
 
+export type GexViewMode = 'winner' | 'dual' | 'net' | 'cumulative'
+export type GexLayoutMode = 'graph' | 'split' | 'table'
+
 interface Bar extends GexStrikeRow {
   net: number
   callVal: number
@@ -30,6 +33,12 @@ interface Bar extends GexStrikeRow {
   netY: number
   cumNet: number
   cumNetY: number
+  winnerSide: 'call' | 'put' | 'flat'
+  winnerVal: number
+  winnerH: number
+  winnerY: number
+  winnerPct: number
+  dominanceText: string
   cx: number
   thickness: number
   isSpotNear: boolean
@@ -60,15 +69,18 @@ interface WallLabel {
   cls: 'call' | 'put'
 }
 
-const props = withDefaults(defineProps<{
-  rows: GexStrikeRow[]
-  spot: number
-  callWall: number | null
-  putWall: number | null
-  gammaFlip: number | null
-  focusStrike?: number | null
-  maxHeight?: number
-}>(), { maxHeight: 620, focusStrike: null })
+const props = withDefaults(
+  defineProps<{
+    rows: GexStrikeRow[]
+    spot: number
+    callWall: number | null
+    putWall: number | null
+    gammaFlip: number | null
+    focusStrike?: number | null
+    maxHeight?: number
+  }>(),
+  { maxHeight: 620, focusStrike: null },
+)
 
 const emit = defineEmits<{
   'update:focusStrike': [strike: number | null]
@@ -94,7 +106,8 @@ function onBarKeydown(e: KeyboardEvent, strike: number): void {
     const rows = orderedRows.value
     const idx = rows.findIndex((r) => r.strike === strike)
     if (idx === -1) return
-    const nextIdx = e.key === 'ArrowLeft' ? Math.max(0, idx - 1) : Math.min(rows.length - 1, idx + 1)
+    const nextIdx =
+      e.key === 'ArrowLeft' ? Math.max(0, idx - 1) : Math.min(rows.length - 1, idx + 1)
     const nextStrike = rows[nextIdx].strike
     hoverStrike.value = nextStrike
     if (props.focusStrike != null) {
@@ -130,9 +143,13 @@ const minCol = 14
 const hoverStrike = ref<number | null>(null)
 const strikeScope = ref<'atm' | 'near' | 'wide' | 'all'>('near')
 const metric = ref<'gex' | 'oi'>('gex')
-const viewMode = ref<'dual' | 'net' | 'cumulative'>('dual')
+const viewMode = ref<GexViewMode>('winner')
+const layoutMode = ref<GexLayoutMode>('graph')
 const showTrace = ref<boolean>(true)
 const showRegimes = ref<boolean>(true)
+const tableFilter = ref<string>('')
+const tableSortKey = ref<'strike' | 'winner' | 'call' | 'put' | 'net' | 'dist'>('strike')
+const tableSortDir = ref<'asc' | 'desc'>('asc')
 
 const visible = computed(() => {
   if (!props.rows.length) return []
@@ -140,14 +157,21 @@ const visible = computed(() => {
   let ratio = 0.12
   if (strikeScope.value === 'atm') ratio = 0.06
   else if (strikeScope.value === 'wide') ratio = 0.25
-  const filtered = props.rows.filter((r) => r.strike >= props.spot * (1 - ratio) && r.strike <= props.spot * (1 + ratio))
+  const filtered = props.rows.filter(
+    (r) => r.strike >= props.spot * (1 - ratio) && r.strike <= props.spot * (1 + ratio),
+  )
   return filtered.length >= 6 ? filtered : props.rows
 })
 
 const orderedRows = computed(() => [...visible.value].sort((a, b) => a.strike - b.strike))
 const colCount = computed(() => Math.max(orderedRows.value.length, 1))
 
-const H = computed(() => Math.max(160, hostH.value || 340))
+const H = computed(() => {
+  if (layoutMode.value === 'split') {
+    return Math.max(180, Math.min(260, (hostH.value || 340) * 0.55))
+  }
+  return Math.max(160, hostH.value || 340)
+})
 const plotInnerH = computed(() => Math.max(80, H.value - top - bottom))
 const plotBottom = computed(() => top + plotInnerH.value)
 const zeroY = computed(() => top + plotInnerH.value / 2)
@@ -185,7 +209,10 @@ const maxAbs = computed(() => {
 })
 
 const totalNet = computed(() =>
-  orderedRows.value.reduce((s, r) => s + (metric.value === 'gex' ? r.net_gex_m : r.call_oi - r.put_oi), 0),
+  orderedRows.value.reduce(
+    (s, r) => s + (metric.value === 'gex' ? r.net_gex_m : r.call_oi - r.put_oi),
+    0,
+  ),
 )
 const callTotal = computed(() =>
   orderedRows.value.reduce((s, r) => s + (metric.value === 'gex' ? r.call_gex_m : r.call_oi), 0),
@@ -210,7 +237,7 @@ const maxCumulative = computed(() => {
   let sum = 0
   let peak = 1e-9
   for (const r of orderedRows.value) {
-    sum += (metric.value === 'gex' ? r.net_gex_m : r.call_oi - r.put_oi)
+    sum += metric.value === 'gex' ? r.net_gex_m : r.call_oi - r.put_oi
     if (Math.abs(sum) > peak) peak = Math.abs(sum)
   }
   return peak
@@ -267,6 +294,22 @@ const bars = computed<Bar[]>(() => {
     const callH = Math.max(callVal > 0 ? 2 : 0, (callVal / maxAbs.value) * halfPlotH.value)
     const putH = Math.max(putVal > 0 ? 2 : 0, (putVal / maxAbs.value) * halfPlotH.value)
 
+    const isCallWinner = callVal > putVal
+    const isPutWinner = putVal > callVal
+    const winnerSide: 'call' | 'put' | 'flat' = isCallWinner ? 'call' : isPutWinner ? 'put' : 'flat'
+    const winnerVal = isCallWinner ? callVal : isPutWinner ? putVal : callVal
+    const winnerH = Math.max(winnerVal > 0 ? 2 : 0, (winnerVal / maxAbs.value) * halfPlotH.value)
+    const winnerY = isCallWinner ? zeroY.value - winnerH : zeroY.value
+
+    const sumVal = callVal + putVal
+    const winnerPct =
+      sumVal > 0 ? Math.round(((isCallWinner ? callVal : putVal) / sumVal) * 100) : 50
+    const dominanceText = isCallWinner
+      ? `${winnerPct}% CALL`
+      : isPutWinner
+        ? `${winnerPct}% PUT`
+        : 'TIED'
+
     const callY = zeroY.value - callH
     const putY = zeroY.value
     const netY = zeroY.value - (net / maxAbs.value) * halfPlotH.value
@@ -277,7 +320,8 @@ const bars = computed<Bar[]>(() => {
     const thickness = Math.max(4, Math.min(bandW.value * 0.64, 24))
     const cx = bandCenter(index)
 
-    const isSpotNear = Math.abs(row.strike - props.spot) <= (bandW.value > 0 ? (props.spot * 0.01) : 0.5)
+    const isSpotNear =
+      Math.abs(row.strike - props.spot) <= (bandW.value > 0 ? props.spot * 0.01 : 0.5)
     const isCallWall = props.callWall != null && Math.abs(row.strike - props.callWall) < 0.01
     const isPutWall = props.putWall != null && Math.abs(row.strike - props.putWall) < 0.01
     const isFlip = props.gammaFlip != null && Math.abs(row.strike - props.gammaFlip) < 0.01
@@ -295,6 +339,12 @@ const bars = computed<Bar[]>(() => {
       netY,
       cumNet,
       cumNetY,
+      winnerSide,
+      winnerVal,
+      winnerH,
+      winnerY,
+      winnerPct,
+      dominanceText,
       cx,
       thickness,
       isSpotNear,
@@ -309,7 +359,8 @@ const bars = computed<Bar[]>(() => {
  *  bar tip so the extremes are readable without hover. */
 const wallLabels = computed<WallLabel[]>(() => {
   const out: WallLabel[] = []
-  if (viewMode.value === 'cumulative' || !bars.value.length) return out
+  if (viewMode.value === 'cumulative' || layoutMode.value === 'table' || !bars.value.length)
+    return out
   const cw =
     props.callWall != null
       ? bars.value.find((b) => Math.abs(b.strike - (props.callWall as number)) < 0.01)
@@ -319,12 +370,58 @@ const wallLabels = computed<WallLabel[]>(() => {
       ? bars.value.find((b) => Math.abs(b.strike - (props.putWall as number)) < 0.01)
       : undefined
   if (cw && cw.callH > 16) {
-    out.push({ key: 'call', x: cw.cx, y: cw.callY - 8, text: metricValue(cw.callVal, true), cls: 'call' })
+    const yPos =
+      viewMode.value === 'winner' && cw.winnerSide === 'put'
+        ? cw.winnerY + cw.winnerH + 16
+        : cw.callY - 8
+    out.push({ key: 'call', x: cw.cx, y: yPos, text: metricValue(cw.callVal, true), cls: 'call' })
   }
   if (pw && pw.putH > 16) {
-    out.push({ key: 'put', x: pw.cx, y: pw.putY + pw.putH + 16, text: metricValue(pw.putVal), cls: 'put' })
+    const yPos =
+      viewMode.value === 'winner' && pw.winnerSide === 'call'
+        ? pw.winnerY - 8
+        : pw.putY + pw.putH + 16
+    out.push({ key: 'put', x: pw.cx, y: yPos, text: metricValue(pw.putVal), cls: 'put' })
   }
   return out
+})
+
+function setTableSort(key: 'strike' | 'winner' | 'call' | 'put' | 'net' | 'dist'): void {
+  if (tableSortKey.value === key) {
+    tableSortDir.value = tableSortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    tableSortKey.value = key
+    tableSortDir.value = key === 'strike' ? 'asc' : 'desc'
+  }
+}
+
+const filteredTableRows = computed(() => {
+  let list = bars.value
+  if (tableFilter.value.trim()) {
+    const q = tableFilter.value.trim().toLowerCase()
+    list = list.filter((b) => {
+      return (
+        String(b.strike).includes(q) ||
+        b.winnerSide.includes(q) ||
+        b.dominanceText.toLowerCase().includes(q) ||
+        (b.isCallWall && 'call wall'.includes(q)) ||
+        (b.isPutWall && 'put wall'.includes(q)) ||
+        (b.isFlip && 'flip'.includes(q)) ||
+        (b.isSpotNear && 'spot atm'.includes(q))
+      )
+    })
+  }
+  return [...list].sort((a, b) => {
+    let diff = 0
+    if (tableSortKey.value === 'strike') diff = a.strike - b.strike
+    else if (tableSortKey.value === 'winner') diff = a.winnerPct - b.winnerPct
+    else if (tableSortKey.value === 'call') diff = a.callVal - b.callVal
+    else if (tableSortKey.value === 'put') diff = a.putVal - b.putVal
+    else if (tableSortKey.value === 'net') diff = a.net - b.net
+    else if (tableSortKey.value === 'dist')
+      diff = Math.abs(a.strike - props.spot) - Math.abs(b.strike - props.spot)
+    return tableSortDir.value === 'asc' ? diff : -diff
+  })
 })
 
 const focusBar = computed(() => {
@@ -414,9 +511,7 @@ const levels = computed<Level[]>(() => {
       key: 'spot',
       label: 'SPOT',
       value:
-        props.spot != null && Number.isFinite(props.spot) && props.spot > 0
-          ? props.spot
-          : null,
+        props.spot != null && Number.isFinite(props.spot) && props.spot > 0 ? props.spot : null,
       cls: 'spot',
     },
     {
@@ -431,7 +526,10 @@ const levels = computed<Level[]>(() => {
   ]
   const placed = raw
     .map((level) => ({ ...level, x: level.value != null ? xOfPrice(level.value) : null }))
-    .filter((level): level is { key: string; label: string; value: number; cls: string; x: number } => level.x != null)
+    .filter(
+      (level): level is { key: string; label: string; value: number; cls: string; x: number } =>
+        level.x != null,
+    )
     .sort((a, b) => a.x - b.x)
 
   if (!placed.length) return []
@@ -486,14 +584,12 @@ const levels = computed<Level[]>(() => {
 
   // 5. Detect remaining congestion for vertical tier staggering
   const hasRemainingOverlap = xs.some((x, i) => i > 0 && x - xs[i - 1] < gapBetween(i - 1, i) - 2)
-  const isWidthConstrained = (maxBoundary - minBoundary) < placed.length * (maxHalf * 2 + 4)
+  const isWidthConstrained = maxBoundary - minBoundary < placed.length * (maxHalf * 2 + 4)
 
   return placed.map((level, i) => {
     const labelX = Math.max(minBoundary, Math.min(maxBoundary, xs[i]))
     // Position labels cleanly in dedicated banner lane [24 .. 38]
-    const labelY = (hasRemainingOverlap || isWidthConstrained)
-      ? (i % 2 === 0 ? 24 : 36)
-      : 30
+    const labelY = hasRemainingOverlap || isWidthConstrained ? (i % 2 === 0 ? 24 : 36) : 30
 
     return {
       ...level,
@@ -532,7 +628,9 @@ const cumulativeAreaPath = computed(() => {
   if (bars.value.length <= 1) return ''
   const first = bars.value[0]
   const last = bars.value[bars.value.length - 1]
-  const line = bars.value.map((b, i) => `${i === 0 ? 'M' : 'L'} ${b.cx.toFixed(1)} ${b.cumNetY.toFixed(1)}`).join(' ')
+  const line = bars.value
+    .map((b, i) => `${i === 0 ? 'M' : 'L'} ${b.cx.toFixed(1)} ${b.cumNetY.toFixed(1)}`)
+    .join(' ')
   return `${line} L ${last.cx.toFixed(1)} ${zeroY.value.toFixed(1)} L ${first.cx.toFixed(1)} ${zeroY.value.toFixed(1)} Z`
 })
 
@@ -568,7 +666,10 @@ const strikeTicks = computed(() => {
   let best = Infinity
   rows.forEach((r, i) => {
     const d = Math.abs(r.strike - props.spot)
-    if (d < best) { best = d; nearest = i }
+    if (d < best) {
+      best = d
+      nearest = i
+    }
   })
   indices.add(nearest)
   return Array.from(indices)
@@ -582,16 +683,22 @@ const strikeTicks = computed(() => {
 })
 
 function barAriaLabel(bar: Bar): string {
-  const callText = metric.value === 'gex' ? `call GEX ${metricValue(bar.call_gex_m)}` : `call OI ${compact(bar.call_oi)}`
-  const putText = metric.value === 'gex' ? `put GEX ${metricValue(Math.abs(bar.put_gex_m))}` : `put OI ${compact(bar.put_oi)}`
+  const callText =
+    metric.value === 'gex'
+      ? `call GEX ${metricValue(bar.call_gex_m)}`
+      : `call OI ${compact(bar.call_oi)}`
+  const putText =
+    metric.value === 'gex'
+      ? `put GEX ${metricValue(Math.abs(bar.put_gex_m))}`
+      : `put OI ${compact(bar.put_oi)}`
   const netText = `net ${metricValue(bar.net, true)}`
   return `Strike $${strikeLabel(bar.strike)}. ${callText}, ${putText}, ${netText}.`
 }
 
 function jumpToLevel(strike: number | null): void {
   if (strike == null || !Number.isFinite(strike)) return
-  const closest = orderedRows.value.reduce((best, row) =>
-    Math.abs(row.strike - strike) < Math.abs(best.strike - strike) ? row : best,
+  const closest = orderedRows.value.reduce(
+    (best, row) => (Math.abs(row.strike - strike) < Math.abs(best.strike - strike) ? row : best),
     orderedRows.value[0],
   )
   if (closest) {
@@ -624,16 +731,19 @@ onMounted(() => {
   })
 })
 
-watch(() => [props.spot, props.rows, strikeScope.value], () => {
-  nextTick(() => {
-    centerOnSpot()
-  })
-})
+watch(
+  () => [props.spot, props.rows, strikeScope.value],
+  () => {
+    nextTick(() => {
+      centerOnSpot()
+    })
+  },
+)
 </script>
 
 <template>
   <div class="gex-map" @keydown.esc="clearLock">
-    <!-- Top toolbar: metric switch, range scope, view mode, overlays & legend -->
+    <!-- Top toolbar: metric switch, range scope, view mode, layout mode, overlays & legend -->
     <div class="map-controls">
       <div class="control-group">
         <div class="mini-segment" role="group" aria-label="Metric selection">
@@ -641,43 +751,140 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             type="button"
             class="label"
             :class="{ on: metric === 'gex' }"
-            @click="metric = 'gex'"
             title="Display Dollar Gamma Exposure ($M per 1% move)"
-          >CALL & PUT GEX</button>
+            @click="metric = 'gex'"
+          >
+            CALL & PUT GEX
+          </button>
           <button
             type="button"
             class="label"
             :class="{ on: metric === 'oi' }"
-            @click="metric = 'oi'"
             title="Display Open Interest in Contracts"
-          >CALL & PUT OI</button>
+            @click="metric = 'oi'"
+          >
+            CALL & PUT OI
+          </button>
         </div>
       </div>
 
       <div class="control-group">
         <div class="mini-segment" role="group" aria-label="Strike range preset">
-          <button type="button" class="label" :class="{ on: strikeScope === 'atm' }" @click="strikeScope = 'atm'">ATM (±6%)</button>
-          <button type="button" class="label" :class="{ on: strikeScope === 'near' }" @click="strikeScope = 'near'">NEAR (±12%)</button>
-          <button type="button" class="label" :class="{ on: strikeScope === 'wide' }" @click="strikeScope = 'wide'">WIDE (±25%)</button>
-          <button type="button" class="label" :class="{ on: strikeScope === 'all' }" @click="strikeScope = 'all'">ALL STRIKES</button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: strikeScope === 'atm' }"
+            @click="strikeScope = 'atm'"
+          >
+            ATM (±6%)
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: strikeScope === 'near' }"
+            @click="strikeScope = 'near'"
+          >
+            NEAR (±12%)
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: strikeScope === 'wide' }"
+            @click="strikeScope = 'wide'"
+          >
+            WIDE (±25%)
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: strikeScope === 'all' }"
+            @click="strikeScope = 'all'"
+          >
+            ALL STRIKES
+          </button>
         </div>
       </div>
 
       <div class="control-group">
         <div class="mini-segment" role="group" aria-label="View format">
-          <button type="button" class="label" :class="{ on: viewMode === 'dual' }" @click="viewMode = 'dual'" title="Dual Call / Put Bars">DUAL BARS</button>
-          <button type="button" class="label" :class="{ on: viewMode === 'net' }" @click="viewMode = 'net'" title="Single Net Exposure Bar per Strike">NET PROFILE</button>
-          <button type="button" class="label" :class="{ on: viewMode === 'cumulative' }" @click="viewMode = 'cumulative'" title="Cumulative Hedge Requirement across Strikes">CUMULATIVE</button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: viewMode === 'winner' }"
+            title="Show Winning Side per Strike (Calls Above in Green / Puts Below in Red)"
+            @click="viewMode = 'winner'"
+          >
+            WINNING SIDE
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: viewMode === 'dual' }"
+            title="Dual Call / Put Bars"
+            @click="viewMode = 'dual'"
+          >
+            DUAL BARS
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: viewMode === 'net' }"
+            title="Single Net Exposure Bar per Strike"
+            @click="viewMode = 'net'"
+          >
+            NET PROFILE
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: viewMode === 'cumulative' }"
+            title="Cumulative Hedge Requirement across Strikes"
+            @click="viewMode = 'cumulative'"
+          >
+            CUMULATIVE
+          </button>
         </div>
       </div>
 
-      <div class="control-group toggles">
+      <div class="control-group">
+        <div class="mini-segment layout-seg" role="group" aria-label="Display layout">
+          <button
+            type="button"
+            class="label"
+            :class="{ on: layoutMode === 'graph' }"
+            title="Graph View"
+            @click="layoutMode = 'graph'"
+          >
+            GRAPH
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: layoutMode === 'split' }"
+            title="Split Graph + Table View"
+            @click="layoutMode = 'split'"
+          >
+            SPLIT
+          </button>
+          <button
+            type="button"
+            class="label"
+            :class="{ on: layoutMode === 'table' }"
+            title="Strike Matrix Table View"
+            @click="layoutMode = 'table'"
+          >
+            TABLE
+          </button>
+        </div>
+      </div>
+
+      <div v-if="layoutMode !== 'table'" class="control-group toggles">
         <button
           type="button"
           class="pill-toggle label"
           :class="{ active: showTrace }"
-          @click="showTrace = !showTrace"
           title="Toggle Net Profile Trace Line"
+          @click="showTrace = !showTrace"
         >
           NET TRACE
         </button>
@@ -686,56 +893,75 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
           type="button"
           class="pill-toggle label"
           :class="{ active: showRegimes }"
-          @click="showRegimes = !showRegimes"
           title="Toggle Positive vs Negative Gamma Regime Zones"
+          @click="showRegimes = !showRegimes"
         >
           REGIMES
         </button>
       </div>
 
-      <div class="quick-levels" v-if="(putWall != null && putWall > 0) || (gammaFlip != null && gammaFlip > 0) || (spot != null && spot > 0) || (callWall != null && callWall > 0)">
+      <div
+        v-if="
+          (putWall != null && putWall > 0) ||
+          (gammaFlip != null && gammaFlip > 0) ||
+          (spot != null && spot > 0) ||
+          (callWall != null && callWall > 0)
+        "
+        class="quick-levels"
+      >
         <span class="label quick-title">JUMP:</span>
         <button
           v-if="putWall != null && putWall > 0"
           type="button"
           class="level-chip put label"
-          @click="jumpToLevel(putWall)"
           title="Jump to Put Wall"
-        >PUT W ${{ strikeLabel(putWall) }}</button>
+          @click="jumpToLevel(putWall)"
+        >
+          PUT W ${{ strikeLabel(putWall) }}
+        </button>
         <button
           v-if="gammaFlip != null && gammaFlip > 0"
           type="button"
           class="level-chip flip label"
-          @click="jumpToLevel(gammaFlip)"
           title="Jump to Gamma Flip"
-        >FLIP ${{ strikeLabel(gammaFlip) }}</button>
+          @click="jumpToLevel(gammaFlip)"
+        >
+          FLIP ${{ strikeLabel(gammaFlip) }}
+        </button>
         <button
           v-if="spot != null && spot > 0"
           type="button"
           class="level-chip spot label"
-          @click="jumpToLevel(spot)"
           title="Jump to Spot"
-        >SPOT ${{ strikeLabel(spot) }}</button>
+          @click="jumpToLevel(spot)"
+        >
+          SPOT ${{ strikeLabel(spot) }}
+        </button>
         <button
           v-if="callWall != null && callWall > 0"
           type="button"
           class="level-chip call label"
-          @click="jumpToLevel(callWall)"
           title="Jump to Call Wall"
-        >CALL W ${{ strikeLabel(callWall) }}</button>
+          @click="jumpToLevel(callWall)"
+        >
+          CALL W ${{ strikeLabel(callWall) }}
+        </button>
       </div>
 
       <span class="coverage label">
         {{ bars.length < rows.length ? `IN VIEW ${bars.length}/${rows.length}` : 'FULL CHAIN' }} ·
         <span class="call-leg"><i class="leg-dot call" />CALL</span> ·
         <span class="put-leg"><i class="leg-dot put" />PUT</span> ·
-        <span class="net-leg"><i class="leg-line net" />NET</span>
+        <span class="net-leg"><i class="leg-dot net" />NET</span>
       </span>
     </div>
 
     <!-- Aggregate HUD bar + Interactive Strike Inspector -->
     <div class="exposure-head">
-      <div v-if="!((hoverStrike != null || focusStrike != null) && focusBar)" class="exposure-totals">
+      <div
+        v-if="!((hoverStrike != null || focusStrike != null) && focusBar)"
+        class="exposure-totals"
+      >
         <div class="exposure-total call">
           <span class="label">{{ metric === 'gex' ? 'CALL GEX' : 'CALL OI' }}</span>
           <strong class="fig">{{ metricValue(callTotal, true) }}</strong>
@@ -757,6 +983,17 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
           </span>
           <strong class="fig">${{ strikeLabel(focusBar.strike) }}</strong>
           <small class="dist-tag">{{ distanceLabel(focusBar.strike) }}</small>
+        </div>
+        <div class="focus-metric winner" :class="focusBar.winnerSide">
+          <span class="label">WINNING BIAS</span>
+          <strong class="fig">{{ focusBar.dominanceText }}</strong>
+          <small>{{
+            focusBar.winnerSide === 'call'
+              ? 'Call Dominance'
+              : focusBar.winnerSide === 'put'
+                ? 'Put Dominance'
+                : 'Balanced'
+          }}</small>
         </div>
         <div class="focus-metric call">
           <span class="label">CALL {{ metric === 'gex' ? 'GEX' : 'OI' }}</span>
@@ -783,17 +1020,20 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
           v-if="focusStrike != null"
           type="button"
           class="clear-lock label"
-          @click="clearLock"
           title="Clear locked strike (Esc)"
-        >CLEAR</button>
+          @click="clearLock"
+        >
+          CLEAR
+        </button>
       </div>
     </div>
 
-    <!-- Main Chart Area with SVG Viewbox -->
+    <!-- Main Chart Area with SVG Viewbox (Rendered in GRAPH and SPLIT modes) -->
     <div
+      v-if="layoutMode !== 'table'"
       ref="hostRef"
       class="plot-scroll"
-      :class="{ scrollable }"
+      :class="{ scrollable, 'split-view': layoutMode === 'split' }"
     >
       <svg
         :viewBox="`0 0 ${W} ${H}`"
@@ -803,24 +1043,20 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
           height: '100%',
           width: scrollable ? `${W}px` : '100%',
           minWidth: scrollable ? `${W}px` : '100%',
-          display: 'block'
+          display: 'block',
         }"
         role="img"
         aria-label="Call and Put gamma exposure by strike. Calls up, Puts down, Net as a smooth trace line."
       >
-        <title>Call vs Put GEX by strike. Call GEX up, Put GEX down, Net as a smooth trace line.</title>
+        <title>
+          Call vs Put GEX by strike. Winning side indicated by Call UP in emerald green or Put DOWN
+          in crimson red.
+        </title>
 
         <defs>
           <!-- Plot frame clip path to guarantee zero bar overflow -->
           <clipPath id="gex-plot-clip">
-            <rect
-              :x="left"
-              :y="top"
-              :width="plotInnerW"
-              :height="plotInnerH"
-              rx="1"
-              ry="1"
-            />
+            <rect :x="left" :y="top" :width="plotInnerW" :height="plotInnerH" rx="1" ry="1" />
           </clipPath>
 
           <!-- Bar gradients: bright at the data tip, settling into the baseline -->
@@ -837,16 +1073,15 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
         </defs>
 
         <!-- Base Plot Background Frame -->
-        <rect
-          class="plot-frame"
-          :x="left"
-          :y="top"
-          :width="plotInnerW"
-          :height="plotInnerH"
-        />
+        <rect class="plot-frame" :x="left" :y="top" :width="plotInnerW" :height="plotInnerH" />
 
         <!-- Optional Gamma Regime Zones Background Shading -->
-        <g v-if="showRegimes && flipX != null && rows.length" class="regime-zones" clip-path="url(#gex-plot-clip)" aria-hidden="true">
+        <g
+          v-if="showRegimes && flipX != null && rows.length"
+          class="regime-zones"
+          clip-path="url(#gex-plot-clip)"
+          aria-hidden="true"
+        >
           <!-- Negative Gamma Zone (Below Flip) -->
           <rect
             v-if="flipX > left"
@@ -865,19 +1100,18 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             :width="Math.max(0, left + plotInnerW - Math.max(flipX, left))"
             :height="plotInnerH"
           />
-          <text
-            v-if="flipX > left + 110"
-            :x="left + 8"
-            :y="top + 14"
-            class="regime-label neg halo"
-          >SHORT GAMMA · VOL AMPLIFIED</text>
+          <text v-if="flipX > left + 110" :x="left + 8" :y="top + 14" class="regime-label neg halo">
+            SHORT GAMMA · VOLATILITY AMPLIFIED
+          </text>
           <text
             v-if="flipX < left + plotInnerW - 110"
             :x="left + plotInnerW - 8"
             :y="top + 14"
             text-anchor="end"
             class="regime-label pos halo"
-          >LONG GAMMA · VOL DAMPENED</text>
+          >
+            LONG GAMMA · VOLATILITY DAMPENED
+          </text>
         </g>
 
         <!-- Y Grid Lines (hairline, recessive) + vertical strike guides -->
@@ -904,13 +1138,7 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
         <!-- Zero Axis — the one allowed-to-be-loud gridline -->
         <g v-if="rows.length" class="zero-baseline-group">
-          <line
-            :x1="left"
-            :x2="left + plotInnerW"
-            :y1="zeroY"
-            :y2="zeroY"
-            class="zero-baseline"
-          />
+          <line :x1="left" :x2="left + plotInnerW" :y1="zeroY" :y2="zeroY" class="zero-baseline" />
         </g>
 
         <!-- Structural Level Guides & Top Labels (Rendered cleanly above the bar peaks) -->
@@ -957,7 +1185,11 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
         </g>
 
         <!-- Cumulative Area / Line (when in cumulative viewMode) -->
-        <g v-if="viewMode === 'cumulative' && rows.length" class="cumulative-group" clip-path="url(#gex-plot-clip)">
+        <g
+          v-if="viewMode === 'cumulative' && rows.length"
+          class="cumulative-group"
+          clip-path="url(#gex-plot-clip)"
+        >
           <path class="cum-area" :d="cumulativeAreaPath" />
           <path class="cum-line" :d="cumulativeLinePath" />
         </g>
@@ -994,8 +1226,42 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
               :height="plotInnerH"
             />
 
+            <!-- WINNING SIDE MODE: Call Above (Emerald), Put Below (Crimson) -->
+            <template v-if="viewMode === 'winner'">
+              <rect
+                v-if="bar.winnerH > 0 && bar.winnerSide === 'call'"
+                class="call-bar winner-bar"
+                :x="bar.cx - bar.thickness / 2"
+                :y="bar.winnerY"
+                :width="bar.thickness"
+                :height="bar.winnerH"
+                rx="2"
+                ry="2"
+              >
+                <title>
+                  ${{ strikeLabel(bar.strike) }} Call Dominant ({{ bar.dominanceText }})
+                  {{ metricValue(bar.callVal) }}
+                </title>
+              </rect>
+              <rect
+                v-else-if="bar.winnerH > 0 && bar.winnerSide === 'put'"
+                class="put-bar winner-bar"
+                :x="bar.cx - bar.thickness / 2"
+                :y="bar.winnerY"
+                :width="bar.thickness"
+                :height="bar.winnerH"
+                rx="2"
+                ry="2"
+              >
+                <title>
+                  ${{ strikeLabel(bar.strike) }} Put Dominant ({{ bar.dominanceText }})
+                  {{ metricValue(bar.putVal) }}
+                </title>
+              </rect>
+            </template>
+
             <!-- DUAL BARS MODE: Call UP / Put DOWN -->
-            <template v-if="viewMode === 'dual'">
+            <template v-else-if="viewMode === 'dual'">
               <!-- Call Bar (gradient emerald, grows UP from zeroY) -->
               <rect
                 v-if="bar.callH > 0"
@@ -1053,15 +1319,27 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             text-anchor="middle"
             class="wall-label halo"
             :class="wl.cls"
-          >{{ wl.text }}</text>
+          >
+            {{ wl.text }}
+          </text>
         </g>
 
         <!-- Continuous Net Trace — smooth swept line, single hover crosshair dot -->
-        <g v-if="showTrace && viewMode !== 'cumulative' && rows.length" class="net-trace-group" clip-path="url(#gex-plot-clip)" aria-hidden="true">
+        <g
+          v-if="showTrace && viewMode !== 'cumulative' && rows.length"
+          class="net-trace-group"
+          clip-path="url(#gex-plot-clip)"
+          aria-hidden="true"
+        >
           <path class="net-trace-path" :d="netTracePath" />
         </g>
         <circle
-          v-if="showTrace && viewMode !== 'cumulative' && focusBar && (hoverStrike != null || focusStrike != null)"
+          v-if="
+            showTrace &&
+            viewMode !== 'cumulative' &&
+            focusBar &&
+            (hoverStrike != null || focusStrike != null)
+          "
           class="net-trace-dot"
           :cx="focusBar.cx"
           :cy="focusBar.netY"
@@ -1077,18 +1355,23 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
             :x="left - 8"
             :y="tick.y + 3.5"
             text-anchor="end"
-          >{{ axisValue(tick.value) }}</text>
+          >
+            {{ axisValue(tick.value) }}
+          </text>
         </g>
-        <text
-          v-if="rows.length"
-          class="axis-cap"
-          :x="left"
-          :y="14"
-        >
+        <text v-if="rows.length" class="axis-cap" :x="left" :y="14">
           {{
             viewMode === 'cumulative'
-              ? (metric === 'gex' ? 'CUMULATIVE NET GEX $M' : 'CUMULATIVE NET OI')
-              : (metric === 'gex' ? 'GEX $M · CALL UP / PUT DN' : 'OI · CALL UP / PUT DN')
+              ? metric === 'gex'
+                ? 'CUMULATIVE NET GEX $M'
+                : 'CUMULATIVE NET OI'
+              : viewMode === 'winner'
+                ? metric === 'gex'
+                  ? 'WINNER GEX $M · CALL UP / PUT DN'
+                  : 'WINNER OI · CALL UP / PUT DN'
+                : metric === 'gex'
+                  ? 'GEX $M · CALL UP / PUT DN'
+                  : 'OI · CALL UP / PUT DN'
           }}
         </text>
 
@@ -1104,8 +1387,19 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
               rx="8"
               class="spot-pill"
             />
-            <line :x1="tick.x" :x2="tick.x" :y1="plotBottom" :y2="plotBottom + 5" :class="{ 'spot-tick': tick.isSpot }" />
-            <text :x="tick.x" :y="plotBottom + 19" text-anchor="middle" :class="{ 'spot-label': tick.isSpot }">
+            <line
+              :x1="tick.x"
+              :x2="tick.x"
+              :y1="plotBottom"
+              :y2="plotBottom + 5"
+              :class="{ 'spot-tick': tick.isSpot }"
+            />
+            <text
+              :x="tick.x"
+              :y="plotBottom + 19"
+              text-anchor="middle"
+              :class="{ 'spot-label': tick.isSpot }"
+            >
               ${{ tick.label }}
             </text>
           </template>
@@ -1113,18 +1407,157 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
 
         <!-- Empty State Viewfinder -->
         <g v-if="!rows.length" class="empty-group">
-          <rect
-            :x="W / 2 - 140"
-            :y="H / 2 - 24"
-            width="280"
-            height="48"
-            class="empty-frame"
-          />
+          <rect :x="W / 2 - 140" :y="H / 2 - 24" width="280" height="48" class="empty-frame" />
           <text :x="W / 2" :y="H / 2 + 4" text-anchor="middle" class="empty">
             NO QUALIFYING GAMMA OBSERVATIONS
           </text>
         </g>
       </svg>
+    </div>
+
+    <!-- Options Strike Matrix Table (Rendered in SPLIT and TABLE modes) -->
+    <div
+      v-if="layoutMode !== 'graph'"
+      class="gex-table-wrap"
+      :class="{ 'full-view': layoutMode === 'table' }"
+    >
+      <div class="gex-table-toolbar">
+        <div class="gex-table-search">
+          <input
+            v-model="tableFilter"
+            type="text"
+            placeholder="Filter strikes / tags (call, put, wall, flip)..."
+            class="gex-table-input label"
+            aria-label="Filter strike matrix"
+          />
+          <button
+            v-if="tableFilter"
+            type="button"
+            class="clear-input label"
+            @click="tableFilter = ''"
+          >
+            ×
+          </button>
+        </div>
+        <span class="table-count label"> {{ filteredTableRows.length }} STRIKES </span>
+      </div>
+      <div class="gex-table-scroll">
+        <table class="gex-strike-table" role="table" aria-label="Options strike matrix">
+          <thead>
+            <tr>
+              <th :class="{ active: tableSortKey === 'strike' }" @click="setTableSort('strike')">
+                STRIKE
+                <span class="sort-arr">{{
+                  tableSortKey === 'strike' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                }}</span>
+              </th>
+              <th :class="{ active: tableSortKey === 'winner' }" @click="setTableSort('winner')">
+                WINNER / BIAS
+                <span class="sort-arr">{{
+                  tableSortKey === 'winner' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                }}</span>
+              </th>
+              <th
+                class="num-col"
+                :class="{ active: tableSortKey === 'call' }"
+                @click="setTableSort('call')"
+              >
+                CALL {{ metric.toUpperCase() }}
+                <span class="sort-arr">{{
+                  tableSortKey === 'call' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                }}</span>
+              </th>
+              <th
+                class="num-col"
+                :class="{ active: tableSortKey === 'put' }"
+                @click="setTableSort('put')"
+              >
+                PUT {{ metric.toUpperCase() }}
+                <span class="sort-arr">{{
+                  tableSortKey === 'put' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                }}</span>
+              </th>
+              <th
+                class="num-col"
+                :class="{ active: tableSortKey === 'net' }"
+                @click="setTableSort('net')"
+              >
+                NET {{ metric.toUpperCase() }}
+                <span class="sort-arr">{{
+                  tableSortKey === 'net' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                }}</span>
+              </th>
+              <th
+                class="num-col"
+                :class="{ active: tableSortKey === 'dist' }"
+                @click="setTableSort('dist')"
+              >
+                SPOT DISTANCE
+                <span class="sort-arr">{{
+                  tableSortKey === 'dist' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                }}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="bar in filteredTableRows"
+              :key="`row-${bar.strike}`"
+              :class="{
+                'active-row': focusBar?.strike === bar.strike,
+                'locked-row': focusStrike === bar.strike,
+                'spot-row': bar.isSpotNear,
+              }"
+              tabindex="0"
+              role="row"
+              @mouseenter="hoverStrike = bar.strike"
+              @mouseleave="hoverStrike = null"
+              @click="lockStrike(bar.strike)"
+              @keydown.enter.prevent="lockStrike(bar.strike)"
+              @keydown.space.prevent="lockStrike(bar.strike)"
+            >
+              <td class="strike-cell">
+                <span class="strike-val">${{ strikeLabel(bar.strike) }}</span>
+                <span v-if="bar.isSpotNear" class="tag-badge spot">SPOT</span>
+                <span v-if="bar.isCallWall" class="tag-badge call">CALL W</span>
+                <span v-if="bar.isPutWall" class="tag-badge put">PUT W</span>
+                <span v-if="bar.isFlip" class="tag-badge flip">FLIP</span>
+              </td>
+              <td>
+                <span class="winner-pill" :class="bar.winnerSide">
+                  <i class="winner-dot" />
+                  {{ bar.dominanceText }}
+                </span>
+              </td>
+              <td class="num-col call-num">
+                {{ metricValue(bar.callVal) }}
+                <small class="sub-num">OI {{ compact(bar.call_oi) }}</small>
+              </td>
+              <td class="num-col put-num">
+                {{ metricValue(bar.putVal) }}
+                <small class="sub-num">OI {{ compact(bar.put_oi) }}</small>
+              </td>
+              <td class="num-col net-num" :class="bar.net >= 0 ? 'positive' : 'negative'">
+                <span class="net-val">{{ metricValue(bar.net, true) }}</span>
+                <div class="net-micro-meter">
+                  <i
+                    :class="bar.net >= 0 ? 'meter-pos' : 'meter-neg'"
+                    :style="{
+                      width: `${Math.min(100, (Math.abs(bar.net) / (maxAbs || 1)) * 100)}%`,
+                    }"
+                  />
+                </div>
+              </td>
+              <td class="num-col dist-num">
+                {{ distanceLabel(bar.strike) }}
+              </td>
+            </tr>
+            <tr v-if="!filteredTableRows.length">
+              <td colspan="6" class="no-rows">No strikes match the filter.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </template>
@@ -1189,7 +1622,9 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   cursor: pointer;
   background: transparent;
   border-radius: var(--r-xs);
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
 
 .mini-segment button:hover {
@@ -1264,7 +1699,10 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   border-radius: 9999px;
   background: var(--void-lift);
   box-shadow: var(--glass-specular-subtle);
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease, background 0.15s ease;
+  transition:
+    transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.15s ease,
+    background 0.15s ease;
   white-space: nowrap;
 }
 
@@ -1274,10 +1712,26 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   transform: translateY(-0.5px);
 }
 
-.level-chip.put { color: var(--put-hi); border-color: var(--put); background: var(--put-wash); }
-.level-chip.call { color: var(--call-hi); border-color: var(--call); background: var(--call-wash); }
-.level-chip.flip { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.level-chip.spot { color: var(--ink); border-color: var(--ink-dim); background: var(--void-lift); }
+.level-chip.put {
+  color: var(--put-hi);
+  border-color: var(--put);
+  background: var(--put-wash);
+}
+.level-chip.call {
+  color: var(--call-hi);
+  border-color: var(--call);
+  background: var(--call-wash);
+}
+.level-chip.flip {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+.level-chip.spot {
+  color: var(--ink);
+  border-color: var(--ink-dim);
+  background: var(--void-lift);
+}
 /* Painted size stays compact for desk density; this restores a 28px pointer
    target underneath without touching layout. */
 .level-chip::after {
@@ -1289,7 +1743,6 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   height: max(100%, 28px);
   transform: translate(-50%, -50%);
 }
-
 
 .coverage {
   margin-left: auto;
@@ -1310,9 +1763,15 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   font-weight: 700;
 }
 
-.coverage .call-leg { color: var(--call-hi); }
-.coverage .put-leg { color: var(--put-hi); }
-.coverage .net-leg { color: var(--ink-soft); }
+.coverage .call-leg {
+  color: var(--call-hi);
+}
+.coverage .put-leg {
+  color: var(--put-hi);
+}
+.coverage .net-leg {
+  color: var(--ink-soft);
+}
 
 .leg-dot {
   width: 6px;
@@ -1321,16 +1780,14 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   flex: 0 0 auto;
 }
 
-.leg-dot.call { background: var(--call); }
-.leg-dot.put { background: var(--put); }
-
-/* NET identity marker is a short line swatch — the trace is a line, not dots */
-.leg-line.net {
-  width: 14px;
-  height: 2px;
-  border-radius: 1px;
+.leg-dot.call {
+  background: var(--call);
+}
+.leg-dot.put {
+  background: var(--put);
+}
+.leg-dot.net {
   background: var(--ink-soft);
-  flex: 0 0 auto;
 }
 
 .exposure-head {
@@ -1397,10 +1854,18 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   text-align: right;
 }
 
-.exposure-total.call { color: var(--call-hi); }
-.exposure-total.put { color: var(--put-hi); }
-.exposure-total.net { color: var(--phosphor); }
-.exposure-total.net.negative { color: var(--put-hi); }
+.exposure-total.call {
+  color: var(--call-hi);
+}
+.exposure-total.put {
+  color: var(--put-hi);
+}
+.exposure-total.net {
+  color: var(--phosphor);
+}
+.exposure-total.net.negative {
+  color: var(--put-hi);
+}
 
 .strike-focus {
   display: flex;
@@ -1415,7 +1880,8 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   overflow: hidden;
 }
 
-.focus-strike, .focus-metric {
+.focus-strike,
+.focus-metric {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -1464,10 +1930,18 @@ watch(() => [props.spot, props.rows, strikeScope.value], () => {
   white-space: nowrap;
 }
 
-.focus-metric.call strong { color: var(--call-hi); }
-.focus-metric.put strong { color: var(--put-hi); }
-.focus-metric.net.positive strong { color: var(--call-hi); }
-.focus-metric.net.negative strong { color: var(--put-hi); }
+.focus-metric.call strong {
+  color: var(--call-hi);
+}
+.focus-metric.put strong {
+  color: var(--put-hi);
+}
+.focus-metric.net.positive strong {
+  color: var(--call-hi);
+}
+.focus-metric.net.negative strong {
+  color: var(--put-hi);
+}
 
 .plot-scroll {
   position: relative;
@@ -1562,7 +2036,8 @@ svg {
   vector-effect: non-scaling-stroke;
 }
 
-.y-axis text, .x-axis text {
+.y-axis text,
+.x-axis text {
   fill: var(--ink-dim);
   font: 600 var(--t-micro) var(--font-data);
   font-variant-numeric: tabular-nums;
@@ -1626,8 +2101,7 @@ svg {
   pointer-events: none;
 }
 
-/* Gradient fills + soft glow — the InsiderFinance profile look. The glow is an
-   ambience layer (drop-shadow of the bar's own hue), not a data channel */
+/* Flat token fills for calls and puts matching instrument design rules */
 .strike-bar .call-bar,
 .strike-bar .put-bar {
   vector-effect: non-scaling-stroke;
@@ -1637,23 +2111,25 @@ svg {
 }
 
 .strike-bar .call-bar {
-  fill: url(#gex-call-grad);
-  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--call) 50%, transparent));
+  fill: var(--call);
 }
 
 .strike-bar .put-bar {
-  fill: url(#gex-put-grad);
-  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--put) 50%, transparent));
+  fill: var(--put);
+}
+
+.strike-bar .net-dot {
+  fill: var(--ink);
 }
 
 .strike-bar.call-dominant .call-bar {
   opacity: 1;
-  filter: drop-shadow(0 0 9px color-mix(in srgb, var(--call-hi) 70%, transparent));
+  fill: var(--call-hi);
 }
 
 .strike-bar.put-dominant .put-bar {
   opacity: 1;
-  filter: drop-shadow(0 0 9px color-mix(in srgb, var(--put-hi) 70%, transparent));
+  fill: var(--put-hi);
 }
 
 .strike-bar:hover .call-bar,
@@ -1663,10 +2139,14 @@ svg {
   opacity: 1;
 }
 
-.strike-bar.locked .call-bar,
+.strike-bar.locked .call-bar {
+  opacity: 1;
+  fill: var(--call-hi);
+}
+
 .strike-bar.locked .put-bar {
   opacity: 1;
-  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--phosphor) 40%, transparent));
+  fill: var(--put-hi);
 }
 
 /* Direct value labels on the wall bars — text wears text ink, never series hue */
@@ -1687,7 +2167,6 @@ svg {
   opacity: 0.9;
   pointer-events: none;
   vector-effect: non-scaling-stroke;
-  filter: drop-shadow(0 0 3.5px color-mix(in srgb, var(--ink) 35%, transparent));
 }
 
 /* Single crosshair dot that rides the trace on hover — 2px surface ring so it
@@ -1713,7 +2192,6 @@ svg {
   stroke-linecap: round;
   pointer-events: none;
   vector-effect: non-scaling-stroke;
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--phosphor) 45%, transparent));
 }
 
 .focus-lock line {
@@ -1744,18 +2222,26 @@ svg {
   stroke-dasharray: 4 4;
   vector-effect: non-scaling-stroke;
   opacity: 0.85;
-  transition: stroke 0.12s ease, opacity 0.12s ease;
+  transition:
+    stroke 0.12s ease,
+    opacity 0.12s ease;
 }
 
-.level.call line { stroke: var(--call-hi); }
-.level.put line { stroke: var(--put-hi); }
+.level.call line {
+  stroke: var(--call-hi);
+}
+.level.put line {
+  stroke: var(--put-hi);
+}
 .level.spot line {
   stroke: var(--ink);
   stroke-dasharray: none;
   stroke-width: 1.5px;
   opacity: 0.9;
 }
-.level.flip line { stroke: var(--warn); }
+.level.flip line {
+  stroke: var(--warn);
+}
 
 .level-connector {
   stroke-width: 1px;
@@ -1764,21 +2250,43 @@ svg {
   pointer-events: none;
   vector-effect: non-scaling-stroke;
 }
-line.level-connector { fill: none; }
-.level.call .level-connector { stroke: var(--call-hi); }
-.level.put .level-connector { stroke: var(--put-hi); }
-.level.spot .level-connector { stroke: var(--ink-dim); }
-.level.flip .level-connector { stroke: var(--warn); }
+line.level-connector {
+  fill: none;
+}
+.level.call .level-connector {
+  stroke: var(--call-hi);
+}
+.level.put .level-connector {
+  stroke: var(--put-hi);
+}
+.level.spot .level-connector {
+  stroke: var(--ink-dim);
+}
+.level.flip .level-connector {
+  stroke: var(--warn);
+}
 
 .level-badge-bg {
   fill: var(--void-lift);
   stroke: var(--rule-hi);
   stroke-width: 1px;
 }
-.level.call .level-badge-bg { fill: var(--call-wash); stroke: var(--call); }
-.level.put .level-badge-bg { fill: var(--put-wash); stroke: var(--put); }
-.level.spot .level-badge-bg { fill: var(--void-lift); stroke: var(--ink-dim); }
-.level.flip .level-badge-bg { fill: var(--warn-wash); stroke: var(--warn); }
+.level.call .level-badge-bg {
+  fill: var(--call-wash);
+  stroke: var(--call);
+}
+.level.put .level-badge-bg {
+  fill: var(--put-wash);
+  stroke: var(--put);
+}
+.level.spot .level-badge-bg {
+  fill: var(--void-lift);
+  stroke: var(--ink-dim);
+}
+.level.flip .level-badge-bg {
+  fill: var(--warn-wash);
+  stroke: var(--warn);
+}
 
 .level text {
   font: 700 var(--t-micro) var(--font-display);
@@ -1786,10 +2294,18 @@ line.level-connector { fill: none; }
   pointer-events: none;
 }
 
-.level.call text { fill: var(--call-hi); }
-.level.put text { fill: var(--put-hi); }
-.level.spot text { fill: var(--ink); }
-.level.flip text { fill: var(--warn); }
+.level.call text {
+  fill: var(--call-hi);
+}
+.level.put text {
+  fill: var(--put-hi);
+}
+.level.spot text {
+  fill: var(--ink);
+}
+.level.flip text {
+  fill: var(--warn);
+}
 
 .empty-frame {
   fill: var(--void);
@@ -1801,6 +2317,297 @@ line.level-connector { fill: none; }
   fill: var(--ink-dim);
   font: 600 var(--t-micro) var(--font-display);
   letter-spacing: 0.08em;
+}
+
+/* =========================================================================
+   OPTIONS STRIKE MATRIX TABLE (GRAPH TABLE)
+   ========================================================================= */
+.gex-table-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs, 2px);
+  background: var(--void);
+  overflow: hidden;
+}
+
+.gex-table-wrap.full-view {
+  flex: 1 1 auto;
+  height: 100%;
+}
+
+.gex-table-wrap:not(.full-view) {
+  flex: 1 1 200px;
+  max-height: 48%;
+}
+
+.gex-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--void-lift);
+  border-bottom: var(--hair) solid var(--rule);
+  gap: 8px;
+}
+
+.gex-table-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 260px;
+  max-width: 320px;
+}
+
+.gex-table-input {
+  width: 100%;
+  min-height: 22px;
+  padding: 2px 22px 2px 6px;
+  border: var(--hair) solid var(--glass-border);
+  background: var(--glass-base);
+  border-radius: var(--r-xs);
+  color: var(--ink);
+  font: 500 var(--t-micro) var(--font-data);
+  outline: none;
+}
+
+.gex-table-input:focus {
+  border-color: var(--phosphor);
+}
+
+.clear-input {
+  position: absolute;
+  right: 4px;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font: 700 var(--t-micro) var(--font-display);
+  padding: 0 4px;
+}
+
+.table-count {
+  color: var(--ink-dim);
+  font: 700 var(--t-micro) var(--font-display);
+  letter-spacing: 0.05em;
+}
+
+.gex-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.gex-table-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.gex-table-scroll::-webkit-scrollbar-track {
+  background: var(--void);
+}
+.gex-table-scroll::-webkit-scrollbar-thumb {
+  background: var(--rule-hi);
+  border-radius: 3px;
+}
+
+.gex-strike-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.gex-strike-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel-hi);
+  padding: 5px 8px;
+  color: var(--ink-dim);
+  font: 700 var(--t-micro) var(--font-display);
+  letter-spacing: 0.04em;
+  border-bottom: var(--hair) solid var(--rule-hi);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.gex-strike-table thead th:hover {
+  color: var(--ink);
+  background: var(--panel-raise);
+}
+
+.gex-strike-table thead th.active {
+  color: var(--phosphor);
+}
+
+.sort-arr {
+  font-size: var(--t-micro);
+  margin-left: 2px;
+}
+
+.gex-strike-table tbody tr {
+  border-bottom: var(--hair) solid var(--rule-faint);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease;
+}
+
+.gex-strike-table tbody tr:hover {
+  background: var(--glass-surface-hi);
+}
+
+.gex-strike-table tbody tr.active-row {
+  background: var(--phosphor-wash);
+}
+
+.gex-strike-table tbody tr.locked-row {
+  background: var(--phosphor-wash);
+  outline: 1px solid var(--phosphor-dim);
+}
+
+.gex-strike-table tbody td {
+  padding: 4px 8px;
+  font: 500 var(--t-micro) var(--font-data);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.strike-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.strike-val {
+  font-weight: 700;
+}
+
+.tag-badge {
+  padding: 1px 4px;
+  border-radius: 3px;
+  font: 700 var(--t-micro) var(--font-display);
+  letter-spacing: 0.03em;
+}
+
+.tag-badge.spot {
+  background: var(--void-lift);
+  border: var(--hair) solid var(--ink-dim);
+  color: var(--ink);
+}
+.tag-badge.call {
+  background: var(--call-wash);
+  border: var(--hair) solid var(--call);
+  color: var(--call-hi);
+}
+.tag-badge.put {
+  background: var(--put-wash);
+  border: var(--hair) solid var(--put);
+  color: var(--put-hi);
+}
+.tag-badge.flip {
+  background: var(--warn-wash);
+  border: var(--hair) solid var(--warn);
+  color: var(--warn);
+}
+
+.winner-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  font: 700 var(--t-micro) var(--font-display);
+  letter-spacing: 0.03em;
+}
+
+.winner-pill.call {
+  background: var(--call-wash);
+  border: var(--hair) solid var(--call);
+  color: var(--call-hi);
+}
+
+.winner-pill.put {
+  background: var(--put-wash);
+  border: var(--hair) solid var(--put);
+  color: var(--put-hi);
+}
+
+.winner-pill.flat {
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule);
+  color: var(--ink-dim);
+}
+
+.winner-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.num-col {
+  text-align: right;
+}
+
+.sub-num {
+  display: block;
+  font-size: var(--t-micro);
+  color: var(--ink-ghost);
+}
+
+.call-num {
+  color: var(--call-hi);
+}
+
+.put-num {
+  color: var(--put-hi);
+}
+
+.net-num {
+  position: relative;
+}
+
+.net-num.positive .net-val {
+  color: var(--call-hi);
+}
+.net-num.negative .net-val {
+  color: var(--put-hi);
+}
+
+.net-micro-meter {
+  width: 100%;
+  height: 2px;
+  background: var(--rule-faint);
+  margin-top: 2px;
+  position: relative;
+  overflow: hidden;
+}
+
+.meter-pos {
+  display: block;
+  height: 100%;
+  background: var(--call);
+}
+
+.meter-neg {
+  display: block;
+  height: 100%;
+  background: var(--put);
+  margin-left: auto;
+}
+
+.dist-num {
+  color: var(--ink-dim);
+}
+
+.no-rows {
+  text-align: center;
+  padding: 16px;
+  color: var(--ink-dim);
+  font: 500 var(--t-micro) var(--font-display);
 }
 
 @media (max-width: 900px) {

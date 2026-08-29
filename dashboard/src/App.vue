@@ -216,7 +216,7 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
-/** Five operator destinations. Everything else lives in Tools. */
+/** Seven operator destinations. Everything else lives in Tools. */
 const primaryNav = [
   {
     name: 'flow',
@@ -230,6 +230,20 @@ const primaryNav = [
     title: 'Options',
     hint: 'One underlier',
     icon: 'options',
+    tab: true,
+  },
+  {
+    name: 'regime',
+    title: 'Regime',
+    hint: 'Dealer gamma · live',
+    icon: 'regime',
+    tab: true,
+  },
+  {
+    name: 'drift',
+    title: 'Drift',
+    hint: 'Charm · hedge pressure',
+    icon: 'drift',
     tab: true,
   },
   {
@@ -263,10 +277,9 @@ const deskTools = [
     hint: "Today's decision funnel",
     icon: 'radar',
   },
-  { name: 'drift', idx: 'D2', title: 'Drift', hint: 'Buying vs selling pressure', icon: 'drift' },
   {
     name: 'absorption',
-    idx: 'D3',
+    idx: 'D2',
     title: 'Absorption',
     hint: 'Heavy flow, held level',
     icon: 'absorption',
@@ -278,7 +291,7 @@ const deskTools = [
     hint: 'All lenses, one tape',
     icon: 'stack',
   },
-  { name: 'suggest', idx: 'D5', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
+  { name: 'suggest', idx: 'D4', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
 ] as const
 
 const marketTools = [
@@ -769,6 +782,7 @@ function openSymbol(sym: string): void {
     'market',
     'options',
     'drift',
+    'regime',
     'changepoints',
     'sentiment',
     'momentum',
@@ -1852,6 +1866,10 @@ function openFearGreed(): void {
   box-shadow: var(--glass-specular-subtle), var(--glass-shadow-sm);
   z-index: var(--z-strip);
   min-width: 0;
+  /* The rail can expand or collapse independently of the viewport. Size the
+     strip's disclosure rules from its real available width, not just from a
+     viewport breakpoint. */
+  container: instrument-strip / inline-size;
 }
 
 .gauges {
@@ -2481,6 +2499,28 @@ function openFearGreed(): void {
   }
 }
 
+/* Header information has an intentional reading order: the live benchmark
+   tape remains first, then market state, search and operator controls. The
+   broader sentiment and duplicate UTC clock yield before any gauge is allowed
+   to be partially painted beneath the controls. Container queries keep this
+   correct whether the operator has the rail expanded or collapsed. */
+@container instrument-strip (max-width: 920px) {
+  .gauge-fg {
+    display: none;
+  }
+}
+
+@container instrument-strip (max-width: 700px) {
+  .clock {
+    display: none;
+  }
+
+  .market-clock {
+    min-width: 98px;
+    padding-left: var(--s2);
+  }
+}
+
 @media (max-width: 780px) {
   .shell {
     grid-template-columns: minmax(0, 1fr) !important;
@@ -2521,6 +2561,7 @@ function openFearGreed(): void {
     display: none;
     flex: 1 1 0;
     min-width: 0;
+    overflow: hidden;
   }
   .nav li.tab-dest-li {
     display: flex;
@@ -2529,7 +2570,12 @@ function openFearGreed(): void {
     display: none !important;
   }
   .nav-item {
-    flex: 1 1 auto;
+    /* Every destination owns exactly one slot in the bottom rail. Without a
+       definite width, the longer "Options" label uses its intrinsic width
+       and paints over its neighbouring destination on narrow phones. */
+    flex: 1 1 0;
+    width: 100%;
+    min-width: 0;
     flex-direction: column;
     min-height: 64px;
     height: 64px;
@@ -2541,6 +2587,9 @@ function openFearGreed(): void {
   .nav-label-wrap {
     align-items: center;
     flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
   }
   .nav-item.on::after {
     top: auto;
@@ -2561,9 +2610,9 @@ function openFearGreed(): void {
     border-top: none;
   }
   .more-wrap {
-    flex: 1 1 0;
-    width: auto;
-    min-width: 0;
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
     margin-top: 0;
     margin-bottom: 0;
   }

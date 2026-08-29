@@ -33,13 +33,18 @@ function checkRows(g: Gate): { k: string; ok: boolean }[] {
 
 function metricRows(g: Gate): { k: string; v: number | string }[] {
   return Object.entries(g.metrics ?? {})
-    .filter((e): e is [string, number | string] => typeof e[1] === 'number' || typeof e[1] === 'string')
+    .filter(
+      (e): e is [string, number | string] => typeof e[1] === 'number' || typeof e[1] === 'string',
+    )
     .slice(0, 8)
     .map(([k, v]) => ({ k, v }))
 }
 
 function prettyKey(k: string): string {
-  return k.replace(/_/g, ' ').replace(/\bpct\b/, '%').replace(/\bic\b/i, 'IC')
+  return k
+    .replace(/_/g, ' ')
+    .replace(/\bpct\b/, '%')
+    .replace(/\bic\b/i, 'IC')
 }
 
 /** Counts (n_symbols, n_rows) are integers — 4dp on them is noise, not precision. */
@@ -52,7 +57,12 @@ function metricValue(v: number | string): string {
 <template>
   <div class="gates-page">
     <!-- ── 01 Gate Summary Header ──────────────────────────────────────── -->
-    <Panel label="Pre-registered Gate Evaluation" index="04" :meta="`${rows.length} gates evaluated`" class="w-full">
+    <Panel
+      label="Pre-registered Gate Evaluation"
+      index="04"
+      :meta="`${rows.length} gates evaluated`"
+      class="w-full"
+    >
       <p v-if="gates.error.value" class="err">{{ gates.error.value }}</p>
       <template v-else>
         <div class="tally">
@@ -69,14 +79,22 @@ function metricValue(v: number | string): string {
             <span class="label t-lbl">UNEVALUATED</span>
           </div>
           <p class="t-note">
-            Every gate specification was pre-registered before model execution. A status here reflects immutable backtest artifacts recorded on disk — never re-computed or retroactively altered.
+            Every gate specification was pre-registered before model execution. A status here
+            reflects immutable backtest artifacts recorded on disk — never re-computed or
+            retroactively altered.
           </p>
         </div>
       </template>
     </Panel>
 
     <!-- ── 02 Gate Strategy Leaderboard ───────────────────────────────── -->
-    <Panel label="Pre-Registered Strategy Leaderboard" index="—" :meta="`${board.length} strategies registered`" class="w-full" flush>
+    <Panel
+      label="Pre-Registered Strategy Leaderboard"
+      index="—"
+      :meta="`${board.length} strategies registered`"
+      class="w-full"
+      flush
+    >
       <div class="table-container">
         <table v-if="board.length" class="grid">
           <thead>
@@ -97,8 +115,12 @@ function metricValue(v: number | string): string {
                 <span class="s-file label">{{ m.gate_file }}</span>
               </td>
               <td class="label dim feat" :title="m.features">{{ m.features }}</td>
-              <td class="fig num" :class="m.rank_ic?.startsWith('-') ? 'neg' : 'pos'">{{ m.rank_ic }}</td>
-              <td class="fig num" :class="m.net_return?.startsWith('-') ? 'neg' : 'pos'">{{ m.net_return }}</td>
+              <td class="fig num" :class="m.rank_ic?.startsWith('-') ? 'neg' : 'pos'">
+                {{ m.rank_ic }}
+              </td>
+              <td class="fig num" :class="m.net_return?.startsWith('-') ? 'neg' : 'pos'">
+                {{ m.net_return }}
+              </td>
               <td class="fig num bold">{{ m.sharpe }}</td>
               <td class="label dim">{{ m.validation_status }}</td>
               <td><VerdictChip :verdict="m.verdict" size="sm" /></td>
@@ -108,7 +130,8 @@ function metricValue(v: number | string): string {
         <p v-else class="note pad">Strategy leaderboard artifact unavailable.</p>
       </div>
       <p class="note tiny pad-x">
-        Net return and Sharpe ratios reflect recorded backtest artifacts. Strategies marked HELD fail on turnover or max drawdown limits.
+        Net return and Sharpe ratios reflect recorded backtest artifacts. Strategies marked HELD
+        fail on turnover or max drawdown limits.
       </p>
     </Panel>
 
@@ -129,10 +152,7 @@ function metricValue(v: number | string): string {
         <dl class="metrics">
           <template v-for="m in metricRows(g)" :key="m.k">
             <dt class="label">{{ prettyKey(m.k) }}</dt>
-            <dd
-              class="fig"
-              :class="typeof m.v === 'number' ? tone(m.v) : ''"
-            >
+            <dd class="fig" :class="typeof m.v === 'number' ? tone(m.v) : ''">
               {{ metricValue(m.v) }}
             </dd>
           </template>
@@ -157,15 +177,40 @@ function metricValue(v: number | string): string {
   flex-direction: column;
   gap: var(--s4);
 }
-.w-full { width: 100%; }
+.w-full {
+  width: 100%;
+}
 
-.tally { display: flex; align-items: center; gap: var(--s6); flex-wrap: wrap; }
-.t-cell { display: flex; flex-direction: column; gap: 2px; }
-.t-lbl { font-size: 10px; font-weight: 700; }
-.t-n { font-size: 2.2rem; line-height: 1; letter-spacing: -0.04em; font-weight: 800; }
-.go .t-n { color: var(--go); }
-.no .t-n { color: var(--no-go); }
-.unk .t-n { color: var(--unknown); }
+.tally {
+  display: flex;
+  align-items: center;
+  gap: var(--s6);
+  flex-wrap: wrap;
+}
+.t-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.t-lbl {
+  font-size: 10px;
+  font-weight: 700;
+}
+.t-n {
+  font-size: 2.2rem;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  font-weight: 800;
+}
+.go .t-n {
+  color: var(--go);
+}
+.no .t-n {
+  color: var(--no-go);
+}
+.unk .t-n {
+  color: var(--unknown);
+}
 .t-note {
   flex: 1 1 340px;
   color: var(--ink-dim);
@@ -189,7 +234,11 @@ function metricValue(v: number | string): string {
   scrollbar-width: thin;
 }
 
-.grid { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
 .grid th {
   text-align: left;
   padding: var(--s3) var(--s4);
@@ -201,17 +250,42 @@ function metricValue(v: number | string): string {
   font-weight: 700;
   z-index: 1;
 }
-.grid td { padding: var(--s2) var(--s4); border-bottom: var(--hair) solid var(--rule-faint); color: var(--ink); vertical-align: middle; }
+.grid td {
+  padding: var(--s2) var(--s4);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  color: var(--ink);
+  vertical-align: middle;
+}
 
-.num { text-align: right; }
-.bold { font-weight: 700; }
-.dim { color: var(--ink-dim); }
+.num {
+  text-align: right;
+}
+.bold {
+  font-weight: 700;
+}
+.dim {
+  color: var(--ink-dim);
+}
 /* Feature lists are additive expressions — wrap so the whole set stays readable. */
-.feat { max-width: 30ch; white-space: normal; line-height: 1.4; }
+.feat {
+  max-width: 30ch;
+  white-space: normal;
+  line-height: 1.4;
+}
 
-.strat { display: flex; flex-direction: column; gap: 2px; }
-.s-name { color: var(--ink); font-weight: 600; }
-.s-file { color: var(--ink-dim); font-size: 11px; }
+.strat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.s-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+.s-file {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
 
 .metrics {
   display: grid;
@@ -223,19 +297,63 @@ function metricValue(v: number | string): string {
   margin-top: var(--s2);
   padding-bottom: var(--s3);
 }
-.metrics dt { color: var(--ink-dim); font-weight: 600; }
-.metrics dd { font-size: var(--t-small); color: var(--ink); text-align: right; font-weight: 600; }
+.metrics dt {
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+.metrics dd {
+  font-size: var(--t-small);
+  color: var(--ink);
+  text-align: right;
+  font-weight: 600;
+}
 
-.checks { list-style: none; display: flex; flex-direction: column; gap: 4px; border-top: var(--hair) solid var(--rule-faint); padding-top: var(--s2); }
-.check { display: flex; align-items: center; gap: var(--s2); color: var(--no-go); }
-.check.ok { color: var(--go); }
-.c-mark { font-weight: 700; font-size: 12px; }
-.c-k { color: var(--ink-dim); font-size: 11px; }
+.checks {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: var(--hair) solid var(--rule-faint);
+  padding-top: var(--s2);
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  color: var(--no-go);
+}
+.check.ok {
+  color: var(--go);
+}
+.c-mark {
+  font-weight: 700;
+  font-size: 12px;
+}
+.c-k {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
 
-.src { margin-top: var(--s3); color: var(--ink-dim); font-size: 10px; }
-.err { color: var(--short); font-size: var(--t-small); }
-.note { color: var(--ink-dim); font-size: var(--t-small); }
-.note.pad { padding: var(--s5) var(--s4); }
-.note.pad-x { padding: var(--s3) var(--s4) var(--s4); }
-.note.tiny { font-size: 11px; }
+.src {
+  margin-top: var(--s3);
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.err {
+  color: var(--short);
+  font-size: var(--t-small);
+}
+.note {
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+}
+.note.pad {
+  padding: var(--s5) var(--s4);
+}
+.note.pad-x {
+  padding: var(--s3) var(--s4) var(--s4);
+}
+.note.tiny {
+  font-size: 11px;
+}
 </style>

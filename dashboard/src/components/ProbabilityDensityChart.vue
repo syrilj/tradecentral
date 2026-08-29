@@ -7,9 +7,7 @@ import { num, pctFrac, usd } from '@/format'
 // Three.js is only needed after an operator explicitly opens the measured 3D
 // surface. Keeping it out of the default Options route removes the heaviest
 // dependency from the initial workspace download.
-const RiskNeutral3DModel = defineAsyncComponent(
-  () => import('@/components/RiskNeutral3DModel.vue'),
-)
+const RiskNeutral3DModel = defineAsyncComponent(() => import('@/components/RiskNeutral3DModel.vue'))
 
 /**
  * 2D risk-neutral lognormal PDF of terminal price f(S_T).
@@ -30,7 +28,19 @@ const props = withDefaults(
     pop?: number | null
     strategyLabel?: string
   }>(),
-  { probability: null, height: 260, callWall: null, putWall: null, focusPrice: null, dte: null, vol: null, breakevens: () => [], strikes: () => [], pop: null, strategyLabel: undefined },
+  {
+    probability: null,
+    height: 260,
+    callWall: null,
+    putWall: null,
+    focusPrice: null,
+    dte: null,
+    vol: null,
+    breakevens: () => [],
+    strikes: () => [],
+    pop: null,
+    strategyLabel: undefined,
+  },
 )
 
 const hostRef = ref<HTMLDivElement | null>(null)
@@ -62,15 +72,17 @@ watch(
   { immediate: true },
 )
 
-const activeTargetPrice = computed(() =>
-  targetPrice.value ?? (props.spot ? Math.round(props.spot * 1.05 * 100) / 100 : 0),
+const activeTargetPrice = computed(
+  () => targetPrice.value ?? (props.spot ? Math.round(props.spot * 1.05 * 100) / 100 : 0),
 )
 
 const model = computed(() => {
   const p = props.probability
   const spotVal = Number(props.spot)
   const dteVal = p?.horizon_days ?? (props.dte != null && props.dte > 0 ? props.dte : 30)
-  const ivVal = p?.atm_iv ?? (props.vol != null && props.vol > 0 ? (props.vol > 2 ? props.vol / 100 : props.vol) : 0.30)
+  const ivVal =
+    p?.atm_iv ??
+    (props.vol != null && props.vol > 0 ? (props.vol > 2 ? props.vol / 100 : props.vol) : 0.3)
 
   if (!spotVal || spotVal <= 0 || !ivVal || ivVal <= 0 || !dteVal || dteVal <= 0) return null
   const T = Math.max(dteVal, 1) / 365
@@ -109,7 +121,7 @@ const model = computed(() => {
 
 function cdfNormal(x: number): number {
   const t = 1 / (1 + 0.2316419 * Math.abs(x))
-  const d = 0.3989423 * Math.exp(-x * x / 2)
+  const d = 0.3989423 * Math.exp((-x * x) / 2)
   const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
   return x >= 0 ? 1 - p : p
 }
@@ -187,7 +199,9 @@ const curve = computed(() => {
 
   // Lower tail (prices <= spot)
   const lowerPts = pts.filter((p) => p.price <= spotPrice)
-  const lowerSegments = lowerPts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`)
+  const lowerSegments = lowerPts.map(
+    (p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`,
+  )
   lowerSegments.push(`L${spotX.toFixed(2)},${spotY.toFixed(2)}`)
   const putArea = `${lowerSegments.join(' ')} L${spotX.toFixed(2)},${baseBottom} L${pts[0].x.toFixed(2)},${baseBottom} Z`
 
@@ -314,7 +328,10 @@ function onMove(e: MouseEvent): void {
   hoverX.value = ((e.clientX - box.left) / box.width) * W.value
 }
 
-function probeDetails(pt: { price: number; dens: number; x: number; y: number }, source: 'lock' | 'hover') {
+function probeDetails(
+  pt: { price: number; dens: number; x: number; y: number },
+  source: 'lock' | 'hover',
+) {
   const c = curve.value
   if (!c) return null
   const d2 = (Math.log(props.spot / pt.price) - 0.5 * c.m.sigma * c.m.sigma) / c.m.sigma
@@ -370,22 +387,41 @@ watch(canRender3d, (available) => {
   <div class="pdf-chart">
     <div class="head">
       <div class="mode-toggle mini-segment">
-        <button type="button" class="label" :class="{ on: viewMode === '2d' }" @click="viewMode = '2d'">2D DEN</button>
+        <button
+          type="button"
+          class="label"
+          :class="{ on: viewMode === '2d' }"
+          @click="viewMode = '2d'"
+        >
+          2D DEN
+        </button>
         <button
           type="button"
           class="label"
           :class="{ on: viewMode === '3d' }"
           :disabled="!canRender3d"
-          :title="canRender3d ? 'Inspect the measured 3D risk-neutral surface' : 'Need ATM IV + expiry for a 3D model'"
+          :title="
+            canRender3d
+              ? 'Inspect the measured 3D risk-neutral surface'
+              : 'Need ATM IV + expiry for a 3D model'
+          "
           @click="viewMode = '3d'"
-        >3D MODEL</button>
+        >
+          3D MODEL
+        </button>
       </div>
 
       <div v-if="model" class="facts">
-        <span class="label model-tag">{{ viewMode === '3d' ? '3D SURFACE MODEL' : '2D PDF f(S_T)' }}</span>
-        <span class="label">IV <b class="fig">{{ pctFrac(model.iv, 1) }}</b></span>
+        <span class="label model-tag">{{
+          viewMode === '3d' ? '3D SURFACE MODEL' : '2D PDF f(S_T)'
+        }}</span>
+        <span class="label"
+          >IV <b class="fig">{{ pctFrac(model.iv, 1) }}</b></span
+        >
         <span class="label">{{ model.horizon }}D</span>
-        <span class="label">±1σ <b class="fig">{{ usd(model.expectedMove) }}</b></span>
+        <span class="label"
+          >±1σ <b class="fig">{{ usd(model.expectedMove) }}</b></span
+        >
         <span class="label put">{{ usd(model.expectedLow) }}</span>
         <span class="label">→</span>
         <span class="label call">{{ usd(model.expectedHigh) }}</span>
@@ -434,23 +470,48 @@ watch(canRender3d, (available) => {
 
         <!-- 1σ Expected Move Boundary Lines -->
         <g v-if="oneSigmaBounds" class="sigma-bounds">
-          <line :x1="oneSigmaBounds.xLo" :x2="oneSigmaBounds.xLo" :y1="pad.t" :y2="H - pad.b" class="sigma-bound low" />
-          <line :x1="oneSigmaBounds.xHi" :x2="oneSigmaBounds.xHi" :y1="pad.t" :y2="H - pad.b" class="sigma-bound high" />
-          <text :x="oneSigmaBounds.xLo" :y="pad.t - 4" text-anchor="middle" class="sigma-label low">-1σ {{ num(oneSigmaBounds.expectedLow, 0) }}</text>
-          <text :x="oneSigmaBounds.xHi" :y="pad.t - 4" text-anchor="middle" class="sigma-label high">+1σ {{ num(oneSigmaBounds.expectedHigh, 0) }}</text>
+          <line
+            :x1="oneSigmaBounds.xLo"
+            :x2="oneSigmaBounds.xLo"
+            :y1="pad.t"
+            :y2="H - pad.b"
+            class="sigma-bound low"
+          />
+          <line
+            :x1="oneSigmaBounds.xHi"
+            :x2="oneSigmaBounds.xHi"
+            :y1="pad.t"
+            :y2="H - pad.b"
+            class="sigma-bound high"
+          />
+          <text :x="oneSigmaBounds.xLo" :y="pad.t - 4" text-anchor="middle" class="sigma-label low">
+            -1σ {{ num(oneSigmaBounds.expectedLow, 0) }}
+          </text>
+          <text
+            :x="oneSigmaBounds.xHi"
+            :y="pad.t - 4"
+            text-anchor="middle"
+            class="sigma-label high"
+          >
+            +1σ {{ num(oneSigmaBounds.expectedHigh, 0) }}
+          </text>
         </g>
 
         <!-- Base Axes -->
         <line class="baseline" :x1="pad.l" :x2="W - pad.r" :y1="H - pad.b" :y2="H - pad.b" />
         <line class="baseline" :x1="pad.l" :x2="pad.l" :y1="pad.t" :y2="H - pad.b" />
-        <text class="axis-cap" :x="(pad.l + W - pad.r) / 2" :y="H - 4" text-anchor="middle">TERMINAL PRICE $</text>
+        <text class="axis-cap" :x="(pad.l + W - pad.r) / 2" :y="H - 4" text-anchor="middle">
+          TERMINAL PRICE $
+        </text>
         <text
           class="axis-cap y-cap"
           :x="12"
           :y="(pad.t + H - pad.b) / 2"
           text-anchor="middle"
           :transform="`rotate(-90 12 ${(pad.t + H - pad.b) / 2})`"
-        >REL DENSITY</text>
+        >
+          REL DENSITY
+        </text>
 
         <!-- 2D Lognormal Tails: Crimson Lower Tail, Emerald Upper Tail -->
         <path class="area put-tail" :d="curve.putArea" fill="var(--put-wash)" />
@@ -467,15 +528,11 @@ watch(canRender3d, (available) => {
         <g v-if="focus" class="probe">
           <line :x1="focus.x" :x2="focus.x" :y1="focus.y" :y2="H - pad.b" class="probe-line" />
           <circle :cx="focus.x" :cy="focus.y" r="4.5" class="probe-dot" />
-          <g class="probe-tooltip" :transform="`translate(${focus.x}, ${Math.max(pad.t + 16, focus.y - 12)})`">
-            <rect
-              :x="-44"
-              :y="-16"
-              width="88"
-              height="18"
-              rx="2"
-              class="probe-tip-bg"
-            />
+          <g
+            class="probe-tooltip"
+            :transform="`translate(${focus.x}, ${Math.max(pad.t + 16, focus.y - 12)})`"
+          >
+            <rect :x="-44" :y="-16" width="88" height="18" rx="2" class="probe-tip-bg" />
             <text text-anchor="middle" y="-3.5" class="probe-tip-text">
               {{ usd(focus.price) }} · {{ pctFrac(focus.probAbove, 0) }} P(&gt;)
             </text>
@@ -496,7 +553,9 @@ watch(canRender3d, (available) => {
     <div v-if="model" class="calc-panel">
       <div class="calc-head">
         <span class="calc-title label">TARGET PRICE & RISK CALCULATOR</span>
-        <span class="calc-sub label">{{ model.horizon }}D HORIZON · IV {{ pctFrac(model.iv, 1) }}</span>
+        <span class="calc-sub label"
+          >{{ model.horizon }}D HORIZON · IV {{ pctFrac(model.iv, 1) }}</span
+        >
       </div>
       <div class="calc-body">
         <div class="calc-inputs">
@@ -525,13 +584,39 @@ watch(canRender3d, (available) => {
           <div class="target-chips">
             <button type="button" class="chip-btn" @click="setQuickTarget(-10)">-10%</button>
             <button type="button" class="chip-btn" @click="setQuickTarget(-5)">-5%</button>
-            <button type="button" class="chip-btn" @click="setTargetToLevel(model.expectedLow)">-1σ</button>
-            <button type="button" class="chip-btn" @click="setTargetToLevel(model.expectedHigh)">+1σ</button>
+            <button type="button" class="chip-btn" @click="setTargetToLevel(model.expectedLow)">
+              -1σ
+            </button>
+            <button type="button" class="chip-btn" @click="setTargetToLevel(model.expectedHigh)">
+              +1σ
+            </button>
             <button type="button" class="chip-btn" @click="setQuickTarget(5)">+5%</button>
             <button type="button" class="chip-btn" @click="setQuickTarget(10)">+10%</button>
-            <button v-if="putWall" type="button" class="chip-btn put" @click="setTargetToLevel(putWall)">PUT WALL</button>
-            <button v-if="callWall" type="button" class="chip-btn call" @click="setTargetToLevel(callWall)">CALL WALL</button>
-            <button v-for="(be, idx) in breakevens" :key="`be-chip-${idx}`" type="button" class="chip-btn accent" @click="setTargetToLevel(be)">BE {{ num(be, 0) }}</button>
+            <button
+              v-if="putWall"
+              type="button"
+              class="chip-btn put"
+              @click="setTargetToLevel(putWall)"
+            >
+              PUT WALL
+            </button>
+            <button
+              v-if="callWall"
+              type="button"
+              class="chip-btn call"
+              @click="setTargetToLevel(callWall)"
+            >
+              CALL WALL
+            </button>
+            <button
+              v-for="(be, idx) in breakevens"
+              :key="`be-chip-${idx}`"
+              type="button"
+              class="chip-btn accent"
+              @click="setTargetToLevel(be)"
+            >
+              BE {{ num(be, 0) }}
+            </button>
           </div>
         </div>
         <div v-if="targetCalc" class="calc-metrics">
@@ -551,7 +636,9 @@ watch(canRender3d, (available) => {
           </div>
           <div class="calc-tile">
             <span class="label">Z-SCORE (DIST)</span>
-            <strong class="fig">{{ targetCalc.zScore >= 0 ? '+' : '' }}{{ num(targetCalc.zScore, 2) }}σ</strong>
+            <strong class="fig"
+              >{{ targetCalc.zScore >= 0 ? '+' : '' }}{{ num(targetCalc.zScore, 2) }}σ</strong
+            >
           </div>
           <div v-if="targetCalc.probBetweenWalls != null" class="calc-tile">
             <span class="label">PROB INSIDE WALLS</span>
@@ -591,10 +678,22 @@ watch(canRender3d, (available) => {
   flex-wrap: wrap;
   min-width: 0;
 }
-.facts b { color: var(--ink); margin-left: 3px; }
-.model-tag { color: var(--phosphor); font-weight: 700; }
-.facts .put, .probe-inline .put { color: var(--put-hi); }
-.facts .call, .probe-inline .call { color: var(--call-hi); }
+.facts b {
+  color: var(--ink);
+  margin-left: 3px;
+}
+.model-tag {
+  color: var(--phosphor);
+  font-weight: 700;
+}
+.facts .put,
+.probe-inline .put {
+  color: var(--put-hi);
+}
+.facts .call,
+.probe-inline .call {
+  color: var(--call-hi);
+}
 .probe-inline {
   display: inline-flex;
   align-items: center;
@@ -612,7 +711,9 @@ watch(canRender3d, (available) => {
   border-color: var(--phosphor-dim);
   background: var(--phosphor-wash);
 }
-.probe-inline b { color: var(--ink); }
+.probe-inline b {
+  color: var(--ink);
+}
 .idle {
   margin-left: auto;
   color: var(--ink-dim);
@@ -626,7 +727,12 @@ watch(canRender3d, (available) => {
   background: var(--void);
   border: var(--hair) solid var(--rule-hi);
 }
-.svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
 .sigma-band {
   fill: var(--void-lift);
   opacity: 0.65;
@@ -646,8 +752,12 @@ watch(canRender3d, (available) => {
   stroke: var(--void);
   stroke-width: 3px;
 }
-.sigma-label.low { fill: var(--put-hi); }
-.sigma-label.high { fill: var(--call-hi); }
+.sigma-label.low {
+  fill: var(--put-hi);
+}
+.sigma-label.high {
+  fill: var(--call-hi);
+}
 
 .curve {
   fill: none;
@@ -676,8 +786,12 @@ watch(canRender3d, (available) => {
   vector-effect: non-scaling-stroke;
   transition: stroke 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.marker.put line { stroke: var(--put-hi); }
-.marker.call line { stroke: var(--call-hi); }
+.marker.put line {
+  stroke: var(--put-hi);
+}
+.marker.call line {
+  stroke: var(--call-hi);
+}
 .marker.spot line {
   stroke: var(--ink);
   stroke-dasharray: none;
@@ -702,13 +816,25 @@ watch(canRender3d, (available) => {
   stroke-width: 3px;
   transition: fill 0.15s ease;
 }
-.marker.put text { fill: var(--put-hi); }
-.marker.call text { fill: var(--call-hi); }
-.marker.spot text { fill: var(--ink); }
-.marker.focus text { fill: var(--phosphor); }
-.marker.target text { fill: var(--warn); }
+.marker.put text {
+  fill: var(--put-hi);
+}
+.marker.call text {
+  fill: var(--call-hi);
+}
+.marker.spot text {
+  fill: var(--ink);
+}
+.marker.focus text {
+  fill: var(--phosphor);
+}
+.marker.target text {
+  fill: var(--warn);
+}
 .probe {
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+  transition:
+    transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.15s ease;
 }
 .probe-line {
   stroke: var(--phosphor);
@@ -730,7 +856,10 @@ watch(canRender3d, (available) => {
   fill: var(--phosphor);
   font: 700 9px var(--font-data);
 }
-.x-axis line { stroke: var(--rule-hi); vector-effect: non-scaling-stroke; }
+.x-axis line {
+  stroke: var(--rule-hi);
+  vector-effect: non-scaling-stroke;
+}
 .x-axis text {
   fill: var(--ink-dim);
   font: 600 10px var(--font-data);
@@ -767,7 +896,9 @@ watch(canRender3d, (available) => {
   font-weight: 700;
   letter-spacing: 0.08em;
 }
-.calc-sub { color: var(--ink-dim); }
+.calc-sub {
+  color: var(--ink-dim);
+}
 .calc-body {
   display: flex;
   align-items: stretch;
@@ -824,9 +955,18 @@ watch(canRender3d, (available) => {
   color: var(--ink);
   border-color: var(--rule-hi);
 }
-.chip-btn.call { color: var(--call-hi); border-color: var(--call-dim); }
-.chip-btn.put { color: var(--put-hi); border-color: var(--put-dim); }
-.chip-btn.accent { color: var(--phosphor); border-color: var(--phosphor-dim); }
+.chip-btn.call {
+  color: var(--call-hi);
+  border-color: var(--call-dim);
+}
+.chip-btn.put {
+  color: var(--put-hi);
+  border-color: var(--put-dim);
+}
+.chip-btn.accent {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+}
 .calc-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -851,9 +991,15 @@ watch(canRender3d, (available) => {
   font: 700 0.9375rem var(--font-data);
   color: var(--ink);
 }
-.calc-tile .fig.call { color: var(--call-hi); }
-.calc-tile .fig.put { color: var(--put-hi); }
-.calc-tile .fig.accent { color: var(--phosphor); }
+.calc-tile .fig.call {
+  color: var(--call-hi);
+}
+.calc-tile .fig.put {
+  color: var(--put-hi);
+}
+.calc-tile .fig.accent {
+  color: var(--phosphor);
+}
 
 .mode-toggle.mini-segment,
 .pdf-chart :deep(.mini-segment) {
@@ -873,7 +1019,9 @@ watch(canRender3d, (available) => {
   cursor: pointer;
   background: transparent;
 }
-.pdf-chart .mode-toggle button:last-child { border-right: 0; }
+.pdf-chart .mode-toggle button:last-child {
+  border-right: 0;
+}
 .pdf-chart .mode-toggle button.on {
   color: var(--phosphor);
   background: var(--phosphor-wash);

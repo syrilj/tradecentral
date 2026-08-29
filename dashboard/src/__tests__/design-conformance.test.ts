@@ -120,8 +120,7 @@ function matchParen(src: string, openIdx: number): number {
  *  - #rgb / #rgba / #rrggbb / #rrggbbaa
  *  - rgb(...) / rgba(...) / hsl(...) / hsla(...)
  */
-const COLOR_LITERAL =
-  /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b|rgba?\(|hsla?\(/g
+const COLOR_LITERAL = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b|rgba?\(|hsla?\(/g
 
 /**
  * Structural ink exceptions. The instrument aesthetic uses pure-black
@@ -300,8 +299,12 @@ function findDecorativeLinearGradients(src: string): string[] {
     const vars = [...body.matchAll(/var\(\s*(--[\w-]+)/g)].map((x) => x[1])
     const hasColorLiteral =
       /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/.test(body) &&
-      !isHexFalsePositive(body, body.search(/#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/))
-    const hasRgbLiteral = /rgba?\(\s*\d/.test(body) && !isStructuralInk(body.match(/rgba?\([^)]*\)/)?.[0] ?? '')
+      !isHexFalsePositive(
+        body,
+        body.search(/#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/),
+      )
+    const hasRgbLiteral =
+      /rgba?\(\s*\d/.test(body) && !isStructuralInk(body.match(/rgba?\([^)]*\)/)?.[0] ?? '')
     const hasHslLiteral = /hsla?\(\s*\d/.test(body)
     const hasSemanticToken = vars.some((v) => !STRUCTURAL_TOKENS.has(v))
     if (hasColorLiteral || hasRgbLiteral || hasHslLiteral || hasSemanticToken) {
@@ -326,7 +329,8 @@ function findForbiddenEffects(src: string): string[] {
   push(TEXT_SHADOW, 'text-shadow')
   push(FILTER_BRIGHTNESS, 'filter brightness')
   push(RADIAL_GRADIENT, 'radial-gradient')
-  for (const line of findDecorativeLinearGradients(src)) hits.push(`decorative linear-gradient: ${line}`)
+  for (const line of findDecorativeLinearGradients(src))
+    hits.push(`decorative linear-gradient: ${line}`)
   return hits
 }
 
@@ -370,7 +374,9 @@ if (DIAGNOSE) {
 describe('design-conformance guard — design source of truth', () => {
   it('tokens.css defines the three previously-missing design tokens', () => {
     const css = read(TOKENS_FILE)
-    expect(css, 'tokens.css must define --call-dim').toMatch(/--call-dim\s*:\s*#[0-9a-fA-F]{3,8}\s*;/)
+    expect(css, 'tokens.css must define --call-dim').toMatch(
+      /--call-dim\s*:\s*#[0-9a-fA-F]{3,8}\s*;/,
+    )
     expect(css, 'tokens.css must define --put-dim').toMatch(/--put-dim\s*:\s*#[0-9a-fA-F]{3,8}\s*;/)
     expect(css, 'tokens.css must define --panel-wash').toMatch(/--panel-wash\s*:\s*rgba?\(/)
   })
@@ -393,14 +399,24 @@ describe('design-conformance guard — design source of truth', () => {
     // brighter -hi variant).
     const lum = (hex: string): number => {
       const h = hex.replace('#', '')
-      const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16)
+      const n = parseInt(
+        h.length === 3
+          ? h
+              .split('')
+              .map((c) => c + c)
+              .join('')
+          : h,
+        16,
+      )
       const r = (n >> 16) & 255
       const g = (n >> 8) & 255
       const b = n & 255
       return 0.2126 * r + 0.7152 * g + 0.0722 * b
     }
     expect(lum(callDim), '--call-dim should be darker than --call').toBeLessThan(lum(call))
-    expect(lum(callDim), '--call-dim should not be the brighter --call-hi').toBeLessThan(lum(callHi))
+    expect(lum(callDim), '--call-dim should not be the brighter --call-hi').toBeLessThan(
+      lum(callHi),
+    )
     expect(lum(putDim), '--put-dim should be darker than --put').toBeLessThan(lum(put))
     expect(lum(putDim), '--put-dim should not be the brighter --put-hi').toBeLessThan(lum(putHi))
   })

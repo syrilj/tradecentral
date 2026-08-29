@@ -56,7 +56,8 @@ const routerSource = readFileSync(routerPath, 'utf8')
 // 1. AUTOMATED REGEX SCAN FOR UNICODE EMOJIS
 // ============================================================================
 describe('Challenger 1: Deep Regex Emoji Scans (Institutional Design Gate)', () => {
-  const EMOJI_REGEX = /[\u{1F300}-\u{1F5FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
+  const EMOJI_REGEX =
+    /[\u{1F300}-\u{1F5FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
 
   function getAllFiles(dir: string, ext: string[]): string[] {
     const results: string[] = []
@@ -213,7 +214,13 @@ describe('Challenger 1: Empty Data Payloads & Null Field Resilience', () => {
       smart_score: {
         score: null as unknown as number,
         rating: null as unknown as string,
-        components: { momentum: 0, insider_activity: 0, institutional_flow: 0, analyst_sentiment: 0, financial_health: 0 },
+        components: {
+          momentum: 0,
+          insider_activity: 0,
+          institutional_flow: 0,
+          analyst_sentiment: 0,
+          financial_health: 0,
+        },
       },
       bull_bear: {
         bulls_say: [],
@@ -231,9 +238,7 @@ describe('Challenger 1: Empty Data Payloads & Null Field Resilience', () => {
     const ceoPay = computed(() => formatBigUsd(emptyProf.value.compensation?.highest_paid_total))
     const ceoRatio = computed(() => num(emptyProf.value.compensation?.ceo_pay_ratio, 1))
     const scoreVal = computed(() =>
-      emptyProf.value.smart_score?.score != null
-        ? String(emptyProf.value.smart_score.score)
-        : DASH,
+      emptyProf.value.smart_score?.score != null ? String(emptyProf.value.smart_score.score) : DASH,
     )
 
     expect(name.value).toBe(DASH)
@@ -424,10 +429,20 @@ describe('Challenger 1: Compare Basket Edge Cases & Deadlock Prevention', () => 
 
     const sparks: Record<string, string> = {}
     if (emptySeries.length > 0) {
-      sparks['EMPTY'] = sparkline(emptySeries.map((r) => r.cum), 120, 22, 2).d
+      sparks['EMPTY'] = sparkline(
+        emptySeries.map((r) => r.cum),
+        120,
+        22,
+        2,
+      ).d
     }
     if (singlePointSeries.length > 0) {
-      sparks['SINGLE'] = sparkline(singlePointSeries.map((r) => r.cum), 120, 22, 2).d
+      sparks['SINGLE'] = sparkline(
+        singlePointSeries.map((r) => r.cum),
+        120,
+        22,
+        2,
+      ).d
     }
 
     expect(sparks['EMPTY']).toBeUndefined()
@@ -478,7 +493,11 @@ describe('Challenger 1: Tab Switching & Navigation Contract', () => {
 // ============================================================================
 describe('Challenger 1: Rapid Symbol Changes & Input Sanitization', () => {
   function cleanTicker(term: string): string {
-    return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+    return term
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9.-]/g, '')
+      .slice(0, 10)
   }
 
   it('cleans and sanitizes dirty / malformed ticker search queries', () => {
@@ -501,7 +520,9 @@ describe('Challenger 1: Rapid Symbol Changes & Input Sanitization', () => {
       if (!s) return
       currentSymbol.value = s
       const rest = currentBasket.value.filter((b) => b !== s && b !== 'SPY')
-      currentBasket.value = [...new Set(s === 'SPY' ? ['SPY', 'QQQ', ...rest] : [s, 'SPY', ...rest])].slice(0, 8)
+      currentBasket.value = [
+        ...new Set(s === 'SPY' ? ['SPY', 'QQQ', ...rest] : [s, 'SPY', ...rest]),
+      ].slice(0, 8)
     }
 
     // Sequence of rapid transitions

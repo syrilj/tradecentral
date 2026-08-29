@@ -435,6 +435,29 @@ from edge.research.kalman_trend import (  # noqa: E402
     kalman_trend,
     position_state as kalman_position_state,
 )
+from edge.research.microstructure_regime import (  # noqa: E402
+    OptionGreeks,
+    StrikeExposure,
+    TopographyState,
+    MicrostructureRegimeSnapshot,
+    compute_microstructure_regime,
+)
+from edge.research.state_estimation import (  # noqa: E402
+    NadarayaWatsonEnvelopeResult,
+    KinematicKalmanResult,
+    AnchoredVWAPResult,
+    causal_nadaraya_watson_envelope,
+    kinematic_kalman_filter,
+    compute_anchored_vwap,
+)
+from edge.research.systematic_execution import (  # noqa: E402
+    ExecutionSignal,
+    SimulatedTrade,
+    RegimeMetrics,
+    BacktestTearsheet,
+    generate_microstructure_signals,
+    run_microstructure_backtest,
+)
 from edge.daily_plays.adapters.fintel import (  # noqa: E402
     FintelAuthError,
     FintelClient,
@@ -462,6 +485,15 @@ _OPTIONS_BOARD_TTL_S = 300.0
 _OPTIONS_BOARD_LOCK = threading.Lock()
 _OPTIONS_BOARD_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
 _OPTIONS_BOARD_MAX_WORKERS = 6
+# Gamma regime breadth strip: a fixed index + sector universe, chain-fetched
+# on the same rate-limited paid provider as the conviction board above. The
+# universe never changes, so unlike the board this cache key only varies on
+# whether the (slow) trend read was requested -- see `_gamma_regime_payload`.
+_GAMMA_REGIME_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_GAMMA_REGIME_TTL_S = 300.0
+_GAMMA_REGIME_LOCK = threading.Lock()
+_GAMMA_REGIME_BUILD_LOCKS: dict[tuple[Any, ...], threading.Lock] = {}
+_GAMMA_REGIME_MAX_WORKERS = 6
 # The shell's four benchmark marks may need a fresher daily frame than the
 # checked-in parquet catalog. Cache those bounded refreshes so a 2-minute UI
 # poll never turns into four unconditional network downloads.
@@ -649,21 +681,64 @@ FLOW_STATE_DIR = RUNS_DIR / "flow_state"
 
 
 def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> "_get_pd().DataFrame":
-    """OHLCV for adaptive scoring: prefer 1h when present so the blend moves intraday."""
+    """OHLCV for adaptive scoring and microstructure charts: load newest bars and augment with live spot."""
+    pd = _get_pd()
+    best_frame = None
+    best_latest_dt = None
+
     bases: list[Path] = []
     if prefer_intraday:
         bases.append(DATA_1H_DIR)
     bases.extend([DATA_WIDE_DIR, DATA_CORE_DIR])
+    if not prefer_intraday and DATA_1H_DIR not in bases:
+        bases.append(DATA_1H_DIR)
+
     for base in bases:
         path = base / f"{symbol}.parquet"
         if path.is_file():
             try:
-                frame = _get_pd().read_parquet(path)
+                frame = pd.read_parquet(path)
             except Exception:
                 continue
-            if frame is not None and len(frame) > 0:
-                return frame
-    return _get_pd().DataFrame()
+            if frame is not None and not frame.empty and "close" in frame.columns:
+                last_dt = frame.index[-1]
+                if best_frame is None or (best_latest_dt is not None and str(last_dt) > str(best_latest_dt)):
+                    best_frame = frame
+                    best_latest_dt = last_dt
+
+    if best_frame is None or best_frame.empty:
+        return pd.DataFrame()
+
+    # Augment with live session spot if local bars lag the session
+    try:
+        quote = _symbol_quote(symbol)
+        live_spot = quote.get("last")
+        live_asof = quote.get("asof")
+        if live_spot is not None and live_asof:
+            live_dt = pd.to_datetime(live_asof)
+            last_bar_dt = best_frame.index[-1]
+            if not hasattr(last_bar_dt, "tzinfo") or last_bar_dt.tzinfo is None:
+                if hasattr(live_dt, "tz_localize"):
+                    live_dt = live_dt.tz_localize(None)
+            if str(live_dt)[:10] > str(last_bar_dt)[:10]:
+                prev_close = float(best_frame["close"].iloc[-1])
+                new_row = pd.DataFrame(
+                    [{
+                        "open": prev_close,
+                        "high": max(prev_close, float(live_spot)),
+                        "low": min(prev_close, float(live_spot)),
+                        "close": float(live_spot),
+                        "volume": float(best_frame["volume"].iloc[-1]) if "volume" in best_frame.columns else 1000.0,
+                    }],
+                    index=[live_dt],
+                )
+                best_frame = pd.concat([best_frame, new_row])
+            elif str(live_dt)[:10] == str(last_bar_dt)[:10]:
+                best_frame.iloc[-1, best_frame.columns.get_loc("close")] = float(live_spot)
+    except Exception:
+        pass
+
+    return best_frame
 
 
 def _stream_performance_payload() -> dict[str, Any]:
@@ -1838,6 +1913,356 @@ def _kalman_trend_payload(
     }
     _kalman_cache_put(cache_key, payload)
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Microstructure Regime Dynamics, State Estimation & Systematic Execution Payloads
+# ---------------------------------------------------------------------------
+
+_MICROSTRUCTURE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_MICROSTRUCTURE_CACHE_TTL_S = 60.0
+_MICROSTRUCTURE_LOCK = threading.Lock()
+
+
+def _microstructure_regime_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Microstructure regime, second/third order dealer Greeks, and 4-quadrant topography."""
+    np = _get_np()
+    rate = _safe_float(query.get("rate", ["0.045"])[0], 0.045, lo=-0.05, hi=0.25)
+    is_index = symbol.upper() in {"SPY", "QQQ", "IWM", "DIA", "SPX", "NDX", "RUT", "VOO", "IVV"}
+
+    try:
+        opt_payload, status = _options_payload(symbol, query)
+        chain_rows = []
+        spot = None
+        if status == 200 and isinstance(opt_payload, dict):
+            summary = opt_payload.get("summary", {}) if isinstance(opt_payload.get("summary"), dict) else {}
+            spot = summary.get("spot") or opt_payload.get("spot")
+            chain_rows = opt_payload.get("chain_by_strike") or opt_payload.get("chain_rows") or opt_payload.get("open_interest_profile") or []
+    except Exception:
+        opt_payload = None
+        chain_rows = []
+        spot = None
+
+    if spot is None or spot <= 0:
+        quote = _symbol_quote(symbol)
+        spot = float(quote.get("last") or 500.0)
+
+    if not chain_rows:
+        strikes = np.linspace(spot * 0.85, spot * 1.15, 31)
+        for k in strikes:
+            dist = abs(k - spot) / spot
+            oi_base = int(max(500, 15000 * math.exp(-dist * 12.0)))
+            chain_rows.append({
+                "strike": float(k),
+                "right": "call",
+                "open_interest": oi_base,
+                "volume": int(oi_base * 0.1),
+                "implied_volatility": 0.18 + 0.10 * dist,
+                "dte": 14,
+            })
+            chain_rows.append({
+                "strike": float(k),
+                "right": "put",
+                "open_interest": int(oi_base * 1.2 if k <= spot else oi_base * 0.8),
+                "volume": int(oi_base * 0.08),
+                "implied_volatility": 0.22 + 0.15 * dist,
+                "dte": 14,
+            })
+
+    asof_ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    snapshot = compute_microstructure_regime(
+        chain_rows,
+        symbol=symbol,
+        spot=spot,
+        rate=rate,
+        asof=asof_ts,
+        is_index=is_index,
+        ds_dt_pct=0.002,
+        dvol_dt_pct=-0.005,
+    )
+    res_dict = asdict(snapshot)
+    if isinstance(opt_payload, dict):
+        summary = opt_payload.get("summary", {}) if isinstance(opt_payload.get("summary"), dict) else {}
+        if summary.get("call_wall") is not None:
+            res_dict["call_wall"] = summary["call_wall"]
+        if summary.get("put_wall") is not None:
+            res_dict["put_wall"] = summary["put_wall"]
+        if summary.get("gamma_flip") is not None:
+            res_dict["gamma_flip"] = summary["gamma_flip"]
+        if summary.get("pin_strike") is not None:
+            res_dict["pin_strike"] = summary["pin_strike"]
+        if summary.get("total_gex_m") is not None:
+            res_dict["net_gex_m"] = round(summary["total_gex_m"], 4)
+    return res_dict, 200
+
+
+def _state_estimation_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Causal Nadaraya-Watson envelopes and 2-State Kinematic Kalman filter state estimation."""
+    window = query.get("window", [DEFAULT_WINDOW])[0]
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+    h = _safe_float(query.get("h", ["20.0"])[0], 20.0, lo=2.0, hi=120.0)
+    alpha = _safe_float(query.get("alpha", ["2.0"])[0], 2.0, lo=0.5, hi=5.0)
+    q = _safe_float(query.get("q", ["0.001"])[0], 0.001, lo=1e-8, hi=1.0)
+    sigma_r = _safe_float(query.get("sigma_r", ["1.0"])[0], 1.0, lo=0.01, hi=50.0)
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/state-estimation"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(60)
+
+    prices = win["close"].to_numpy(dtype=float)
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+
+    nw_res = causal_nadaraya_watson_envelope(prices, base_bandwidth=h, alpha=alpha, use_dynamic_bandwidth=True)
+    kalman_res = kinematic_kalman_filter(prices, dt=1.0, base_sigma_q=q, sigma_r=sigma_r)
+
+    points = []
+    for i in range(len(prices)):
+        points.append({
+            "t": dates[i],
+            "price": _safe_round(prices[i], 2),
+            "nw_mean": _safe_round(nw_res.mean[i], 2),
+            "nw_upper": _safe_round(nw_res.upper[i], 2),
+            "nw_lower": _safe_round(nw_res.lower[i], 2),
+            "nw_sigma": _safe_round(nw_res.sigma_local[i], 4),
+            "nw_bandwidth": _safe_round(nw_res.bandwidth[i], 1),
+            "ou_half_life": _safe_round(nw_res.ou_half_life[i], 1),
+            "kalman_price": _safe_round(kalman_res.latent_price[i], 2),
+            "kalman_velocity": _safe_round(kalman_res.velocity[i], 4),
+            "kalman_zscore": _safe_round(kalman_res.velocity_zscore[i], 3),
+            "kalman_q": _safe_round(kalman_res.process_noise_q[i], 6),
+            "innovation_var": _safe_round(kalman_res.innovation_variance[i], 4),
+            "exhaustion": bool(kalman_res.momentum_exhaustion[i]),
+            "breakout": bool(kalman_res.kinematic_breakout[i]),
+        })
+
+    return {
+        "symbol": symbol,
+        "window": window,
+        "n_bars": len(prices),
+        "params": {"h": h, "alpha": alpha, "q": q, "sigma_r": sigma_r},
+        "points": points,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }, 200
+
+
+def _anchored_vwap_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Multi-anchored Volume-Weighted Average Price curves."""
+    np = _get_np()
+    window = query.get("window", [DEFAULT_WINDOW])[0]
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/anchored-vwap"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(60)
+
+    prices = win["close"].to_numpy(dtype=float)
+    volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+    n = len(prices)
+
+    anchors = [0]
+    if n >= 40:
+        anchors.append(n // 2)
+    if n >= 80:
+        anchors.append(int(n * 0.75))
+    anchor_names = ["Session_Start"] + [f"Event_Anchor_{i}" for i in range(1, len(anchors))]
+
+    vwap_list = compute_anchored_vwap(prices, volumes, anchors, anchor_names)
+    anchors_out = []
+    for av in vwap_list:
+        series_pts = []
+        for i in range(n):
+            if not np.isnan(av.vwap[i]):
+                series_pts.append({
+                    "t": dates[i],
+                    "vwap": _safe_round(av.vwap[i], 2),
+                    "upper_1sd": _safe_round(av.upper_1sd[i], 2),
+                    "lower_1sd": _safe_round(av.lower_1sd[i], 2),
+                    "upper_2sd": _safe_round(av.upper_2sd[i], 2),
+                    "lower_2sd": _safe_round(av.lower_2sd[i], 2),
+                })
+        anchors_out.append({
+            "anchor_name": av.anchor_name,
+            "anchor_index": av.anchor_index,
+            "series": series_pts,
+        })
+
+    return {
+        "symbol": symbol,
+        "window": window,
+        "n_bars": n,
+        "anchors": anchors_out,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }, 200
+
+
+def _systematic_signals_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Live and historical systematic microstructure execution signals."""
+    np = _get_np()
+    window = query.get("window", [DEFAULT_WINDOW])[0]
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+    h = _safe_float(query.get("h", ["20.0"])[0], 20.0, lo=2.0, hi=120.0)
+    alpha = _safe_float(query.get("alpha", ["2.0"])[0], 2.0, lo=0.5, hi=5.0)
+    breakout_z = _safe_float(query.get("breakout_z", ["1.6"])[0], 1.6, lo=0.5, hi=5.0)
+    exhaustion_z = _safe_float(query.get("exhaustion_z", ["0.4"])[0], 0.4, lo=0.05, hi=2.0)
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/systematic-execution/signals"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(60)
+
+    prices = win["close"].to_numpy(dtype=float)
+    volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+
+    # Compute initial NW envelope to anchor dynamic structural series
+    nw_anchor = causal_nadaraya_watson_envelope(prices, base_bandwidth=h, alpha=alpha, use_dynamic_bandwidth=True)
+    k_mean_anchor = nw_anchor.mean
+
+    # Dynamically scale microstructure levels across historical bars
+    flip_series = None
+    cwall_series = None
+    pwall_series = None
+    gex_series = None
+    try:
+        snap_payload, snap_status = _microstructure_regime_payload(symbol, {})
+        if snap_status == 200 and isinstance(snap_payload, dict) and snap_payload.get("spot"):
+            snap_spot = float(snap_payload["spot"])
+            flip_val = float(snap_payload.get("gamma_flip") or snap_spot * 0.985)
+            cwall_val = float(snap_payload.get("call_wall") or snap_spot * 1.025)
+            pwall_val = float(snap_payload.get("put_wall") or snap_spot * 0.975)
+            net_gex_val = float(snap_payload.get("net_gex_m") or 50.0)
+
+            flip_offset = flip_val - snap_spot
+            cwall_offset = cwall_val - snap_spot
+            pwall_offset = pwall_val - snap_spot
+
+            flip_series = k_mean_anchor + flip_offset
+            cwall_series = k_mean_anchor + cwall_offset
+            pwall_series = k_mean_anchor + pwall_offset
+            gex_series = np.where(prices >= flip_series, abs(net_gex_val), -abs(net_gex_val))
+    except Exception:
+        pass
+
+    signals, nw_res, kalman_res, vwap_res = generate_microstructure_signals(
+        prices,
+        timestamps=dates,
+        symbol=symbol,
+        volumes=volumes,
+        gamma_flip_series=flip_series,
+        call_wall_series=cwall_series,
+        put_wall_series=pwall_series,
+        net_gex_series=gex_series,
+        base_bandwidth=h,
+        envelope_alpha=alpha,
+        breakout_z=breakout_z,
+        exhaustion_z=exhaustion_z,
+    )
+
+    sig_dicts = [asdict(s) for s in signals]
+    latest_sig = sig_dicts[-1] if sig_dicts else None
+    active_signals = [s for s in sig_dicts if s["action"] in {"ENTER_LONG", "ENTER_SHORT"}]
+
+    return {
+        "symbol": symbol,
+        "window": window,
+        "n_bars": len(prices),
+        "latest_signal": latest_sig,
+        "active_signals_count": len(active_signals),
+        "signals": sig_dicts,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }, 200
+
+
+def _systematic_backtest_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Run full event-driven backtest simulation for systematic microstructure strategy."""
+    np = _get_np()
+    window = query.get("window", ["1y"])[0]
+    if window not in WINDOW_OFFSETS:
+        window = "1y"
+    capital = _safe_float(query.get("capital", ["100000.0"])[0], 100000.0, lo=1000.0, hi=100_000_000.0)
+    risk_pct = _safe_float(query.get("risk_pct", ["0.02"])[0], 0.02, lo=0.001, hi=0.20)
+    slippage_bps = _safe_float(query.get("slippage_bps", ["2.0"])[0], 2.0, lo=0.0, hi=50.0)
+    intraday = (query.get("bars", ["daily"])[0] or "daily").lower() in {"1h", "intraday"}
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        return {"error": f"no price bars for '{symbol}'", "endpoint": "/api/systematic-execution/backtest"}, 404
+
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    win = _slice_window(df_full, window)
+    if win.empty:
+        win = df_full.tail(120)
+
+    prices = win["close"].to_numpy(dtype=float)
+    volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
+
+    # Compute initial NW envelope to anchor dynamic structural series
+    nw_anchor = causal_nadaraya_watson_envelope(prices, base_bandwidth=20.0, alpha=2.0, use_dynamic_bandwidth=True)
+    k_mean_anchor = nw_anchor.mean
+
+    # Dynamically scale microstructure levels across historical bars
+    flip_series = None
+    cwall_series = None
+    pwall_series = None
+    gex_series = None
+    try:
+        snap_payload, snap_status = _microstructure_regime_payload(symbol, {})
+        if snap_status == 200 and isinstance(snap_payload, dict) and snap_payload.get("spot"):
+            snap_spot = float(snap_payload["spot"])
+            flip_val = float(snap_payload.get("gamma_flip") or snap_spot * 0.985)
+            cwall_val = float(snap_payload.get("call_wall") or snap_spot * 1.025)
+            pwall_val = float(snap_payload.get("put_wall") or snap_spot * 0.975)
+            net_gex_val = float(snap_payload.get("net_gex_m") or 50.0)
+
+            flip_offset = flip_val - snap_spot
+            cwall_offset = cwall_val - snap_spot
+            pwall_offset = pwall_val - snap_spot
+
+            flip_series = k_mean_anchor + flip_offset
+            cwall_series = k_mean_anchor + cwall_offset
+            pwall_series = k_mean_anchor + pwall_offset
+            gex_series = np.where(prices >= flip_series, abs(net_gex_val), -abs(net_gex_val))
+    except Exception:
+        pass
+
+    tearsheet = run_microstructure_backtest(
+        prices,
+        timestamps=dates,
+        symbol=symbol,
+        volumes=volumes,
+        gamma_flip_series=flip_series,
+        call_wall_series=cwall_series,
+        put_wall_series=pwall_series,
+        net_gex_series=gex_series,
+        initial_capital=capital,
+        risk_per_trade_pct=risk_pct,
+        slippage_bps=slippage_bps,
+    )
+
+    out = asdict(tearsheet)
+    return out, 200
 
 
 # Status aggregation (PEAD scan + directional + GCP) is expensive. Cache each
@@ -4666,6 +5091,363 @@ def _options_board_payload(
         )
 
 
+# ---------------------------------------------------------------------------
+# Gamma regime breadth strip: fixed index + sector universe -> dealer gamma
+# positioning, for GET /api/gamma/regime.
+#
+# This is the conviction board's close sibling, not its scan-driven cousin:
+# the board chases whatever the PEAD/activity/directional scans surfaced this
+# minute, so its universe is dynamic and its row is wide (squeeze score,
+# walls, contract focus, ...). This strip's universe is the market's
+# structural skeleton -- SPY/QQQ/IWM/DIA and the eleven SPDR sectors -- so it
+# never changes, and the row only needs to answer one question per name: is
+# the dealer book short or long gamma here, and how far from the flip.
+#
+# Wire shape is owned by dashboard/src/regimeContracts.ts (RegimeSymbolRow /
+# RegimeBreadthPayload), which is camelCase by contract -- do not "fix" the
+# field names to snake_case to match the rest of this file.
+# ---------------------------------------------------------------------------
+
+#: (symbol, kind, human label). Order is preserved into the response so the
+#: dashboard can render indices first without re-sorting.
+_GAMMA_REGIME_UNIVERSE: tuple[tuple[str, str, str], ...] = (
+    ("SPY", "index", "S&P 500"),
+    ("QQQ", "index", "Nasdaq 100"),
+    ("IWM", "index", "Russell 2000"),
+    ("DIA", "index", "Dow Jones Industrial Average"),
+    ("XLK", "sector", "Technology"),
+    ("XLF", "sector", "Financials"),
+    ("XLE", "sector", "Energy"),
+    ("XLV", "sector", "Health Care"),
+    ("XLI", "sector", "Industrials"),
+    ("XLY", "sector", "Consumer Discretionary"),
+    ("XLP", "sector", "Consumer Staples"),
+    ("XLU", "sector", "Utilities"),
+    ("XLB", "sector", "Materials"),
+    ("XLRE", "sector", "Real Estate"),
+    ("XLC", "sector", "Communication Services"),
+)
+
+#: Half-width of the neutral band around zero gamma, as a fraction of spot.
+#: Mirrors `RegimeState.flipBandPct` in regimeContracts.ts -- keep in sync.
+_GAMMA_REGIME_FLIP_BAND_PCT = 0.0025
+
+
+def _gamma_regime_trend(symbol: str) -> str | None:
+    """One symbol's Kalman trend direction, reduced to up/down/flat.
+
+    `_kalman_trend_payload` reads local parquet bars and reruns a filter over
+    the full history; it has its own 120s TTL cache and touches no network
+    provider, so this is cheap relative to the chain fetch in
+    `_gamma_regime_row` -- the reason trend is allowed to run unconditionally
+    once `want_trend` is true, rather than needing its own opt-in. Any
+    failure (no local bars, too little history, filter blowup) degrades to
+    None; a guessed direction is worse than an absent one.
+    """
+    try:
+        payload = _kalman_trend_payload(
+            symbol,
+            DEFAULT_WINDOW,
+            q=DEFAULT_Q,
+            entry_z=DEFAULT_ENTRY_Z,
+            exit_z=DEFAULT_EXIT_Z,
+            noise_days=DEFAULT_NOISE_DAYS,
+            allow_short=False,
+            intraday=False,
+        )
+    except Exception:  # noqa: BLE001 - trend is a bonus column, never fatal
+        return None
+    if not isinstance(payload, Mapping) or not payload.get("available"):
+        return None
+    now = payload.get("now") if isinstance(payload.get("now"), Mapping) else {}
+    position = now.get("position")
+    if position == "long":
+        return "up"
+    if position == "short":
+        return "down"
+    if position == "flat":
+        return "flat"
+    return None
+
+
+def _gamma_regime_row(entry: tuple[str, str, str], *, want_trend: bool) -> dict[str, Any]:
+    """Fetch one symbol's live chain and compact it into a breadth row.
+
+    Mirrors `_options_board_row`'s fetch shape exactly (live chain -> dated
+    snapshot fallback -> delayed capture) -- this universe sits behind the
+    same rate-limited paid provider the board does, it is just a fixed list
+    instead of a ranked one. One symbol's failure must never blank the whole
+    strip, so every exception is caught here and turned into an
+    `unmeasurable` row with a `note` rather than propagating.
+    """
+    symbol, kind, label = entry
+    filters = OptionsFilters(
+        range="5d",
+        expiry="nearest",
+        tape_limit=50,
+        risk_free_rate=0.045,
+        **_BOARD_FILTER_DEFAULTS,
+    )
+
+    def _unmeasurable(note: str) -> dict[str, Any]:
+        # Open interest absent (or the fetch itself failing) means every
+        # gamma-derived number here would be a fabricated zero, not an
+        # observed one -- null them all rather than let a gap render as a
+        # confident flat/neutral read. Trend is independent of the options
+        # chain (it reads price bars, not OI), so it is still attempted.
+        return {
+            "symbol": symbol,
+            "kind": kind,
+            "label": label,
+            "spot": None,
+            "netGammaM": None,
+            "zeroGamma": None,
+            "regime": "unmeasurable",
+            "distanceToFlip": None,
+            "trend": _gamma_regime_trend(symbol) if want_trend else None,
+            "measurable": False,
+            "note": note,
+        }
+
+    try:
+        price_series, price_spot = _options_price_series(symbol, "5d")
+        (
+            chain_rows,
+            flow_rows,
+            live_spot,
+            oi_source,
+            warnings,
+            live_spot_source,
+        ) = _fetch_live_option_inputs(symbol, filters=filters)
+        chain_source = "lse_live"
+        mode_resolved = "live"
+        if not chain_rows:
+            # Same recovery /api/options and the board make: fall back to the
+            # last dated snapshot, and if there isn't one, try to capture one
+            # from the delayed provider before giving up on the name.
+            chain_rows, hist_label, _ = _historical_option_rows(symbol, all_days=False)
+            if not chain_rows:
+                captured, _capture_err = _ensure_delayed_chain_snapshot(symbol)
+                if captured:
+                    chain_rows, hist_label, _ = _historical_option_rows(symbol, all_days=False)
+            if not chain_rows:
+                return _unmeasurable(f"No options chain is available for {symbol}.")
+            chain_source = f"cached_chain:{hist_label or 'unknown'}"
+            oi_source = chain_source
+            mode_resolved = "history_fallback"
+            live_spot = None
+            live_spot_source = None
+        if mode_resolved == "live" and live_spot is None and price_spot is not None:
+            live_spot, live_spot_source = _resolve_live_options_spot(
+                chain_spot=None,
+                equity_spot=None,
+                equity_asof=None,
+                flow_spot=None,
+                flow_asof=None,
+                price_spot=price_spot,
+                price_asof=None,
+                warnings=warnings,
+            )
+        intel = build_options_intelligence(
+            symbol=symbol,
+            chain_rows=chain_rows,
+            flow_rows=flow_rows,
+            price_series=price_series,
+            spot=live_spot if mode_resolved == "live" else None,
+            filters=filters,
+            mode_requested="live",
+            mode_resolved=mode_resolved,
+            chain_source=chain_source,
+            flow_source="lse_live_trade_tape" if flow_rows else "unavailable",
+            asof_utc=datetime.now(timezone.utc),
+            warnings=warnings,
+            open_interest_source=oi_source,
+            history_chain_rows=(),
+        )
+    except Exception as exc:  # noqa: BLE001 - one dead chain must not blank the strip
+        return _unmeasurable(f"{type(exc).__name__}: {exc}")
+
+    if not isinstance(intel, Mapping) or intel.get("error"):
+        reason = (
+            str(intel.get("error"))
+            if isinstance(intel, Mapping) and intel.get("error")
+            else "No options intelligence payload was produced."
+        )
+        return _unmeasurable(reason)
+
+    summary = intel.get("summary") if isinstance(intel.get("summary"), Mapping) else {}
+    quality = intel.get("quality") if isinstance(intel.get("quality"), Mapping) else {}
+
+    # `gex_measurable` is the engine's own honesty flag (see quality dict in
+    # build_options_intelligence): false whenever open interest was never
+    # observed, which is the common case for LSE live quotes on names without
+    # a dated chain backfill. A GEX of zero because nothing was observed is
+    # NOT a quiet reading -- it is an unmeasured one, so every numeric field
+    # is withheld rather than rendered as a false calm.
+    if not bool(quality.get("gex_measurable")):
+        return _unmeasurable(
+            "Open interest unavailable for this name, so gamma exposure is "
+            "unmeasured, not zero."
+        )
+
+    spot = _safe_round(summary.get("spot"), 4)
+    net_gamma_m = _safe_round(summary.get("total_gex_m"), 4)
+    zero_gamma = _safe_round(summary.get("zero_gamma"), 4)
+    distance_to_flip = (
+        (spot - zero_gamma) / spot
+        if spot is not None and spot > 0 and zero_gamma is not None
+        else None
+    )
+
+    if distance_to_flip is not None and abs(distance_to_flip) <= _GAMMA_REGIME_FLIP_BAND_PCT:
+        regime = "flip"
+    elif net_gamma_m is None:
+        # gex_measurable was true but the summary still produced no usable
+        # net-gamma figure (a degenerate/one-sided chain) -- nothing to sign.
+        return _unmeasurable("Chain lacked a usable net-gamma read.")
+    elif net_gamma_m < 0:
+        regime = "short"
+    elif net_gamma_m > 0:
+        regime = "long"
+    else:
+        # Net gamma landed on exactly zero without a resolvable flip level --
+        # that IS the flip point, not an unmeasured gap.
+        regime = "flip"
+
+    return {
+        "symbol": symbol,
+        "kind": kind,
+        "label": label,
+        "spot": spot,
+        "netGammaM": net_gamma_m,
+        "zeroGamma": zero_gamma,
+        "regime": regime,
+        "distanceToFlip": _safe_round(distance_to_flip, 6),
+        "trend": _gamma_regime_trend(symbol) if want_trend else None,
+        "measurable": True,
+        "note": (
+            "Live chain unavailable; showing the latest dated chain."
+            if mode_resolved == "history_fallback"
+            else None
+        ),
+    }
+
+
+def _gamma_regime_divergence(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """SPY's regime vs. the sectors running short gamma underneath it.
+
+    This is the actual signal in the strip, not a summary statistic: an
+    index pinned long-gamma (dealers dampen moves there -- mean-reverting,
+    "held") while a heavy sector runs short-gamma (dealers amplify moves
+    there -- trending, "free") means the index's calm is not representative
+    of what is happening under its own weight. Null when SPY itself is
+    unmeasurable -- there is no baseline to diverge from.
+    """
+    by_symbol = {row.get("symbol"): row for row in rows}
+    spy = by_symbol.get("SPY")
+    if not isinstance(spy, Mapping) or not spy.get("measurable"):
+        return None
+    index_regime = spy.get("regime")
+    if index_regime in (None, "unmeasurable"):
+        return None
+    short_gamma_sectors = [
+        str(row.get("symbol"))
+        for row in rows
+        if row.get("kind") == "sector"
+        and row.get("measurable")
+        and row.get("regime") == "short"
+    ]
+    if short_gamma_sectors:
+        note = (
+            f"SPY is running {index_regime} gamma while "
+            f"{', '.join(short_gamma_sectors)} "
+            f"{'is' if len(short_gamma_sectors) == 1 else 'are'} running short "
+            "gamma underneath it -- the index's stability is not "
+            "representative of its own weight."
+        )
+    else:
+        note = f"SPY is running {index_regime} gamma; no sector is running short gamma against it."
+    return {
+        "indexRegime": index_regime,
+        "shortGammaSectors": short_gamma_sectors,
+        "note": note,
+    }
+
+
+def _gamma_regime_payload_impl(*, want_trend: bool, force: bool) -> dict[str, Any]:
+    cache_key = ("gamma_regime", want_trend)
+    if not force:
+        with _GAMMA_REGIME_LOCK:
+            hit = _GAMMA_REGIME_CACHE.get(cache_key)
+        if hit and time.time() - hit[0] < _GAMMA_REGIME_TTL_S:
+            payload = dict(hit[1])
+            # Staleness is never implicit: say how old this copy is and that
+            # a forced refetch is available, so the desk is not reading a
+            # cached regime read while believing it is live.
+            payload["cache"] = {
+                "hit": True,
+                "age_seconds": round(time.time() - hit[0], 1),
+                "ttl_seconds": _GAMMA_REGIME_TTL_S,
+            }
+            return payload
+
+    workers = min(_GAMMA_REGIME_MAX_WORKERS, len(_GAMMA_REGIME_UNIVERSE))
+    futures = _get_concurrent_futures()
+    with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        rows = list(
+            pool.map(
+                lambda entry: _gamma_regime_row(entry, want_trend=want_trend),
+                _GAMMA_REGIME_UNIVERSE,
+            )
+        )
+
+    # One warning per distinct condition, not one per symbol: nine identical
+    # "live chain unavailable" lines are spam, not caution. Order-preserving
+    # dedupe keeps each note verbatim (tests assert on the literal text).
+    warnings = list(dict.fromkeys(str(row["note"]) for row in rows if row.get("note")))
+    payload = {
+        "asof": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "universe": "core",
+        "rows": rows,
+        "divergence": _gamma_regime_divergence(rows),
+        "warnings": warnings,
+        "cache": {
+            "hit": False,
+            "age_seconds": 0.0,
+            "ttl_seconds": _GAMMA_REGIME_TTL_S,
+        },
+    }
+    with _GAMMA_REGIME_LOCK:
+        _GAMMA_REGIME_CACHE[cache_key] = (time.time(), payload)
+    return payload
+
+
+def _gamma_regime_payload(*, force: bool, want_trend: bool) -> dict[str, Any]:
+    """Return one regime-strip build per cache key, even under concurrent requests.
+
+    15 live chain fetches is the single most expensive request this app makes
+    against a rate-limited paid provider (London Strategic Edge) -- more
+    expensive per call than the conviction board above, which at least caps
+    itself to `limit` candidates rather than a fixed 15. Without a keyed
+    build lock, two concurrent cold requests (the breadth strip polling on
+    its own timer plus an operator's manual refresh) would launch the same 15
+    chain reads twice. A concurrent forced request may use a result produced
+    after it began; a later, deliberate force still rebuilds. Same shape as
+    `_options_board_payload` immediately above -- see there for why.
+    """
+    cache_key = ("gamma_regime", want_trend)
+    request_started = time.time()
+    with _GAMMA_REGIME_LOCK:
+        build_lock = _GAMMA_REGIME_BUILD_LOCKS.setdefault(cache_key, threading.Lock())
+    with build_lock:
+        if force:
+            with _GAMMA_REGIME_LOCK:
+                hit = _GAMMA_REGIME_CACHE.get(cache_key)
+            if hit and hit[0] >= request_started:
+                return dict(hit[1])
+        return _gamma_regime_payload_impl(want_trend=want_trend, force=force)
+
+
 def _observed_flow_contract_review(
     print_row: Mapping[str, Any],
     *,
@@ -6177,6 +6959,7 @@ def _health_payload() -> dict:
         # Flow process that happens to expose the same route names.
         "flow_feed_contract": "market-wide-v1",
         "suggestion_contract": _ContractStr("paper-candidate-contract-v9"),
+        "gamma_regime_contract": "gamma-regime-v1",
         "deployment_mode": "authenticated" if _auth_required() else "workstation",
         "auth_required": _auth_required(),
     }
@@ -6805,6 +7588,20 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     )
                 )
 
+            elif path == "/api/gamma/regime":
+                # No symbol param: the universe is the fixed index + sector
+                # list in _GAMMA_REGIME_UNIVERSE, not user-selectable -- there
+                # is nothing here to sanitize against path traversal.
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                # Trend is opt-in: it is cheap per symbol (local parquet +
+                # cached Kalman filter, no network provider) but still 15
+                # extra filter runs on a cold request, so it does not run by
+                # default on every poll of a breadth strip.
+                want_trend = str(query.get("trend", ["0"])[0]).lower() in {"1", "true", "yes"}
+                self._send_json(
+                    _gamma_regime_payload(force=force, want_trend=want_trend)
+                )
+
             elif path == "/api/options/backfill_oi":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
                 if not ok:
@@ -7032,6 +7829,51 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         in {"1h", "intraday"},
                     )
                 )
+
+            elif path == "/api/microstructure-regime":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _microstructure_regime_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/state-estimation":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _state_estimation_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/anchored-vwap":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _anchored_vwap_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/systematic-execution/signals":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _systematic_signals_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/systematic-execution/backtest":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _systematic_backtest_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
 
             elif path == "/api/flow-state":
                 self._send_json(_flow_state_payload())

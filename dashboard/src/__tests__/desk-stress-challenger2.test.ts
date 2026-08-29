@@ -17,7 +17,9 @@ describe('Challenger 2: DeskView Empirical Contract & Telemetry Stress Tests', (
       const out: string[] = []
       const seen = new Set<string>()
       const push = (value: string | undefined) => {
-        const sym = String(value || '').trim().toUpperCase()
+        const sym = String(value || '')
+          .trim()
+          .toUpperCase()
         if (!sym || seen.has(sym)) return
         seen.add(sym)
         out.push(sym)
@@ -114,7 +116,9 @@ describe('Challenger 2: DeskView Empirical Contract & Telemetry Stress Tests', (
     })
 
     it('configures watchlist probe timer at 60s interval', () => {
-      expect(desk).toContain('watchlistTimer = window.setInterval(() => void probeWatchlist(true), 60_000)')
+      expect(desk).toContain(
+        'watchlistTimer = window.setInterval(() => void probeWatchlist(true), 60_000)',
+      )
     })
 
     it('cleans up all intervals on component unmount', () => {
@@ -135,7 +139,9 @@ describe('Challenger 2: DeskView Empirical Contract & Telemetry Stress Tests', (
       expect(desk).toContain('() => status.data.value?.asof')
       expect(desk).toContain('void probeWatchlist(true)')
       expect(desk).toContain('void refreshBoardMarks()')
-      expect(desk).toContain("() => [pead.value.length, signals.value.length, customWatchlist.value.join(',')]")
+      expect(desk).toContain(
+        "() => [pead.value.length, signals.value.length, customWatchlist.value.join(',')]",
+      )
     })
 
     it('integrates api.quotes in refreshBoardMarks', () => {
@@ -201,7 +207,9 @@ describe('Challenger 2: DeskView Empirical Contract & Telemetry Stress Tests', (
         'linear-gradient(180deg, color-mix(in srgb, var(--phosphor)',
       ]
       for (const bad of forbiddenTokens) {
-        expect(desk, `DeskView.vue must not contain forbidden aura token: ${bad}`).not.toContain(bad)
+        expect(desk, `DeskView.vue must not contain forbidden aura token: ${bad}`).not.toContain(
+          bad,
+        )
       }
     })
   })

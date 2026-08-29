@@ -49,16 +49,36 @@ withDefaults(
   white-space: normal;
 }
 
-.s-sm .val { font-size: var(--t-small); }
-.s-md .val { font-size: var(--t-fig); }
-.s-lg .val { font-size: var(--t-fig-lg); font-weight: 400; letter-spacing: -0.03em; }
+.s-sm .val {
+  font-size: var(--t-small);
+}
+.s-md .val {
+  font-size: var(--t-fig);
+}
+.s-lg .val {
+  font-size: var(--t-fig-lg);
+  font-weight: 400;
+  letter-spacing: -0.03em;
+}
 
-.t-pos .val { color: var(--long); }
-.t-neg .val { color: var(--short); }
-.t-call .val { color: var(--call); }
-.t-put .val { color: var(--put); }
-.t-flat .val { color: var(--ink-dim); }
-.t-accent .val { color: var(--phosphor); }
+.t-pos .val {
+  color: var(--long);
+}
+.t-neg .val {
+  color: var(--short);
+}
+.t-call .val {
+  color: var(--call);
+}
+.t-put .val {
+  color: var(--put);
+}
+.t-flat .val {
+  color: var(--ink-dim);
+}
+.t-accent .val {
+  color: var(--phosphor);
+}
 
 /* The secondary line often carries several facts (age, greeks, denominator);
    let it wrap rather than truncate them away. */

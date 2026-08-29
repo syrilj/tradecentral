@@ -36,16 +36,18 @@ const emit = defineEmits<{
         </button>
       </div>
 
-      <div class="banner-meta" v-if="summary">
+      <div v-if="summary" class="banner-meta">
         <div class="meta-item">
           <span class="meta-label">Ecosystem Total Cap</span>
-          <span class="meta-value">{{ formatMarketCap(summary.total_ecosystem_market_cap_b) }}</span>
+          <span class="meta-value">{{
+            formatMarketCap(summary.total_ecosystem_market_cap_b)
+          }}</span>
         </div>
       </div>
     </div>
 
     <!-- Narrative & Catalyst Timeline Strip -->
-    <div class="banner-narrative" v-if="summary">
+    <div v-if="summary" class="banner-narrative">
       <div class="narrative-text">
         <div class="narrative-header-row">
           <span class="narrative-tag">CAPEX & DEMAND CASCADE</span>
@@ -54,16 +56,14 @@ const emit = defineEmits<{
         <p>{{ summary.capex_catalyst_narrative }}</p>
       </div>
 
-      <div class="catalyst-timeline" v-if="summary.catalyst_timeline?.length">
+      <div v-if="summary.catalyst_timeline?.length" class="catalyst-timeline">
         <div class="timeline-header">
-          <span class="timeline-title">Upcoming Catalyst Milestones ({{ summary.catalyst_timeline.length }})</span>
+          <span class="timeline-title"
+            >Upcoming Catalyst Milestones ({{ summary.catalyst_timeline.length }})</span
+          >
         </div>
         <div class="timeline-track">
-          <div
-            v-for="(evt, i) in summary.catalyst_timeline"
-            :key="i"
-            class="timeline-card"
-          >
+          <div v-for="(evt, i) in summary.catalyst_timeline" :key="i" class="timeline-card">
             <div class="card-date">{{ evt.date }}</div>
             <div class="card-event">{{ evt.event }}</div>
             <div class="card-tickers">
@@ -83,7 +83,7 @@ const emit = defineEmits<{
     </div>
 
     <!-- Related Themes: shared-ticker connective tissue -->
-    <div class="related-themes" v-if="relatedThemes.length">
+    <div v-if="relatedThemes.length" class="related-themes">
       <span class="related-label">CONNECTED VALUE CHAINS</span>
       <div class="related-track">
         <button

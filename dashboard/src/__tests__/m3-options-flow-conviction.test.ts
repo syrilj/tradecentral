@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { OptionsBoardRow, OptionsTapeRow } from '@/api'
 
 describe('M3: Options Flow Context & C/P Zero-Division Guards', () => {
-  function computePremiumSplit(tape: OptionsTapeRow[], summary?: { call_premium?: number; put_premium?: number }) {
+  function computePremiumSplit(
+    tape: OptionsTapeRow[],
+    summary?: { call_premium?: number; put_premium?: number },
+  ) {
     let call = 0
     let put = 0
     let fromTape = false
@@ -30,19 +33,28 @@ describe('M3: Options Flow Context & C/P Zero-Division Guards', () => {
     }
 
     const total = call + put
-    const hasPrem = total > 0 && (fromTape ? classifiedCount > 0 : (call > 0 || put > 0))
+    const hasPrem = total > 0 && (fromTape ? classifiedCount > 0 : call > 0 || put > 0)
     const callPct = hasPrem ? Math.round((call / total) * 100) : 0
     const putPct = hasPrem ? 100 - callPct : 0
     const dominantPct = Math.max(callPct, putPct)
     const tone = !hasPrem ? 'neutral' : callPct >= 58 ? 'call' : putPct >= 58 ? 'put' : 'neutral'
-    const conviction = hasPrem ? (dominantPct >= 72 ? 'HIGH' : dominantPct >= 62 ? 'MED' : 'LOW') : 'NONE'
-    const ratio = (hasPrem && put > 0) ? call / put : null
+    const conviction = hasPrem
+      ? dominantPct >= 72
+        ? 'HIGH'
+        : dominantPct >= 62
+          ? 'MED'
+          : 'LOW'
+      : 'NONE'
+    const ratio = hasPrem && put > 0 ? call / put : null
 
-    const label = tone === 'call'
-      ? 'CALL-HEAVY ACTIVITY'
-      : tone === 'put'
-        ? 'PUT-HEAVY ACTIVITY'
-        : total > 0 ? 'BALANCED ACTIVITY' : 'NO ACTIVITY MIX'
+    const label =
+      tone === 'call'
+        ? 'CALL-HEAVY ACTIVITY'
+        : tone === 'put'
+          ? 'PUT-HEAVY ACTIVITY'
+          : total > 0
+            ? 'BALANCED ACTIVITY'
+            : 'NO ACTIVITY MIX'
 
     return {
       call,
@@ -128,9 +140,10 @@ describe('M3: Conviction Board Pressure Score Dampening', () => {
 
     if (row.squeeze_score != null && Number.isFinite(row.squeeze_score)) {
       const rawSigned = Math.max(-100, Math.min(100, row.squeeze_score))
-      const signed = (row.selection_basis === 'live_options_flow' && totalPrem > 0)
-        ? rawSigned * dampener
-        : rawSigned
+      const signed =
+        row.selection_basis === 'live_options_flow' && totalPrem > 0
+          ? rawSigned * dampener
+          : rawSigned
       const score = Math.abs(signed)
       const tone = signed > 0.5 ? 'pos' : signed < -0.5 ? 'neg' : 'neutral'
       return { score, signed, tone, label: `${signed > 0 ? '+' : ''}${signed.toFixed(1)}` }
@@ -223,13 +236,19 @@ describe('M3: Conviction Board Pressure Score Dampening', () => {
 })
 
 describe('M3: Moneyness and Strike Distance Null/Zero Guards', () => {
-  function isItm(row: { right: string; strike: number | null; underlying_price?: number | null }, spot?: number | null): boolean {
+  function isItm(
+    row: { right: string; strike: number | null; underlying_price?: number | null },
+    spot?: number | null,
+  ): boolean {
     const spotPrice = row.underlying_price ?? spot
     if (spotPrice == null || spotPrice <= 0 || row.strike == null || row.strike <= 0) return false
     return row.right === 'call' ? spotPrice > row.strike : spotPrice < row.strike
   }
 
-  function moneynessInfo(row: { right: string; strike: number | null; underlying_price?: number | null }, spot?: number | null) {
+  function moneynessInfo(
+    row: { right: string; strike: number | null; underlying_price?: number | null },
+    spot?: number | null,
+  ) {
     const spotPrice = row.underlying_price ?? spot
     if (spotPrice == null || spotPrice <= 0 || row.strike == null || row.strike <= 0) return null
     const diffPct = ((spotPrice - row.strike) / row.strike) * 100
@@ -246,7 +265,12 @@ describe('M3: Moneyness and Strike Distance Null/Zero Guards', () => {
     return { text: `${dist}% OTM`, cls: 'otm' }
   }
 
-  function wallPct(side: 'call' | 'put', spot: number | null | undefined, callWall: number | null | undefined, putWall: number | null | undefined) {
+  function wallPct(
+    side: 'call' | 'put',
+    spot: number | null | undefined,
+    callWall: number | null | undefined,
+    putWall: number | null | undefined,
+  ) {
     const wall = side === 'call' ? callWall : putWall
     if (spot == null || spot <= 0 || wall == null || wall <= 0) return null
     const calc = (wall - spot) / spot

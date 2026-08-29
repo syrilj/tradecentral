@@ -21,21 +21,24 @@ import { compact, num } from '@/format'
  * net flow so the pressure profile reads left to right across strikes.
  * This is a positioning proxy, not observed flow — the readout says so.
  */
-const props = withDefaults(defineProps<{
-  symbol: string
-  rows: CharmStrikeRow[]
-  spot?: number | null
-  height?: number
-  callWall?: number | null
-  putWall?: number | null
-  gammaFlip?: number | null
-}>(), {
-  spot: null,
-  height: 440,
-  callWall: null,
-  putWall: null,
-  gammaFlip: null,
-})
+const props = withDefaults(
+  defineProps<{
+    symbol: string
+    rows: CharmStrikeRow[]
+    spot?: number | null
+    height?: number
+    callWall?: number | null
+    putWall?: number | null
+    gammaFlip?: number | null
+  }>(),
+  {
+    spot: null,
+    height: 440,
+    callWall: null,
+    putWall: null,
+    gammaFlip: null,
+  },
+)
 
 const frameEl = ref<HTMLDivElement | null>(null)
 const svgEl = ref<SVGSVGElement | null>(null)
@@ -67,9 +70,11 @@ const halfH = computed(() => plotH.value / 2)
 
 const hoverIdx = ref<number | null>(null)
 
-const ordered = computed(() => [...props.rows]
-  .filter((r) => Number.isFinite(r.strike) && Number.isFinite(r.net_charm_flow))
-  .sort((a, b) => a.strike - b.strike))
+const ordered = computed(() =>
+  [...props.rows]
+    .filter((r) => Number.isFinite(r.strike) && Number.isFinite(r.net_charm_flow))
+    .sort((a, b) => a.strike - b.strike),
+)
 
 const strikeDomain = computed(() => {
   const strikes = ordered.value.map((r) => r.strike)
@@ -81,10 +86,9 @@ const strikeDomain = computed(() => {
   return { lo: lo - padAmt, hi: hi + padAmt }
 })
 
-const xScale = computed(() => linearScale(
-  [strikeDomain.value.lo, strikeDomain.value.hi],
-  [pad.value.l, W.value - pad.value.r],
-))
+const xScale = computed(() =>
+  linearScale([strikeDomain.value.lo, strikeDomain.value.hi], [pad.value.l, W.value - pad.value.r]),
+)
 
 /** Dynamic bar width based on strike spacing. */
 const barWidth = computed(() => {
@@ -92,7 +96,9 @@ const barWidth = computed(() => {
   if (n <= 1) return 16
   let minDx = Infinity
   for (let i = 1; i < ordered.value.length; i++) {
-    const dx = Math.abs(xScale.value(ordered.value[i].strike) - xScale.value(ordered.value[i - 1].strike))
+    const dx = Math.abs(
+      xScale.value(ordered.value[i].strike) - xScale.value(ordered.value[i - 1].strike),
+    )
     if (dx > 0 && dx < minDx) minDx = dx
   }
   if (!Number.isFinite(minDx)) return 12
@@ -108,10 +114,9 @@ const flowMax = computed(() => {
   return max
 })
 
-const yScale = computed(() => linearScale(
-  [-flowMax.value, flowMax.value],
-  [plotBot.value, plotTop.value],
-))
+const yScale = computed(() =>
+  linearScale([-flowMax.value, flowMax.value], [plotBot.value, plotTop.value]),
+)
 
 interface FlowBar {
   strike: number
@@ -145,13 +150,19 @@ const bars = computed<FlowBar[]>(() => {
 })
 
 /** Net pressure trace across strikes. */
-const netPath = computed(() => linePath(
-  ordered.value.map((r) => ({ x: xScale.value(r.strike), y: yScale.value(r.net_charm_flow) })),
-))
+const netPath = computed(() =>
+  linePath(
+    ordered.value.map((r) => ({ x: xScale.value(r.strike), y: yScale.value(r.net_charm_flow) })),
+  ),
+)
 
 /** Totals: positive net flow = selling pressure, negative = buying pressure. */
-const totalSell = computed(() => ordered.value.reduce((a, r) => a + Math.max(0, r.net_charm_flow), 0))
-const totalBuy = computed(() => ordered.value.reduce((a, r) => a + Math.max(0, -r.net_charm_flow), 0))
+const totalSell = computed(() =>
+  ordered.value.reduce((a, r) => a + Math.max(0, r.net_charm_flow), 0),
+)
+const totalBuy = computed(() =>
+  ordered.value.reduce((a, r) => a + Math.max(0, -r.net_charm_flow), 0),
+)
 const netTotal = computed(() => totalSell.value - totalBuy.value)
 const regime = computed<'selling' | 'buying' | 'balanced'>(() => {
   const total = totalSell.value + totalBuy.value
@@ -176,21 +187,23 @@ const strikeTicks = computed(() => {
   return t.map((value) => ({ value, x: xScale.value(value) }))
 })
 
-const spotX = computed(() => props.spot != null && Number.isFinite(props.spot)
-  ? xScale.value(props.spot)
-  : null)
+const spotX = computed(() =>
+  props.spot != null && Number.isFinite(props.spot) ? xScale.value(props.spot) : null,
+)
 
-const callWallX = computed(() => props.callWall != null && Number.isFinite(props.callWall)
-  ? xScale.value(props.callWall)
-  : null)
+const callWallX = computed(() =>
+  props.callWall != null && Number.isFinite(props.callWall) ? xScale.value(props.callWall) : null,
+)
 
-const putWallX = computed(() => props.putWall != null && Number.isFinite(props.putWall)
-  ? xScale.value(props.putWall)
-  : null)
+const putWallX = computed(() =>
+  props.putWall != null && Number.isFinite(props.putWall) ? xScale.value(props.putWall) : null,
+)
 
-const gammaFlipX = computed(() => props.gammaFlip != null && Number.isFinite(props.gammaFlip)
-  ? xScale.value(props.gammaFlip)
-  : null)
+const gammaFlipX = computed(() =>
+  props.gammaFlip != null && Number.isFinite(props.gammaFlip)
+    ? xScale.value(props.gammaFlip)
+    : null,
+)
 
 const focus = computed(() => {
   const idx = hoverIdx.value
@@ -198,9 +211,7 @@ const focus = computed(() => {
   const bar = bars.value[idx]
   if (!bar) return null
   const spotPrice = props.spot
-  const distPct = spotPrice && spotPrice > 0
-    ? ((bar.strike - spotPrice) / spotPrice) * 100
-    : null
+  const distPct = spotPrice && spotPrice > 0 ? ((bar.strike - spotPrice) / spotPrice) * 100 : null
   return {
     strike: bar.strike,
     x: bar.x,
@@ -257,7 +268,13 @@ function onMove(e: MouseEvent): void {
         <span class="main-px">
           <i class="key net" />{{ symbol }}
           <b class="fig" :class="regime">
-            {{ regime === 'selling' ? 'SELLING PRESSURE' : regime === 'buying' ? 'BUYING PRESSURE' : 'BALANCED' }}
+            {{
+              regime === 'selling'
+                ? 'SELLING PRESSURE'
+                : regime === 'buying'
+                  ? 'BUYING PRESSURE'
+                  : 'BALANCED'
+            }}
           </b>
         </span>
         <span class="prem-sum sell">Σ SELL {{ compact(totalSell) }} sh/d</span>
@@ -276,17 +293,22 @@ function onMove(e: MouseEvent): void {
         <span v-if="focus.distPct != null" class="probe-moneyness label">
           {{ focus.distPct >= 0 ? '+' : '' }}{{ focus.distPct.toFixed(1) }}%
         </span>
-        <span class="probe-action label" :class="focus.net > 0 ? 'sell' : focus.net < 0 ? 'buy' : ''">
+        <span
+          class="probe-action label"
+          :class="focus.net > 0 ? 'sell' : focus.net < 0 ? 'buy' : ''"
+        >
           DEALERS {{ focus.dealerAction }}
         </span>
         <span v-if="focus.net > 0" class="sell fig">SELL {{ compact(focus.net) }} sh/d</span>
         <span v-else-if="focus.net < 0" class="buy fig">BUY {{ compact(-focus.net) }} sh/d</span>
         <span class="label flow-breakdown">
-          C: {{ compact(focus.callFlow) }} sh/d ({{ compact(focus.callOi) }} OI) ·
-          P: {{ compact(focus.putFlow) }} sh/d ({{ compact(focus.putOi) }} OI)
+          C: {{ compact(focus.callFlow) }} sh/d ({{ compact(focus.callOi) }} OI) · P:
+          {{ compact(focus.putFlow) }} sh/d ({{ compact(focus.putOi) }} OI)
         </span>
       </div>
-      <div v-else class="scale-note label">shares/day · hover any strike bar to inspect dealer hedge flow</div>
+      <div v-else class="scale-note label">
+        shares/day · hover any strike bar to inspect dealer hedge flow
+      </div>
     </div>
 
     <!-- Chart canvas -->
@@ -345,18 +367,38 @@ function onMove(e: MouseEvent): void {
 
         <!-- Pane captions -->
         <g class="pane-headers">
-          <text class="pane-cap sell" :x="pad.l + 8" :y="plotTop + 14">▲ SELLING PRESSURE · DEALERS SELL SHARES</text>
-          <text class="pane-cap buy" :x="pad.l + 8" :y="plotBot - 8">▼ BUYING PRESSURE · DEALERS BUY SHARES</text>
+          <text class="pane-cap sell" :x="pad.l + 8" :y="plotTop + 14">
+            ▲ SELLING PRESSURE · DEALERS SELL SHARES
+          </text>
+          <text class="pane-cap buy" :x="pad.l + 8" :y="plotBot - 8">
+            ▼ BUYING PRESSURE · DEALERS BUY SHARES
+          </text>
         </g>
 
         <!-- Left-axis ticks (shared scale, mirrored about zero) -->
         <g class="grid-lines">
           <line class="zero" :x1="pad.l" :x2="W - pad.r" :y1="zeroY" :y2="zeroY" />
           <template v-for="tick in flowTicks" :key="`ft-${tick.value}`">
-            <line v-if="tick.value > 0" :x1="pad.l" :x2="W - pad.r" :y1="tick.sellY" :y2="tick.sellY" />
-            <line v-if="tick.value > 0" :x1="pad.l" :x2="W - pad.r" :y1="tick.buyY" :y2="tick.buyY" />
-            <text :x="pad.l - 8" :y="tick.sellY + 3" text-anchor="end">+{{ compact(tick.value) }}</text>
-            <text :x="pad.l - 8" :y="tick.buyY + 3" text-anchor="end">-{{ compact(tick.value) }}</text>
+            <line
+              v-if="tick.value > 0"
+              :x1="pad.l"
+              :x2="W - pad.r"
+              :y1="tick.sellY"
+              :y2="tick.sellY"
+            />
+            <line
+              v-if="tick.value > 0"
+              :x1="pad.l"
+              :x2="W - pad.r"
+              :y1="tick.buyY"
+              :y2="tick.buyY"
+            />
+            <text :x="pad.l - 8" :y="tick.sellY + 3" text-anchor="end">
+              +{{ compact(tick.value) }}
+            </text>
+            <text :x="pad.l - 8" :y="tick.buyY + 3" text-anchor="end">
+              -{{ compact(tick.value) }}
+            </text>
           </template>
           <text :x="pad.l - 8" :y="zeroY + 3" text-anchor="end" class="zero-label">0</text>
         </g>
@@ -364,22 +406,30 @@ function onMove(e: MouseEvent): void {
         <!-- Wall markers if present -->
         <g v-if="putWallX != null" class="wall-marker put-wall">
           <line :x1="putWallX" :x2="putWallX" :y1="plotTop" :y2="plotBot" class="wall-line" />
-          <text :x="putWallX + 3" :y="plotTop + 34" class="wall-label">PUT WALL ${{ num(putWall, 0) }}</text>
+          <text :x="putWallX + 3" :y="plotTop + 34" class="wall-label">
+            PUT WALL ${{ num(putWall, 0) }}
+          </text>
         </g>
         <g v-if="callWallX != null" class="wall-marker call-wall">
           <line :x1="callWallX" :x2="callWallX" :y1="plotTop" :y2="plotBot" class="wall-line" />
-          <text :x="callWallX + 3" :y="plotTop + 34" class="wall-label">CALL WALL ${{ num(callWall, 0) }}</text>
+          <text :x="callWallX + 3" :y="plotTop + 34" class="wall-label">
+            CALL WALL ${{ num(callWall, 0) }}
+          </text>
         </g>
         <g v-if="gammaFlipX != null" class="wall-marker gamma-flip">
           <line :x1="gammaFlipX" :x2="gammaFlipX" :y1="plotTop" :y2="plotBot" class="wall-line" />
-          <text :x="gammaFlipX + 3" :y="plotTop + 48" class="wall-label">FLIP ${{ num(gammaFlip, 0) }}</text>
+          <text :x="gammaFlipX + 3" :y="plotTop + 48" class="wall-label">
+            FLIP ${{ num(gammaFlip, 0) }}
+          </text>
         </g>
 
         <!-- Spot marker -->
         <g v-if="spotX != null" class="spot-marker">
           <line :x1="spotX" :x2="spotX" :y1="plotTop" :y2="plotBot" class="spot-line" />
           <rect :x="spotX - 32" :y="plotTop + 2" width="64" height="18" rx="2" class="spot-badge" />
-          <text :x="spotX" :y="plotTop + 14" class="spot-label" text-anchor="middle">SPOT ${{ num(spot) }}</text>
+          <text :x="spotX" :y="plotTop + 14" class="spot-label" text-anchor="middle">
+            SPOT ${{ num(spot) }}
+          </text>
         </g>
 
         <!-- Net pressure trace across strikes -->
@@ -432,7 +482,13 @@ function onMove(e: MouseEvent): void {
         <!-- Crosshair on hover -->
         <g v-if="focus" class="crosshair">
           <line :x1="focus.x" :x2="focus.x" :y1="plotTop" :y2="plotBot" class="crosshair-v" />
-          <line :x1="pad.l" :x2="W - pad.r" :y1="yScale(focus.net)" :y2="yScale(focus.net)" class="crosshair-h" />
+          <line
+            :x1="pad.l"
+            :x2="W - pad.r"
+            :y1="yScale(focus.net)"
+            :y2="yScale(focus.net)"
+            class="crosshair-h"
+          />
           <circle :cx="focus.x" :cy="zeroY" r="3.5" class="zero-dot" />
         </g>
 
@@ -453,10 +509,18 @@ function onMove(e: MouseEvent): void {
 
     <!-- Clear footer legend & interpretation guide -->
     <div class="legend label">
-      <span class="leg"><i class="swatch sell" /> <b>Top Pane (↑):</b> Positive charm flow → Dealer delta increases → <b>Dealers SELL underlying</b> (Selling Pressure)</span>
-      <span class="leg"><i class="swatch buy" /> <b>Bottom Pane (↓):</b> Negative charm flow → Dealer delta decreases → <b>Dealers BUY underlying</b> (Buying Pressure)</span>
+      <span class="leg"
+        ><i class="swatch sell" /> <b>Top Pane (↑):</b> Positive charm flow → Dealer delta increases
+        → <b>Dealers SELL underlying</b> (Selling Pressure)</span
+      >
+      <span class="leg"
+        ><i class="swatch buy" /> <b>Bottom Pane (↓):</b> Negative charm flow → Dealer delta
+        decreases → <b>Dealers BUY underlying</b> (Buying Pressure)</span
+      >
       <span class="leg"><i class="swatch net" /> Net trace across strikes</span>
-      <span class="leg note">Positioning proxy from open interest, not observed flow. Units in shares/day.</span>
+      <span class="leg note"
+        >Positioning proxy from open interest, not observed flow. Units in shares/day.</span
+      >
     </div>
   </div>
 </template>
@@ -505,12 +569,22 @@ function onMove(e: MouseEvent): void {
   font-weight: 700;
   color: var(--ink);
 }
-.main-px b.selling { color: var(--put-hi); }
-.main-px b.buying { color: var(--call-hi); }
-.main-px b.balanced { color: var(--ink-dim); }
+.main-px b.selling {
+  color: var(--put-hi);
+}
+.main-px b.buying {
+  color: var(--call-hi);
+}
+.main-px b.balanced {
+  color: var(--ink-dim);
+}
 
-.prem-sum.sell { color: var(--put-hi); }
-.prem-sum.buy { color: var(--call-hi); }
+.prem-sum.sell {
+  color: var(--put-hi);
+}
+.prem-sum.buy {
+  color: var(--call-hi);
+}
 
 .imbalance {
   font-weight: 700;
@@ -558,12 +632,27 @@ function onMove(e: MouseEvent): void {
   padding: 1px 4px;
   border-radius: 2px;
 }
-.probe-action.sell { color: var(--put-hi); background: var(--put-wash); }
-.probe-action.buy { color: var(--call-hi); background: var(--call-wash); }
+.probe-action.sell {
+  color: var(--put-hi);
+  background: var(--put-wash);
+}
+.probe-action.buy {
+  color: var(--call-hi);
+  background: var(--call-wash);
+}
 
-.probe-inline .sell { color: var(--put-hi); font-weight: 600; }
-.probe-inline .buy { color: var(--call-hi); font-weight: 600; }
-.flow-breakdown { color: var(--ink-dim); font-size: 10px; }
+.probe-inline .sell {
+  color: var(--put-hi);
+  font-weight: 600;
+}
+.probe-inline .buy {
+  color: var(--call-hi);
+  font-weight: 600;
+}
+.flow-breakdown {
+  color: var(--ink-dim);
+  font-size: 10px;
+}
 
 .scale-note {
   color: var(--ink-faint);
@@ -576,7 +665,9 @@ function onMove(e: MouseEvent): void {
   display: inline-block;
   border-radius: 1px;
 }
-.key.net { background: var(--phosphor); }
+.key.net {
+  background: var(--phosphor);
+}
 
 .pressure-canvas {
   position: relative;
@@ -602,8 +693,12 @@ function onMove(e: MouseEvent): void {
   font: 700 9px var(--font-data);
   letter-spacing: 0.08em;
 }
-.pane-cap.sell { fill: var(--put-dim); }
-.pane-cap.buy { fill: var(--call-dim); }
+.pane-cap.sell {
+  fill: var(--put-dim);
+}
+.pane-cap.buy {
+  fill: var(--call-dim);
+}
 
 .grid-lines line {
   stroke: var(--rule-faint);
@@ -615,7 +710,8 @@ function onMove(e: MouseEvent): void {
   stroke-width: 1.5px;
   vector-effect: non-scaling-stroke;
 }
-.grid-lines text, .strike-axis text {
+.grid-lines text,
+.strike-axis text {
   fill: var(--ink-dim);
   font: 600 10px var(--font-data);
   letter-spacing: 0.02em;
@@ -646,16 +742,28 @@ function onMove(e: MouseEvent): void {
   opacity: 0.6;
   vector-effect: non-scaling-stroke;
 }
-.wall-marker.call-wall .wall-line { stroke: var(--call); }
-.wall-marker.put-wall .wall-line { stroke: var(--put); }
-.wall-marker.gamma-flip .wall-line { stroke: var(--warn); }
+.wall-marker.call-wall .wall-line {
+  stroke: var(--call);
+}
+.wall-marker.put-wall .wall-line {
+  stroke: var(--put);
+}
+.wall-marker.gamma-flip .wall-line {
+  stroke: var(--warn);
+}
 .wall-marker .wall-label {
   font: 600 8.5px var(--font-data);
   letter-spacing: 0.04em;
 }
-.wall-marker.call-wall .wall-label { fill: var(--call-dim); }
-.wall-marker.put-wall .wall-label { fill: var(--put-dim); }
-.wall-marker.gamma-flip .wall-label { fill: var(--warn); }
+.wall-marker.call-wall .wall-label {
+  fill: var(--call-dim);
+}
+.wall-marker.put-wall .wall-label {
+  fill: var(--put-dim);
+}
+.wall-marker.gamma-flip .wall-label {
+  fill: var(--warn);
+}
 
 .net-trace {
   stroke: var(--phosphor);
@@ -677,7 +785,10 @@ function onMove(e: MouseEvent): void {
   vector-effect: non-scaling-stroke;
   stroke-width: 1px;
   opacity: 0.85;
-  transition: opacity 0.15s ease, stroke-width 0.15s ease, fill 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    stroke-width 0.15s ease,
+    fill 0.15s ease;
 }
 .pressure-bars .bar.sell {
   fill: var(--put);
@@ -765,9 +876,15 @@ function onMove(e: MouseEvent): void {
   height: 9px;
   border-radius: 1.5px;
 }
-.legend .swatch.sell { background: var(--put); }
-.legend .swatch.buy { background: var(--call); }
-.legend .swatch.net { background: var(--phosphor); }
+.legend .swatch.sell {
+  background: var(--put);
+}
+.legend .swatch.buy {
+  background: var(--call);
+}
+.legend .swatch.net {
+  background: var(--phosphor);
+}
 
 @media (max-width: 900px) {
   .chart-readout {

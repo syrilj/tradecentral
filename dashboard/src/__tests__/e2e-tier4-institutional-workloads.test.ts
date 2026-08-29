@@ -12,36 +12,24 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import {
-  bookAllocation,
-  netDebit,
-  type CalcLeg,
-} from '@/optionsCalculator'
+import { bookAllocation, netDebit, type CalcLeg } from '@/optionsCalculator'
 
-import {
-  collectWatchlistAlerts,
-  saveSeenAlertKeys,
-} from '@/flowAlerts'
+import { collectWatchlistAlerts, saveSeenAlertKeys } from '@/flowAlerts'
 
-import {
-  buildOptionsDirection,
-  type OptionsDirectionSummary,
-} from '@/optionsDirection'
+import { buildOptionsDirection, type OptionsDirectionSummary } from '@/optionsDirection'
 
-import {
-  nextResourceData,
-} from '@/composables/useResource'
+import { nextResourceData } from '@/composables/useResource'
 
-import type {
-  GexStrikeRow,
-  MarketFlowPrint,
-} from '@/api'
+import type { GexStrikeRow, MarketFlowPrint } from '@/api'
 
 // Standard Black-Scholes Reference Oracle
 function standardNormalCdf(x: number): number {
   const t = 1 / (1 + 0.2316419 * Math.abs(x))
   const d = 0.3989422804014327 * Math.exp((-x * x) / 2)
-  const p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+  const p =
+    d *
+    t *
+    (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
   return x >= 0 ? 1 - p : p
 }
 
@@ -84,7 +72,8 @@ function solveBs(
   } else {
     theo = K * disc * standardNormalCdf(-d2) - S * standardNormalCdf(-d1)
     delta = nd1 - 1
-    theta = (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
+    theta =
+      (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
     rho = (-K * T * disc * standardNormalCdf(-d2)) / 100
   }
 
@@ -102,7 +91,7 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     // Generate 50 simulated fast-arriving 0DTE prints
     const prints = Array.from({ length: 50 }, (_, i) => {
       const strike = 540 + (i % 5)
-      const premium = 250_000 + (i * 20_000)
+      const premium = 250_000 + i * 20_000
       const volume = 2_000 + i * 100
       const oi = 800 // High Vol/OI ratio > 2.5
       return {
@@ -125,11 +114,12 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     expect(filtered.length).toBeGreaterThan(30)
 
     // 2. Classify Golden Sweeps with Vol/OI >= 1.0
-    const goldenSweeps = filtered.filter((p) =>
-      p.trade_class === 'sweep'
-      && String(p.aggressor).toLowerCase() === 'ask'
-      && (p.premium ?? 0) >= 500_000
-      && ((p.volume ?? 0) / (p.open_interest ?? 1)) >= 1.0,
+    const goldenSweeps = filtered.filter(
+      (p) =>
+        p.trade_class === 'sweep' &&
+        String(p.aggressor).toLowerCase() === 'ask' &&
+        (p.premium ?? 0) >= 500_000 &&
+        (p.volume ?? 0) / (p.open_interest ?? 1) >= 1.0,
     )
     expect(goldenSweeps).toHaveLength(filtered.length)
 
@@ -162,18 +152,22 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
 
     // 3. Short Iron Condor seller profits from Vega contraction:
     // Iron Condor: Long 105P, Short 110P, Short 130C, Long 135C
-    const condorPre = (solveBs('put', spot, 110, dte, preEarningsVol).theo +
-      solveBs('call', spot, 130, dte, preEarningsVol).theo -
-      solveBs('put', spot, 105, dte, preEarningsVol).theo -
-      solveBs('call', spot, 135, dte, preEarningsVol).theo) * 100
+    const condorPre =
+      (solveBs('put', spot, 110, dte, preEarningsVol).theo +
+        solveBs('call', spot, 130, dte, preEarningsVol).theo -
+        solveBs('put', spot, 105, dte, preEarningsVol).theo -
+        solveBs('call', spot, 135, dte, preEarningsVol).theo) *
+      100
 
-    const condorPost = (solveBs('put', spot, 110, dte, postEarningsVol).theo +
-      solveBs('call', spot, 130, dte, postEarningsVol).theo -
-      solveBs('put', spot, 105, dte, postEarningsVol).theo -
-      solveBs('call', spot, 135, dte, postEarningsVol).theo) * 100
+    const condorPost =
+      (solveBs('put', spot, 110, dte, postEarningsVol).theo +
+        solveBs('call', spot, 130, dte, postEarningsVol).theo -
+        solveBs('put', spot, 105, dte, postEarningsVol).theo -
+        solveBs('call', spot, 135, dte, postEarningsVol).theo) *
+      100
 
     // Iron condor price to buy back dropped significantly -> seller secures credit profit
-    expect(condorPost).toBeLessThan(condorPre * 0.40)
+    expect(condorPost).toBeLessThan(condorPre * 0.4)
   })
 
   // =========================================================================
@@ -188,8 +182,8 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     // 30 strikes distributed across $450 to $550
     const gexRows = Array.from({ length: 30 }, (_, i) => {
       const strike = 470 + i * 2.5
-      let callGex = Math.max(0, (25 - Math.abs(strike - callWall))) * 5
-      let putGex = -Math.max(0, (20 - Math.abs(strike - putWall))) * 5
+      let callGex = Math.max(0, 25 - Math.abs(strike - callWall)) * 5
+      let putGex = -Math.max(0, 20 - Math.abs(strike - putWall)) * 5
       if (strike === callWall) callGex = 150 // Massive Call Wall
       if (strike === putWall) putGex = -120 // Massive Put Wall
       const netGex = callGex + putGex
@@ -204,8 +198,11 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     }) as unknown as GexStrikeRow[]
 
     // Verify Call Wall & Put Wall detection
-    const detectedCallWall = [...gexRows].sort((a, b) => (b.call_gex_m ?? 0) - (a.call_gex_m ?? 0))[0].strike
-    const detectedPutWall = [...gexRows].sort((a, b) => (a.put_gex_m ?? 0) - (b.put_gex_m ?? 0))[0].strike
+    const detectedCallWall = [...gexRows].sort(
+      (a, b) => (b.call_gex_m ?? 0) - (a.call_gex_m ?? 0),
+    )[0].strike
+    const detectedPutWall = [...gexRows].sort((a, b) => (a.put_gex_m ?? 0) - (b.put_gex_m ?? 0))[0]
+      .strike
 
     expect(detectedCallWall).toBe(510)
     expect(detectedPutWall).toBe(490)
@@ -234,12 +231,12 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     } as unknown as MarketFlowPrint
 
     // 2. Check drawer trigger threshold
-    expect((whalePrint.premium ?? 0)).toBeGreaterThanOrEqual(1_000_000)
+    expect(whalePrint.premium ?? 0).toBeGreaterThanOrEqual(1_000_000)
 
     // 3. Pre-fill Options Calculator Bear Put Spread: Long 200P / Short 180P
     const legs: CalcLeg[] = [
-      { id: '1', right: 'put', strike: 200, quantity: 1, premium: 8.50 },
-      { id: '2', right: 'put', strike: 180, quantity: -1, premium: 3.00 },
+      { id: '1', right: 'put', strike: 200, quantity: 1, premium: 8.5 },
+      { id: '2', right: 'put', strike: 180, quantity: -1, premium: 3.0 },
     ]
 
     const netCost = netDebit(legs) // (8.50 - 3.00) * 100 = $550
@@ -294,7 +291,7 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     // Generate 200 surge prints
     const surgePrints = Array.from({ length: 200 }, (_, i) => {
       const sym = symbols[i % symbols.length]
-      const premium = 50_000 + (i * 10_000)
+      const premium = 50_000 + i * 10_000
       return {
         timestamp: `14:00:${String(Math.floor(i / 10)).padStart(2, '0')}`,
         symbol: sym,
@@ -321,8 +318,12 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     const seenKeys = new Set(alerts.map((a) => a.key))
     const storage = {
       store: new Map<string, string>(),
-      getItem(k: string) { return this.store.get(k) ?? null },
-      setItem(k: string, v: string) { this.store.set(k, v) },
+      getItem(k: string) {
+        return this.store.get(k) ?? null
+      },
+      setItem(k: string, v: string) {
+        this.store.set(k, v)
+      },
     }
 
     const saved = saveSeenAlertKeys(seenKeys, storage)
@@ -341,8 +342,8 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
       call_wall: 215,
       put_wall: 190,
       squeeze: {
-        bullish: 0.60,
-        bearish: 0.20,
+        bullish: 0.6,
+        bearish: 0.2,
         score: 30,
         label: 'long_gamma',
         primary: 'bullish',
@@ -358,9 +359,9 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
       call_wall: 215,
       put_wall: 185,
       signed_flow_imbalance: -0.75, // Bearish institutional puts rushing in
-      signed_flow_confidence: 0.90,
+      signed_flow_confidence: 0.9,
       squeeze: {
-        bullish: 0.10,
+        bullish: 0.1,
         bearish: 0.85,
         score: -70,
         label: 'short_gamma_acceleration',

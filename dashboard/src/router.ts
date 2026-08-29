@@ -76,6 +76,18 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Drift', index: '05' },
   },
   {
+    path: '/regime',
+    name: 'regime',
+    component: () => import('@/views/RegimeView.vue'),
+    meta: { title: 'Regime', index: '05' },
+  },
+  {
+    path: '/microstructure-regime',
+    name: 'microstructure-regime',
+    component: () => import('@/views/MicrostructureRegimeView.vue'),
+    meta: { title: 'Microstructure Regime', index: '05' },
+  },
+  {
     path: '/flow',
     name: 'flow',
     component: () => import('@/views/FlowView.vue'),

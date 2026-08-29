@@ -250,13 +250,21 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
       const primaryMatch = appVueSrc.match(primaryNavRegex)
       expect(primaryMatch).toBeTruthy()
       const primaryNames = [...primaryMatch![1].matchAll(/name:\s*'([^']+)'/g)].map((m) => m[1])
-      expect(primaryNames).toEqual(['flow', 'options', 'desk', 'chain', 'market'])
+      expect(primaryNames).toEqual([
+        'flow',
+        'options',
+        'regime',
+        'drift',
+        'desk',
+        'chain',
+        'market',
+      ])
 
       const deskToolsRegex = /const deskTools = \[\s*([\s\S]*?)\] as const/
       const deskMatch = appVueSrc.match(deskToolsRegex)
       expect(deskMatch).toBeTruthy()
       const deskNames = [...deskMatch![1].matchAll(/name:\s*'([^']+)'/g)].map((m) => m[1])
-      expect(deskNames).toEqual(['plays', 'drift', 'absorption', 'livestack', 'suggest'])
+      expect(deskNames).toEqual(['plays', 'absorption', 'livestack', 'suggest'])
 
       // Market Analytics: 6 items
       const marketToolsRegex = /const marketTools = \[\s*([\s\S]*?)\] as const/

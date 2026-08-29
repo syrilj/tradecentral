@@ -67,6 +67,10 @@ backend_is_current() {
     *'"suggestion_contract":"paper-candidate-contract-v9"'*) ;;
     *) return 1 ;;
   esac
+  case "$health_nospace" in
+    *'"gamma_regime_contract":"gamma-regime-v1"'*) ;;
+    *) return 1 ;;
+  esac
   # A backend that answers /api/* can still be unable to read the SPA bundle:
   # a process launched without filesystem access to this tree returns
   # 500 PermissionError on every static read while /api/health stays green.

@@ -126,7 +126,8 @@ const regimeInfo = computed(() => {
       'No measured gamma flip. Net dealer gamma is long, so the book leans toward dampening moves, but the boundary is unlocated.'
     actionTag = 'DAMPEN · NO MEASURED FLIP'
   } else {
-    dealerThesis = 'Dealer gamma is balanced and no flip is measured. Directional hedging influence is minimal.'
+    dealerThesis =
+      'Dealer gamma is balanced and no flip is measured. Directional hedging influence is minimal.'
     actionTag = 'BALANCED REGIME'
   }
 
@@ -347,7 +348,9 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             <strong class="dealer-hero-num fig" :class="regimeInfo.tone">{{
               regimeInfo.dealerGexHero
             }}</strong>
-            <span class="action-tag label" :class="regimeInfo.tone">{{ regimeInfo.actionTag }}</span>
+            <span class="action-tag label" :class="regimeInfo.tone">{{
+              regimeInfo.actionTag
+            }}</span>
           </div>
           <p class="dealer-thesis-text">{{ regimeInfo.dealerThesis }}</p>
           <div class="dealer-derivation" aria-label="How the dealer read was derived">
@@ -357,72 +360,72 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
           <p v-if="regimeInfo.conflict" class="dealer-conflict label">
             NET GEX AND SPOT-SIDE DISAGREE — net gamma is
             {{ regimeInfo.isPos ? 'long' : 'short' }} across the chain while spot sits
-            {{ regimeInfo.isPos ? 'below' : 'above' }} the flip. The hedging read above follows
-            spot versus the flip.
+            {{ regimeInfo.isPos ? 'below' : 'above' }} the flip. The hedging read above follows spot
+            versus the flip.
           </p>
         </div>
       </div>
 
       <div class="evidence-strip" aria-label="Directional evidence">
-          <div class="evidence-cell basis-cell">
-            <span class="label">DIRECTION COMES FROM</span>
-            <strong class="fig">{{ read.basis }}</strong>
-          </div>
-          <div class="evidence-cell">
-            <span class="label">SIGNED FLOW</span>
-            <strong
-              class="fig"
-              :class="
-                read.signedFlow != null
-                  ? read.signedFlow > 0
-                    ? 'pos'
-                    : read.signedFlow < 0
-                      ? 'neg'
-                      : ''
-                  : ''
-              "
-            >
-              {{
-                read.signedFlow == null
-                  ? '+0.0%'
-                  : `${read.signedFlow > 0 ? '+' : ''}${pctFrac(read.signedFlow, 1)}`
-              }}
-            </strong>
-            <small class="label">{{
-              read.signedConfidence == null
-                ? 'NO BUY / SELL SIDE'
-                : `${pctFrac(read.signedConfidence, 0)} CONF.`
-            }}</small>
-          </div>
-          <div class="evidence-cell">
-            <span class="label">PRICE MOMENTUM</span>
-            <strong
-              class="fig"
-              :class="
-                read.momentum != null
-                  ? read.momentum > 0
-                    ? 'pos'
-                    : read.momentum < 0
-                      ? 'neg'
-                      : ''
-                  : ''
-              "
-            >
-              {{
-                read.momentum == null
-                  ? '+0.00%'
-                  : `${read.momentum > 0 ? '+' : ''}${pctFrac(read.momentum, 2)}`
-              }}
-            </strong>
-            <small class="label">{{ read.momentumFresh ? 'FRESH' : 'STALE · EXCLUDED' }}</small>
-          </div>
-          <div class="evidence-cell activity" :class="read.activity">
-            <span class="label">CONTRACT MIX</span>
-            <strong class="fig">{{
-              read.callPct == null ? '0% C / 0% P' : `${read.callPct}% C / ${read.putPct}% P`
-            }}</strong>
-            <small class="label">NOT DIRECTION</small>
-          </div>
+        <div class="evidence-cell basis-cell">
+          <span class="label">DIRECTION COMES FROM</span>
+          <strong class="fig">{{ read.basis }}</strong>
+        </div>
+        <div class="evidence-cell">
+          <span class="label">SIGNED FLOW</span>
+          <strong
+            class="fig"
+            :class="
+              read.signedFlow != null
+                ? read.signedFlow > 0
+                  ? 'pos'
+                  : read.signedFlow < 0
+                    ? 'neg'
+                    : ''
+                : ''
+            "
+          >
+            {{
+              read.signedFlow == null
+                ? '+0.0%'
+                : `${read.signedFlow > 0 ? '+' : ''}${pctFrac(read.signedFlow, 1)}`
+            }}
+          </strong>
+          <small class="label">{{
+            read.signedConfidence == null
+              ? 'NO BUY / SELL SIDE'
+              : `${pctFrac(read.signedConfidence, 0)} CONF.`
+          }}</small>
+        </div>
+        <div class="evidence-cell">
+          <span class="label">PRICE MOMENTUM</span>
+          <strong
+            class="fig"
+            :class="
+              read.momentum != null
+                ? read.momentum > 0
+                  ? 'pos'
+                  : read.momentum < 0
+                    ? 'neg'
+                    : ''
+                : ''
+            "
+          >
+            {{
+              read.momentum == null
+                ? '+0.00%'
+                : `${read.momentum > 0 ? '+' : ''}${pctFrac(read.momentum, 2)}`
+            }}
+          </strong>
+          <small class="label">{{ read.momentumFresh ? 'FRESH' : 'STALE · EXCLUDED' }}</small>
+        </div>
+        <div class="evidence-cell activity" :class="read.activity">
+          <span class="label">CONTRACT MIX</span>
+          <strong class="fig">{{
+            read.callPct == null ? '0% C / 0% P' : `${read.callPct}% C / ${read.putPct}% P`
+          }}</strong>
+          <small class="label">NOT DIRECTION</small>
+        </div>
       </div>
 
       <div
@@ -582,7 +585,6 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             />
           </svg>
         </div>
-
       </div>
     </div>
   </section>

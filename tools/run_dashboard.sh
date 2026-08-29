@@ -10,14 +10,24 @@
 # against real data.
 
 set -euo pipefail
-cd "$(dirname "$0")/../.."
 
-DASH="edge/dashboard"
-PY="edge/.venv-qlib/bin/python"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EDGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+export NO_PROXY="127.0.0.1,localhost,*"
+export no_proxy="127.0.0.1,localhost,*"
+
+cd "$EDGE_DIR"
+
+DASH="dashboard"
+PY="$EDGE_DIR/.venv-qlib/bin/python"
+if [ ! -x "$PY" ] || ! "$PY" -c 'import sys' >/dev/null 2>&1; then
+  PY=".venv-qlib/bin/python"
+fi
 if [ ! -x "$PY" ] || ! "$PY" -c 'import sys' >/dev/null 2>&1; then
   PY="python3"
 fi
-PY_REQUIREMENTS="edge/requirements-dashboard.txt"
+PY_REQUIREMENTS="requirements-dashboard.txt"
 
 MODE="${1:-}"
 
@@ -44,7 +54,7 @@ if ! "$PY" -c 'import exchange_calendars' >/dev/null 2>&1; then
 fi
 
 if [ "$MODE" != "--serve" ]; then
-  echo "[build] compiling Vue app -> edge/runs/dashboard_dist/"
+  echo "[build] compiling Vue app -> runs/dashboard_dist/"
   (cd "$DASH" && npm run build)
 fi
 
@@ -66,6 +76,10 @@ backend_is_current() {
   esac
   case "$health_nospace" in
     *'"suggestion_contract":"paper-candidate-contract-v9"'*) ;;
+    *) return 1 ;;
+  esac
+  case "$health_nospace" in
+    *'"gamma_regime_contract":"gamma-regime-v1"'*) ;;
     *) return 1 ;;
   esac
   for path in /api/ga /api/factors /api/graph /api/changepoints /api/flow-state /api/scan_status; do
@@ -120,37 +134,40 @@ frontend_is_current() {
   esac
 }
 
+API_PORT="${API_PORT:-8787}"
+VITE_PORT="${VITE_PORT:-5178}"
+
 if [ "$MODE" = "--dev" ]; then
-  echo "[dev] API on :8787, Vite on :5178 (proxying /api)"
+  echo "[dev] API on :${API_PORT}, Vite on :${VITE_PORT} (proxying /api)"
   API_PID=""
-  if backend_is_current 8787; then
-    echo "[backend] already current on :8787"
+  if backend_is_current "$API_PORT"; then
+    echo "[backend] already current on :${API_PORT}"
   else
-    stop_stale_backend 8787
-    "$PY" edge/tools/api_server.py --no-browser &
+    stop_stale_backend "$API_PORT"
+    "$PY" "$EDGE_DIR/tools/api_server.py" --port "$API_PORT" --no-browser &
     API_PID=$!
     trap 'if [ -n "$API_PID" ]; then kill "$API_PID" 2>/dev/null || true; fi' EXIT INT TERM
-    if ! wait_for_backend "$API_PID" 8787; then
+    if ! wait_for_backend "$API_PID" "$API_PORT"; then
       echo "[backend] failed to start with the current Flow contract" >&2
       exit 1
     fi
-    echo "[backend] current on :8787"
+    echo "[backend] current on :${API_PORT}"
   fi
 
-  if frontend_is_current 5178; then
-    echo "[frontend] already running on :5178 (Vite current)"
+  if frontend_is_current "$VITE_PORT"; then
+    echo "[frontend] already running on :${VITE_PORT} (Vite current)"
     if [ -n "$API_PID" ]; then
       wait "$API_PID"
     fi
     exit 0
   fi
-  (cd "$DASH" && npm run dev)
+  (cd "$DASH" && npm run dev -- --port "$VITE_PORT")
 else
-  echo "[serve] http://localhost:8787"
-  if backend_is_current 8787; then
-    echo "[backend] already current on :8787"
+  echo "[serve] http://localhost:${API_PORT}"
+  if backend_is_current "$API_PORT"; then
+    echo "[backend] already current on :${API_PORT}"
     exit 0
   fi
-  stop_stale_backend 8787
-  exec "$PY" edge/tools/api_server.py
+  stop_stale_backend "$API_PORT"
+  exec "$PY" "$EDGE_DIR/tools/api_server.py" --port "$API_PORT"
 fi

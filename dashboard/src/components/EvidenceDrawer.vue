@@ -29,11 +29,7 @@ function nav(viewName: string) {
 </script>
 
 <template>
-  <aside
-    class="evidence-drawer"
-    :class="{ 'is-open': open && node }"
-    data-test="evidence-drawer"
-  >
+  <aside class="evidence-drawer" :class="{ 'is-open': open && node }" data-test="evidence-drawer">
     <div v-if="node" class="drawer-content">
       <!-- Drawer Header -->
       <div class="drawer-header">
@@ -45,7 +41,9 @@ function nav(viewName: string) {
             </span>
           </div>
           <div class="company-name">{{ node.name }}</div>
-          <div class="sub-industry">{{ node.sub_industry }} · {{ formatMarketCap(node.market_cap_billions) }}</div>
+          <div class="sub-industry">
+            {{ node.sub_industry }} · {{ formatMarketCap(node.market_cap_billions) }}
+          </div>
         </div>
 
         <button type="button" class="close-btn" @click="emit('close')">✕</button>
@@ -55,10 +53,7 @@ function nav(viewName: string) {
       <div class="metrics-grid">
         <div class="metric-card">
           <span class="metric-label">ELASTICITY SCORE</span>
-          <span
-            class="metric-val"
-            :class="`val-${elasticityTone(node.metrics?.elasticity_score)}`"
-          >
+          <span class="metric-val" :class="`val-${elasticityTone(node.metrics?.elasticity_score)}`">
             {{ node.metrics?.elasticity_score?.toFixed(1) ?? '—' }}
           </span>
         </div>
@@ -92,7 +87,9 @@ function nav(viewName: string) {
       <div class="meta-strip">
         <div class="meta-cell">
           <span class="cell-k">Forward P/E:</span>
-          <span class="cell-v">{{ node.metrics?.forward_pe ? `${node.metrics.forward_pe.toFixed(1)}x` : '—' }}</span>
+          <span class="cell-v">{{
+            node.metrics?.forward_pe ? `${node.metrics.forward_pe.toFixed(1)}x` : '—'
+          }}</span>
         </div>
         <div class="meta-cell">
           <span class="cell-k">Gross Margin:</span>
@@ -100,7 +97,9 @@ function nav(viewName: string) {
         </div>
         <div class="meta-cell">
           <span class="cell-k">Next Catalyst / ER:</span>
-          <span class="cell-v font-mono">{{ node.metrics?.next_earnings_date ?? 'Unconfirmed' }}</span>
+          <span class="cell-v font-mono">{{
+            node.metrics?.next_earnings_date ?? 'Unconfirmed'
+          }}</span>
         </div>
       </div>
 
@@ -111,11 +110,7 @@ function nav(viewName: string) {
         </div>
 
         <div class="citations-list">
-          <div
-            v-for="(ev, idx) in node.evidence"
-            :key="idx"
-            class="citation-card"
-          >
+          <div v-for="(ev, idx) in node.evidence" :key="idx" class="citation-card">
             <div class="citation-meta">
               <span class="source-tag uppercase">{{ ev.source_type.replace('_', ' ') }}</span>
               <span class="period-tag font-mono">{{ ev.period }} ({{ ev.filing_date }})</span>
@@ -124,13 +119,9 @@ function nav(viewName: string) {
               </span>
             </div>
 
-            <div v-if="ev.speaker" class="speaker-tag">
-              Speaker: {{ ev.speaker }}
-            </div>
+            <div v-if="ev.speaker" class="speaker-tag">Speaker: {{ ev.speaker }}</div>
 
-            <blockquote class="quote-body">
-              "{{ ev.quote }}"
-            </blockquote>
+            <blockquote class="quote-body">"{{ ev.quote }}"</blockquote>
 
             <div v-if="ev.context" class="quote-context">
               <span class="context-k">Context:</span> {{ ev.context }}

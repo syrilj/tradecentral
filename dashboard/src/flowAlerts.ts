@@ -28,7 +28,8 @@ function finite(value: unknown): number | null {
 
 export function printAlertKind(row: MarketFlowPrint): FlowAlertKind | null {
   const unusual = row.is_unusual === true || (row.presets ?? []).includes('unusual')
-  const sweep = row.is_sweep === true || row.trade_class === 'sweep' || (row.presets ?? []).includes('sweeps')
+  const sweep =
+    row.is_sweep === true || row.trade_class === 'sweep' || (row.presets ?? []).includes('sweeps')
   if (unusual && sweep) return 'both'
   if (unusual) return 'unusual'
   if (sweep) return 'sweep'
@@ -67,7 +68,9 @@ export function collectWatchlistAlerts(input: {
   return alerts
 }
 
-export function loadSeenAlertKeys(storage: Pick<Storage, 'getItem'> | null | undefined = defaultStorage()): Set<string> {
+export function loadSeenAlertKeys(
+  storage: Pick<Storage, 'getItem'> | null | undefined = defaultStorage(),
+): Set<string> {
   if (!storage) return new Set()
   try {
     const raw = JSON.parse(storage.getItem(FLOW_ALERT_SEEN_KEY) ?? '[]')
@@ -92,7 +95,9 @@ export function saveSeenAlertKeys(
   return next
 }
 
-export function unreadAlertCount(storage: Pick<Storage, 'getItem'> | null | undefined = defaultStorage()): number {
+export function unreadAlertCount(
+  storage: Pick<Storage, 'getItem'> | null | undefined = defaultStorage(),
+): number {
   if (!storage) return 0
   try {
     const value = Number(storage.getItem(FLOW_ALERT_UNREAD_KEY) ?? 0)

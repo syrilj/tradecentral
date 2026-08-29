@@ -50,7 +50,13 @@ const EXPIRY_MODES: { value: 'all' | 'nearest'; label: string }[] = [
 function readSymbol(): string {
   const raw = route.query.symbol
   const value = Array.isArray(raw) ? raw[0] : raw
-  return String(value || 'NVDA').trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10) || 'NVDA'
+  return (
+    String(value || 'NVDA')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9.-]/g, '')
+      .slice(0, 10) || 'NVDA'
+  )
 }
 
 const symbolInput = ref(readSymbol())
@@ -68,13 +74,14 @@ const preset = ref<'strict' | 'balanced' | 'raw'>('balanced')
 const tableFilter = ref<'all' | 'near_spot' | 'high_charm'>('all')
 
 const optionsRes = useResource<OptionsIntelligence>(
-  () => api.options({
-    symbol: symbol.value,
-    mode: mode.value,
-    range: selectedRange.value,
-    minPremium: minPremium.value,
-    expiry: selectedExpiry.value,
-  }),
+  () =>
+    api.options({
+      symbol: symbol.value,
+      mode: mode.value,
+      range: selectedRange.value,
+      minPremium: minPremium.value,
+      expiry: selectedExpiry.value,
+    }),
   { intervalMs: () => refreshMs.value },
 )
 
@@ -82,16 +89,23 @@ watch(symbol, () => {
   void optionsRes.refresh({ clear: true })
 })
 
-watch(() => route.query.symbol, (val) => {
-  const next = Array.isArray(val) ? val[0] : val
-  if (typeof next === 'string' && next && next.toUpperCase() !== symbol.value) {
-    symbol.value = next.toUpperCase()
-    symbolInput.value = next.toUpperCase()
-  }
-})
+watch(
+  () => route.query.symbol,
+  (val) => {
+    const next = Array.isArray(val) ? val[0] : val
+    if (typeof next === 'string' && next && next.toUpperCase() !== symbol.value) {
+      symbol.value = next.toUpperCase()
+      symbolInput.value = next.toUpperCase()
+    }
+  },
+)
 
 function applySymbol(): void {
-  const clean = symbolInput.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  const clean = symbolInput.value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
   if (!clean || clean === symbol.value) return
   symbol.value = clean
   symbolInput.value = clean
@@ -151,17 +165,23 @@ const loading = computed(() => optionsRes.loading.value && !payload.value)
 const error = computed(() => optionsRes.error.value)
 const hasChain = computed(() => gexRows.value.length > 0 || chainRows.value.length > 0)
 
-const gexRegimeLabel = computed(() => ({
-  positive: 'MEAN-REVERSION',
-  negative: 'TRENDING',
-  neutral: 'NEUTRAL',
-}[gexRegime.value]))
+const gexRegimeLabel = computed(
+  () =>
+    ({
+      positive: 'MEAN-REVERSION',
+      negative: 'TRENDING',
+      neutral: 'NEUTRAL',
+    })[gexRegime.value],
+)
 
-const pressureLabel = computed(() => ({
-  buying: 'BUYING PRESSURE',
-  selling: 'SELLING PRESSURE',
-  balanced: 'BALANCED',
-}[pressure.value?.label ?? 'balanced']))
+const pressureLabel = computed(
+  () =>
+    ({
+      buying: 'BUYING PRESSURE',
+      selling: 'SELLING PRESSURE',
+      balanced: 'BALANCED',
+    })[pressure.value?.label ?? 'balanced'],
+)
 
 const gaugePct = computed(() => {
   const v = pressure.value?.imbalance
@@ -189,7 +209,8 @@ const microstructureAssessment = computed(() => {
       title: 'Strong Structural Buying Pressure',
       tone: 'buying',
       body: `Dealers are net short decaying OTM put contracts. As time passes without a downward move, put deltas decay toward zero, forcing dealers to systematically BUY back their short equity hedges (${compact(Math.abs(charmSummary.value?.net_charm_flow ?? 0))} shares/day).`,
-      implication: 'Mechanical tailwind supporting price; dips into the Put Wall are likely to find rapid absorption.',
+      implication:
+        'Mechanical tailwind supporting price; dips into the Put Wall are likely to find rapid absorption.',
     }
   }
   if (imb < -0.35) {
@@ -197,7 +218,8 @@ const microstructureAssessment = computed(() => {
       title: 'Strong Structural Selling Pressure',
       tone: 'selling',
       body: `Long call gamma/delta decay dominates the dealer inventory. As call deltas decay over time, dealers are forced to SELL underlying stock to remain delta-neutral (${compact(Math.abs(charmSummary.value?.net_charm_flow ?? 0))} shares/day).`,
-      implication: 'Mechanical headwind capping upside; rallies toward the Call Wall face persistent dealer inventory supply.',
+      implication:
+        'Mechanical headwind capping upside; rallies toward the Call Wall face persistent dealer inventory supply.',
     }
   }
   if (regimeStr === 'positive') {
@@ -205,7 +227,8 @@ const microstructureAssessment = computed(() => {
       title: 'Balanced Flow in Positive Gamma Channel',
       tone: 'balanced',
       body: `Aggregate dealer positioning is Net Long Gamma ($${compact(summary.value.total_gex_m ?? 0)}M GEX). Dealers hedge counter-cyclically (buying dips, selling rips), compressing realized volatility between Put Wall ($${num(summary.value.put_wall, 0)}) and Call Wall ($${num(summary.value.call_wall, 0)}).`,
-      implication: 'High probability of range-bound mean-reversion. Fade range extremes; low breakout follow-through.',
+      implication:
+        'High probability of range-bound mean-reversion. Fade range extremes; low breakout follow-through.',
     }
   }
   return {
@@ -245,7 +268,7 @@ const strikeTable = computed<StrikeTableRow[]>(() => {
   const list: StrikeTableRow[] = []
   for (const [strike, entry] of byStrike.entries()) {
     const distPct = spotVal && spotVal > 0 ? ((strike - spotVal) / spotVal) * 100 : null
-    const isSpot = spotVal != null && Math.abs(strike - spotVal) <= (spotVal * 0.007)
+    const isSpot = spotVal != null && Math.abs(strike - spotVal) <= spotVal * 0.007
     const isCallWall = callWall.value != null && Math.abs(strike - callWall.value) < 0.01
     const isPutWall = putWall.value != null && Math.abs(strike - putWall.value) < 0.01
     const isGammaFlip = gammaFlip.value != null && Math.abs(strike - gammaFlip.value) < 0.01
@@ -287,7 +310,8 @@ const strategies = computed(() => {
   const charm = netCharmFlow.value ?? 0
 
   // Strategy 1: Mean-Reversion in Heavy Positive Gamma
-  const s1Active = gex > 0 && spotVal != null && pw != null && cw != null && spotVal >= pw && spotVal <= cw
+  const s1Active =
+    gex > 0 && spotVal != null && pw != null && cw != null && spotVal >= pw && spotVal <= cw
   // Strategy 2: Breakout Expansion Below Gamma Flip
   const s2Active = flip != null && spotVal != null && spotVal < flip && gex < 0
   // Strategy 3: OpEx Charm Drift
@@ -300,8 +324,10 @@ const strategies = computed(() => {
       regime: 'Positive Gamma (+GEX)',
       status: s1Active ? 'ACTIVE' : 'MONITORING',
       condition: `Spot ($${num(spotVal, 0)}) bounded between Put Wall ($${num(pw, 0)}) and Call Wall ($${num(cw, 0)}), Net GEX > 0`,
-      trade: 'Fade range extremes (VWAP ±2σ), sell OTM strangles, buy dips at Put Wall, take profit at Call Wall.',
-      mechanic: 'Dealer counter-cyclical hedging dampens realized volatility and creates range compression.',
+      trade:
+        'Fade range extremes (VWAP ±2σ), sell OTM strangles, buy dips at Put Wall, take profit at Call Wall.',
+      mechanic:
+        'Dealer counter-cyclical hedging dampens realized volatility and creates range compression.',
     },
     {
       id: 'strat-2',
@@ -309,8 +335,10 @@ const strategies = computed(() => {
       regime: 'Negative Gamma (-GEX)',
       status: s2Active ? 'TRIGGERED' : 'MONITORING',
       condition: `Spot ($${num(spotVal, 0)}) breaches below Zero Gamma Flip ($${num(flip, 0)})`,
-      trade: 'Long directional momentum (long puts / short futures) or long straddles for volatility breakout.',
-      mechanic: 'Dealers are net short gamma and forced to sell into market declines, accelerating cascades.',
+      trade:
+        'Long directional momentum (long puts / short futures) or long straddles for volatility breakout.',
+      mechanic:
+        'Dealers are net short gamma and forced to sell into market declines, accelerating cascades.',
     },
     {
       id: 'strat-3',
@@ -318,8 +346,10 @@ const strategies = computed(() => {
       regime: 'Time-Decay Dynamics (dΔ/dt)',
       status: s3Active ? 'ACTIVE' : 'MONITORING',
       condition: `Net charm flow negative (${signed(charm, 0)} sh/d buying pressure) heading into expiry`,
-      trade: 'Long delta bias via futures or call spreads from Thursday afternoon through Friday OpEx.',
-      mechanic: 'Dealer short OTM put hedges decay toward 0 delta, forcing mechanical stock buying to unwind.',
+      trade:
+        'Long delta bias via futures or call spreads from Thursday afternoon through Friday OpEx.',
+      mechanic:
+        'Dealer short OTM put hedges decay toward 0 delta, forcing mechanical stock buying to unwind.',
     },
   ]
 })
@@ -332,11 +362,14 @@ const focusStrike = ref<number | null>(null)
     <!-- Header banner -->
     <header class="drift-head ticked rise">
       <div class="drift-title">
-        <span class="label eyebrow"><i aria-hidden="true" class="live-dot" /> CHARM &amp; DEALER HEDGING DYNAMICS</span>
+        <span class="label eyebrow"
+          ><i aria-hidden="true" class="live-dot" /> CHARM &amp; DEALER HEDGING DYNAMICS</span
+        >
         <h1>Charm &amp; Pressure Drift</h1>
         <p>
-          Charm ($\partial\Delta/\partial t$) measures the mechanical daily change in option delta solely due to the passage of time.
-          Because dealers run delta-neutral books, decaying OTM options force predictable, time-dependent rebalancing flows into the underlying market.
+          Charm ($\partial\Delta/\partial t$) measures the mechanical daily change in option delta
+          solely due to the passage of time. Because dealers run delta-neutral books, decaying OTM
+          options force predictable, time-dependent rebalancing flows into the underlying market.
         </p>
       </div>
 
@@ -405,7 +438,9 @@ const focusStrike = ref<number | null>(null)
     <section class="kpi-row">
       <div class="kpi" :class="{ stale: netGex == null }">
         <span class="label k-key">NET GEX</span>
-        <span class="fig k-val" :class="gexRegime">{{ netGex != null ? `$${compact(netGex)}M` : '—' }}</span>
+        <span class="fig k-val" :class="gexRegime">{{
+          netGex != null ? `$${compact(netGex)}M` : '—'
+        }}</span>
         <span class="label k-tag" :class="gexRegime">{{ gexRegimeLabel }}</span>
       </div>
       <div class="kpi" :class="{ stale: netCharmFlow == null }">
@@ -423,7 +458,9 @@ const focusStrike = ref<number | null>(null)
       <div class="kpi" :class="{ stale: asof == null }">
         <span class="label k-key">LAST UPDATE</span>
         <span class="fig k-val">{{ asof ? shortDate(asof) : '—' }}</span>
-        <span class="label k-tag" :class="{ live: modeResolved === 'live' }">{{ dataModeBadge }}</span>
+        <span class="label k-tag" :class="{ live: modeResolved === 'live' }">{{
+          dataModeBadge
+        }}</span>
       </div>
     </section>
 
@@ -473,11 +510,11 @@ const focusStrike = ref<number | null>(null)
           </div>
 
           <p v-if="pressure" class="gauge-note label">
-            Charm flow {{ signed(pressure.components.net_charm_flow, 0) }} sh/d ·
-            ΔW call vol {{ compact(pressure.components.delta_weighted_call_vol) }} ·
-            ΔW put vol {{ compact(pressure.components.delta_weighted_put_vol) }} ·
-            GEX {{ signed(pressure.components.net_gex_m, 1) }}M ·
-            α {{ pressure.weights.alpha }} · β {{ pressure.weights.beta }}
+            Charm flow {{ signed(pressure.components.net_charm_flow, 0) }} sh/d · ΔW call vol
+            {{ compact(pressure.components.delta_weighted_call_vol) }} · ΔW put vol
+            {{ compact(pressure.components.delta_weighted_put_vol) }} · GEX
+            {{ signed(pressure.components.net_gex_m, 1) }}M · α {{ pressure.weights.alpha }} · β
+            {{ pressure.weights.beta }}
           </p>
           <p v-else class="gauge-note label">Pressure unavailable until the chain loads.</p>
         </div>
@@ -487,17 +524,21 @@ const focusStrike = ref<number | null>(null)
           <div class="factor-card" :class="charmPressure">
             <div class="factor-head">
               <span class="label">1. CHARM TIME DECAY</span>
-              <span class="factor-badge label" :class="charmPressure">{{ charmPressure.toUpperCase() }}</span>
+              <span class="factor-badge label" :class="charmPressure">{{
+                charmPressure.toUpperCase()
+              }}</span>
             </div>
             <div class="factor-metric fig" :class="charmPressure">
               {{ signed(pressure.components.net_charm_flow, 0) }} <small>sh/d</small>
             </div>
             <p class="factor-desc">
-              {{ netCharmFlow && netCharmFlow < 0
-                ? 'Dealers short decaying OTM puts → Must BUY stock to unwind hedges.'
-                : netCharmFlow && netCharmFlow > 0
-                  ? 'Dealers long decaying calls → Must SELL stock to re-neutralize.'
-                  : 'Time decay flow is balanced between calls and puts.' }}
+              {{
+                netCharmFlow && netCharmFlow < 0
+                  ? 'Dealers short decaying OTM puts → Must BUY stock to unwind hedges.'
+                  : netCharmFlow && netCharmFlow > 0
+                    ? 'Dealers long decaying calls → Must SELL stock to re-neutralize.'
+                    : 'Time decay flow is balanced between calls and puts.'
+              }}
             </p>
           </div>
 
@@ -510,11 +551,13 @@ const focusStrike = ref<number | null>(null)
               {{ signed(pressure.components.net_gex_m, 1) }} <small>$M</small>
             </div>
             <p class="factor-desc">
-              {{ gexRegime === 'positive'
-                ? 'Long Gamma: Counter-cyclical rehedging compresses volatility.'
-                : gexRegime === 'negative'
-                  ? 'Short Gamma: Pro-cyclical rehedging amplifies breakouts & slips.'
-                  : 'Gamma exposure neutral near current spot.' }}
+              {{
+                gexRegime === 'positive'
+                  ? 'Long Gamma: Counter-cyclical rehedging compresses volatility.'
+                  : gexRegime === 'negative'
+                    ? 'Short Gamma: Pro-cyclical rehedging amplifies breakouts & slips.'
+                    : 'Gamma exposure neutral near current spot.'
+              }}
             </p>
           </div>
 
@@ -524,18 +567,26 @@ const focusStrike = ref<number | null>(null)
               <span class="factor-badge label">INTRADAY</span>
             </div>
             <div class="factor-metric fig">
-              C: {{ compact(pressure.components.delta_weighted_call_vol) }} · P: {{ compact(pressure.components.delta_weighted_put_vol) }}
+              C: {{ compact(pressure.components.delta_weighted_call_vol) }} · P:
+              {{ compact(pressure.components.delta_weighted_put_vol) }}
             </div>
             <p class="factor-desc">
-              {{ pressure.components.delta_weighted_call_vol > pressure.components.delta_weighted_put_vol
-                ? 'Call taker volume leads put taker volume on a delta-weighted basis.'
-                : 'Put taker volume leads call taker volume on a delta-weighted basis.' }}
+              {{
+                pressure.components.delta_weighted_call_vol >
+                pressure.components.delta_weighted_put_vol
+                  ? 'Call taker volume leads put taker volume on a delta-weighted basis.'
+                  : 'Put taker volume leads call taker volume on a delta-weighted basis.'
+              }}
             </p>
           </div>
         </div>
 
         <!-- Microstructure Interpretation Banner -->
-        <div v-if="microstructureAssessment" class="assessment-box" :class="microstructureAssessment.tone">
+        <div
+          v-if="microstructureAssessment"
+          class="assessment-box"
+          :class="microstructureAssessment.tone"
+        >
           <div class="assessment-header">
             <span class="label assess-tag">MICROSTRUCTURE IMPLICATION</span>
             <span class="assess-title">{{ microstructureAssessment.title }}</span>
@@ -551,7 +602,11 @@ const focusStrike = ref<number | null>(null)
     <!-- Charm flow by strike chart -->
     <Panel
       :label="`${symbol} · CHARM FLOW BY STRIKE`"
-      :meta="charmSummary ? `${charmSummary.contracts_measured} contracts · ${charmSummary.contracts_skipped} skipped` : 'NO CHAIN'"
+      :meta="
+        charmSummary
+          ? `${charmSummary.contracts_measured} contracts · ${charmSummary.contracts_skipped} skipped`
+          : 'NO CHAIN'
+      "
       live
       flush
     >
@@ -721,8 +776,15 @@ const focusStrike = ref<number | null>(null)
               <th class="num put-head" title="Daily Charm (∂Δ/∂t per day)">CHARM/d</th>
 
               <!-- Net flow columns -->
-              <th class="num net-head" title="Net shares/day dealers must trade to stay delta-neutral">NET CHARM FLOW</th>
-              <th class="num net-head" title="Net Dollar Gamma Exposure per 1% move ($M)">NET GEX $M</th>
+              <th
+                class="num net-head"
+                title="Net shares/day dealers must trade to stay delta-neutral"
+              >
+                NET CHARM FLOW
+              </th>
+              <th class="num net-head" title="Net Dollar Gamma Exposure per 1% move ($M)">
+                NET GEX $M
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -747,22 +809,36 @@ const focusStrike = ref<number | null>(null)
 
               <!-- Moneyness -->
               <td class="num moneyness-cell">
-                {{ row.distPct != null ? (row.distPct >= 0 ? `+${row.distPct.toFixed(1)}%` : `${row.distPct.toFixed(1)}%`) : '—' }}
+                {{
+                  row.distPct != null
+                    ? row.distPct >= 0
+                      ? `+${row.distPct.toFixed(1)}%`
+                      : `${row.distPct.toFixed(1)}%`
+                    : '—'
+                }}
               </td>
 
               <!-- Call Side -->
               <td class="num call-oi">{{ compact(row.call?.open_interest ?? null) }}</td>
               <td class="num call-vol">{{ compact(row.call?.volume ?? null) }}</td>
-              <td class="num">{{ row.call?.iv != null ? `${(row.call.iv * 100).toFixed(0)}%` : '—' }}</td>
+              <td class="num">
+                {{ row.call?.iv != null ? `${(row.call.iv * 100).toFixed(0)}%` : '—' }}
+              </td>
               <td class="num call-delta">{{ num(row.call?.delta ?? null, 3) }}</td>
-              <td class="num call-charm">{{ row.call?.charm_per_day != null ? signed(row.call.charm_per_day, 5) : '—' }}</td>
+              <td class="num call-charm">
+                {{ row.call?.charm_per_day != null ? signed(row.call.charm_per_day, 5) : '—' }}
+              </td>
 
               <!-- Put Side -->
               <td class="num put-oi">{{ compact(row.put?.open_interest ?? null) }}</td>
               <td class="num put-vol">{{ compact(row.put?.volume ?? null) }}</td>
-              <td class="num">{{ row.put?.iv != null ? `${(row.put.iv * 100).toFixed(0)}%` : '—' }}</td>
+              <td class="num">
+                {{ row.put?.iv != null ? `${(row.put.iv * 100).toFixed(0)}%` : '—' }}
+              </td>
               <td class="num put-delta">{{ num(row.put?.delta ?? null, 3) }}</td>
-              <td class="num put-charm">{{ row.put?.charm_per_day != null ? signed(row.put.charm_per_day, 5) : '—' }}</td>
+              <td class="num put-charm">
+                {{ row.put?.charm_per_day != null ? signed(row.put.charm_per_day, 5) : '—' }}
+              </td>
 
               <!-- Dealer Net Impact -->
               <td
@@ -782,9 +858,9 @@ const focusStrike = ref<number | null>(null)
 
     <!-- Freshness and compliance footer -->
     <p v-if="freshness?.feed_age_seconds != null && payload" class="freshness-note label">
-      Feed age {{ Math.round(freshness.feed_age_seconds) }}s ·
-      activity basis {{ payload.provider?.activity_basis ?? 'unavailable' }} ·
-      charm source {{ charmSummary?.source ?? 'unavailable' }}
+      Feed age {{ Math.round(freshness.feed_age_seconds) }}s · activity basis
+      {{ payload.provider?.activity_basis ?? 'unavailable' }} · charm source
+      {{ charmSummary?.source ?? 'unavailable' }}
     </p>
     <p v-if="pressure" class="freshness-note label">{{ pressure.convention_note }}</p>
   </div>
@@ -813,8 +889,12 @@ const focusStrike = ref<number | null>(null)
   background: var(--surface-base);
 }
 
-.drift-title { min-width: 0; }
-.eyebrow { color: var(--phosphor); }
+.drift-title {
+  min-width: 0;
+}
+.eyebrow {
+  color: var(--phosphor);
+}
 
 h1 {
   margin: var(--s2) 0 0;
@@ -870,14 +950,18 @@ h1 {
   background: var(--phosphor-wash);
 }
 
-.range-box, .expiry-box, .preset-box {
+.range-box,
+.expiry-box,
+.preset-box {
   display: flex;
   gap: 2px;
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xs);
   overflow: hidden;
 }
-.range-btn, .expiry-btn, .preset-btn {
+.range-btn,
+.expiry-btn,
+.preset-btn {
   min-height: var(--density-control-h);
   padding: 3px 10px;
   color: var(--ink-dim);
@@ -889,10 +973,19 @@ h1 {
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
-.range-btn:hover, .expiry-btn:hover, .preset-btn:hover { color: var(--ink); background: var(--panel-hi); }
-.range-btn.on, .expiry-btn.on, .preset-btn.on {
+.range-btn:hover,
+.expiry-btn:hover,
+.preset-btn:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+}
+.range-btn.on,
+.expiry-btn.on,
+.preset-btn.on {
   color: var(--phosphor);
   background: var(--phosphor-wash);
 }
@@ -912,7 +1005,9 @@ h1 {
   border-radius: var(--r-sm);
   background: var(--panel);
 }
-.kpi.stale .k-val { color: var(--ink-faint); }
+.kpi.stale .k-val {
+  color: var(--ink-faint);
+}
 .k-key {
   color: var(--ink-ghost);
   font-family: var(--font-data);
@@ -925,12 +1020,24 @@ h1 {
   font-size: var(--t-body);
   font-weight: 600;
 }
-.k-val.positive { color: var(--call-hi); }
-.k-val.negative { color: var(--put-hi); }
-.k-val.neutral { color: var(--ink-dim); }
-.k-val.selling { color: var(--put-hi); }
-.k-val.buying { color: var(--call-hi); }
-.k-val.balanced { color: var(--ink-dim); }
+.k-val.positive {
+  color: var(--call-hi);
+}
+.k-val.negative {
+  color: var(--put-hi);
+}
+.k-val.neutral {
+  color: var(--ink-dim);
+}
+.k-val.selling {
+  color: var(--put-hi);
+}
+.k-val.buying {
+  color: var(--call-hi);
+}
+.k-val.balanced {
+  color: var(--ink-dim);
+}
 .k-tag {
   align-self: flex-start;
   padding: 1px 5px;
@@ -938,11 +1045,29 @@ h1 {
   border-radius: var(--r-xs);
   color: var(--ink-dim);
 }
-.k-tag.positive { color: var(--call-hi); border-color: var(--call-dim); }
-.k-tag.negative { color: var(--put-hi); border-color: var(--put-dim); }
-.k-tag.selling { color: var(--put-hi); border-color: var(--put-dim); background: var(--put-wash); }
-.k-tag.buying { color: var(--call-hi); border-color: var(--call-dim); background: var(--call-wash); }
-.k-tag.live { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
+.k-tag.positive {
+  color: var(--call-hi);
+  border-color: var(--call-dim);
+}
+.k-tag.negative {
+  color: var(--put-hi);
+  border-color: var(--put-dim);
+}
+.k-tag.selling {
+  color: var(--put-hi);
+  border-color: var(--put-dim);
+  background: var(--put-wash);
+}
+.k-tag.buying {
+  color: var(--call-hi);
+  border-color: var(--call-dim);
+  background: var(--call-wash);
+}
+.k-tag.live {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
 
 /* Pressure gauge container */
 .gauge-card-container {
@@ -977,9 +1102,15 @@ h1 {
   font-size: var(--t-body);
   font-weight: 700;
 }
-.gauge-score.selling { color: var(--put-hi); }
-.gauge-score.buying { color: var(--call-hi); }
-.gauge-score.balanced { color: var(--ink-dim); }
+.gauge-score.selling {
+  color: var(--put-hi);
+}
+.gauge-score.buying {
+  color: var(--call-hi);
+}
+.gauge-score.balanced {
+  color: var(--ink-dim);
+}
 
 .gauge-track {
   position: relative;
@@ -998,11 +1129,31 @@ h1 {
   height: 100%;
   display: block;
 }
-.zone-sell-heavy { flex: 25; background: var(--put); opacity: 0.65; }
-.zone-sell-mod { flex: 15; background: var(--put); opacity: 0.35; }
-.zone-neutral { flex: 20; background: var(--surface-base); opacity: 0.4; }
-.zone-buy-mod { flex: 15; background: var(--call); opacity: 0.35; }
-.zone-buy-heavy { flex: 25; background: var(--call); opacity: 0.65; }
+.zone-sell-heavy {
+  flex: 25;
+  background: var(--put);
+  opacity: 0.65;
+}
+.zone-sell-mod {
+  flex: 15;
+  background: var(--put);
+  opacity: 0.35;
+}
+.zone-neutral {
+  flex: 20;
+  background: var(--surface-base);
+  opacity: 0.4;
+}
+.zone-buy-mod {
+  flex: 15;
+  background: var(--call);
+  opacity: 0.35;
+}
+.zone-buy-heavy {
+  flex: 25;
+  background: var(--call);
+  opacity: 0.65;
+}
 
 .gauge-ticks {
   position: absolute;
@@ -1026,9 +1177,15 @@ h1 {
   pointer-events: none;
   transition: left var(--dur) var(--ease-out);
 }
-.gauge-needle.selling { background: var(--put-hi); }
-.gauge-needle.buying { background: var(--call-hi); }
-.gauge-needle.balanced { background: var(--ink); }
+.gauge-needle.selling {
+  background: var(--put-hi);
+}
+.gauge-needle.buying {
+  background: var(--call-hi);
+}
+.gauge-needle.balanced {
+  background: var(--ink);
+}
 
 .gauge-labels {
   display: flex;
@@ -1039,9 +1196,15 @@ h1 {
   letter-spacing: 0.05em;
   font-weight: 600;
 }
-.gauge-labels .sell { color: var(--put-hi); }
-.gauge-labels .buy { color: var(--call-hi); }
-.gauge-labels .neutral { color: var(--ink-dim); }
+.gauge-labels .sell {
+  color: var(--put-hi);
+}
+.gauge-labels .buy {
+  color: var(--call-hi);
+}
+.gauge-labels .neutral {
+  color: var(--ink-dim);
+}
 
 .gauge-note {
   color: var(--ink-faint);
@@ -1066,10 +1229,18 @@ h1 {
   border-radius: var(--r-sm);
   background: var(--panel);
 }
-.factor-card.buying { border-left: 2px solid var(--call); }
-.factor-card.selling { border-left: 2px solid var(--put); }
-.factor-card.positive { border-left: 2px solid var(--call); }
-.factor-card.negative { border-left: 2px solid var(--put); }
+.factor-card.buying {
+  border-left: 2px solid var(--call);
+}
+.factor-card.selling {
+  border-left: 2px solid var(--put);
+}
+.factor-card.positive {
+  border-left: 2px solid var(--call);
+}
+.factor-card.negative {
+  border-left: 2px solid var(--put);
+}
 
 .factor-head {
   display: flex;
@@ -1084,17 +1255,36 @@ h1 {
   font-weight: 700;
   border: var(--hair) solid var(--rule);
 }
-.factor-badge.buying, .factor-badge.positive { color: var(--call-hi); border-color: var(--call-dim); background: var(--call-wash); }
-.factor-badge.selling, .factor-badge.negative { color: var(--put-hi); border-color: var(--put-dim); background: var(--put-wash); }
+.factor-badge.buying,
+.factor-badge.positive {
+  color: var(--call-hi);
+  border-color: var(--call-dim);
+  background: var(--call-wash);
+}
+.factor-badge.selling,
+.factor-badge.negative {
+  color: var(--put-hi);
+  border-color: var(--put-dim);
+  background: var(--put-wash);
+}
 
 .factor-metric {
   font-size: var(--t-display);
   font-weight: 700;
   color: var(--ink);
 }
-.factor-metric.buying, .factor-metric.positive { color: var(--call-hi); }
-.factor-metric.selling, .factor-metric.negative { color: var(--put-hi); }
-.factor-metric small { font-size: var(--t-micro); color: var(--ink-dim); }
+.factor-metric.buying,
+.factor-metric.positive {
+  color: var(--call-hi);
+}
+.factor-metric.selling,
+.factor-metric.negative {
+  color: var(--put-hi);
+}
+.factor-metric small {
+  font-size: var(--t-micro);
+  color: var(--ink-dim);
+}
 
 .factor-desc {
   font-size: var(--t-micro);
@@ -1113,9 +1303,15 @@ h1 {
   border-radius: var(--r-sm);
   background: var(--surface-base);
 }
-.assessment-box.buying { border-left: 3px solid var(--call-hi); }
-.assessment-box.selling { border-left: 3px solid var(--put-hi); }
-.assessment-box.balanced { border-left: 3px solid var(--phosphor); }
+.assessment-box.buying {
+  border-left: 3px solid var(--call-hi);
+}
+.assessment-box.selling {
+  border-left: 3px solid var(--put-hi);
+}
+.assessment-box.balanced {
+  border-left: 3px solid var(--phosphor);
+}
 
 .assessment-header {
   display: flex;
@@ -1143,7 +1339,9 @@ h1 {
   padding-top: 6px;
   border-top: var(--hair) solid var(--rule-faint);
 }
-.assess-footer b { color: var(--phosphor); }
+.assess-footer b {
+  color: var(--phosphor);
+}
 
 /* Strategies Grid */
 .strategies-grid {
@@ -1184,9 +1382,19 @@ h1 {
   font-weight: 700;
   border: var(--hair) solid var(--rule);
 }
-.strat-status.active { color: var(--call-hi); border-color: var(--call-dim); background: var(--call-wash); }
-.strat-status.triggered { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.strat-status.monitoring { color: var(--ink-faint); }
+.strat-status.active {
+  color: var(--call-hi);
+  border-color: var(--call-dim);
+  background: var(--call-wash);
+}
+.strat-status.triggered {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+.strat-status.monitoring {
+  color: var(--ink-faint);
+}
 
 .strat-regime {
   color: var(--ink-ghost);
@@ -1271,10 +1479,25 @@ h1 {
   text-align: center;
   border-bottom: var(--hair) solid var(--rule);
 }
-.group-center { background: var(--void-lift); color: var(--ink); }
-.group-call { background: var(--call-wash); color: var(--call-hi); border-left: var(--hair) solid var(--rule); }
-.group-put { background: var(--put-wash); color: var(--put-hi); border-left: var(--hair) solid var(--rule); }
-.group-net { background: var(--panel-hi); color: var(--phosphor); border-left: var(--hair) solid var(--rule); }
+.group-center {
+  background: var(--void-lift);
+  color: var(--ink);
+}
+.group-call {
+  background: var(--call-wash);
+  color: var(--call-hi);
+  border-left: var(--hair) solid var(--rule);
+}
+.group-put {
+  background: var(--put-wash);
+  color: var(--put-hi);
+  border-left: var(--hair) solid var(--rule);
+}
+.group-net {
+  background: var(--panel-hi);
+  color: var(--phosphor);
+  border-left: var(--hair) solid var(--rule);
+}
 
 .header-cols th {
   position: sticky;
@@ -1289,10 +1512,18 @@ h1 {
   border-bottom: var(--hair) solid var(--rule-hi);
   white-space: nowrap;
 }
-.strike-col { text-align: left; }
-.call-head { color: var(--call-dim); }
-.put-head { color: var(--put-dim); }
-.net-head { color: var(--ink); }
+.strike-col {
+  text-align: left;
+}
+.call-head {
+  color: var(--call-dim);
+}
+.put-head {
+  color: var(--put-dim);
+}
+.net-head {
+  color: var(--ink);
+}
 
 .strike-table td {
   padding: 4px 8px;
@@ -1300,7 +1531,9 @@ h1 {
   border-bottom: var(--hair) solid var(--rule-faint);
   white-space: nowrap;
 }
-.strike-table .num { font-variant-numeric: tabular-nums; }
+.strike-table .num {
+  font-variant-numeric: tabular-nums;
+}
 
 .strike-cell {
   text-align: left;
@@ -1320,35 +1553,71 @@ h1 {
   font-weight: 700;
   letter-spacing: 0.04em;
 }
-.spot-badge { background: var(--phosphor); color: var(--void); }
-.call-wall-badge { background: var(--call-dim); color: var(--void); }
-.put-wall-badge { background: var(--put-dim); color: var(--void); }
-.flip-badge { background: var(--warn); color: var(--void); }
+.spot-badge {
+  background: var(--phosphor);
+  color: var(--void);
+}
+.call-wall-badge {
+  background: var(--call-dim);
+  color: var(--void);
+}
+.put-wall-badge {
+  background: var(--put-dim);
+  color: var(--void);
+}
+.flip-badge {
+  background: var(--warn);
+  color: var(--void);
+}
 
 .moneyness-cell {
   color: var(--ink-faint);
   font-size: 10px;
 }
 
-.call-oi, .call-vol { color: var(--ink); }
-.call-delta { color: var(--call-dim); font-weight: 600; }
-.call-charm { color: var(--call-dim); }
+.call-oi,
+.call-vol {
+  color: var(--ink);
+}
+.call-delta {
+  color: var(--call-dim);
+  font-weight: 600;
+}
+.call-charm {
+  color: var(--call-dim);
+}
 
-.put-oi, .put-vol { color: var(--ink); }
-.put-delta { color: var(--put-dim); font-weight: 600; }
-.put-charm { color: var(--put-dim); }
+.put-oi,
+.put-vol {
+  color: var(--ink);
+}
+.put-delta {
+  color: var(--put-dim);
+  font-weight: 600;
+}
+.put-charm {
+  color: var(--put-dim);
+}
 
 .net-charm-cell {
   font-weight: 600;
 }
-.net-charm-cell.sell-flow { color: var(--put-hi); }
-.net-charm-cell.buy-flow { color: var(--call-hi); }
+.net-charm-cell.sell-flow {
+  color: var(--put-hi);
+}
+.net-charm-cell.buy-flow {
+  color: var(--call-hi);
+}
 
 .gex-cell {
   font-weight: 600;
 }
-.gex-cell.call { color: var(--call-hi); }
-.gex-cell.put { color: var(--put-hi); }
+.gex-cell.call {
+  color: var(--call-hi);
+}
+.gex-cell.put {
+  color: var(--put-hi);
+}
 
 .strike-table tr.at-spot td {
   background: var(--phosphor-wash);
@@ -1377,7 +1646,9 @@ h1 {
   letter-spacing: 0.08em;
   background: var(--void-lift);
 }
-.ph-msg.fault { color: var(--warn); }
+.ph-msg.fault {
+  color: var(--warn);
+}
 
 .state-chip {
   display: inline-flex;
@@ -1387,8 +1658,15 @@ h1 {
   border-radius: var(--r-xs);
   color: var(--ink-dim);
 }
-.state-chip.live { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
-.state-chip.fault { color: var(--warn); border-color: var(--warn); }
+.state-chip.live {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
+.state-chip.fault {
+  color: var(--warn);
+  border-color: var(--warn);
+}
 
 .freshness-note {
   color: var(--ink-faint);
@@ -1408,8 +1686,13 @@ h1 {
   animation: dot-pulse var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1422,9 +1705,22 @@ h1 {
     align-items: stretch;
     width: 100%;
   }
-  .symbol-box { align-items: flex-start; }
-  .symbol-input { width: 100%; text-align: left; }
-  .range-box, .expiry-box, .preset-box { width: 100%; }
-  .range-btn, .expiry-btn, .preset-btn { flex: 1 1 0; }
+  .symbol-box {
+    align-items: flex-start;
+  }
+  .symbol-input {
+    width: 100%;
+    text-align: left;
+  }
+  .range-box,
+  .expiry-box,
+  .preset-box {
+    width: 100%;
+  }
+  .range-btn,
+  .expiry-btn,
+  .preset-btn {
+    flex: 1 1 0;
+  }
 }
 </style>

@@ -45,9 +45,9 @@ export interface GreekMetrics {
   delta: number
   gamma: number
   theta: number // Daily theta ($ / day per contract multiplier 100)
-  vega: number  // $ / 1% vol change per contract multiplier 100
-  rho: number   // $ / 1% interest rate change per contract multiplier 100
-  theo: number  // Model theoretical price per share
+  vega: number // $ / 1% vol change per contract multiplier 100
+  rho: number // $ / 1% interest rate change per contract multiplier 100
+  theo: number // Model theoretical price per share
 }
 
 export interface BookGreeks extends GreekMetrics {
@@ -146,7 +146,7 @@ export function erf(x: number): number {
   const p = 0.3275911
   const absX = Math.abs(x)
   const t = 1.0 / (1.0 + p * absX)
-  const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-absX * absX)
+  const y = 1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-absX * absX)
   return sign * y
 }
 
@@ -176,7 +176,14 @@ export function computeRiskNeutralModel(input: {
   const S = Number(input.spot)
   const dte = Number(input.dteDays)
   const volPct = Number(input.volPct)
-  if (!Number.isFinite(S) || S <= 0 || !Number.isFinite(dte) || dte <= 0 || !Number.isFinite(volPct) || volPct <= 0) {
+  if (
+    !Number.isFinite(S) ||
+    S <= 0 ||
+    !Number.isFinite(dte) ||
+    dte <= 0 ||
+    !Number.isFinite(volPct) ||
+    volPct <= 0
+  ) {
     return null
   }
 
@@ -278,7 +285,16 @@ export function computeTargetRiskMetrics(input: {
   const S = Number(input.spot)
   const dte = Number(input.dteDays)
   const volPct = Number(input.volPct)
-  if (!Number.isFinite(tp) || tp <= 0 || !Number.isFinite(S) || S <= 0 || !Number.isFinite(dte) || dte <= 0 || !Number.isFinite(volPct) || volPct <= 0) {
+  if (
+    !Number.isFinite(tp) ||
+    tp <= 0 ||
+    !Number.isFinite(S) ||
+    S <= 0 ||
+    !Number.isFinite(dte) ||
+    dte <= 0 ||
+    !Number.isFinite(volPct) ||
+    volPct <= 0
+  ) {
     return null
   }
 
@@ -299,7 +315,14 @@ export function computeTargetRiskMetrics(input: {
   let probBetweenWalls: number | null = null
   if (input.putWall && input.callWall && input.putWall < input.callWall) {
     const pPut = probTerminalAbove(input.putWall, S, dte, volPct, input.ratePct, input.dividendPct)
-    const pCall = probTerminalAbove(input.callWall, S, dte, volPct, input.ratePct, input.dividendPct)
+    const pCall = probTerminalAbove(
+      input.callWall,
+      S,
+      dte,
+      volPct,
+      input.ratePct,
+      input.dividendPct,
+    )
     probBetweenWalls = Math.max(0, pPut - pCall)
   }
 
@@ -326,9 +349,18 @@ export function calculateStrategyPoP(input: {
   dividendPct?: number
   breakevens?: readonly number[]
 }): StrategyPoPMetrics {
-  const { legs, spot, dteDays, volPct, ratePct = DEFAULT_RATE, dividendPct = DEFAULT_DIVIDEND } = input
+  const {
+    legs,
+    spot,
+    dteDays,
+    volPct,
+    ratePct = DEFAULT_RATE,
+    dividendPct = DEFAULT_DIVIDEND,
+  } = input
   const usable = usableLegs(legs)
-  const bes = input.breakevens ?? findBreakevens(evaluateBookDualCurves({ legs, spot, dteDays, volPct, ratePct }))
+  const bes =
+    input.breakevens ??
+    findBreakevens(evaluateBookDualCurves({ legs, spot, dteDays, volPct, ratePct }))
 
   if (!usable.length || !Number.isFinite(spot) || spot <= 0) {
     return { pop: 0.5, popPctFormatted: '50.0%', breakevens: [], profitZoneDesc: 'No active legs' }
@@ -336,7 +368,12 @@ export function calculateStrategyPoP(input: {
 
   const model = computeRiskNeutralModel({ spot, dteDays, volPct, ratePct, dividendPct })
   if (!model) {
-    return { pop: 0.5, popPctFormatted: '50.0%', breakevens: [...bes], profitZoneDesc: 'Standard distribution' }
+    return {
+      pop: 0.5,
+      popPctFormatted: '50.0%',
+      breakevens: [...bes],
+      profitZoneDesc: 'Standard distribution',
+    }
   }
 
   // Fast evaluation of PnL at a given terminal spot
@@ -344,7 +381,8 @@ export function calculateStrategyPoP(input: {
   const evalPnlAt = (s: number) => {
     let payoff = -debit
     for (const leg of usable) {
-      const intrinsic = leg.right === 'call' ? Math.max(s - leg.strike, 0) : Math.max(leg.strike - s, 0)
+      const intrinsic =
+        leg.right === 'call' ? Math.max(s - leg.strike, 0) : Math.max(leg.strike - s, 0)
       payoff += intrinsic * MULTIPLIER * leg.quantity
     }
     return payoff
@@ -374,11 +412,14 @@ export function calculateStrategyPoP(input: {
 
   let profitZoneDesc = ''
   if (!bes.length) {
-    profitZoneDesc = evalPnlAt(spot) > 0 ? 'All price zones profitable' : 'Net debit / Defined loss zone'
+    profitZoneDesc =
+      evalPnlAt(spot) > 0 ? 'All price zones profitable' : 'Net debit / Defined loss zone'
   } else if (bes.length === 1) {
     const be = bes[0]
     const aboveProfit = evalPnlAt(be + 5) > 0
-    profitZoneDesc = aboveProfit ? `Profitable above $${be.toFixed(2)}` : `Profitable below $${be.toFixed(2)}`
+    profitZoneDesc = aboveProfit
+      ? `Profitable above $${be.toFixed(2)}`
+      : `Profitable below $${be.toFixed(2)}`
   } else if (bes.length === 2) {
     const [be1, be2] = [...bes].sort((a, b) => a - b)
     const midProfit = evalPnlAt((be1 + be2) / 2) > 0
@@ -467,8 +508,12 @@ export function computeGreeks(
   const vega = S * discountQ * n1 * rootT * 0.01 * MULTIPLIER // $ per 1% vol per contract
 
   const thetaYear = isCall
-    ? -((S * discountQ * n1 * vol) / (2.0 * rootT)) - r * K * discountR * normCdf(d2) + q * S * discountQ * normCdf(d1)
-    : -((S * discountQ * n1 * vol) / (2.0 * rootT)) + r * K * discountR * normCdf(-d2) - q * S * discountQ * normCdf(-d1)
+    ? -((S * discountQ * n1 * vol) / (2.0 * rootT)) -
+      r * K * discountR * normCdf(d2) +
+      q * S * discountQ * normCdf(d1)
+    : -((S * discountQ * n1 * vol) / (2.0 * rootT)) +
+      r * K * discountR * normCdf(-d2) -
+      q * S * discountQ * normCdf(-d1)
   const theta = (thetaYear / 365.0) * MULTIPLIER // $ per calendar day per contract
 
   const rho = isCall
@@ -553,7 +598,9 @@ export function evaluateRiskRewardBounds(
   }
 
   // Net asymptotic call quantity as spot -> +infinity
-  const netCallQty = usable.filter((l) => l.right === 'call').reduce((sum, l) => sum + l.quantity, 0)
+  const netCallQty = usable
+    .filter((l) => l.right === 'call')
+    .reduce((sum, l) => sum + l.quantity, 0)
   const isProfitUnbounded = netCallQty > 0
   const isLossUnbounded = netCallQty < 0
 
@@ -593,7 +640,9 @@ export function detectBookRiskReward(
     }
   }
 
-  const netCallQty = usable.filter((l) => l.right === 'call').reduce((sum, l) => sum + l.quantity, 0)
+  const netCallQty = usable
+    .filter((l) => l.right === 'call')
+    .reduce((sum, l) => sum + l.quantity, 0)
   const isProfitUnlimited = netCallQty > 0
   const isLossUnlimited = netCallQty < 0
 
@@ -606,7 +655,8 @@ export function detectBookRiskReward(
   const evalExpiryPnl = (s: number): number => {
     let val = 0
     for (const leg of usable) {
-      const intrinsic = leg.right === 'call' ? Math.max(s - leg.strike, 0) : Math.max(leg.strike - s, 0)
+      const intrinsic =
+        leg.right === 'call' ? Math.max(s - leg.strike, 0) : Math.max(leg.strike - s, 0)
       val += intrinsic * multiplier * leg.quantity
     }
     return val - debit
@@ -614,7 +664,9 @@ export function detectBookRiskReward(
 
   const criticalPnl = [...criticalSpots].map(evalExpiryPnl)
   const asymptoticCallPnl =
-    -usable.filter((l) => l.right === 'call').reduce((sum, l) => sum + l.quantity * l.strike * multiplier, 0) - debit
+    -usable
+      .filter((l) => l.right === 'call')
+      .reduce((sum, l) => sum + l.quantity * l.strike * multiplier, 0) - debit
   const allFinitePnls = [...criticalPnl, asymptoticCallPnl]
 
   const finiteMaxProfit = Math.max(0, ...allFinitePnls)
@@ -655,12 +707,16 @@ export function evaluateBookAtSpot(
   let theoValue = 0
 
   for (const leg of usable) {
-    const intrinsic = leg.right === 'call' ? Math.max(evalSpot - leg.strike, 0) : Math.max(leg.strike - evalSpot, 0)
+    const intrinsic =
+      leg.right === 'call' ? Math.max(evalSpot - leg.strike, 0) : Math.max(leg.strike - evalSpot, 0)
     pnlExpiry += intrinsic * multiplier * leg.quantity
 
     const legDte = leg.dte != null && leg.dte >= 0 ? leg.dte : dteDays
     const remDte = Math.max(0, legDte - evalDaysAhead)
-    const legVol = leg.vol != null && leg.vol > 0 ? leg.vol : smileAdjustedVol(leg.strike, evalSpot, baseVolPct, skewPct, smilePct)
+    const legVol =
+      leg.vol != null && leg.vol > 0
+        ? leg.vol
+        : smileAdjustedVol(leg.strike, evalSpot, baseVolPct, skewPct, smilePct)
     const legTheo = blackScholesPrice(leg.right, evalSpot, leg.strike, remDte, legVol, ratePct)
     theoValue += legTheo * multiplier * leg.quantity
   }
@@ -717,7 +773,17 @@ export function evaluateBookDualCurves(input: {
 
   const sortedSpots = [...spotSet].sort((a, b) => a - b)
   return sortedSpots.map((s) => {
-    const res = evaluateBookAtSpot(legs, s, dteDays, evalDaysAhead, volPct, ratePct, skewPct, smilePct, multiplier)
+    const res = evaluateBookAtSpot(
+      legs,
+      s,
+      dteDays,
+      evalDaysAhead,
+      volPct,
+      ratePct,
+      skewPct,
+      smilePct,
+      multiplier,
+    )
     const pnlExpiry = Math.round(res.pnlExpiry * 100) / 100
     const pnlTheo = Math.round(res.pnlTheo * 100) / 100
     return {
@@ -759,7 +825,11 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
     category: 'Directional',
     description: 'Bullish directional bet with defined risk and unlimited profit potential.',
     factory: (spot, dte, vol, prem = 5) => [
-      cleanLeg({ id: 'leg-1', right: 'call', strike: roundStrike(spot), quantity: 1, premium: prem }, dte, vol),
+      cleanLeg(
+        { id: 'leg-1', right: 'call', strike: roundStrike(spot), quantity: 1, premium: prem },
+        dte,
+        vol,
+      ),
     ],
   },
   long_put: {
@@ -768,7 +838,11 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
     category: 'Directional',
     description: 'Bearish directional bet with defined risk and large downside profit potential.',
     factory: (spot, dte, vol, prem = 5) => [
-      cleanLeg({ id: 'leg-1', right: 'put', strike: roundStrike(spot), quantity: 1, premium: prem }, dte, vol),
+      cleanLeg(
+        { id: 'leg-1', right: 'put', strike: roundStrike(spot), quantity: 1, premium: prem },
+        dte,
+        vol,
+      ),
     ],
   },
   bull_call_spread: {
@@ -782,7 +856,17 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
       const k2 = roundStrike(k1 + dK)
       return [
         cleanLeg({ id: 'leg-1', right: 'call', strike: k1, quantity: 1, premium: prem }, dte, vol),
-        cleanLeg({ id: 'leg-2', right: 'call', strike: k2, quantity: -1, premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100) }, dte, vol),
+        cleanLeg(
+          {
+            id: 'leg-2',
+            right: 'call',
+            strike: k2,
+            quantity: -1,
+            premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
       ]
     },
   },
@@ -797,7 +881,17 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
       const k2 = roundStrike(Math.max(0.5, k1 - dK))
       return [
         cleanLeg({ id: 'leg-1', right: 'put', strike: k1, quantity: 1, premium: prem }, dte, vol),
-        cleanLeg({ id: 'leg-2', right: 'put', strike: k2, quantity: -1, premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100) }, dte, vol),
+        cleanLeg(
+          {
+            id: 'leg-2',
+            right: 'put',
+            strike: k2,
+            quantity: -1,
+            premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
       ]
     },
   },
@@ -805,14 +899,25 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
     key: 'bull_put_spread',
     label: 'Bull Put Spread',
     category: 'Income',
-    description: 'Credit put vertical spread collecting premium from bullish or neutral price action.',
+    description:
+      'Credit put vertical spread collecting premium from bullish or neutral price action.',
     factory: (spot, dte, vol, prem = 5) => {
       const dK = Math.max(1, Math.round(spot * 0.05 * 2) / 2)
       const k1 = roundStrike(spot)
       const k2 = roundStrike(Math.max(0.5, k1 - dK))
       return [
         cleanLeg({ id: 'leg-1', right: 'put', strike: k1, quantity: -1, premium: prem }, dte, vol),
-        cleanLeg({ id: 'leg-2', right: 'put', strike: k2, quantity: 1, premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100) }, dte, vol),
+        cleanLeg(
+          {
+            id: 'leg-2',
+            right: 'put',
+            strike: k2,
+            quantity: 1,
+            premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
       ]
     },
   },
@@ -827,7 +932,17 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
       const k2 = roundStrike(k1 + dK)
       return [
         cleanLeg({ id: 'leg-1', right: 'call', strike: k1, quantity: -1, premium: prem }, dte, vol),
-        cleanLeg({ id: 'leg-2', right: 'call', strike: k2, quantity: 1, premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100) }, dte, vol),
+        cleanLeg(
+          {
+            id: 'leg-2',
+            right: 'call',
+            strike: k2,
+            quantity: 1,
+            premium: Math.max(0.05, Math.round(prem * 0.45 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
       ]
     },
   },
@@ -835,7 +950,8 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
     key: 'long_straddle',
     label: 'Long Straddle',
     category: 'Volatility',
-    description: 'Market-neutral volatility structure profiting from sharp breakout moves in either direction.',
+    description:
+      'Market-neutral volatility structure profiting from sharp breakout moves in either direction.',
     factory: (spot, dte, vol, prem = 5) => {
       const k = roundStrike(spot)
       return [
@@ -848,14 +964,35 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
     key: 'long_strangle',
     label: 'Long Strangle',
     category: 'Volatility',
-    description: 'OTM volatility structure offering lower cost than a straddle for explosive breakouts.',
+    description:
+      'OTM volatility structure offering lower cost than a straddle for explosive breakouts.',
     factory: (spot, dte, vol, prem = 5) => {
       const dK = Math.max(1, Math.round(spot * 0.05 * 2) / 2)
       const kPut = roundStrike(Math.max(0.5, spot - dK))
       const kCall = roundStrike(spot + dK)
       return [
-        cleanLeg({ id: 'leg-1', right: 'put', strike: kPut, quantity: 1, premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100) }, dte, vol),
-        cleanLeg({ id: 'leg-2', right: 'call', strike: kCall, quantity: 1, premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100) }, dte, vol),
+        cleanLeg(
+          {
+            id: 'leg-1',
+            right: 'put',
+            strike: kPut,
+            quantity: 1,
+            premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
+        cleanLeg(
+          {
+            id: 'leg-2',
+            right: 'call',
+            strike: kCall,
+            quantity: 1,
+            premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
       ]
     },
   },
@@ -871,10 +1008,50 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
       const cShort = roundStrike(spot + dK)
       const cWing = roundStrike(spot + 2 * dK)
       return [
-        cleanLeg({ id: 'leg-1', right: 'put', strike: pWing, quantity: 1, premium: Math.max(0.05, Math.round(prem * 0.3 * 100) / 100) }, dte, vol),
-        cleanLeg({ id: 'leg-2', right: 'put', strike: pShort, quantity: -1, premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100) }, dte, vol),
-        cleanLeg({ id: 'leg-3', right: 'call', strike: cShort, quantity: -1, premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100) }, dte, vol),
-        cleanLeg({ id: 'leg-4', right: 'call', strike: cWing, quantity: 1, premium: Math.max(0.05, Math.round(prem * 0.3 * 100) / 100) }, dte, vol),
+        cleanLeg(
+          {
+            id: 'leg-1',
+            right: 'put',
+            strike: pWing,
+            quantity: 1,
+            premium: Math.max(0.05, Math.round(prem * 0.3 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
+        cleanLeg(
+          {
+            id: 'leg-2',
+            right: 'put',
+            strike: pShort,
+            quantity: -1,
+            premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
+        cleanLeg(
+          {
+            id: 'leg-3',
+            right: 'call',
+            strike: cShort,
+            quantity: -1,
+            premium: Math.max(0.05, Math.round(prem * 0.7 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
+        cleanLeg(
+          {
+            id: 'leg-4',
+            right: 'call',
+            strike: cWing,
+            quantity: 1,
+            premium: Math.max(0.05, Math.round(prem * 0.3 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
       ]
     },
   },
@@ -886,7 +1063,17 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
     factory: (spot, dte, vol, prem = 5) => {
       const dK = Math.max(1, Math.round(spot * 0.05 * 2) / 2)
       return [
-        cleanLeg({ id: 'leg-1', right: 'call', strike: roundStrike(spot + dK), quantity: -1, premium: Math.max(0.05, Math.round(prem * 0.8 * 100) / 100) }, dte, vol),
+        cleanLeg(
+          {
+            id: 'leg-1',
+            right: 'call',
+            strike: roundStrike(spot + dK),
+            quantity: -1,
+            premium: Math.max(0.05, Math.round(prem * 0.8 * 100) / 100),
+          },
+          dte,
+          vol,
+        ),
       ]
     },
   },
@@ -901,8 +1088,23 @@ export const STRATEGY_PRESETS: Record<Exclude<CalcStrategy, 'custom'>, StrategyP
       const nearDte = Math.max(7, Math.round(baseDte * 0.5))
       const farDte = Math.max(14, baseDte)
       return [
-        cleanLeg({ id: 'leg-1', right: 'call', strike: k, quantity: -1, premium: prem, dte: nearDte }, undefined, vol),
-        cleanLeg({ id: 'leg-2', right: 'call', strike: k, quantity: 1, premium: Math.max(0.05, Math.round(prem * 1.45 * 100) / 100), dte: farDte }, undefined, vol),
+        cleanLeg(
+          { id: 'leg-1', right: 'call', strike: k, quantity: -1, premium: prem, dte: nearDte },
+          undefined,
+          vol,
+        ),
+        cleanLeg(
+          {
+            id: 'leg-2',
+            right: 'call',
+            strike: k,
+            quantity: 1,
+            premium: Math.max(0.05, Math.round(prem * 1.45 * 100) / 100),
+            dte: farDte,
+          },
+          undefined,
+          vol,
+        ),
       ]
     },
   },
@@ -957,7 +1159,11 @@ export function seedBook(input: {
     }
     return generated
   }
-  const fallback = cleanLeg({ id: 'leg-1', right: 'call', strike: k, quantity: qty, premium: p }, dte, vol)
+  const fallback = cleanLeg(
+    { id: 'leg-1', right: 'call', strike: k, quantity: qty, premium: p },
+    dte,
+    vol,
+  )
   return [fallback]
 }
 
@@ -1019,8 +1225,9 @@ export function samplePnlRows<T extends PnlPoint | DualPnlPoint>(
 ): T[] {
   if (!series.length) return []
   const last = series.length - 1
-  const picks = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1]
-    .map((t) => series[Math.min(last, Math.round(t * last))])
+  const picks = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1].map(
+    (t) => series[Math.min(last, Math.round(t * last))],
+  )
   const extras = extraSpots
     .filter((spot) => Number.isFinite(spot) && spot > 0)
     .map((spot) => nearestPointInSeries(series, spot))
@@ -1032,7 +1239,10 @@ export function samplePnlRows<T extends PnlPoint | DualPnlPoint>(
   return [...bySpot.values()].sort((a, b) => a.spot - b.spot)
 }
 
-function nearestPointInSeries<T extends PnlPoint | DualPnlPoint>(series: readonly T[], spot: number): T {
+function nearestPointInSeries<T extends PnlPoint | DualPnlPoint>(
+  series: readonly T[],
+  spot: number,
+): T {
   let best = series[0]
   let bestDist = Math.abs(best.spot - spot)
   for (const point of series) {
@@ -1140,7 +1350,9 @@ export function buildPayoffChart(input: {
 
   const xs = series.map((point) => point.spot)
   const expYs = series.map((point) => ('pnlExpiry' in point ? point.pnlExpiry : point.pnl))
-  const t0Ys = series.map((point) => ('pnlTheo' in point ? point.pnlTheo : ('pnl' in point ? point.pnl : 0)))
+  const t0Ys = series.map((point) =>
+    'pnlTheo' in point ? point.pnlTheo : 'pnl' in point ? point.pnl : 0,
+  )
   const allYs = [...expYs, ...t0Ys]
 
   const xDomain = niceDomain(Math.min(...xs), Math.max(...xs), 0.02)
@@ -1233,7 +1445,10 @@ export function buildDualPayoffChart(input: {
   })
 }
 
-function splitSignedAreas(pts: Array<{ x: number; y: number }>, zeroY: number): {
+function splitSignedAreas(
+  pts: Array<{ x: number; y: number }>,
+  zeroY: number,
+): {
   profit: Array<{ x: number; y: number }>
   loss: Array<{ x: number; y: number }>
 } {

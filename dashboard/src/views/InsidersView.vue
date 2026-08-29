@@ -25,14 +25,8 @@ const router = useRouter()
 const symbol = ref(((route.query.symbol as string) || 'AAPL').toUpperCase())
 const draft = ref(symbol.value)
 
-const filings = useResource<SentimentPayload>(
-  () => api.sentiment(symbol.value),
-  { intervalMs: 0 },
-)
-const status = useResource<FintelStatusPayload>(
-  () => api.fintelStatus(),
-  { intervalMs: 300_000 },
-)
+const filings = useResource<SentimentPayload>(() => api.sentiment(symbol.value), { intervalMs: 0 })
+const status = useResource<FintelStatusPayload>(() => api.fintelStatus(), { intervalMs: 300_000 })
 const intel = useResource<FintelIntelPayload>(
   () => api.fintelIntel(symbol.value, { country: 'US', depth: 'full' }),
   { intervalMs: 0, immediate: false },
@@ -51,7 +45,11 @@ watch(
 )
 
 function applySymbol(): void {
-  const next = draft.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 12)
+  const next = draft.value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 12)
   symbol.value = next || 'AAPL'
   draft.value = symbol.value
   void router.replace({ name: 'insiders', query: { symbol: symbol.value } })
@@ -87,8 +85,8 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
     </header>
 
     <p class="caveat">
-      Filings desk for market research. Fintel is optional and quota-metered.
-      Authorized = <strong>NO</strong>. Open
+      Filings desk for market research. Fintel is optional and quota-metered. Authorized =
+      <strong>NO</strong>. Open
       <RouterLink :to="{ name: 'options', query: { symbol } }">Options</RouterLink>
       or
       <RouterLink :to="{ name: 'flow', query: { symbol } }">Flow</RouterLink>
@@ -119,7 +117,9 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
       <div class="kpi">
         <span class="label">FINTEL MIX</span>
         <strong class="fig">{{ intel.data.value ? mix.label : '—' }}</strong>
-        <em class="label">{{ intel.data.value ? `${mix.buys} BUY / ${mix.sells} SELL` : 'NOT LOADED' }}</em>
+        <em class="label">{{
+          intel.data.value ? `${mix.buys} BUY / ${mix.sells} SELL` : 'NOT LOADED'
+        }}</em>
       </div>
     </section>
 
@@ -138,18 +138,26 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
         </thead>
         <tbody>
           <tr v-for="(row, i) in secRows" :key="`${row.form}-${row.filed}-${i}`">
-            <td><span class="kind label" :class="row.kind">{{ row.kind.toUpperCase() }}</span></td>
+            <td>
+              <span class="kind label" :class="row.kind">{{ row.kind.toUpperCase() }}</span>
+            </td>
             <td class="fig">{{ row.form }}</td>
             <td class="dim">{{ row.filed || DASH }}</td>
-            <td class="dim">{{ formBrief(row.form).title }}{{ row.description ? ` · ${row.description}` : '' }}</td>
+            <td class="dim">
+              {{ formBrief(row.form).title }}{{ row.description ? ` · ${row.description}` : '' }}
+            </td>
             <td>
-              <a v-if="row.url" :href="row.url" target="_blank" rel="noopener" class="label">open</a>
+              <a v-if="row.url" :href="row.url" target="_blank" rel="noopener" class="label"
+                >open</a
+              >
               <span v-else class="dim">{{ DASH }}</span>
             </td>
           </tr>
         </tbody>
       </table>
-      <p v-else class="note">No watched filings in the recent window, or ticker not in the SEC map.</p>
+      <p v-else class="note">
+        No watched filings in the recent window, or ticker not in the SEC map.
+      </p>
     </Panel>
 
     <Panel label="Fintel insider transactions" index="02" :meta="configured ? 'KEY ON' : 'KEY OFF'">
@@ -159,7 +167,12 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
       <template v-else>
         <p class="note">
           Full-depth Fintel costs monthly weight. Load only when you need the vendor overlay.
-          <button class="btn" type="button" :disabled="intel.loading.value" @click="void intel.refresh({ clear: true })">
+          <button
+            class="btn"
+            type="button"
+            :disabled="intel.loading.value"
+            @click="void intel.refresh({ clear: true })"
+          >
             {{ intel.loading.value ? 'LOADING…' : 'LOAD FINTEL INSIDERS' }}
           </button>
         </p>
@@ -175,7 +188,9 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
           </thead>
           <tbody>
             <tr v-for="(row, i) in insiders" :key="`${row.who}-${i}`">
-              <td><span class="kind label" :class="row.side">{{ row.side.toUpperCase() }}</span></td>
+              <td>
+                <span class="kind label" :class="row.side">{{ row.side.toUpperCase() }}</span>
+              </td>
               <td class="fig">{{ row.who }}</td>
               <td>{{ row.typeLabel }}</td>
               <td class="dim">{{ row.detail }}</td>
@@ -189,14 +204,44 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
 </template>
 
 <style scoped>
-.page { display: grid; gap: var(--s4); }
-.mast, .sym-form, .kpis { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
-.mast { justify-content: space-between; }
-.mast-left { display: flex; align-items: center; gap: var(--s2); }
-.idx { opacity: 0.55; font-size: 12px; }
-.title { margin: 0; letter-spacing: 0.08em; font-size: 14px; }
-.caveat { margin: 0; color: var(--ink-dim); font-size: var(--t-small); max-width: 80ch; }
-.caveat a { color: var(--phosphor); }
+.page {
+  display: grid;
+  gap: var(--s4);
+}
+.mast,
+.sym-form,
+.kpis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+}
+.mast {
+  justify-content: space-between;
+}
+.mast-left {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.idx {
+  opacity: 0.55;
+  font-size: 12px;
+}
+.title {
+  margin: 0;
+  letter-spacing: 0.08em;
+  font-size: 14px;
+}
+.caveat {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  max-width: 80ch;
+}
+.caveat a {
+  color: var(--phosphor);
+}
 .briefs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -204,10 +249,25 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
   background: var(--rule);
   border: var(--hair) solid var(--rule);
 }
-.brief { display: grid; gap: 4px; padding: var(--s3); background: var(--panel); }
-.brief-form { color: var(--phosphor); }
-.brief-title { font: 700 var(--t-small) / 1.2 var(--font-display); color: var(--ink); }
-.brief-copy { margin: 0; color: var(--ink-dim); font-size: var(--t-tiny); line-height: 1.45; }
+.brief {
+  display: grid;
+  gap: 4px;
+  padding: var(--s3);
+  background: var(--panel);
+}
+.brief-form {
+  color: var(--phosphor);
+}
+.brief-title {
+  font: 700 var(--t-small) / 1.2 var(--font-display);
+  color: var(--ink);
+}
+.brief-copy {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
+  line-height: 1.45;
+}
 .sym {
   width: 8rem;
   padding: 6px 8px;
@@ -228,18 +288,60 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
   text-transform: uppercase;
   cursor: pointer;
 }
-.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: var(--hair) solid var(--rule); }
-.kpi { display: grid; gap: 2px; padding: var(--s3); background: var(--panel); }
-.kpi strong { font: 700 var(--t-display) / 1 var(--font-display); }
-.grid { width: 100%; border-collapse: collapse; }
-.grid th, .grid td { padding: 6px 8px; border-bottom: var(--hair) solid var(--rule); text-align: left; }
-.dim { color: var(--ink-ghost); }
-.note { margin: var(--s3); color: var(--ink-dim); font-size: var(--t-small); }
-.kind { padding: 1px 6px; border: var(--hair) solid var(--rule); }
-.kind.buy, .kind.insider { color: var(--long); }
-.kind.sell { color: var(--short); }
-.kind.event, .kind.holder, .kind.other { color: var(--ink-soft); }
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: var(--hair) solid var(--rule);
+}
+.kpi {
+  display: grid;
+  gap: 2px;
+  padding: var(--s3);
+  background: var(--panel);
+}
+.kpi strong {
+  font: 700 var(--t-display) / 1 var(--font-display);
+}
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+.grid th,
+.grid td {
+  padding: 6px 8px;
+  border-bottom: var(--hair) solid var(--rule);
+  text-align: left;
+}
+.dim {
+  color: var(--ink-ghost);
+}
+.note {
+  margin: var(--s3);
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+}
+.kind {
+  padding: 1px 6px;
+  border: var(--hair) solid var(--rule);
+}
+.kind.buy,
+.kind.insider {
+  color: var(--long);
+}
+.kind.sell {
+  color: var(--short);
+}
+.kind.event,
+.kind.holder,
+.kind.other {
+  color: var(--ink-soft);
+}
 @media (max-width: 900px) {
-  .kpis, .briefs { grid-template-columns: 1fr; }
+  .kpis,
+  .briefs {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

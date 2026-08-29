@@ -60,8 +60,10 @@ const filteredNodes = computed(() => {
   if (tierFilter.value === 'all') return props.nodes
   if (tierFilter.value === 'tier1') return props.nodes.filter((n) => n.tier === 'tier1_supplier')
   if (tierFilter.value === 'tier2') return props.nodes.filter((n) => n.tier === 'tier2_supplier')
-  if (tierFilter.value === 'driver') return props.nodes.filter((n) => n.tier === 'mega_driver' || n.tier === 'horizontal_enabler')
-  if (tierFilter.value === 'customer') return props.nodes.filter((n) => n.tier === 'downstream_customer')
+  if (tierFilter.value === 'driver')
+    return props.nodes.filter((n) => n.tier === 'mega_driver' || n.tier === 'horizontal_enabler')
+  if (tierFilter.value === 'customer')
+    return props.nodes.filter((n) => n.tier === 'downstream_customer')
   return props.nodes
 })
 
@@ -231,10 +233,18 @@ const activeFloatingEdge = computed(() => {
     return computedEdges.value.find((e) => e.id === hoveredEdgeId.value) ?? null
   }
   if (hoveredSymbol.value) {
-    return computedEdges.value.find((e) => e.source === hoveredSymbol.value || e.target === hoveredSymbol.value) ?? null
+    return (
+      computedEdges.value.find(
+        (e) => e.source === hoveredSymbol.value || e.target === hoveredSymbol.value,
+      ) ?? null
+    )
   }
   if (props.selectedSymbol) {
-    return computedEdges.value.find((e) => e.source === props.selectedSymbol || e.target === props.selectedSymbol) ?? null
+    return (
+      computedEdges.value.find(
+        (e) => e.source === props.selectedSymbol || e.target === props.selectedSymbol,
+      ) ?? null
+    )
   }
   return null
 })
@@ -244,7 +254,9 @@ function isNodeConnected(symbol: string): boolean {
   const activeSym = hoveredSymbol.value || props.selectedSymbol
   if (symbol === activeSym) return true
   return props.edges.some(
-    (e) => (e.source === activeSym && e.target === symbol) || (e.target === activeSym && e.source === symbol),
+    (e) =>
+      (e.source === activeSym && e.target === symbol) ||
+      (e.target === activeSym && e.source === symbol),
   )
 }
 </script>
@@ -401,10 +413,10 @@ function isNodeConnected(symbol: string): boolean {
                 ? e.flowType === 'flow-supply'
                   ? 'url(#edgeGradSupply)'
                   : e.flowType === 'flow-demand'
-                  ? 'url(#edgeGradDemand)'
-                  : e.flowType === 'flow-partner'
-                  ? 'url(#edgeGradPartner)'
-                  : 'url(#edgeGradPeer)'
+                    ? 'url(#edgeGradDemand)'
+                    : e.flowType === 'flow-partner'
+                      ? 'url(#edgeGradPartner)'
+                      : 'url(#edgeGradPeer)'
                 : 'url(#edgeGradDefault)'
             "
             :stroke-width="e.active ? 2.5 : Math.max(1.2, e.strength * 1.8)"
@@ -425,8 +437,12 @@ function isNodeConnected(symbol: string): boolean {
           top: `${activeFloatingEdge.midY}px`,
         }"
       >
-        <span class="pill-pair">{{ activeFloatingEdge.source }} ➔ {{ activeFloatingEdge.target }}</span>
-        <span class="pill-desc">{{ activeFloatingEdge.supply_category || relationshipLabel(activeFloatingEdge.relationship) }}</span>
+        <span class="pill-pair"
+          >{{ activeFloatingEdge.source }} ➔ {{ activeFloatingEdge.target }}</span
+        >
+        <span class="pill-desc">{{
+          activeFloatingEdge.supply_category || relationshipLabel(activeFloatingEdge.relationship)
+        }}</span>
       </div>
 
       <!-- HTML Node Overlays for High-Density Interactive Cards -->
@@ -605,7 +621,9 @@ function isNodeConnected(symbol: string): boolean {
 }
 
 .chain-edge {
-  transition: stroke 0.2s ease, stroke-width 0.2s ease;
+  transition:
+    stroke 0.2s ease,
+    stroke-width 0.2s ease;
   cursor: pointer;
 }
 

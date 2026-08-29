@@ -8,11 +8,14 @@ import TradeCentralMark from '@/components/TradeCentralMark.vue'
  * premiums, ranks, or signed-flow conclusions. Live prints appear after
  * the operator signs in and the local API returns a measured window.
  */
-withDefaults(defineProps<{
-  compact?: boolean
-}>(), {
-  compact: false,
-})
+withDefaults(
+  defineProps<{
+    compact?: boolean
+  }>(),
+  {
+    compact: false,
+  },
+)
 
 const majors = [
   { symbol: 'SPY', focus: 'Index tape first' },
@@ -23,13 +26,21 @@ const majors = [
 
 const queue = [
   { slot: '01', label: 'Open first', question: 'Highest-review name after the window lands' },
-  { slot: '02', label: 'Sweep cluster', question: 'Largest sweep premium, if the provider sent one' },
+  {
+    slot: '02',
+    label: 'Sweep cluster',
+    question: 'Largest sweep premium, if the provider sent one',
+  },
   { slot: '03', label: 'Shortest DTE', question: 'Nearest dated activity, not a trade ticket' },
 ] as const
 </script>
 
 <template>
-  <figure class="flow-mock" :class="{ compact }" aria-label="Flow workspace layout. Live prints appear after sign-in.">
+  <figure
+    class="flow-mock"
+    :class="{ compact }"
+    aria-label="Flow workspace layout. Live prints appear after sign-in."
+  >
     <div class="bezel">
       <aside class="mock-rail" aria-hidden="true">
         <span class="mock-mark"><TradeCentralMark :size="24" /></span>
@@ -53,7 +64,9 @@ const queue = [
           <div class="brief-copy">
             <p>Desk brief</p>
             <h3>Inspect the window. Then open one chain.</h3>
-            <span>Activity lean is descriptive. Missing stays missing. No illustrative values.</span>
+            <span
+              >Activity lean is descriptive. Missing stays missing. No illustrative values.</span
+            >
           </div>
           <div class="queue">
             <article v-for="item in queue" :key="item.slot">
@@ -151,7 +164,11 @@ const queue = [
   outline: 1px solid #3f403b;
 }
 
-.mock-stage { min-width: 0; display: grid; grid-template-rows: auto auto 1fr; }
+.mock-stage {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+}
 .mock-strip {
   display: flex;
   flex-wrap: wrap;
@@ -176,7 +193,9 @@ const queue = [
   height: 7px;
   background: var(--mock-green);
 }
-.muted { color: #75736c; }
+.muted {
+  color: #75736c;
+}
 
 .brief {
   display: grid;
@@ -308,8 +327,14 @@ const queue = [
   margin-top: 11px;
   background: #2a2b29;
 }
-.bar b:first-child { flex: 1.1; background: var(--mock-blue); }
-.bar b:last-child { flex: 0.9; background: var(--mock-orange); }
+.bar b:first-child {
+  flex: 1.1;
+  background: var(--mock-blue);
+}
+.bar b:last-child {
+  flex: 0.9;
+  background: var(--mock-orange);
+}
 
 figcaption {
   margin-top: 10px;
@@ -320,16 +345,30 @@ figcaption {
   text-transform: uppercase;
 }
 
-.compact .bezel { min-height: 360px; }
-.compact .brief-copy h3 { font-size: 14px; }
-.compact .majors { display: none; }
+.compact .bezel {
+  min-height: 360px;
+}
+.compact .brief-copy h3 {
+  font-size: 14px;
+}
+.compact .majors {
+  display: none;
+}
 
 @media (max-width: 860px) {
-  .bezel { grid-template-columns: 1fr; }
-  .mock-rail { display: none; }
+  .bezel {
+    grid-template-columns: 1fr;
+  }
+  .mock-rail {
+    display: none;
+  }
   .brief,
   .queue,
-  .majors { grid-template-columns: 1fr; }
-  .majors article:nth-child(n + 3) { display: none; }
+  .majors {
+    grid-template-columns: 1fr;
+  }
+  .majors article:nth-child(n + 3) {
+    display: none;
+  }
 }
 </style>

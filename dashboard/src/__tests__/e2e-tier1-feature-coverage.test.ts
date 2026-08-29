@@ -58,18 +58,11 @@ import {
   type FlowPulsePayload,
 } from '@/flowPulse'
 
-import {
-  collectWatchlistAlerts,
-} from '@/flowAlerts'
+import { collectWatchlistAlerts } from '@/flowAlerts'
 
-import {
-  buildOptionsDirection,
-} from '@/optionsDirection'
+import { buildOptionsDirection } from '@/optionsDirection'
 
-import {
-  nextResourceData,
-  shouldStartRefresh,
-} from '@/composables/useResource'
+import { nextResourceData, shouldStartRefresh } from '@/composables/useResource'
 
 import type {
   GexStrikeRow,
@@ -90,7 +83,10 @@ function readSrc(rel: string): string {
 function standardNormalCdf(x: number): number {
   const t = 1 / (1 + 0.2316419 * Math.abs(x))
   const d = 0.3989422804014327 * Math.exp((-x * x) / 2)
-  const p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+  const p =
+    d *
+    t *
+    (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
   return x >= 0 ? 1 - p : p
 }
 
@@ -133,7 +129,8 @@ function solveBlackScholes(
   } else {
     theo = K * disc * standardNormalCdf(-d2) - S * standardNormalCdf(-d1)
     delta = nd1 - 1
-    theta = (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
+    theta =
+      (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
     rho = (-K * T * disc * standardNormalCdf(-d2)) / 100
   }
 
@@ -149,16 +146,29 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
   // =========================================================================
   describe('F01: Institutional Order Badges & Taxonomy', () => {
     it('classifies Golden Sweeps when aggressive ask side sweep exceeds premium threshold', () => {
-      const isGoldenSweep = (print: { trade_class?: string; aggressor?: string; premium?: number }) => {
-        return print.trade_class?.toLowerCase() === 'sweep'
-          && (print.aggressor?.toLowerCase() === 'ask' || print.aggressor?.toLowerCase() === 'above_ask')
-          && (print.premium ?? 0) >= 500_000
+      const isGoldenSweep = (print: {
+        trade_class?: string
+        aggressor?: string
+        premium?: number
+      }) => {
+        return (
+          print.trade_class?.toLowerCase() === 'sweep' &&
+          (print.aggressor?.toLowerCase() === 'ask' ||
+            print.aggressor?.toLowerCase() === 'above_ask') &&
+          (print.premium ?? 0) >= 500_000
+        )
       }
 
       expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'ask', premium: 750_000 })).toBe(true)
-      expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'bid', premium: 750_000 })).toBe(false)
-      expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'ask', premium: 200_000 })).toBe(false)
-      expect(isGoldenSweep({ trade_class: 'block', aggressor: 'ask', premium: 1_000_000 })).toBe(false)
+      expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'bid', premium: 750_000 })).toBe(
+        false,
+      )
+      expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'ask', premium: 200_000 })).toBe(
+        false,
+      )
+      expect(isGoldenSweep({ trade_class: 'block', aggressor: 'ask', premium: 1_000_000 })).toBe(
+        false,
+      )
     })
 
     it('differentiates Split orders and Multi-leg strategies with distinct badge metadata', () => {
@@ -251,31 +261,34 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
     })
 
     it('evaluates directional conviction by pairing signed flow with price momentum', () => {
-      const brief = buildOptionsDirection({
-        activity_imbalance: 0.65,
-        signed_flow_imbalance: 0.80,
-        signed_flow_confidence: 0.85,
-        gamma_flip: 245,
-        call_wall: 260,
-        put_wall: 240,
-        squeeze: {
-          bullish: 0.80,
-          bearish: 0.05,
-          score: 65,
-          label: 'bullish_squeeze',
-          primary: 'bullish',
-          drivers: ['short_premium_dealer_gamma'],
-          theory: {
-            momentum: 0.035,
-            momentum_fresh: true,
+      const brief = buildOptionsDirection(
+        {
+          activity_imbalance: 0.65,
+          signed_flow_imbalance: 0.8,
+          signed_flow_confidence: 0.85,
+          gamma_flip: 245,
+          call_wall: 260,
+          put_wall: 240,
+          squeeze: {
+            bullish: 0.8,
+            bearish: 0.05,
+            score: 65,
+            label: 'bullish_squeeze',
+            primary: 'bullish',
+            drivers: ['short_premium_dealer_gamma'],
+            theory: {
+              momentum: 0.035,
+              momentum_fresh: true,
+            },
           },
         },
-      }, 'live')
+        'live',
+      )
 
       expect(brief.state).toBe('bullish')
       expect(brief.confidence).toBe('high')
       expect(brief.activity).toBe('call')
-      expect(brief.signedFlow).toBe(0.80)
+      expect(brief.signedFlow).toBe(0.8)
     })
 
     it('provides transparent named empties when telemetry fields are absent', () => {
@@ -291,7 +304,9 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
   // Feature 3: Expanded Premium Thresholds ($500k+, $1M+)
   // =========================================================================
   describe('F03: Expanded Premium Thresholds & Tier Badges', () => {
-    function categorizePremiumTier(premium: number): 'mega' | 'whale' | 'large' | 'medium' | 'base' {
+    function categorizePremiumTier(
+      premium: number,
+    ): 'mega' | 'whale' | 'large' | 'medium' | 'base' {
       if (premium >= 1_000_000) return 'mega'
       if (premium >= 500_000) return 'whale'
       if (premium >= 250_000) return 'large'
@@ -327,9 +342,27 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
 
     it('aggregates total sweep premium and contracts across filtered tier subset', () => {
       const rows = [
-        { symbol: 'SPY', premium: 2_000_000, sweep_premium: 1_500_000, sweep_contracts: 4000, live: true },
-        { symbol: 'QQQ', premium: 800_000, sweep_premium: 600_000, sweep_contracts: 1500, live: true },
-        { symbol: 'IWM', premium: 150_000, sweep_premium: 100_000, sweep_contracts: 300, live: true },
+        {
+          symbol: 'SPY',
+          premium: 2_000_000,
+          sweep_premium: 1_500_000,
+          sweep_contracts: 4000,
+          live: true,
+        },
+        {
+          symbol: 'QQQ',
+          premium: 800_000,
+          sweep_premium: 600_000,
+          sweep_contracts: 1500,
+          live: true,
+        },
+        {
+          symbol: 'IWM',
+          premium: 150_000,
+          sweep_premium: 100_000,
+          sweep_contracts: 300,
+          live: true,
+        },
       ] as unknown as UnusualFlowRow[]
 
       const threshold = 500_000
@@ -356,9 +389,30 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
   // =========================================================================
   describe('F04: Flow Table & Tape Sorting and Sticky Headers', () => {
     const sampleRows = [
-      { symbol: 'TSLA', premium: 500_000, sweep_premium: 400_000, average_dte: 5, contract_count: 1000, live: true },
-      { symbol: 'NVDA', premium: 1_500_000, sweep_premium: 200_000, average_dte: 45, contract_count: 500, live: true },
-      { symbol: 'AAPL', premium: 800_000, sweep_premium: 700_000, average_dte: 15, contract_count: 800, live: true },
+      {
+        symbol: 'TSLA',
+        premium: 500_000,
+        sweep_premium: 400_000,
+        average_dte: 5,
+        contract_count: 1000,
+        live: true,
+      },
+      {
+        symbol: 'NVDA',
+        premium: 1_500_000,
+        sweep_premium: 200_000,
+        average_dte: 45,
+        contract_count: 500,
+        live: true,
+      },
+      {
+        symbol: 'AAPL',
+        premium: 800_000,
+        sweep_premium: 700_000,
+        average_dte: 15,
+        contract_count: 800,
+        live: true,
+      },
     ] as unknown as UnusualFlowRow[]
 
     it('sorts rows descending by premium', () => {
@@ -367,7 +421,9 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
     })
 
     it('sorts rows descending by sweep premium', () => {
-      const sorted = [...sampleRows].sort((a, b) => Number(b.sweep_premium) - Number(a.sweep_premium))
+      const sorted = [...sampleRows].sort(
+        (a, b) => Number(b.sweep_premium) - Number(a.sweep_premium),
+      )
       expect(sorted.map((r) => r.symbol)).toEqual(['AAPL', 'TSLA', 'NVDA'])
     })
 
@@ -400,7 +456,7 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
       const spot = 100
       const strike = 100
       const dte = 30
-      const vol = 0.30 // 30%
+      const vol = 0.3 // 30%
       const rate = 0.05 // 5%
 
       const callGreeks = solveBlackScholes('call', spot, strike, dte, vol, rate)
@@ -429,24 +485,24 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
     })
 
     it('computes Delta, Gamma, Theta, Vega, and Rho within accurate mathematical bounds', () => {
-      const greeks = solveBlackScholes('call', 200, 200, 45, 0.20, 0.05)
+      const greeks = solveBlackScholes('call', 200, 200, 45, 0.2, 0.05)
 
-      expect(greeks.delta).toBeGreaterThan(0.50)
-      expect(greeks.delta).toBeLessThan(0.60)
+      expect(greeks.delta).toBeGreaterThan(0.5)
+      expect(greeks.delta).toBeLessThan(0.6)
       expect(greeks.gamma).toBeGreaterThan(0)
       expect(greeks.theta).toBeLessThan(0) // Long option theta decay is negative
-      expect(greeks.vega).toBeGreaterThan(0)  // Long option vega is positive
-      expect(greeks.rho).toBeGreaterThan(0)   // Long call rho is positive
+      expect(greeks.vega).toBeGreaterThan(0) // Long option vega is positive
+      expect(greeks.rho).toBeGreaterThan(0) // Long call rho is positive
     })
 
     it('computes Put Greeks correctly with negative Delta and negative Rho', () => {
-      const putGreeks = solveBlackScholes('put', 200, 200, 45, 0.20, 0.05)
+      const putGreeks = solveBlackScholes('put', 200, 200, 45, 0.2, 0.05)
 
       expect(putGreeks.delta).toBeLessThan(0)
       expect(putGreeks.delta).toBeGreaterThan(-1)
       expect(putGreeks.gamma).toBeGreaterThan(0) // Gamma is identical for call & put
-      expect(putGreeks.vega).toBeGreaterThan(0)  // Vega is identical for call & put
-      expect(putGreeks.rho).toBeLessThan(0)      // Long put rho is negative
+      expect(putGreeks.vega).toBeGreaterThan(0) // Vega is identical for call & put
+      expect(putGreeks.rho).toBeLessThan(0) // Long put rho is negative
     })
 
     it('properly drops unusable legs with 0 strike, 0 qty or negative premium in usableLegs', () => {
@@ -534,7 +590,9 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
   describe('F07: Strategy Presets & IV Controls', () => {
     it('seeds basic strategies: Long Call, Long Put, Long Straddle', () => {
       const callBook = seedBook({ strategy: 'long_call', strike: 100, premium: 4 })
-      expect(callBook).toEqual([{ id: 'leg-1', right: 'call', strike: 100, quantity: 1, premium: 4 }])
+      expect(callBook).toEqual([
+        { id: 'leg-1', right: 'call', strike: 100, quantity: 1, premium: 4 },
+      ])
 
       const putBook = seedBook({ strategy: 'long_put', strike: 95, premium: 3, quantity: 2 })
       expect(putBook).toEqual([{ id: 'leg-1', right: 'put', strike: 95, quantity: 2, premium: 3 }])
@@ -601,9 +659,46 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
   // =========================================================================
   describe('F08: Conviction Board Sorting, Search & Heatmap', () => {
     const mockBoardRows = [
-      { rank: 1, symbol: 'NVDA', selection_basis: 'live_options_flow', selection_score: 9.5, spot: 120, squeeze_score: 4.2, net_gex_m: 50.4, put_wall: 110, call_wall: 130, available: true, gex_measurable: true },
-      { rank: 2, symbol: 'TSLA', selection_basis: 'pead_ordinal', selection_score: 8.1, spot: 220, squeeze_score: -2.5, net_gex_m: -30.2, put_wall: 200, call_wall: 240, available: true, gex_measurable: true },
-      { rank: 3, symbol: 'AAPL', selection_basis: 'directional_model', selection_score: 0.88, score_kind: 'calibrated_probability', spot: 230, squeeze_score: 0.5, net_gex_m: 10.1, put_wall: 220, call_wall: 240, available: true, gex_measurable: true },
+      {
+        rank: 1,
+        symbol: 'NVDA',
+        selection_basis: 'live_options_flow',
+        selection_score: 9.5,
+        spot: 120,
+        squeeze_score: 4.2,
+        net_gex_m: 50.4,
+        put_wall: 110,
+        call_wall: 130,
+        available: true,
+        gex_measurable: true,
+      },
+      {
+        rank: 2,
+        symbol: 'TSLA',
+        selection_basis: 'pead_ordinal',
+        selection_score: 8.1,
+        spot: 220,
+        squeeze_score: -2.5,
+        net_gex_m: -30.2,
+        put_wall: 200,
+        call_wall: 240,
+        available: true,
+        gex_measurable: true,
+      },
+      {
+        rank: 3,
+        symbol: 'AAPL',
+        selection_basis: 'directional_model',
+        selection_score: 0.88,
+        score_kind: 'calibrated_probability',
+        spot: 230,
+        squeeze_score: 0.5,
+        net_gex_m: 10.1,
+        put_wall: 220,
+        call_wall: 240,
+        available: true,
+        gex_measurable: true,
+      },
     ] as unknown as OptionsBoardRow[]
 
     it('filters board rows by ticker search query', () => {
@@ -616,7 +711,9 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
     })
 
     it('sorts board rows by squeeze score descending', () => {
-      const sorted = [...mockBoardRows].sort((a, b) => Number(b.squeeze_score) - Number(a.squeeze_score))
+      const sorted = [...mockBoardRows].sort(
+        (a, b) => Number(b.squeeze_score) - Number(a.squeeze_score),
+      )
       expect(sorted.map((r) => r.symbol)).toEqual(['NVDA', 'AAPL', 'TSLA'])
     })
 
@@ -660,7 +757,11 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
     ] as unknown as GexStrikeRow[]
 
     it('filters visible strikes according to ATM, near, wide, and all scope ratios', () => {
-      const filterScope = (rows: GexStrikeRow[], spot: number, scope: 'atm' | 'near' | 'wide' | 'all') => {
+      const filterScope = (
+        rows: GexStrikeRow[],
+        spot: number,
+        scope: 'atm' | 'near' | 'wide' | 'all',
+      ) => {
         if (scope === 'all') return rows
         let ratio = 0.12
         if (scope === 'atm') ratio = 0.06
@@ -723,9 +824,10 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
       expect(currentFocus).toBeNull()
     })
 
-    it('verifies GEX view modes: Dual bars, Net profile, and Cumulative GEX', () => {
+    it('verifies GEX view modes: Winner side, Dual bars, Net profile, and Cumulative GEX', () => {
       const src = readSrc('components/GammaExposureMap.vue')
-      expect(src).toContain("viewMode = ref<'dual' | 'net' | 'cumulative'>('dual')")
+      expect(src).toContain("viewMode = ref<GexViewMode>('winner')")
+      expect(src).toContain("viewMode === 'winner'")
       expect(src).toContain("viewMode === 'dual'")
       expect(src).toContain("viewMode === 'net'")
       expect(src).toContain("viewMode === 'cumulative'")
@@ -739,10 +841,50 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
   // =========================================================================
   describe('F10: Flow Multi-Parameter Filtering & Dynamic KPI Aggregation', () => {
     const mockTapePrints = [
-      { timestamp: '10:00:00', symbol: 'NVDA', right: 'call', strike: 130, dte: 2, premium: 800_000, trade_class: 'sweep', is_sweep: true, presets: ['sweeps', 'momentum'] },
-      { timestamp: '10:01:00', symbol: 'NVDA', right: 'put', strike: 115, dte: 14, premium: 400_000, trade_class: 'block', is_block: true, presets: ['unusual'] },
-      { timestamp: '10:02:00', symbol: 'TSLA', right: 'call', strike: 250, dte: 45, premium: 300_000, trade_class: 'sweep', is_sweep: true, presets: ['sweeps', 'moonshot'] },
-      { timestamp: '10:03:00', symbol: 'SPY', right: 'put', strike: 540, dte: 0, premium: 1_200_000, trade_class: 'sweep', is_sweep: true, presets: ['sweeps'] },
+      {
+        timestamp: '10:00:00',
+        symbol: 'NVDA',
+        right: 'call',
+        strike: 130,
+        dte: 2,
+        premium: 800_000,
+        trade_class: 'sweep',
+        is_sweep: true,
+        presets: ['sweeps', 'momentum'],
+      },
+      {
+        timestamp: '10:01:00',
+        symbol: 'NVDA',
+        right: 'put',
+        strike: 115,
+        dte: 14,
+        premium: 400_000,
+        trade_class: 'block',
+        is_block: true,
+        presets: ['unusual'],
+      },
+      {
+        timestamp: '10:02:00',
+        symbol: 'TSLA',
+        right: 'call',
+        strike: 250,
+        dte: 45,
+        premium: 300_000,
+        trade_class: 'sweep',
+        is_sweep: true,
+        presets: ['sweeps', 'moonshot'],
+      },
+      {
+        timestamp: '10:03:00',
+        symbol: 'SPY',
+        right: 'put',
+        strike: 540,
+        dte: 0,
+        premium: 1_200_000,
+        trade_class: 'sweep',
+        is_sweep: true,
+        presets: ['sweeps'],
+      },
     ] as unknown as MarketFlowPrint[]
 
     it('filters prints by Right (Call vs Put)', () => {
@@ -781,8 +923,26 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
 
     it('recalculates summary totals dynamically over active filtered rows', () => {
       const activeRows = [
-        { symbol: 'NVDA', premium: 1_200_000, call_premium: 800_000, put_premium: 400_000, contract_count: 3000, sweep_premium: 800_000, sweep_contracts: 2000, live: true },
-        { symbol: 'SPY', premium: 1_200_000, call_premium: 0, put_premium: 1_200_000, contract_count: 5000, sweep_premium: 1_200_000, sweep_contracts: 5000, live: true },
+        {
+          symbol: 'NVDA',
+          premium: 1_200_000,
+          call_premium: 800_000,
+          put_premium: 400_000,
+          contract_count: 3000,
+          sweep_premium: 800_000,
+          sweep_contracts: 2000,
+          live: true,
+        },
+        {
+          symbol: 'SPY',
+          premium: 1_200_000,
+          call_premium: 0,
+          put_premium: 1_200_000,
+          contract_count: 5000,
+          sweep_premium: 1_200_000,
+          sweep_contracts: 5000,
+          live: true,
+        },
       ] as unknown as UnusualFlowRow[]
 
       const totalPrem = activeRows.reduce((s, r) => s + Number(r.premium), 0)
@@ -862,24 +1022,30 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
     })
 
     it('generates accurate copy for first baseline window vs delta windows', () => {
-      expect(pulseWindowCopy({
-        baseline: true,
-        newPrints: 0,
-        newPremiumLabel: '+$0',
-        windowDeltaLabel: '+$0',
-      })).toBe(FIRST_WINDOW_BASELINE)
+      expect(
+        pulseWindowCopy({
+          baseline: true,
+          newPrints: 0,
+          newPremiumLabel: '+$0',
+          windowDeltaLabel: '+$0',
+        }),
+      ).toBe(FIRST_WINDOW_BASELINE)
 
-      expect(pulseWindowCopy({
-        baseline: false,
-        newPrints: 3,
-        newPremiumLabel: '+$150k',
-        windowDeltaLabel: '+$50k',
-      })).toBe(`+$150k · 3 new vs ${PREVIOUS_PROVIDER_WINDOW}`)
+      expect(
+        pulseWindowCopy({
+          baseline: false,
+          newPrints: 3,
+          newPremiumLabel: '+$150k',
+          windowDeltaLabel: '+$50k',
+        }),
+      ).toBe(`+$150k · 3 new vs ${PREVIOUS_PROVIDER_WINDOW}`)
     })
 
     it('manages debounce timer and executes trailing edge call reliably', async () => {
       let callCount = 0
-      const increment = () => { callCount++ }
+      const increment = () => {
+        callCount++
+      }
       const debounced = vi.fn()
       debounced.mockImplementation(increment)
 
@@ -893,7 +1059,11 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
 
   describe('F01 Extra: Sweep Volume vs Open Interest and Badge Hierarchy', () => {
     it('detects unusual sweep prints when volume exceeds existing open interest', () => {
-      const isUnusualSweep = (p: { is_sweep?: boolean; volume?: number; open_interest?: number }) => {
+      const isUnusualSweep = (p: {
+        is_sweep?: boolean
+        volume?: number
+        open_interest?: number
+      }) => {
         return Boolean(p.is_sweep) && (p.volume ?? 0) > (p.open_interest ?? 0)
       }
 
@@ -941,7 +1111,9 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
           : row.selection_score.toFixed(2)
       }
 
-      expect(formatScore({ score_kind: 'calibrated_probability', selection_score: 0.875 })).toBe('87.5%')
+      expect(formatScore({ score_kind: 'calibrated_probability', selection_score: 0.875 })).toBe(
+        '87.5%',
+      )
       expect(formatScore({ score_kind: 'ordinal', selection_score: 14.234 })).toBe('14.23')
       expect(formatScore({ selection_score: null })).toBe('—')
     })

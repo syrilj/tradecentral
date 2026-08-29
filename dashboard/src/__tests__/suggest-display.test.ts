@@ -62,7 +62,9 @@ describe('suggest display helpers (shipped)', () => {
       ],
     }
     expect(formatSetupLevel(payload.strike, payload.strikeSource)).toBe('$101.50  positions')
-    expect(formatSetupLevel(payload.invalidation, payload.invalidationSource)).toBe('$96.25  options GEX')
+    expect(formatSetupLevel(payload.invalidation, payload.invalidationSource)).toBe(
+      '$96.25  options GEX',
+    )
     expect(formatSupportLevels(payload.supports)).toContain('96.25')
     expect(formatSupportLevels(payload.supports)).toContain('options GEX')
     expect(formatSupportLevels(payload.supports)).toContain('resistance/support')
@@ -106,18 +108,24 @@ describe('suggest display helpers (shipped)', () => {
   })
 
   it('renders a spot-relative sell from the shipped GEX fields, or —', () => {
-    expect(spotRelativeSellCopy({
-      sell: 108,
-      spot: 100,
-      sellRelPct: 0.08,
-      sellSource: 'call_wall',
-    })).toBe('$108.00  +8.0%  call wall')
-    expect(spotRelativeSellCopy({
-      sell: 94,
-      sellRelPct: -0.06,
-      sellSource: 'put_wall',
-    })).toBe(`$94.00  ${signedPct(-6, 1)}  put wall`)
-    expect(spotRelativeSellCopy({ sell: null, sellRelPct: 0.08, sellSource: 'call_wall' })).toBe(DASH)
+    expect(
+      spotRelativeSellCopy({
+        sell: 108,
+        spot: 100,
+        sellRelPct: 0.08,
+        sellSource: 'call_wall',
+      }),
+    ).toBe('$108.00  +8.0%  call wall')
+    expect(
+      spotRelativeSellCopy({
+        sell: 94,
+        sellRelPct: -0.06,
+        sellSource: 'put_wall',
+      }),
+    ).toBe(`$94.00  ${signedPct(-6, 1)}  put wall`)
+    expect(spotRelativeSellCopy({ sell: null, sellRelPct: 0.08, sellSource: 'call_wall' })).toBe(
+      DASH,
+    )
     expect(spotRelativeSellCopy({ sell: Number.NaN })).toBe(UNMEASURED)
     expect(sellSourceLabel(null)).toBe(UNMEASURED)
   })
@@ -144,28 +152,34 @@ describe('suggest display helpers (shipped)', () => {
   })
 
   it('shows direction and contract stability without implying probability', () => {
-    expect(suggestionStabilityCopy({
-      right: 'call',
-      review_label: 'PAPER',
-      direction_observations: 3,
-      direction_required: 3,
-      direction_stable: true,
-      contract_plan: { stability_observations: 2, stability_required: 3, stable: false },
-    })).toBe('PAPER · DIR 3/3 · CTR 2/3')
-    expect(suggestionStabilityCopy({
-      right: 'put',
-      direction_observations: 1,
-      direction_required: 3,
-      direction_churned: true,
-    })).toBe('FLIPPED · DIR 1/3')
+    expect(
+      suggestionStabilityCopy({
+        right: 'call',
+        review_label: 'PAPER',
+        direction_observations: 3,
+        direction_required: 3,
+        direction_stable: true,
+        contract_plan: { stability_observations: 2, stability_required: 3, stable: false },
+      }),
+    ).toBe('PAPER · DIR 3/3 · CTR 2/3')
+    expect(
+      suggestionStabilityCopy({
+        right: 'put',
+        direction_observations: 1,
+        direction_required: 3,
+        direction_churned: true,
+      }),
+    ).toBe('FLIPPED · DIR 1/3')
     expect(suggestionStabilityCopy({ right: 'blocked' })).toBe(DASH)
   })
 
   it('uses review quality rank before call/put grouping', () => {
-    const view = presentSetupRows({ rows: [
-      { symbol: 'LOWCALL', suggestion: { right: 'call', review_rank: 2, review_score: 30 } },
-      { symbol: 'HIGHPUT', suggestion: { right: 'put', review_rank: 1, review_score: 75 } },
-    ] })
+    const view = presentSetupRows({
+      rows: [
+        { symbol: 'LOWCALL', suggestion: { right: 'call', review_rank: 2, review_score: 30 } },
+        { symbol: 'HIGHPUT', suggestion: { right: 'put', review_rank: 1, review_score: 75 } },
+      ],
+    })
     expect(view.rows.map((row) => row.symbol)).toEqual(['HIGHPUT', 'LOWCALL'])
   })
 
@@ -205,15 +219,17 @@ describe('suggest display helpers (shipped)', () => {
 
 describe('setup calculator query', () => {
   it('prefills a long call from the contract plan without inventing numbers', () => {
-    expect(setupCalculatorQuery({
-      symbol: 'spy',
-      right: 'call',
-      spot: 500,
-      strike: 510,
-      dte: 21,
-      vol: 0.18,
-      premium: 6.2,
-    })).toEqual({
+    expect(
+      setupCalculatorQuery({
+        symbol: 'spy',
+        right: 'call',
+        spot: 500,
+        strike: 510,
+        dte: 21,
+        vol: 0.18,
+        premium: 6.2,
+      }),
+    ).toEqual({
       strategy: 'long_call',
       symbol: 'SPY',
       spot: '500',

@@ -26,7 +26,11 @@ function memoryStorage(seed: string | null = null) {
 describe('shared personal watchlist', () => {
   it('normalizes and dedupes symbols without inventing names', () => {
     expect(normalizeWatchSymbol(' nvda ')).toBe('NVDA')
-    expect(uniqueWatchlist(['aapl', 'AAPL', ' msft ', '', 'GOOG1'])).toEqual(['AAPL', 'MSFT', 'GOOG1'])
+    expect(uniqueWatchlist(['aapl', 'AAPL', ' msft ', '', 'GOOG1'])).toEqual([
+      'AAPL',
+      'MSFT',
+      'GOOG1',
+    ])
     expect(uniqueWatchlist([])).toEqual([...DEFAULT_WATCHLIST])
   })
 

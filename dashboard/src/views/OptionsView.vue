@@ -1801,10 +1801,16 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         </div>
 
         <!-- Live Streaming Status / Interval indicator -->
-        <div v-if="mode === 'live'" class="stream-status-pill label" :title="`WebSocket-style stream updating every ${liveStreamSpeed}`">
+        <div
+          v-if="mode === 'live'"
+          class="stream-status-pill label"
+          :title="`WebSocket-style stream updating every ${liveStreamSpeed}`"
+        >
           <span class="stream-pulse-dot" :class="{ active: liveStreamSpeed !== 'pause' }" />
           <span class="stream-label">STREAM: {{ liveStreamSpeed.toUpperCase() }}</span>
-          <span v-if="liveStreamSpeed !== 'pause'" class="stream-sec fig">({{ streamCountdown }}s)</span>
+          <span v-if="liveStreamSpeed !== 'pause'" class="stream-sec fig"
+            >({{ streamCountdown }}s)</span
+          >
         </div>
 
         <!-- Historical Date Selector when in history mode -->
@@ -1827,8 +1833,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             :key="item"
             class="seg label"
             :class="{ on: selectedRange === item }"
-            @click="selectedRange = item"
             :title="rangeHint(item)"
+            @click="selectedRange = item"
           >
             {{ item.toUpperCase() }}
           </button>
@@ -1853,9 +1859,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <div class="hist-banner-content">
         <span class="hist-lamp-pulse" aria-hidden="true" />
         <div class="hist-banner-text">
-          <strong class="label hist-title">HISTORICAL SNAPSHOT REPLAY · {{ historyMeta?.selected_asof || dateTo || 'SELECTED DATE' }}</strong>
+          <strong class="label hist-title"
+            >HISTORICAL SNAPSHOT REPLAY ·
+            {{ historyMeta?.selected_asof || dateTo || 'SELECTED DATE' }}</strong
+          >
           <span class="hist-sub">
-            Squeeze score, trigger distance, price ladder & GEX map are strictly calculated for this historical chain day.
+            Squeeze score, trigger distance, price ladder & GEX map are strictly calculated for this
+            historical chain day.
           </span>
         </div>
       </div>
@@ -1888,7 +1898,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <strong class="fig">{{ tapeHealth.lag }}</strong>
           </div>
         </div>
-        <div class="live-meta label" v-if="tapeHealth.detail">{{ tapeHealth.detail }}</div>
+        <div v-if="tapeHealth.detail" class="live-meta label">{{ tapeHealth.detail }}</div>
 
         <div class="quick-filters">
           <span class="qf-lab label">TAPE MIN $</span>
@@ -2294,10 +2304,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           <template #action>
             <div class="tape-action-bar">
               <!-- Live Stream speed controls -->
-              <div v-if="mode === 'live'" class="mini-segment stream-rate-seg" title="Real-time WebSocket-style stream refresh rate">
+              <div
+                v-if="mode === 'live'"
+                class="mini-segment stream-rate-seg"
+                title="Real-time WebSocket-style stream refresh rate"
+              >
                 <span class="stream-pulse-lamp" :class="{ running: liveStreamSpeed !== 'pause' }" />
                 <button
-                  v-for="s_ in (['5s', '10s', '15s', '30s', 'pause'] as LiveStreamSpeed[])"
+                  v-for="s_ in ['5s', '10s', '15s', '30s', 'pause'] as LiveStreamSpeed[]"
                   :key="s_"
                   type="button"
                   class="label"
@@ -2331,7 +2345,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="clear-search label"
                   @click="tapeSearchQuery = ''"
-                >×</button>
+                >
+                  ×
+                </button>
               </div>
 
               <!-- Table / Cards Mode Toggle -->
@@ -2369,15 +2385,16 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </div>
 
           <!-- FLAGGED PRINTS & HIGH-CONVICTION ALERTS SHELF (Top Highlight Section) -->
-          <div
-            v-if="flaggedPrints.length"
-            class="flagged-prints-section"
-          >
+          <div v-if="flaggedPrints.length" class="flagged-prints-section">
             <div class="flagged-prints-header">
               <div class="flagged-title-group">
                 <span class="flagged-pulse-icon" aria-hidden="true">⚡</span>
-                <strong class="flagged-title label">HIGH-CONVICTION & FLAG ALERTS ({{ flaggedPrints.length }})</strong>
-                <span class="flagged-sub label">Golden Sweeps · Whales ($100k+) · Clusters · Vol/OI Surges</span>
+                <strong class="flagged-title label"
+                  >HIGH-CONVICTION & FLAG ALERTS ({{ flaggedPrints.length }})</strong
+                >
+                <span class="flagged-sub label"
+                  >Golden Sweeps · Whales ($100k+) · Clusters · Vol/OI Surges</span
+                >
               </div>
               <div class="flagged-quick-filters">
                 <button
@@ -2392,7 +2409,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="flag-pill label golden-pill"
                   :class="{ on: activeFlagFilter === 'golden_sweep' }"
-                  @click="activeFlagFilter = activeFlagFilter === 'golden_sweep' ? 'all' : 'golden_sweep'"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'golden_sweep' ? 'all' : 'golden_sweep'
+                  "
                 >
                   GOLDEN SWEEP
                 </button>
@@ -2400,7 +2419,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="flag-pill label mega-whale-pill"
                   :class="{ on: activeFlagFilter === 'mega_whales' }"
-                  @click="activeFlagFilter = activeFlagFilter === 'mega_whales' ? 'all' : 'mega_whales'"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'mega_whales' ? 'all' : 'mega_whales'
+                  "
                 >
                   MEGA WHALE ($500k+)
                 </button>
@@ -2416,7 +2437,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="flag-pill label cluster-pill"
                   :class="{ on: activeFlagFilter === 'repeat_cluster' }"
-                  @click="activeFlagFilter = activeFlagFilter === 'repeat_cluster' ? 'all' : 'repeat_cluster'"
+                  @click="
+                    activeFlagFilter =
+                      activeFlagFilter === 'repeat_cluster' ? 'all' : 'repeat_cluster'
+                  "
                 >
                   REPEAT CLUSTER
                 </button>
@@ -2424,7 +2448,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="flag-pill label burst-pill"
                   :class="{ on: activeFlagFilter === 'sweep_burst' }"
-                  @click="activeFlagFilter = activeFlagFilter === 'sweep_burst' ? 'all' : 'sweep_burst'"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'sweep_burst' ? 'all' : 'sweep_burst'
+                  "
                 >
                   SWEEP BURST
                 </button>
@@ -2432,7 +2458,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="flag-pill label vol-oi-pill-filter"
                   :class="{ on: activeFlagFilter === 'high_vol_oi' }"
-                  @click="activeFlagFilter = activeFlagFilter === 'high_vol_oi' ? 'all' : 'high_vol_oi'"
+                  @click="
+                    activeFlagFilter = activeFlagFilter === 'high_vol_oi' ? 'all' : 'high_vol_oi'
+                  "
                 >
                   VOL/OI &gt; 2X
                 </button>
@@ -2546,8 +2574,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   class="label near-tab"
                   :class="{ on: tapeView === 'near' }"
                   :disabled="tapeClassCounts.near === 0"
-                  @click="selectTapeView('near')"
                   title="Near-dated flow (this month). Signed prints bubble to top."
+                  @click="selectTapeView('near')"
                 >
                   NEAR<span class="near-count">&nbsp;{{ tapeClassCounts.near }}</span>
                 </button>
@@ -2701,8 +2729,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="band-chip label"
                   :class="{ on: strikeBand === 'atm' }"
-                  @click="strikeBand = 'atm'"
                   title="Within ±2% of spot"
+                  @click="strikeBand = 'atm'"
                 >
                   ATM (±2%)
                 </button>
@@ -2710,8 +2738,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="band-chip label"
                   :class="{ on: strikeBand === 'near' }"
-                  @click="strikeBand = 'near'"
                   title="Within ±6% of spot"
+                  @click="strikeBand = 'near'"
                 >
                   NEAR (±6%)
                 </button>
@@ -2719,8 +2747,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="band-chip label"
                   :class="{ on: strikeBand === 'wide' }"
-                  @click="strikeBand = 'wide'"
                   title="Within ±15% of spot"
+                  @click="strikeBand = 'wide'"
                 >
                   WIDE (±15%)
                 </button>
@@ -2728,8 +2756,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   type="button"
                   class="band-chip label"
                   :class="{ on: strikeBand === 'deep_otm' }"
-                  @click="strikeBand = 'deep_otm'"
                   title="Over 15% OTM"
+                  @click="strikeBand = 'deep_otm'"
                 >
                   DEEP OTM (15%+)
                 </button>
@@ -2912,7 +2940,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     isWhale: (row.premium ?? 0) >= 100_000,
                     isMegaWhale: (row.premium ?? 0) >= 500_000,
                     isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
-                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                    isSweep: tradeClassLabel(row) === 'SWEEP',
                     'just-arrived': isNewPrint(row),
                     [tapeLean(row).cls]: true,
                   }"
@@ -2957,11 +2985,15 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <td class="fig num-col strike-cell">{{ optUsd(row.strike) }}</td>
                   <td class="fig num-col tape-col-group stock-cell">
                     <div class="stock-lockup">
-                      <span class="stock-val" :class="{ 'cell-na': (row.underlying_price ?? s?.spot) == null }">{{
-                        (row.underlying_price ?? s?.spot) == null
-                          ? '—'
-                          : optUsd(row.underlying_price ?? s?.spot)
-                      }}</span>
+                      <span
+                        class="stock-val"
+                        :class="{ 'cell-na': (row.underlying_price ?? s?.spot) == null }"
+                        >{{
+                          (row.underlying_price ?? s?.spot) == null
+                            ? '—'
+                            : optUsd(row.underlying_price ?? s?.spot)
+                        }}</span
+                      >
                       <span
                         v-if="moneynessInfo(row)"
                         class="moneyness-tag label"
@@ -3032,7 +3064,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               (unsigned proxy), not a trade tape.
             </p>
             <p v-else>No prints cleared the current time and noise filters.</p>
-            <p class="reject-hint label" v-if="d?.quality?.flow_rejected">
+            <p v-if="d?.quality?.flow_rejected" class="reject-hint label">
               Rejected:
               <template v-for="(n, k) in d.quality.flow_rejected" :key="k">
                 <span v-if="typeof n === 'number' && n > 0"> {{ k }}={{ n }}</span>
@@ -3043,7 +3075,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               </template>
               <template v-else> · try <b>RAW</b> noise filter or lower min premium </template>
             </p>
-            <p class="reject-hint label" v-if="d?.quality?.flow_rejected?.print_ts_min">
+            <p v-if="d?.quality?.flow_rejected?.print_ts_min" class="reject-hint label">
               Prints span {{ d.quality.flow_rejected.print_ts_min }} →
               {{ d.quality.flow_rejected.print_ts_max }} · window
               {{ d.quality.flow_rejected.window_lower }} →
@@ -3074,8 +3106,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               v-if="historyTape.length"
               type="button"
               class="panel-action label"
-              @click="downloadHistoryTapeCsv"
               title="Export complete historical tape to CSV"
+              @click="downloadHistoryTapeCsv"
             >
               EXPORT CSV
             </button>
@@ -3372,7 +3404,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             >
               {{ unusual.loading.value ? 'SCANNING…' : 'SCAN LIVE FLOW' }}
             </button>
-            <span class="label cov" v-if="unusual.data.value?.asof">
+            <span v-if="unusual.data.value?.asof" class="label cov">
               AS OF {{ shortDate(unusual.data.value?.asof) }}
             </span>
           </div>
@@ -3514,7 +3546,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             >
               {{ opportunities.loading.value ? 'SCANNING…' : 'SCAN LIVE' }}
             </button>
-            <span class="label cov" v-if="opportunities.data.value?.asof_utc">
+            <span v-if="opportunities.data.value?.asof_utc" class="label cov">
               AS OF {{ shortDate(opportunities.data.value?.asof_utc) }}
             </span>
           </div>
@@ -3609,7 +3641,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               to recombine the latest conviction board + unusual flow boards.
             </p>
           </div>
-          <p class="note tiny pad" v-if="opportunityRows.length">
+          <p v-if="opportunityRows.length" class="note tiny pad">
             Click a row to load that underlier. NO-TRADE rows failed the gate on measured chain
             fields — shown, not hidden. Hover a gate chip for the reason.
           </p>
@@ -5826,6 +5858,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .table-scroll {
   overflow: auto;
   max-height: 420px;
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--surface-base);
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-hi) transparent;
 }
 table {
   width: 100%;
@@ -5842,21 +5879,133 @@ td {
 th {
   position: sticky;
   top: 0;
-  background: var(--panel-hi);
-  z-index: 1;
+  background: var(--surface-overlay);
+  box-shadow: inset 0 -1px 0 var(--border-strong);
+  z-index: 2;
   color: var(--ink-dim);
+  font-weight: 750;
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 td.fig,
 th.num-col,
 td.num-col {
   font-size: var(--t-small);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
-/* One consistent anomaly-flag treatment. The abbreviation (PRM/VOL/CLU/SWP)
-   already carries the sub-type, so color stays a single "flagged" signal
-   instead of four competing hues — and never phosphor, which means
-   live-now everywhere else on this page. Wash + tinted text (not a solid
-   fill) so the flag reads as a quiet annotation, matching every other chip
-   on the page instead of shouting over the premium figure. */
+.tape-table {
+  min-width: 980px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.tape-table th {
+  padding: var(--s2) var(--s3);
+  color: var(--ink-dim);
+  background: var(--surface-overlay);
+  box-shadow: inset 0 -1px 0 var(--border-strong);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  font-weight: 750;
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tape-table td {
+  padding: var(--s2) var(--s3);
+  border-bottom: var(--hair) solid var(--border-subtle);
+  vertical-align: middle;
+}
+/* Row states: hover lifts the surface; anomalous rows keep their warn wash */
+.tape-table tbody tr {
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.tape-table tbody tr:hover {
+  background: var(--panel-hi);
+}
+.tape-table tbody tr.anomalous:hover {
+  background: color-mix(in srgb, var(--warn) 14%, var(--panel-hi));
+}
+tr.anomalous {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+tr.isSweep {
+  background: var(--badge-sweep-wash);
+  box-shadow: inset 3px 0 0 var(--badge-sweep);
+}
+tr.isWhale {
+  background: var(--warn-wash);
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+tr.isMegaWhale {
+  background: color-mix(in srgb, var(--warn) 16%, var(--panel));
+  box-shadow: inset 5px 0 0 var(--warn);
+}
+tr.isGoldenSweep {
+  background: var(--badge-golden-wash);
+  box-shadow: inset 4px 0 0 var(--badge-golden);
+}
+tr.anomalous td,
+tr.isWhale td,
+tr.isMegaWhale td,
+tr.isSweep td,
+tr.isGoldenSweep td {
+  color: var(--ink);
+}
+.ts-cell {
+  font-size: var(--t-micro);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.ts-cell .ts-date {
+  display: block;
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+}
+.ts-cell .ts-clock {
+  display: block;
+}
+.ts-eod {
+  color: var(--ink-faint);
+  font-style: normal;
+  letter-spacing: 0.08em;
+}
+.ts-time .ts-date {
+  font-style: normal;
+  color: var(--ink-faint);
+  margin-right: 4px;
+}
+.expiry-cell {
+  font-size: var(--t-micro);
+  letter-spacing: 0.02em;
+}
+.stock-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.moneyness-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: var(--t-micro);
+  font-weight: 750;
+  border-radius: var(--r-xs);
+}
+.moneyness-tag.itm {
+  color: var(--call-hi);
+  background: var(--call-wash);
+}
+.moneyness-tag.otm {
+  color: var(--ink-dim);
+  background: var(--surface-raised);
+}
+.moneyness-tag.atm {
+  color: var(--warn);
+  background: var(--warn-wash);
+}
 .flag-chip {
   display: inline-block;
   margin: 1px 4px 2px 0;
@@ -5868,132 +6017,18 @@ td.num-col {
   font-weight: 800;
   letter-spacing: 0.04em;
 }
-/* Legacy flag-chip sizes stay (anomaly flags) */
-.no-flag {
-  color: var(--ink-ghost);
-}
-/* Vol/OI head column */
-.vol-oi-head {
-  color: var(--ink-dim);
-}
-/* Timestamp column: trimmed to time only, tighter */
-.ts-cell {
-  font-size: var(--t-micro);
-  letter-spacing: 0.03em;
-  white-space: nowrap;
-}
-/* Date sits above the clock so the column stays as narrow as it was when it
-   showed time alone — the tape now spans sessions, so the day has to be
-   readable without widening the row past the numeric columns. */
-.ts-cell .ts-date {
-  display: block;
-  color: var(--ink-faint);
-  letter-spacing: 0.06em;
-}
-.ts-cell .ts-clock {
-  display: block;
-}
-/* End-of-day roll-ups carry no intraday clock; mark them so they cannot be
-   misread as a real fill that printed at midnight. */
-.ts-eod {
-  color: var(--ink-faint);
-  font-style: normal;
-  letter-spacing: 0.08em;
-}
-.ts-time .ts-date {
-  font-style: normal;
-  color: var(--ink-faint);
-  margin-right: 4px;
-}
-/* Expiry cell: compact mono */
-.expiry-cell {
-  font-size: var(--t-micro);
-  letter-spacing: 0.02em;
-}
-/* Type chip: abbreviated C/P takes less space */
-.type-chip {
-  min-width: 24px;
-}
-/* Anomalous rows: left rule only, no gradient wash */
-tr.anomalous {
-  box-shadow: inset 3px 0 0 var(--warn);
-}
-/* Sweep rows: steel-blue rule + faint wash so intermarket routing is visible
-   at a scan. Declared after .anomalous so a flagged sweep keeps its routing
-   color — the specific identity beats the generic anomaly flag. Whale tiers
-   (size) still outrank it below. */
-tr.isSweep {
-  background: var(--badge-sweep-wash);
-  box-shadow: inset 3px 0 0 var(--badge-sweep);
-}
-.tape-stalker-card.isSweep {
-  border-left: 3px solid var(--badge-sweep);
-  background: color-mix(in srgb, var(--badge-sweep) 7%, var(--panel));
-}
-/* Whale row thresholds — $100k and $500k+ (previously $250k) */
-/* Whale rows: progressively heavier left rule, flat background */
-tr.isWhale {
-  background: var(--warn-wash);
-  box-shadow: inset 3px 0 0 var(--warn);
-}
-tr.isMegaWhale {
-  background: color-mix(in srgb, var(--warn) 16%, var(--panel));
-  box-shadow: inset 5px 0 0 var(--warn);
-}
-tr.anomalous td,
-tr.isWhale td,
-tr.isMegaWhale td,
-tr.isSweep td {
-  color: var(--ink);
-}
-/* Golden sweep is the highest-conviction row state — declared last so a
-   golden mega-whale keeps its gold rule instead of being washed amber by the
-   whale tiers above it. */
-tr.isGoldenSweep {
-  background: var(--badge-golden-wash);
-  box-shadow: inset 4px 0 0 var(--badge-golden);
-}
-tr.isGoldenSweep td {
-  color: var(--ink);
-}
-.tape-stalker-card.isGoldenSweep {
-  border-left: 3px solid var(--badge-golden);
-  background: color-mix(in srgb, var(--badge-golden) 8%, var(--panel));
-}
 .num-col {
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .dim {
   color: var(--ink-dim);
 }
-/* Missing measurements render as a muted dash — never a fabricated $0.00. */
 .cell-na {
   color: var(--ink-ghost);
   font-weight: 400;
 }
-.tape-table th {
-  font-size: var(--t-micro);
-  letter-spacing: 0.06em;
-  border-bottom: var(--hair) solid var(--rule-hi);
-}
-.tape-table td {
-  padding: var(--s2) var(--s3);
-  font-size: var(--t-tiny);
-}
-/* Row states: hover lifts the surface; anomalous rows keep their warn wash
-   underneath so the flag cue never gets washed out by the hover state. */
-.tape-table tbody tr {
-  transition: background var(--dur-fast) var(--ease-out);
-}
-.tape-table tbody tr:hover {
-  background: var(--panel-hi);
-}
-.tape-table tbody tr.anomalous:hover {
-  background: color-mix(in srgb, var(--warn) 14%, var(--panel-hi));
-}
-/* Quiet column-group dividers — Lean/Side/Class, Expiry/Strike, the
-   economics group, then Aggressor/edge — so the eye can chunk the row
-   instead of parsing twelve flat columns in one pass. */
+/* Quiet column-group dividers */
 .tape-table th.tape-col-group,
 .tape-table td.tape-col-group {
   border-left: var(--hair) solid var(--rule-faint);

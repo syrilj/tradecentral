@@ -81,7 +81,9 @@ function qLabel(q: number): string {
   return `Q${q - qOffset.value + 1}`
 }
 
-const headlineIc = computed(() => icRows.value.find((r) => r.horizon === 1) ?? icRows.value[0] ?? null)
+const headlineIc = computed(
+  () => icRows.value.find((r) => r.horizon === 1) ?? icRows.value[0] ?? null,
+)
 const survivingHorizon = computed(() => {
   // The longest horizon whose IC is still significant at |t| >= 2. This is the
   // number that sets a viable rebalance period.
@@ -188,7 +190,9 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
           <Readout
             label="Rank IC (1d)"
             :value="num(headlineIc?.mean_ic, 4)"
-            :sub="headlineIc?.ic_t_stat != null ? `NW t ${num(headlineIc.ic_t_stat, 2)}` : undefined"
+            :sub="
+              headlineIc?.ic_t_stat != null ? `NW t ${num(headlineIc.ic_t_stat, 2)}` : undefined
+            "
             :tone="toneFor(headlineIc?.mean_ic)"
           />
           <Readout
@@ -234,19 +238,42 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
       <Panel
         label="Signal diagnostics"
         index="—"
-        :meta="chartTab === 'ic' ? 'IC decay' : `top−bottom ${spreadRow ? pctFrac(spreadRow.mean_return, 3) : '—'}`"
+        :meta="
+          chartTab === 'ic'
+            ? 'IC decay'
+            : `top−bottom ${spreadRow ? pctFrac(spreadRow.mean_return, 3) : '—'}`
+        "
         :delay="40"
         class="w-full"
       >
         <!-- tab strip -->
         <div class="chart-tabs">
-          <button type="button" class="ctab label" :class="{ on: chartTab === 'ic' }" @click="chartTab = 'ic'">IC DECAY</button>
-          <button type="button" class="ctab label" :class="{ on: chartTab === 'quantile' }" @click="chartTab = 'quantile'">QUANTILE SPREAD</button>
+          <button
+            type="button"
+            class="ctab label"
+            :class="{ on: chartTab === 'ic' }"
+            @click="chartTab = 'ic'"
+          >
+            IC DECAY
+          </button>
+          <button
+            type="button"
+            class="ctab label"
+            :class="{ on: chartTab === 'quantile' }"
+            @click="chartTab = 'quantile'"
+          >
+            QUANTILE SPREAD
+          </button>
         </div>
 
         <!-- IC DECAY tab -->
         <template v-if="chartTab === 'ic'">
-          <svg v-if="icChart" :viewBox="`0 0 ${IC_W} ${IC_H}`" class="chart" preserveAspectRatio="none">
+          <svg
+            v-if="icChart"
+            :viewBox="`0 0 ${IC_W} ${IC_H}`"
+            class="chart"
+            preserveAspectRatio="none"
+          >
             <g class="axis">
               <line
                 v-for="t in icChart.yTicks"
@@ -264,7 +291,9 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
                 :y="icChart.y(t) + 3"
                 text-anchor="end"
                 class="tick-label"
-              >{{ t.toFixed(3) }}</text>
+              >
+                {{ t.toFixed(3) }}
+              </text>
             </g>
 
             <line
@@ -391,14 +420,13 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
             <tbody>
               <tr v-for="r in quantiles" :key="`qt-${r.quantile}`">
                 <td class="fig">{{ qLabel(r.quantile) }}</td>
-                <td class="fig num" :class="toneFor(r.mean_return)">{{ pctFrac(r.mean_return, 3) }}</td>
+                <td class="fig num" :class="toneFor(r.mean_return)">
+                  {{ pctFrac(r.mean_return, 3) }}
+                </td>
                 <td class="fig num">{{ num(r.sharpe, 2) }}</td>
                 <td class="fig num dim">{{ pctFrac(turnoverOf.get(r.quantile), 1) }}</td>
                 <td class="fig num dim">{{ pctFrac(costOf(r.quantile), 3) }}</td>
-                <td
-                  class="fig num"
-                  :class="clears(r.quantile, r.mean_return) ? 'pos' : 'neg'"
-                >
+                <td class="fig num" :class="clears(r.quantile, r.mean_return) ? 'pos' : 'neg'">
                   {{
                     r.mean_return != null && costOf(r.quantile) != null
                       ? pctFrac(r.mean_return - (costOf(r.quantile) as number), 3)
@@ -430,7 +458,10 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   gap: var(--s4);
 }
 
-.w-full { width: 100%; min-width: 0; }
+.w-full {
+  width: 100%;
+  min-width: 0;
+}
 
 /* ---- chart tab strip ----------------------------------------------------- */
 .chart-tabs {
@@ -448,9 +479,14 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   font-weight: 700;
   letter-spacing: 0.06em;
   font-size: var(--t-micro);
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
-.ctab:hover { color: var(--ink); background: var(--panel-hi); }
+.ctab:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+}
 .ctab.on {
   color: var(--phosphor);
   background: var(--phosphor-wash);
@@ -504,7 +540,9 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   width: 100%;
   height: 220px;
 }
-.qchart { height: 240px; }
+.qchart {
+  height: 240px;
+}
 
 .gridline {
   stroke: var(--grid);
@@ -526,7 +564,9 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }
-.ic-dot.sig { fill: var(--phosphor); }
+.ic-dot.sig {
+  fill: var(--phosphor);
+}
 /* An insignificant point is drawn hollow rather than in a different hue —
    significance is a confidence statement, not a second data series. */
 .ic-dot.weak {
@@ -535,15 +575,21 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   stroke-width: 1.5;
 }
 
-.qbar.up { fill: var(--long); }
-.qbar.down { fill: var(--short); }
+.qbar.up {
+  fill: var(--long);
+}
+.qbar.down {
+  fill: var(--short);
+}
 .costline {
   stroke: var(--warn);
   stroke-width: 1.5;
   stroke-dasharray: 3 2;
 }
 
-.qwrap { padding-top: var(--s2); }
+.qwrap {
+  padding-top: var(--s2);
+}
 .qaxis {
   display: flex;
   margin-top: var(--s1);
@@ -561,27 +607,47 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   font-size: var(--t-tiny);
   color: var(--ink-dim);
 }
-.key { display: flex; align-items: center; gap: var(--s2); }
+.key {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
 .sw {
   width: 12px;
   height: 3px;
   display: inline-block;
 }
-.sw.up { background: var(--long); }
-.sw.cost { background: var(--warn); }
+.sw.up {
+  background: var(--long);
+}
+.sw.cost {
+  background: var(--warn);
+}
 
 /* ---- tables -------------------------------------------------------------- */
-.ic-table { margin-top: var(--s4); }
-.faded td { color: var(--ink-faint); }
+.ic-table {
+  margin-top: var(--s4);
+}
+.faded td {
+  color: var(--ink-faint);
+}
 .spread-row td {
   border-top: var(--hair) solid var(--rule-hi);
   font-weight: 600;
 }
-.dim { color: var(--ink-faint); }
-.pos { color: var(--long); }
-.neg { color: var(--short); }
+.dim {
+  color: var(--ink-faint);
+}
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
 
-.empty { padding-top: var(--s2); }
+.empty {
+  padding-top: var(--s2);
+}
 .cmds {
   list-style: none;
   display: flex;
@@ -603,11 +669,22 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
   color: var(--ink-soft);
 }
 
-.note { font-size: var(--t-small); color: var(--ink-dim); }
-.err { font-size: var(--t-small); color: var(--short); }
+.note {
+  font-size: var(--t-small);
+  color: var(--ink-dim);
+}
+.err {
+  font-size: var(--t-small);
+  color: var(--short);
+}
 
 @media (max-width: 960px) {
-  .counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .legend { flex-direction: column; gap: var(--s2); }
+  .counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .legend {
+    flex-direction: column;
+    gap: var(--s2);
+  }
 }
 </style>

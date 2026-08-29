@@ -14,7 +14,10 @@ export function normalizeWatchSymbol(value: unknown): string {
     .slice(0, 10)
 }
 
-export function uniqueWatchlist(values: unknown, fallback: readonly string[] = DEFAULT_WATCHLIST): string[] {
+export function uniqueWatchlist(
+  values: unknown,
+  fallback: readonly string[] = DEFAULT_WATCHLIST,
+): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const value of Array.isArray(values) ? values : []) {
@@ -28,7 +31,9 @@ export function uniqueWatchlist(values: unknown, fallback: readonly string[] = D
   return [...fallback].map(normalizeWatchSymbol).filter(Boolean).slice(0, WATCHLIST_MAX)
 }
 
-export function loadWatchlist(storage: Pick<Storage, 'getItem'> | null | undefined = defaultStorage()): string[] {
+export function loadWatchlist(
+  storage: Pick<Storage, 'getItem'> | null | undefined = defaultStorage(),
+): string[] {
   if (!storage) return [...DEFAULT_WATCHLIST]
   try {
     const raw = storage.getItem(WATCHLIST_STORAGE_KEY)
@@ -63,7 +68,9 @@ export function toggleWatchlistSymbol(
   const symbol = normalizeWatchSymbol(rawSymbol)
   if (!symbol) return { symbols: current, added: false }
   const exists = current.includes(symbol)
-  const next = exists ? current.filter((item) => item !== symbol) : uniqueWatchlist([...current, symbol], [])
+  const next = exists
+    ? current.filter((item) => item !== symbol)
+    : uniqueWatchlist([...current, symbol], [])
   return { symbols: saveWatchlist(next, storage), added: !exists }
 }
 

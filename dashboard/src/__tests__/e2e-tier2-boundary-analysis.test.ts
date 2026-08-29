@@ -38,11 +38,7 @@ import {
   signedPrintTokenClass,
 } from '@/flowDisplay'
 
-import {
-  buildFlowPulse,
-  compareFlowReviewRows,
-  flowPrintKey,
-} from '@/flowPulse'
+import { buildFlowPulse, compareFlowReviewRows, flowPrintKey } from '@/flowPulse'
 
 import {
   collectWatchlistAlerts,
@@ -53,9 +49,7 @@ import {
   unreadAlertCount,
 } from '@/flowAlerts'
 
-import {
-  shouldStartRefresh,
-} from '@/composables/useResource'
+import { shouldStartRefresh } from '@/composables/useResource'
 
 import type {
   GexStrikeRow,
@@ -71,7 +65,10 @@ import type {
 function standardNormalCdf(x: number): number {
   const t = 1 / (1 + 0.2316419 * Math.abs(x))
   const d = 0.3989422804014327 * Math.exp((-x * x) / 2)
-  const p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+  const p =
+    d *
+    t *
+    (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
   return x >= 0 ? 1 - p : p
 }
 
@@ -114,7 +111,8 @@ function solveBsBoundary(
   } else {
     theo = K * disc * standardNormalCdf(-d2) - S * standardNormalCdf(-d1)
     delta = nd1 - 1
-    theta = (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
+    theta =
+      (-(S * sigma * nPrimeD1) / (2 * Math.sqrt(T)) + r * K * disc * standardNormalCdf(-d2)) / 365
     rho = (-K * T * disc * standardNormalCdf(-d2)) / 100
   }
 
@@ -131,18 +129,18 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
   describe('DTE Boundaries & Expiry Intrinsic Limits', () => {
     it('evaluates 0 DTE option pricing where price converges to intrinsic value', () => {
       // 0 DTE: Spot 105, Strike 100 Call -> Intrinsic = 5.0
-      const itmCall = solveBsBoundary('call', 105, 100, 0.0001, 0.20, 0.05)
+      const itmCall = solveBsBoundary('call', 105, 100, 0.0001, 0.2, 0.05)
       expect(itmCall.theo).toBeCloseTo(5.0, 1)
       expect(itmCall.delta).toBeCloseTo(1.0, 1)
 
       // 0 DTE: Spot 95, Strike 100 Call -> Intrinsic = 0.0
-      const otmCall = solveBsBoundary('call', 95, 100, 0.0001, 0.20, 0.05)
+      const otmCall = solveBsBoundary('call', 95, 100, 0.0001, 0.2, 0.05)
       expect(otmCall.theo).toBeCloseTo(0.0, 1)
       expect(otmCall.delta).toBeCloseTo(0.0, 1)
     })
 
     it('handles fractional intraday DTE (0.01 days / ~14 minutes) without NaN', () => {
-      const greeks = solveBsBoundary('call', 100, 100, 0.01, 0.30, 0.05)
+      const greeks = solveBsBoundary('call', 100, 100, 0.01, 0.3, 0.05)
       expect(Number.isFinite(greeks.theo)).toBe(true)
       expect(Number.isFinite(greeks.delta)).toBe(true)
       expect(Number.isFinite(greeks.gamma)).toBe(true)
@@ -154,19 +152,20 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
       const shortTerm = solveBsBoundary('call', 100, 100, 30, 0.25, 0.05)
 
       expect(leap.vega).toBeGreaterThan(shortTerm.vega * 3) // Vega scales with sqrt(T)
-      expect(leap.rho).toBeGreaterThan(shortTerm.rho * 10)  // Rho scales with T
+      expect(leap.rho).toBeGreaterThan(shortTerm.rho * 10) // Rho scales with T
       expect(leap.theo).toBeGreaterThan(shortTerm.theo)
     })
 
     it('evaluates 1000 DTE ultra-long option boundary safely', () => {
-      const ultraLeap = solveBsBoundary('put', 100, 100, 1000, 0.30, 0.05)
+      const ultraLeap = solveBsBoundary('put', 100, 100, 1000, 0.3, 0.05)
       expect(Number.isFinite(ultraLeap.theo)).toBe(true)
       expect(ultraLeap.delta).toBeLessThan(0)
       expect(ultraLeap.delta).toBeGreaterThan(-1)
     })
 
     it('guards against negative DTE input by clamping to minimum positive period', () => {
-      const safeCalc = (dte: number) => solveBsBoundary('call', 100, 100, Math.max(0.0001, dte), 0.20)
+      const safeCalc = (dte: number) =>
+        solveBsBoundary('call', 100, 100, Math.max(0.0001, dte), 0.2)
       expect(safeCalc(-5).theo).toBeGreaterThan(0)
     })
   })
@@ -205,7 +204,8 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     })
 
     it('guards against zero or negative volatility inputs by clamping to epsilon', () => {
-      const safeVolCalc = (v: number) => solveBsBoundary('call', 100, 100, 30, Math.max(0.0001, v), 0.05)
+      const safeVolCalc = (v: number) =>
+        solveBsBoundary('call', 100, 100, 30, Math.max(0.0001, v), 0.05)
       expect(safeVolCalc(0).theo).toBeGreaterThanOrEqual(0)
       expect(safeVolCalc(-0.5).theo).toBeGreaterThanOrEqual(0)
     })
@@ -236,7 +236,7 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     })
 
     it('evaluates Penny Stock regime (Spot = $0.05, Strike = $0.05)', () => {
-      const penny = solveBsBoundary('call', 0.05, 0.05, 30, 0.50, 0.05)
+      const penny = solveBsBoundary('call', 0.05, 0.05, 30, 0.5, 0.05)
       expect(Number.isFinite(penny.theo)).toBe(true)
       expect(penny.theo).toBeLessThan(0.05)
       expect(penny.gamma).toBeGreaterThan(10) // Gamma is inversely proportional to spot S
@@ -274,16 +274,16 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     })
 
     it('evaluates negative interest rates (-5% / -0.05) in NIRP environment', () => {
-      const callNirp = solveBsBoundary('call', 100, 100, 90, 0.20, -0.05)
-      const putNirp = solveBsBoundary('put', 100, 100, 90, 0.20, -0.05)
+      const callNirp = solveBsBoundary('call', 100, 100, 90, 0.2, -0.05)
+      const putNirp = solveBsBoundary('put', 100, 100, 90, 0.2, -0.05)
 
       // Under negative rates, Put is more expensive than Call
       expect(putNirp.theo).toBeGreaterThan(callNirp.theo)
     })
 
     it('evaluates high inflation 20% interest rate regime (+0.20)', () => {
-      const callHighR = solveBsBoundary('call', 100, 100, 90, 0.20, 0.20)
-      const putHighR = solveBsBoundary('put', 100, 100, 90, 0.20, 0.20)
+      const callHighR = solveBsBoundary('call', 100, 100, 90, 0.2, 0.2)
+      const putHighR = solveBsBoundary('put', 100, 100, 90, 0.2, 0.2)
 
       // Under high rates, Call is much more expensive due to cost-of-carry
       expect(callHighR.theo).toBeGreaterThan(putHighR.theo * 1.5)
@@ -348,7 +348,7 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
 
     it('tests exact threshold boundary at $500,000 whale tier', () => {
       expect(isQualified(499_999.99, 500_000)).toBe(false)
-      expect(isQualified(500_000.00, 500_000)).toBe(true)
+      expect(isQualified(500_000.0, 500_000)).toBe(true)
       expect(isQualified(500_000.01, 500_000)).toBe(true)
     })
 
@@ -379,7 +379,16 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     it('handles empty watchlist in collectWatchlistAlerts without errors', () => {
       const alerts = collectWatchlistAlerts({
         watchlist: [],
-        prints: [{ symbol: 'AAPL', is_unusual: true, trade_class: 'sweep', premium: 100_000, timestamp: '10:00', right: 'call' }] as unknown as MarketFlowPrint[],
+        prints: [
+          {
+            symbol: 'AAPL',
+            is_unusual: true,
+            trade_class: 'sweep',
+            premium: 100_000,
+            timestamp: '10:00',
+            right: 'call',
+          },
+        ] as unknown as MarketFlowPrint[],
       })
       expect(alerts).toEqual([])
     })
@@ -531,11 +540,11 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     it('identifies exactly 2 breakeven points for Iron Condor / Long Strangle profile', () => {
       const strangleSeries: PnlPoint[] = [
         { spot: 80, pnl: 1000 },
-        { spot: 90, pnl: 0 },    // Lower BE @ 90
+        { spot: 90, pnl: 0 }, // Lower BE @ 90
         { spot: 95, pnl: -500 },
         { spot: 100, pnl: -500 },
         { spot: 105, pnl: -500 },
-        { spot: 110, pnl: 0 },   // Upper BE @ 110
+        { spot: 110, pnl: 0 }, // Upper BE @ 110
         { spot: 120, pnl: 1000 },
       ]
 
@@ -581,7 +590,8 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
         gex_measurable: false,
       } as unknown as OptionsBoardRow
 
-      const displayScore = unmeasuredRow.squeeze_score == null ? '—' : unmeasuredRow.squeeze_score.toFixed(1)
+      const displayScore =
+        unmeasuredRow.squeeze_score == null ? '—' : unmeasuredRow.squeeze_score.toFixed(1)
       expect(displayScore).toBe('—')
       expect(unmeasuredRow.gex_measurable).toBe(false)
     })
@@ -621,8 +631,12 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     it('persists and truncates seen alert keys to maximum 400 entries in storage', () => {
       const mockStorage = {
         store: new Map<string, string>(),
-        getItem(k: string) { return this.store.get(k) ?? null },
-        setItem(k: string, v: string) { this.store.set(k, v) },
+        getItem(k: string) {
+          return this.store.get(k) ?? null
+        },
+        setItem(k: string, v: string) {
+          this.store.set(k, v)
+        },
       }
 
       const keys = Array.from({ length: 500 }, (_, i) => `key-${i}`)
@@ -641,8 +655,12 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     it('handles unread alert count bounds and negative input protection', () => {
       const mockStorage = {
         store: new Map<string, string>(),
-        getItem(k: string) { return this.store.get(k) ?? null },
-        setItem(k: string, v: string) { this.store.set(k, v) },
+        getItem(k: string) {
+          return this.store.get(k) ?? null
+        },
+        setItem(k: string, v: string) {
+          this.store.set(k, v)
+        },
       }
 
       expect(saveUnreadAlertCount(15, mockStorage)).toBe(15)
@@ -665,7 +683,9 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
 
     it('protects against storage failure in corrupted JSON environment without unhandled exception', () => {
       const corruptedStorage = {
-        getItem() { return 'INVALID_JSON{{{' },
+        getItem() {
+          return 'INVALID_JSON{{{'
+        },
       }
 
       const keys = loadSeenAlertKeys(corruptedStorage)
@@ -738,12 +758,12 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
         right: i % 2 === 0 ? 'call' : 'put',
         strike: 100 + i * 5,
         quantity: i % 2 === 0 ? 1 : -1,
-        premium: 2.50,
+        premium: 2.5,
       }))
 
       const alloc = bookAllocation(tenLegs)
       expect(alloc.longNotional).toBe(1250) // 5 long legs * 2.5 * 100
-      expect(alloc.shortCredit).toBe(1250)  // 5 short legs * 2.5 * 100
+      expect(alloc.shortCredit).toBe(1250) // 5 short legs * 2.5 * 100
       expect(alloc.net).toBe(0)
     })
 
@@ -754,8 +774,18 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     })
 
     it('evaluates flow review ranking tie-breaker when review scores are identical', () => {
-      const rowA = { symbol: 'AAPL', premium: 100_000, contract_count: 1000, live: true } as unknown as UnusualFlowRow
-      const rowB = { symbol: 'MSFT', premium: 100_000, contract_count: 1000, live: true } as unknown as UnusualFlowRow
+      const rowA = {
+        symbol: 'AAPL',
+        premium: 100_000,
+        contract_count: 1000,
+        live: true,
+      } as unknown as UnusualFlowRow
+      const rowB = {
+        symbol: 'MSFT',
+        premium: 100_000,
+        contract_count: 1000,
+        live: true,
+      } as unknown as UnusualFlowRow
 
       const maxPrem = 100_000
       const comparison = compareFlowReviewRows(rowA, rowB, maxPrem)
@@ -795,4 +825,3 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
     })
   })
 })
-

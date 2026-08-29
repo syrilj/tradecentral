@@ -32,7 +32,7 @@ describe('Macro tab (cross-asset regime board)', () => {
     const primaryMatch = appSrc.match(/const primaryNav = \[\s*([\s\S]*?)\] as const/)
     expect(primaryMatch).toBeTruthy()
     const primaryNames = [...primaryMatch![1].matchAll(/name:\s*'([^']+)'/g)].map((m) => m[1])
-    expect(primaryNames).toEqual(['flow', 'options', 'desk', 'chain', 'market'])
+    expect(primaryNames).toEqual(['flow', 'options', 'regime', 'drift', 'desk', 'chain', 'market'])
     expect(appSrc).not.toMatch(/const primaryNav = \[[^\]]*name: 'macro'/s)
   })
 

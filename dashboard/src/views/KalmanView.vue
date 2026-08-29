@@ -57,7 +57,11 @@ const router = useRouter()
 
 /* ---- symbol selection (same inline search + LOAD pattern as Breaks/Market) */
 function cleanTicker(term: string): string {
-  return term.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  return term
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
 }
 
 const initialSymbol =
@@ -150,8 +154,8 @@ watch(symbolInput, (v) => {
 })
 
 /* Never paint the previous ticker's figure while a new load is in flight. */
-const payloadMatches = computed(
-  () => Boolean(detail.data.value && detail.data.value.symbol === symbol.value),
+const payloadMatches = computed(() =>
+  Boolean(detail.data.value && detail.data.value.symbol === symbol.value),
 )
 const d = computed(() => (payloadMatches.value ? detail.data.value : null))
 const available = computed(() => d.value?.available === true)
@@ -190,7 +194,11 @@ const xTicks = computed(() => {
   return out
 })
 
-function yAxis(values: number[], height: number, symmetric = false): {
+function yAxis(
+  values: number[],
+  height: number,
+  symmetric = false,
+): {
   scale: (v: number) => number
   ticks: number[]
 } {
@@ -475,7 +483,9 @@ const truncated = computed(() => {
             label="Position now"
             :value="(nowBlock?.position ?? 'flat').toUpperCase()"
             :tone="positionTone"
-            :sub="nowBlock?.forced_exit ? 'still on at last bar' : `as of ${nowBlock?.date ?? DASH}`"
+            :sub="
+              nowBlock?.forced_exit ? 'still on at last bar' : `as of ${nowBlock?.date ?? DASH}`
+            "
           />
           <Readout
             label="Slope / noise"
@@ -627,7 +637,12 @@ const truncated = computed(() => {
             </g>
           </svg>
 
-          <svg class="axis-pane" :viewBox="`0 0 ${W} 22`" preserveAspectRatio="none" aria-hidden="true">
+          <svg
+            class="axis-pane"
+            :viewBox="`0 0 ${W} 22`"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
             <text
               v-for="t in xTicks"
               :key="t.label + t.x"
@@ -651,8 +666,7 @@ const truncated = computed(() => {
       class="w-full"
     >
       <p v-if="truncated" class="state label">
-        Showing the {{ num(d.trades.length, 0) }} most recent of
-        {{ num(d.n_trades, 0) }}.
+        Showing the {{ num(d.trades.length, 0) }} most recent of {{ num(d.n_trades, 0) }}.
       </p>
       <div class="table-container">
         <table class="mtable">

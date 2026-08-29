@@ -132,10 +132,9 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
     it('parks remaining desk routes in Tools overflow', () => {
       const expectedDesk = [
         { name: 'plays', idx: 'D1', title: 'Plays' },
-        { name: 'drift', idx: 'D2', title: 'Drift' },
-        { name: 'absorption', idx: 'D3', title: 'Absorption' },
+        { name: 'absorption', idx: 'D2', title: 'Absorption' },
         { name: 'livestack', idx: 'LS', title: 'Live Stack' },
-        { name: 'suggest', idx: 'D5', title: 'Setups' },
+        { name: 'suggest', idx: 'D4', title: 'Setups' },
       ]
 
       for (const item of expectedDesk) {
@@ -181,7 +180,7 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
       }
     })
 
-    it('ensures total sidebar items equals 24 unique routes', () => {
+    it('ensures total sidebar items equals 25 unique routes', () => {
       const primaryCount = (
         appContent.match(/primaryNav\s*=\s*\[([\s\S]*?)\]\s*as const/)?.[1].match(/name:/g) || []
       ).length
@@ -195,11 +194,15 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
         appContent.match(/researchTools\s*=\s*\[([\s\S]*?)\]\s*as const/)?.[1].match(/name:/g) || []
       ).length
 
-      expect(primaryCount).toBe(5)
-      expect(deskCount).toBe(5)
+      // Regime and Drift were promoted from the Tools overflow into primaryNav.
+      // Each must live in exactly
+      // one group: overflowActiveItem matches on route name, so a duplicate
+      // would light the primary nav and mark Tools active at the same time.
+      expect(primaryCount).toBe(7)
+      expect(deskCount).toBe(4)
       expect(marketCount).toBe(6)
       expect(researchCount).toBe(8)
-      expect(primaryCount + deskCount + marketCount + researchCount).toBe(24)
+      expect(primaryCount + deskCount + marketCount + researchCount).toBe(25)
     })
   })
 

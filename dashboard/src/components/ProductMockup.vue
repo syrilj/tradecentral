@@ -40,9 +40,30 @@ const strikes = [
 ] as const
 
 const queue = [
-  { idx: '01', badge: 'sweep', badgeLabel: 'SWEEP', note: 'Largest premium print in the window', a: '74%', b: '42%' },
-  { idx: '02', badge: 'golden-sweep', badgeLabel: 'GOLDEN', note: 'Repeat aggression across strikes', a: '58%', b: '66%' },
-  { idx: '03', badge: 'block', badgeLabel: 'BLOCK', note: 'Nearest dated institutional size', a: '63%', b: '31%' },
+  {
+    idx: '01',
+    badge: 'sweep',
+    badgeLabel: 'SWEEP',
+    note: 'Largest premium print in the window',
+    a: '74%',
+    b: '42%',
+  },
+  {
+    idx: '02',
+    badge: 'golden-sweep',
+    badgeLabel: 'GOLDEN',
+    note: 'Repeat aggression across strikes',
+    a: '58%',
+    b: '66%',
+  },
+  {
+    idx: '03',
+    badge: 'block',
+    badgeLabel: 'BLOCK',
+    note: 'Nearest dated institutional size',
+    a: '63%',
+    b: '31%',
+  },
 ] as const
 </script>
 
@@ -69,7 +90,10 @@ const queue = [
 
         <header class="strip" aria-hidden="true">
           <span v-for="g in gauges" :key="g.sym" class="gauge">
-            <span class="g-head"><b>{{ g.sym }}</b><small>{{ g.label }}</small></span>
+            <span class="g-head"
+              ><b>{{ g.sym }}</b
+              ><small>{{ g.label }}</small></span
+            >
             <svg viewBox="0 0 48 20" preserveAspectRatio="none"><path :d="g.d" /></svg>
           </span>
         </header>
@@ -128,7 +152,9 @@ const queue = [
       </div>
     </div>
 
-    <figcaption><span class="cap-dot" aria-hidden="true" />Illustrative anatomy · live prints after sign-in</figcaption>
+    <figcaption>
+      <span class="cap-dot" aria-hidden="true" />Illustrative anatomy · live prints after sign-in
+    </figcaption>
   </figure>
 </template>
 
@@ -168,11 +194,23 @@ const queue = [
   background: var(--phosphor);
   animation: pulse-lamp 2.4s var(--ease-in-out) infinite;
 }
-.chip-tr { top: -13px; right: 26px; }
-.chip-bl { bottom: 46px; left: -16px; animation-delay: 1.6s; }
+.chip-tr {
+  top: -13px;
+  right: 26px;
+}
+.chip-bl {
+  bottom: 46px;
+  left: -16px;
+  animation-delay: 1.6s;
+}
 @keyframes chip-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-5px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
 }
 
 /* ---- window frame --------------------------------------------------------- */
@@ -181,7 +219,9 @@ const queue = [
   border: var(--hair) solid var(--rule-hi);
   border-radius: var(--r-lg);
   background: var(--void);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.55),
+    0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
 .chrome {
@@ -193,7 +233,10 @@ const queue = [
   border-bottom: var(--hair) solid var(--rule);
   background: var(--void-lift);
 }
-.dots { display: inline-flex; gap: 5px; }
+.dots {
+  display: inline-flex;
+  gap: 5px;
+}
 .dots i {
   width: 7px;
   height: 7px;
@@ -295,7 +338,9 @@ const queue = [
   padding: 8px 10px 7px;
   border-right: var(--hair) solid var(--rule);
 }
-.gauge:last-child { border-right: 0; }
+.gauge:last-child {
+  border-right: 0;
+}
 .g-head {
   display: flex;
   align-items: baseline;
@@ -493,8 +538,12 @@ const queue = [
   height: 8px;
   border-radius: 2px;
 }
-.legend .lg-call { background: var(--call); }
-.legend .lg-put { background: var(--put); }
+.legend .lg-call {
+  background: var(--call);
+}
+.legend .lg-put {
+  background: var(--put);
+}
 .legend .lg-net {
   border-radius: 50%;
   background: transparent;
@@ -519,7 +568,9 @@ const queue = [
   border-bottom: var(--hair) solid var(--rule-faint);
   transition: background var(--dur-fast) var(--ease-out);
 }
-.q-row:hover { background: var(--panel-hi); }
+.q-row:hover {
+  background: var(--panel-hi);
+}
 .q-idx {
   flex: 0 0 auto;
   color: var(--ink-ghost);
@@ -550,7 +601,9 @@ const queue = [
   border-radius: 1px;
   background: var(--rule-hi);
 }
-.q-bars i:first-child { background: color-mix(in srgb, var(--phosphor) 45%, var(--rule)); }
+.q-bars i:first-child {
+  background: color-mix(in srgb, var(--phosphor) 45%, var(--rule));
+}
 .q-chevron {
   flex: 0 0 auto;
   color: var(--ink-ghost);
@@ -583,7 +636,9 @@ figcaption {
 }
 
 @media (max-width: 1080px) {
-  .float-chip { display: none; }
+  .float-chip {
+    display: none;
+  }
 }
 @media (max-width: 860px) {
   .shell {
@@ -592,14 +647,22 @@ figcaption {
     grid-template-areas: 'strip' 'stage';
     min-height: 0;
   }
-  .rail { display: none; }
-  .stage { grid-template-columns: 1fr; }
-  .gauge:nth-child(n + 4) { display: none; }
+  .rail {
+    display: none;
+  }
+  .stage {
+    grid-template-columns: 1fr;
+  }
+  .gauge:nth-child(n + 4) {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .float-chip,
   .float-chip i,
-  .lamp { animation: none; }
+  .lamp {
+    animation: none;
+  }
 }
 </style>

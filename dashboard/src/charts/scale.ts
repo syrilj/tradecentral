@@ -100,7 +100,10 @@ export function niceDomain(min: number, max: number, pad = 0.05): [number, numbe
   const paddedHi = hi + span * pad
   const step = niceStep((paddedHi - paddedLo) / 5)
 
-  return [roundTo(Math.floor(paddedLo / step) * step, 6), roundTo(Math.ceil(paddedHi / step) * step, 6)]
+  return [
+    roundTo(Math.floor(paddedLo / step) * step, 6),
+    roundTo(Math.ceil(paddedHi / step) * step, 6),
+  ]
 }
 
 /**
@@ -160,7 +163,20 @@ export function dateTicks(dates: string[], count = 6): { i: number; label: strin
 
 /* ------------------------------------------------------------------ internal */
 
-const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTH_ABBR = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+]
 
 /** Formats a date string at the given granularity, using UTC fields so a
  * plain "YYYY-MM-DD" string never shifts a day under a negative UTC offset. */

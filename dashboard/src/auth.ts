@@ -18,7 +18,9 @@ export interface OperatorIdentity {
 export type OperatorAuthMode = 'clerk' | 'local'
 
 export function operatorAuthMode(): OperatorAuthMode {
-  const raw = String(import.meta.env.VITE_EDGE_AUTH_MODE ?? '').trim().toLowerCase()
+  const raw = String(import.meta.env.VITE_EDGE_AUTH_MODE ?? '')
+    .trim()
+    .toLowerCase()
   return raw === 'local' ? 'local' : 'clerk'
 }
 

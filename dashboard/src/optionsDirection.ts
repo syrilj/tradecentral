@@ -78,10 +78,9 @@ function money(value: number | null | undefined): string | null {
   return `$${parsed.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
-function activityRead(imbalance: number | null): Pick<
-  OptionsDirectionRead,
-  'activity' | 'activityLabel' | 'callPct' | 'putPct'
-> {
+function activityRead(
+  imbalance: number | null,
+): Pick<OptionsDirectionRead, 'activity' | 'activityLabel' | 'callPct' | 'putPct'> {
   if (imbalance == null) {
     return {
       activity: 'unavailable',
@@ -133,7 +132,8 @@ export function buildOptionsDirection(
       putPct: null,
       drivers: [],
       confirmationTitle: 'LOAD A MEASURED CHAIN',
-      confirmation: 'Direction stays blank until signed flow or fresh momentum reaches the squeeze model.',
+      confirmation:
+        'Direction stays blank until signed flow or fresh momentum reaches the squeeze model.',
       stale,
       tapeStale: stale,
       activityShifted: false,
@@ -147,7 +147,8 @@ export function buildOptionsDirection(
   const rawSignedConfidence = finite(summary.signed_flow_confidence)
   // Some older payloads serialize an absent signed sample as 0/0. Treat that
   // as missing evidence, not a measured neutral observation.
-  const hasSignedSample = rawSignedFlow != null && (rawSignedConfidence == null || rawSignedConfidence > 0)
+  const hasSignedSample =
+    rawSignedFlow != null && (rawSignedConfidence == null || rawSignedConfidence > 0)
   const signedFlow = hasSignedSample ? rawSignedFlow : null
   const signedConfidence = hasSignedSample ? rawSignedConfidence : null
   const momentumFresh = theory?.momentum_fresh !== false
@@ -159,11 +160,15 @@ export function buildOptionsDirection(
   const tapeStale = stale
   // Tape lag is not the same as a dead directional input. Fresh momentum can
   // still lean the underlier after the options feed goes quiet after hours.
-  const inputsStale = (signedFlow == null) && !momentumFresh
+  const inputsStale = signedFlow == null && !momentumFresh
 
   let state: OptionsDirectionState = 'neutral'
   if (conflict || primary === 'two_way') state = 'mixed'
-  else if ((primary === 'bullish' || primary === 'bearish') && score != null && Math.abs(score) >= 20) {
+  else if (
+    (primary === 'bullish' || primary === 'bearish') &&
+    score != null &&
+    Math.abs(score) >= 20
+  ) {
     state = primary
   } else if (flowSide != null) {
     state = flowSide
@@ -183,14 +188,16 @@ export function buildOptionsDirection(
   let subhead = 'No qualified directional edge yet — keep this name on watch.'
   if (state === 'bullish') {
     headline = 'BULLISH'
-    subhead = basis === 'PRICE MOMENTUM'
-      ? 'Fresh price momentum is leading. Tape has no buy/sell side — this is not a signed squeeze.'
-      : 'Upside squeeze conditions are leading for the underlier.'
+    subhead =
+      basis === 'PRICE MOMENTUM'
+        ? 'Fresh price momentum is leading. Tape has no buy/sell side — this is not a signed squeeze.'
+        : 'Upside squeeze conditions are leading for the underlier.'
   } else if (state === 'bearish') {
     headline = 'BEARISH'
-    subhead = basis === 'PRICE MOMENTUM'
-      ? 'Fresh price momentum is leading. Tape has no buy/sell side — this is not a signed squeeze.'
-      : 'Downside squeeze conditions are leading for the underlier.'
+    subhead =
+      basis === 'PRICE MOMENTUM'
+        ? 'Fresh price momentum is leading. Tape has no buy/sell side — this is not a signed squeeze.'
+        : 'Downside squeeze conditions are leading for the underlier.'
   } else if (state === 'mixed') {
     headline = 'MIXED / WAIT'
     subhead = conflict
@@ -198,7 +205,8 @@ export function buildOptionsDirection(
       : 'Two-way squeeze pressure is elevated without a clean side.'
   }
 
-  let confidence: OptionsDirectionConfidence = state === 'neutral' || state === 'mixed' ? 'wait' : 'low'
+  let confidence: OptionsDirectionConfidence =
+    state === 'neutral' || state === 'mixed' ? 'wait' : 'low'
   if (state === 'bullish' || state === 'bearish') {
     let points = 0
     const magnitude = Math.abs(score ?? 0)
@@ -226,7 +234,8 @@ export function buildOptionsDirection(
   const callWall = money(summary.call_wall)
   const putWall = money(summary.put_wall)
   let confirmationTitle = 'WAIT FOR DIRECTIONAL EVIDENCE'
-  let confirmation = 'Calls versus puts describe contract activity, not intent. Wait for signed side or fresh momentum before assigning direction.'
+  let confirmation =
+    'Calls versus puts describe contract activity, not intent. Wait for signed side or fresh momentum before assigning direction.'
 
   if (state === 'bullish' || state === 'bearish') {
     const upside = state === 'bullish'
@@ -237,21 +246,34 @@ export function buildOptionsDirection(
         'The tape has no buy/sell side, so this is not a signed-flow squeeze.',
         'Call/put mix is contract identity, not intent.',
         upside
-          ? (callWall ? `The ${callWall} call wall is the first upside structure test.` : null)
-          : (putWall ? `The ${putWall} put wall is the first downside structure test.` : null),
-      ].filter(Boolean).join(' ')
+          ? callWall
+            ? `The ${callWall} call wall is the first upside structure test.`
+            : null
+          : putWall
+            ? `The ${putWall} put wall is the first downside structure test.`
+            : null,
+      ]
+        .filter(Boolean)
+        .join(' ')
     } else {
       confirmation = [
         'Look for signed flow and momentum to remain aligned.',
         flip ? `Use the ${flip} gamma flip as the nearest regime checkpoint.` : null,
         upside
-          ? (callWall ? `The ${callWall} call wall is the first upside structure test.` : null)
-          : (putWall ? `The ${putWall} put wall is the first downside structure test.` : null),
-      ].filter(Boolean).join(' ')
+          ? callWall
+            ? `The ${callWall} call wall is the first upside structure test.`
+            : null
+          : putWall
+            ? `The ${putWall} put wall is the first downside structure test.`
+            : null,
+      ]
+        .filter(Boolean)
+        .join(' ')
     }
   } else if (state === 'mixed') {
     confirmationTitle = 'RESOLVE THE CONFLICT'
-    confirmation = 'Wait for signed flow and fresh momentum to agree. Until then, use the walls as scenario boundaries rather than a directional call.'
+    confirmation =
+      'Wait for signed flow and fresh momentum to agree. Until then, use the walls as scenario boundaries rather than a directional call.'
   }
 
   return {

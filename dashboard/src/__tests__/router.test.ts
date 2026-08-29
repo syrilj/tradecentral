@@ -23,7 +23,7 @@ describe('public entry and operator routing', () => {
   it('sanitizes redirect targets and returns signed-in operators to Flow', () => {
     expect(routerSource).toContain("value.startsWith('//')")
     expect(routerSource).toContain("value.startsWith('/auth')")
-    expect(routerSource).toContain("return fallback")
+    expect(routerSource).toContain('return fallback')
     expect(routerSource).toContain("fallback = '/flow'")
   })
 

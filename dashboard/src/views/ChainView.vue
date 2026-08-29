@@ -28,7 +28,10 @@ watch(
     if (typeof query.theme === 'string' && query.theme) {
       currentTheme.value = query.theme
     }
-    if (typeof query.mode === 'string' && (query.mode === 'dedicated' || query.mode === 'intertwined')) {
+    if (
+      typeof query.mode === 'string' &&
+      (query.mode === 'dedicated' || query.mode === 'intertwined')
+    ) {
       currentMode.value = query.mode
     }
     if (typeof query.symbol === 'string' && query.symbol) {
@@ -253,8 +256,8 @@ function focusQuickTicker(sym: string) {
             type="button"
             class="mode-toggle-btn"
             :class="{ active: currentMode === 'dedicated' }"
-            @click="setMode('dedicated')"
             title="Dedicated Company Multi-Tier Chain"
+            @click="setMode('dedicated')"
           >
             Dedicated Chain
           </button>
@@ -262,8 +265,8 @@ function focusQuickTicker(sym: string) {
             type="button"
             class="mode-toggle-btn"
             :class="{ active: currentMode === 'intertwined' }"
-            @click="setMode('intertwined')"
             title="Intertwined Macro Thematic Frontier"
+            @click="setMode('intertwined')"
           >
             Thematic Intertwine
           </button>
@@ -284,8 +287,8 @@ function focusQuickTicker(sym: string) {
         <button
           type="button"
           class="depth-btn"
-          @click="toggleDepth"
           title="Toggle Multi-Tier vs Direct Supplier Hops"
+          @click="toggleDepth"
         >
           Depth: Tier {{ currentDepth }}
         </button>
@@ -295,8 +298,8 @@ function focusQuickTicker(sym: string) {
           type="button"
           class="refresh-btn"
           :disabled="chainResource.loading.value"
-          @click="triggerRefresh"
           title="Live Ingest & Rescore Transcripts"
+          @click="triggerRefresh"
         >
           <span v-if="chainResource.loading.value">⟳ Ingesting...</span>
           <span v-else>⟳ Live Ingest</span>
@@ -313,8 +316,8 @@ function focusQuickTicker(sym: string) {
           :key="b.id"
           type="button"
           class="bridge-chip"
-          @click="selectBridgeTheme(b.id)"
           :title="`Intertwine into ${b.theme_name}`"
+          @click="selectBridgeTheme(b.id)"
         >
           <span class="bridge-name">⚡ {{ b.theme_name }}</span>
           <span v-if="b.role" class="bridge-role">({{ b.role }})</span>
@@ -359,7 +362,9 @@ function focusQuickTicker(sym: string) {
     <section class="section-canvas">
       <div class="section-header">
         <span class="section-badge">VALUE CHAIN TOPOLOGY</span>
-        <span class="section-hint">Click any supplier or customer node to trace connections and inspect citations</span>
+        <span class="section-hint"
+          >Click any supplier or customer node to trace connections and inspect citations</span
+        >
       </div>
       <ValueChainGraph
         :nodes="nodes"
@@ -373,7 +378,10 @@ function focusQuickTicker(sym: string) {
     <section class="section-matrix">
       <div class="section-header">
         <span class="section-badge">BENEFICIARY ELASTICITY & REVENUE PROPAGATION</span>
-        <span class="section-hint">Ranked by CapEx flow-through sensitivity, operating leverage, and options flow momentum</span>
+        <span class="section-hint"
+          >Ranked by CapEx flow-through sensitivity, operating leverage, and options flow
+          momentum</span
+        >
       </div>
       <BeneficiaryTable
         :nodes="nodes"
@@ -384,11 +392,7 @@ function focusQuickTicker(sym: string) {
     </section>
 
     <!-- Slide-Out Evidence & Citations Drawer -->
-    <EvidenceDrawer
-      :node="selectedNode"
-      :open="drawerOpen"
-      @close="drawerOpen = false"
-    />
+    <EvidenceDrawer :node="selectedNode" :open="drawerOpen" @close="drawerOpen = false" />
   </div>
 </template>
 

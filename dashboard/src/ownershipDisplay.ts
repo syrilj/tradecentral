@@ -130,14 +130,19 @@ export function formatHolderChange(row: HolderChangeFields | null | undefined): 
   return bits.length ? bits.join(' · ') : DASH
 }
 
-export function holderChangeTone(row: HolderChangeFields | null | undefined): 'pos' | 'neg' | 'flat' {
+export function holderChangeTone(
+  row: HolderChangeFields | null | undefined,
+): 'pos' | 'neg' | 'flat' {
   if (!row) return 'flat'
   if (row.change_pct != null && Number.isFinite(row.change_pct)) return tone(row.change_pct)
-  if (row.change_shares != null && Number.isFinite(row.change_shares)) return tone(row.change_shares)
+  if (row.change_shares != null && Number.isFinite(row.change_shares))
+    return tone(row.change_shares)
   return 'flat'
 }
 
-export function tableMaxPctOut(rows: Array<{ pct_out?: number | null }> | null | undefined): number {
+export function tableMaxPctOut(
+  rows: Array<{ pct_out?: number | null }> | null | undefined,
+): number {
   let max = 0
   for (const row of rows ?? []) {
     const pct = row.pct_out
@@ -152,7 +157,8 @@ export function holderPctBarWidth(
   tableMaxPct: number | null | undefined,
 ): number {
   if (pct == null || !Number.isFinite(pct) || pct <= 0) return 0
-  const scale = tableMaxPct != null && Number.isFinite(tableMaxPct) && tableMaxPct > 0 ? tableMaxPct : pct
+  const scale =
+    tableMaxPct != null && Number.isFinite(tableMaxPct) && tableMaxPct > 0 ? tableMaxPct : pct
   return Math.min(1, pct / scale)
 }
 

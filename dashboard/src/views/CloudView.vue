@@ -59,11 +59,24 @@ const extras = computed(() => {
   const g = gcp.data.value
   if (!g) return []
   const consumed = new Set([
-    'vertex_jobs', 'jobs', 'custom_jobs', 'training_jobs', 'vertex',
-    'storage', 'gcs', 'buckets', 'credits', 'billing', 'cost',
+    'vertex_jobs',
+    'jobs',
+    'custom_jobs',
+    'training_jobs',
+    'vertex',
+    'storage',
+    'gcs',
+    'buckets',
+    'credits',
+    'billing',
+    'cost',
   ])
   return Object.entries(g)
-    .filter(([k, v]) => !consumed.has(k) && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+    .filter(
+      ([k, v]) =>
+        !consumed.has(k) &&
+        (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'),
+    )
     .slice(0, 12)
 })
 </script>
@@ -88,7 +101,14 @@ const extras = computed(() => {
       </template>
     </Panel>
 
-    <Panel label="Job queue" index="—" :meta="`${jobs.length} job${jobs.length === 1 ? '' : 's'}`" :delay="60" flush class="w-full">
+    <Panel
+      label="Job queue"
+      index="—"
+      :meta="`${jobs.length} job${jobs.length === 1 ? '' : 's'}`"
+      :delay="60"
+      flush
+      class="w-full"
+    >
       <table v-if="jobs.length" class="grid">
         <thead>
           <tr>
@@ -103,7 +123,9 @@ const extras = computed(() => {
             <td class="fig name">{{ pick(j, 'display_name', 'displayName', 'name') ?? DASH }}</td>
             <td><VerdictChip :verdict="stateOf(j)" size="sm" /></td>
             <td class="fig dim">{{ pick(j, 'create_time', 'createTime', 'created') ?? DASH }}</td>
-            <td class="fig num dim">{{ age(String(pick(j, 'create_time', 'createTime', 'created') ?? '')) }}</td>
+            <td class="fig num dim">
+              {{ age(String(pick(j, 'create_time', 'createTime', 'created') ?? '')) }}
+            </td>
           </tr>
         </tbody>
       </table>
@@ -139,11 +161,21 @@ const extras = computed(() => {
   gap: var(--s4);
   align-items: start;
 }
-.w-full { grid-column: 1 / -1; }
+.w-full {
+  grid-column: 1 / -1;
+}
 
-.counts { display: flex; gap: var(--s7); flex-wrap: wrap; }
+.counts {
+  display: flex;
+  gap: var(--s7);
+  flex-wrap: wrap;
+}
 
-.grid { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
 .grid th {
   text-align: left;
   padding: var(--s2) var(--s4);
@@ -151,10 +183,22 @@ const extras = computed(() => {
   border-bottom: var(--hair) solid var(--rule);
   font-weight: 600;
 }
-.grid td { padding: 5px var(--s4); border-bottom: var(--hair) solid var(--rule-faint); color: var(--ink-soft); }
-.num { text-align: right; }
-.name { color: var(--ink); font-weight: 500; }
-.dim { color: var(--ink-faint); font-size: var(--t-tiny); }
+.grid td {
+  padding: 5px var(--s4);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  color: var(--ink-soft);
+}
+.num {
+  text-align: right;
+}
+.name {
+  color: var(--ink);
+  font-weight: 500;
+}
+.dim {
+  color: var(--ink-faint);
+  font-size: var(--t-tiny);
+}
 
 .raw {
   font-family: var(--font-data);
@@ -167,12 +211,35 @@ const extras = computed(() => {
   overflow: auto;
 }
 
-.kv { display: grid; grid-template-columns: 1fr auto; gap: 3px var(--s3); align-items: baseline; }
-.kv dt { color: var(--ink-faint); }
-.kv dd { font-size: var(--t-small); color: var(--ink-soft); text-align: right; }
+.kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px var(--s3);
+  align-items: baseline;
+}
+.kv dt {
+  color: var(--ink-faint);
+}
+.kv dd {
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+  text-align: right;
+}
 
-.note { color: var(--ink-dim); font-size: var(--t-small); line-height: 1.5; }
-.note.pad { padding: var(--s5) var(--s4); }
-.note code { font-family: var(--font-data); color: var(--phosphor-dim); }
-.err { color: var(--short); font-size: var(--t-small); }
+.note {
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  line-height: 1.5;
+}
+.note.pad {
+  padding: var(--s5) var(--s4);
+}
+.note code {
+  font-family: var(--font-data);
+  color: var(--phosphor-dim);
+}
+.err {
+  color: var(--short);
+  font-size: var(--t-small);
+}
 </style>

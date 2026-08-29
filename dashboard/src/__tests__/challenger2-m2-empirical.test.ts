@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { OptionsBoardRow, SqueezeSetup } from '@/api'
 import { calculateFeaturedSetup } from '@/squeezeCalc'
-import { computePressureScore, type ConvictionSortKey, type ConvictionSortDir } from '@/components/OptionsConvictionBoard.vue'
+import {
+  computePressureScore,
+  type ConvictionSortKey,
+  type ConvictionSortDir,
+} from '@/components/OptionsConvictionBoard.vue'
 
 // ============================================================================
 // Fixture Generators
@@ -51,7 +55,11 @@ function mockSetup(
   }
 }
 
-function mockRow(rank: number, symbol: string, overrides: Partial<OptionsBoardRow> = {}): OptionsBoardRow {
+function mockRow(
+  rank: number,
+  symbol: string,
+  overrides: Partial<OptionsBoardRow> = {},
+): OptionsBoardRow {
   return {
     symbol,
     rank,
@@ -222,17 +230,49 @@ describe('Milestone 2 Challenger 2: Empirical Challenge Suite', () => {
     })
 
     it('robustly handles non-finite numbers (NaN, Infinity, -Infinity) gracefully', () => {
-      const nanSqueeze = mockRow(1, 'A', { squeeze_score: NaN, net_gex_m: null, selection_score: null })
-      expect(computePressureScore(nanSqueeze)).toEqual({ score: 0, signed: 0, tone: 'neutral', label: '0.0' })
+      const nanSqueeze = mockRow(1, 'A', {
+        squeeze_score: NaN,
+        net_gex_m: null,
+        selection_score: null,
+      })
+      expect(computePressureScore(nanSqueeze)).toEqual({
+        score: 0,
+        signed: 0,
+        tone: 'neutral',
+        label: '0.0',
+      })
 
-      const infSqueeze = mockRow(1, 'A', { squeeze_score: Infinity, net_gex_m: null, selection_score: null })
-      expect(computePressureScore(infSqueeze)).toEqual({ score: 0, signed: 0, tone: 'neutral', label: '0.0' })
+      const infSqueeze = mockRow(1, 'A', {
+        squeeze_score: Infinity,
+        net_gex_m: null,
+        selection_score: null,
+      })
+      expect(computePressureScore(infSqueeze)).toEqual({
+        score: 0,
+        signed: 0,
+        tone: 'neutral',
+        label: '0.0',
+      })
 
       const nanGex = mockRow(1, 'A', { squeeze_score: null, net_gex_m: NaN, selection_score: null })
-      expect(computePressureScore(nanGex)).toEqual({ score: 0, signed: 0, tone: 'neutral', label: '0.0' })
+      expect(computePressureScore(nanGex)).toEqual({
+        score: 0,
+        signed: 0,
+        tone: 'neutral',
+        label: '0.0',
+      })
 
-      const nanScore = mockRow(1, 'A', { squeeze_score: null, net_gex_m: null, selection_score: NaN })
-      expect(computePressureScore(nanScore)).toEqual({ score: 0, signed: 0, tone: 'neutral', label: '0.0' })
+      const nanScore = mockRow(1, 'A', {
+        squeeze_score: null,
+        net_gex_m: null,
+        selection_score: NaN,
+      })
+      expect(computePressureScore(nanScore)).toEqual({
+        score: 0,
+        signed: 0,
+        tone: 'neutral',
+        label: '0.0',
+      })
     })
   })
 
@@ -350,7 +390,9 @@ describe('Milestone 2 Challenger 2: Empirical Challenge Suite', () => {
               foundNull = true
             } else if (foundNull) {
               // A non-null was found after a null -> sorting failed total partition!
-              throw new Error(`Non-null found after null in key ${key} dir ${dir}: rank ${row.rank}`)
+              throw new Error(
+                `Non-null found after null in key ${key} dir ${dir}: rank ${row.rank}`,
+              )
             }
           }
         }

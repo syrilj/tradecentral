@@ -289,8 +289,8 @@ const weightBars = computed(() => {
                 :key="row.symbol"
                 class="clickable"
                 @click="
-                  draft = row.symbol;
-                  applySymbol();
+                  draft = row.symbol
+                  applySymbol()
                 "
               >
                 <td class="fig">{{ row.attention_rank ?? DASH }}</td>

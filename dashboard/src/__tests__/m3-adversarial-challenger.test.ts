@@ -282,7 +282,9 @@ describe('Milestone 3 Empirical Challenger & Stress Harness', () => {
       expect(appContent).toContain(':user-email="operatorEmail"')
       // Local operator sessions (EDGE_AUTH_MODE=local) carry no Clerk user, so
       // the display name resolves per mode while keeping the Clerk fallbacks.
-      expect(appContent).toContain(":user-name=\"localMode ? 'Local operator' : (user?.fullName ?? user?.firstName ?? '')\"")
+      expect(appContent).toContain(
+        ":user-name=\"localMode ? 'Local operator' : (user?.fullName ?? user?.firstName ?? '')\"",
+      )
       expect(appContent).toContain(':user-avatar="user?.imageUrl ?? \'\'"')
       expect(appContent).toContain(':telemetry=')
       expect(appContent).toContain('@sign-out="void signOut()"')

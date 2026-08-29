@@ -201,7 +201,7 @@ describe('SqueezeScreener source: no fabricated figures', () => {
 
   it('hides the probability marker when nothing was scored', () => {
     expect(src).toContain('v-if="boardScore != null"')
-    expect(src).toContain(".prob-zones.unscored")
+    expect(src).toContain('.prob-zones.unscored')
   })
 
   it('ships the measured price ladder and its distance columns', () => {
@@ -219,7 +219,12 @@ describe('SqueezeScreener source: no fabricated figures', () => {
   })
 
   it('names every source in the audit line, reporting unknowns rather than omitting them', () => {
-    for (const clause of ['As of ', 'Chain feed: ', 'Open interest: ', 'contracts passed quality filters']) {
+    for (const clause of [
+      'As of ',
+      'Chain feed: ',
+      'Open interest: ',
+      'contracts passed quality filters',
+    ]) {
       expect(src).toContain(clause)
     }
     expect(src.match(/\|\| 'unknown'/g)?.length).toBeGreaterThanOrEqual(2)

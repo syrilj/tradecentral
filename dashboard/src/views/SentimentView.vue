@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  api,
-  type AnomaliesPayload,
-  type CotMarket,
-  type SentimentPayload,
-} from '@/api'
+import { api, type AnomaliesPayload, type CotMarket, type SentimentPayload } from '@/api'
 import { useResource } from '@/composables/useResource'
 import { num, signed, signedPct, compact, tone, shortDate, DASH } from '@/format'
 import { cotLeanFromBias, cotLeanFromSpecNetZ, cotLeanTone } from '@/cotLean'
@@ -75,7 +70,11 @@ function setTab(next: 'structure' | 'outliers'): void {
 }
 
 function applySymbol(): void {
-  const s = draft.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  const s = draft.value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
   draft.value = s
   symbol.value = s
   void router.replace({
@@ -132,14 +131,19 @@ const isRefreshing = computed(() => sentiment.loading.value || anomalies.loading
 
 async function refreshAll(): Promise<void> {
   sentimentForceNext.value = true
-  await Promise.all([
-    sentiment.refresh({ clear: false }),
-    anomalies.refresh({ clear: false }),
-  ])
+  await Promise.all([sentiment.refresh({ clear: false }), anomalies.refresh({ clear: false })])
 }
 
 /** Human labels + lean for vol complex keys (raw CSV names are unreadable on a desk). */
-const VOL_META: Record<string, { label: string; help: string; lean: (v: number | null) => string; toneOf: (v: number | null) => 'pos' | 'neg' | 'flat' }> = {
+const VOL_META: Record<
+  string,
+  {
+    label: string
+    help: string
+    lean: (v: number | null) => string
+    toneOf: (v: number | null) => 'pos' | 'neg' | 'flat'
+  }
+> = {
   VIX: {
     label: 'VIX',
     help: 'Fear gauge. Higher = more expected equity volatility (risk-off lean).',
@@ -193,9 +197,12 @@ const volRows = computed(() => {
       key: r.key,
       label: meta?.label ?? r.key.replaceAll('_', ' '),
       help: meta?.help ?? '',
-      value: isRet ? signedPct(Number(r.value) * 100, 2) : num(r.value, r.key === 'term_slope' ? 3 : 2),
+      value: isRet
+        ? signedPct(Number(r.value) * 100, 2)
+        : num(r.value, r.key === 'term_slope' ? 3 : 2),
       lean: meta?.lean(r.value == null ? null : Number(r.value)) ?? '',
-      tone: meta?.toneOf(r.value == null ? null : Number(r.value)) ?? (isRet ? tone(r.value) : 'flat'),
+      tone:
+        meta?.toneOf(r.value == null ? null : Number(r.value)) ?? (isRet ? tone(r.value) : 'flat'),
     }
   })
 })
@@ -252,10 +259,8 @@ const TICKER_HELP =
           {{ isRefreshing ? 'UPDATING...' : 'UPDATE ALL INFO' }}
         </button>
         <span v-if="d?.generated_at" class="asof-chip label">
-          as-of {{ shortDate(d.generated_at) }}
-          · vol {{ vol?.quality ?? '—' }}
-          · cot {{ d?.cot?.quality ?? '—' }}
-          · finra {{ String((d?.finra_short as any)?.quality ?? '—') }}
+          as-of {{ shortDate(d.generated_at) }} · vol {{ vol?.quality ?? '—' }} · cot
+          {{ d?.cot?.quality ?? '—' }} · finra {{ String((d?.finra_short as any)?.quality ?? '—') }}
         </span>
       </div>
 
@@ -278,7 +283,8 @@ const TICKER_HELP =
         <RouterLink
           class="btn insiders-link"
           :to="{ name: 'insiders', query: symbol ? { symbol } : {} }"
-        >INSIDERS</RouterLink>
+          >INSIDERS</RouterLink
+        >
       </form>
     </div>
 
@@ -293,7 +299,10 @@ const TICKER_HELP =
           <div class="kpi-card armed">
             <span class="label kpi-label">
               Desk composite
-              <HelpTip label="Composite" text="Descriptive mix of structure sources only — not a trade call or probability." />
+              <HelpTip
+                label="Composite"
+                text="Descriptive mix of structure sources only — not a trade call or probability."
+              />
             </span>
             <div class="kpi-val-row">
               <span class="kpi-val">{{ composite?.label ?? DASH }}</span>
@@ -314,7 +323,9 @@ const TICKER_HELP =
             </span>
             <div class="kpi-val-row">
               <span class="kpi-val">{{ vol?.composite_label ?? DASH }}</span>
-              <span class="kpi-badge" :class="qTone(vol?.quality)">{{ vol?.quality?.toUpperCase() ?? 'NO DATA' }}</span>
+              <span class="kpi-badge" :class="qTone(vol?.quality)">{{
+                vol?.quality?.toUpperCase() ?? 'NO DATA'
+              }}</span>
             </div>
             <span class="kpi-sub">
               Risk pctile {{ num(vol?.composite_risk_pctile, 2) }} · {{ shortDate(vol?.asof) }}
@@ -328,7 +339,9 @@ const TICKER_HELP =
             </span>
             <div class="kpi-val-row">
               <span class="kpi-val fig">{{ cotMarkets.length }} markets</span>
-              <span class="kpi-badge" :class="qTone(d?.cot?.quality)">{{ d?.cot?.quality?.toUpperCase() ?? 'NO DATA' }}</span>
+              <span class="kpi-badge" :class="qTone(d?.cot?.quality)">{{
+                d?.cot?.quality?.toUpperCase() ?? 'NO DATA'
+              }}</span>
             </div>
             <span class="kpi-sub">Weekly futures · {{ shortDate(d?.cot?.asof) }}</span>
           </div>
@@ -342,12 +355,16 @@ const TICKER_HELP =
               />
             </span>
             <div class="kpi-val-row">
-              <span class="kpi-val fig">{{ num((d?.finra_short as any)?.market_median_short_ratio, 3) }}</span>
+              <span class="kpi-val fig">{{
+                num((d?.finra_short as any)?.market_median_short_ratio, 3)
+              }}</span>
               <span class="kpi-badge" :class="qTone((d?.finra_short as any)?.quality)">
                 {{ String((d?.finra_short as any)?.quality ?? 'NO DATA').toUpperCase() }}
               </span>
             </div>
-            <span class="kpi-sub">Market median ratio · {{ shortDate((d?.finra_short as any)?.asof) }}</span>
+            <span class="kpi-sub"
+              >Market median ratio · {{ shortDate((d?.finra_short as any)?.asof) }}</span
+            >
           </div>
         </div>
 
@@ -376,7 +393,13 @@ const TICKER_HELP =
           <p v-else class="note pad">Vol complex unavailable.</p>
         </Panel>
 
-        <Panel label="CFTC commitment of traders" index="" :meta="shortDate(d?.cot?.asof) || ''" class="w-half" flush>
+        <Panel
+          label="CFTC commitment of traders"
+          index=""
+          :meta="shortDate(d?.cot?.asof) || ''"
+          class="w-half"
+          flush
+        >
           <template #action>
             <HelpTip label="How to use COT" :text="COT_HELP" />
           </template>
@@ -387,11 +410,15 @@ const TICKER_HELP =
                   <th class="label">Market</th>
                   <th class="label">
                     Bias
-                    <HelpTip text="LONG = futures specs crowded long (bullish lean for that book). SHORT = crowded short (bearish lean). Not an equity entry." />
+                    <HelpTip
+                      text="LONG = futures specs crowded long (bullish lean for that book). SHORT = crowded short (bearish lean). Not an equity entry."
+                    />
                   </th>
                   <th class="label num">
                     Spec net
-                    <HelpTip text="Non-commercial long minus short. Large positive = specs net long." />
+                    <HelpTip
+                      text="Non-commercial long minus short. Large positive = specs net long."
+                    />
                   </th>
                   <th class="label num">
                     Z 1y
@@ -409,17 +436,25 @@ const TICKER_HELP =
                     <span class="label dim s-file">{{ m.label }}</span>
                   </td>
                   <td>
-                    <span class="kpi-badge" :class="cotLeanTone(marketLean(m))">{{ marketLean(m) }}</span>
+                    <span class="kpi-badge" :class="cotLeanTone(marketLean(m))">{{
+                      marketLean(m)
+                    }}</span>
                   </td>
-                  <td class="fig num" :class="tone(m.noncomm_net)">{{ signed(m.noncomm_net, 0) }}</td>
-                  <td class="fig num" :class="tone(m.noncomm_net_z_1y)">{{ num(m.noncomm_net_z_1y, 2) }}</td>
+                  <td class="fig num" :class="tone(m.noncomm_net)">
+                    {{ signed(m.noncomm_net, 0) }}
+                  </td>
+                  <td class="fig num" :class="tone(m.noncomm_net_z_1y)">
+                    {{ num(m.noncomm_net_z_1y, 2) }}
+                  </td>
                   <td class="fig num">{{ num(m.noncomm_net_pctile_1y, 2) }}</td>
                   <td class="fig num">{{ compact(m.open_interest, 1) }}</td>
                   <td class="label dim">{{ shortDate(m.asof) }}</td>
                 </tr>
               </tbody>
             </table>
-            <p v-else class="note pad">No COT markets loaded. {{ (d?.cot?.errors || []).join('; ') }}</p>
+            <p v-else class="note pad">
+              No COT markets loaded. {{ (d?.cot?.errors || []).join('; ') }}
+            </p>
           </div>
         </Panel>
 
@@ -490,14 +525,10 @@ const TICKER_HELP =
           </div>
         </Panel>
 
-        <Panel
-          label="Insiders + filings"
-          index=""
-          :meta="symbol || 'open desk'"
-          class="w-full"
-        >
+        <Panel label="Insiders + filings" index="" :meta="symbol || 'open desk'" class="w-full">
           <p class="note pad">
-            Form 4 / 8-K / 13D/G live on the Insiders desk — Pulse keeps structure (vol, COT, FINRA).
+            Form 4 / 8-K / 13D/G live on the Insiders desk — Pulse keeps structure (vol, COT,
+            FINRA).
             <RouterLink :to="{ name: 'insiders', query: symbol ? { symbol } : {} }">
               Open Insiders{{ symbol ? ` · ${symbol}` : '' }} →
             </RouterLink>
@@ -517,7 +548,9 @@ const TICKER_HELP =
           <div class="kpi-card armed">
             <span class="label kpi-label">
               Unified outliers
-              <HelpTip text="Names that cleared hard thresholds only. Empty means nothing cleared — not a calm market." />
+              <HelpTip
+                text="Names that cleared hard thresholds only. Empty means nothing cleared — not a calm market."
+              />
             </span>
             <div class="kpi-val-row">
               <span class="kpi-val fig">{{ unified.length }}</span>
@@ -551,7 +584,13 @@ const TICKER_HELP =
           </div>
         </div>
 
-        <Panel label="Unified anomaly feed" index="" :meta="`${unified.length} events`" class="w-full" flush>
+        <Panel
+          label="Unified anomaly feed"
+          index=""
+          :meta="`${unified.length} events`"
+          class="w-full"
+          flush
+        >
           <div class="table-container">
             <table v-if="unified.length" class="grid">
               <thead>
@@ -567,21 +606,25 @@ const TICKER_HELP =
               <tbody>
                 <tr v-for="(r, i) in unified" :key="i" @click="openMarket(String(r.symbol))">
                   <td class="fig sym">{{ r.symbol }}</td>
-                  <td><span class="kind" :class="kindClass(String(r.kind))">{{ r.kind }}</span></td>
+                  <td>
+                    <span class="kind" :class="kindClass(String(r.kind))">{{ r.kind }}</span>
+                  </td>
                   <td class="fig num">{{ num(r.severity as number, 2) }}</td>
                   <td class="label dim feat">
                     <template v-if="r.kind === 'PRICE_VOLUME'">
-                      1d {{ signedPct(Number(r.ret_1d) * 100, 2) }}
-                      · 5d {{ signedPct(Number(r.ret_5d) * 100, 2) }}
-                      · vol× {{ num(r.volume_vs_20d_med as number, 2) }}
-                      <span v-if="Array.isArray(r.flags)"> · {{ (r.flags as string[]).join(', ') }}</span>
+                      1d {{ signedPct(Number(r.ret_1d) * 100, 2) }} · 5d
+                      {{ signedPct(Number(r.ret_5d) * 100, 2) }} · vol×
+                      {{ num(r.volume_vs_20d_med as number, 2) }}
+                      <span v-if="Array.isArray(r.flags)">
+                        · {{ (r.flags as string[]).join(', ') }}</span
+                      >
                     </template>
                     <template v-else-if="String(r.kind).includes('FINRA')">
                       ratio {{ num(r.value as number, 3) }} · z {{ num(r.z as number, 2) }}
                     </template>
                     <template v-else-if="String(r.kind).includes('SEC')">
-                      F4 {{ r.form4_90d }} · 8-K {{ r.eightk_90d }} · 13D/G {{ r.sc13_90d }}
-                      · latest {{ r.latest_form }}
+                      F4 {{ r.form4_90d }} · 8-K {{ r.eightk_90d }} · 13D/G {{ r.sc13_90d }} ·
+                      latest {{ r.latest_form }}
                     </template>
                     <template v-else>{{ r.note || 'n/a' }}</template>
                   </td>
@@ -591,12 +634,22 @@ const TICKER_HELP =
               </tbody>
             </table>
             <p v-else class="note pad">
-              {{ anomalies.loading.value ? 'Scanning…' : 'No outliers cleared thresholds (or sources missing).' }}
+              {{
+                anomalies.loading.value
+                  ? 'Scanning…'
+                  : 'No outliers cleared thresholds (or sources missing).'
+              }}
             </p>
           </div>
         </Panel>
 
-        <Panel label="Price & volume extremes" index="" :meta="a?.price_volume?.source || ''" class="w-half" flush>
+        <Panel
+          label="Price & volume extremes"
+          index=""
+          :meta="a?.price_volume?.source || ''"
+          class="w-half"
+          flush
+        >
           <p class="note pad">{{ a?.price_volume?.lag_note }}</p>
           <div class="table-container">
             <table v-if="pxRows.length" class="grid">
@@ -613,9 +666,15 @@ const TICKER_HELP =
               <tbody>
                 <tr v-for="r in pxRows" :key="r.symbol" @click="openMarket(r.symbol)">
                   <td class="fig sym">{{ r.symbol }}</td>
-                  <td class="fig num" :class="tone(r.ret_1d)">{{ signedPct(Number(r.ret_1d) * 100, 2) }}</td>
-                  <td class="fig num" :class="tone(r.ret_5d)">{{ signedPct(Number(r.ret_5d) * 100, 2) }}</td>
-                  <td class="fig num" :class="tone(r.ret_1d_z_60d)">{{ num(r.ret_1d_z_60d, 2) }}</td>
+                  <td class="fig num" :class="tone(r.ret_1d)">
+                    {{ signedPct(Number(r.ret_1d) * 100, 2) }}
+                  </td>
+                  <td class="fig num" :class="tone(r.ret_5d)">
+                    {{ signedPct(Number(r.ret_5d) * 100, 2) }}
+                  </td>
+                  <td class="fig num" :class="tone(r.ret_1d_z_60d)">
+                    {{ num(r.ret_1d_z_60d, 2) }}
+                  </td>
                   <td class="fig num">{{ num(r.volume_vs_20d_med, 2) }}</td>
                   <td class="label dim">{{ (r.flags || []).join(', ') }}</td>
                 </tr>
@@ -685,7 +744,9 @@ const TICKER_HELP =
                 </tr>
               </tbody>
             </table>
-            <p v-else class="note pad">No elevated filing activity in the scanned seed set (or SEC unreachable).</p>
+            <p v-else class="note pad">
+              No elevated filing activity in the scanned seed set (or SEC unreachable).
+            </p>
           </div>
         </Panel>
 
@@ -771,8 +832,12 @@ const TICKER_HELP =
   animation: spin var(--dur-spin) linear infinite;
 }
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 .tabs {
   display: flex;
@@ -795,7 +860,10 @@ const TICKER_HELP =
   font-weight: 600;
   transition: all var(--dur-fast) var(--ease-out);
 }
-.tab:hover { color: var(--ink); background: var(--panel-hi); }
+.tab:hover {
+  color: var(--ink);
+  background: var(--panel-hi);
+}
 .tab.on {
   color: var(--void);
   background: var(--phosphor);
@@ -828,7 +896,12 @@ const TICKER_HELP =
   min-width: 0;
   overflow: hidden;
 }
-.kpi-card.armed { border-color: var(--phosphor-dim); box-shadow: inset 3px 0 0 var(--phosphor), 0 1px 3px rgba(0, 0, 0, 0.35); }
+.kpi-card.armed {
+  border-color: var(--phosphor-dim);
+  box-shadow:
+    inset 3px 0 0 var(--phosphor),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+}
 .kpi-label {
   color: var(--ink-dim);
   font-family: var(--font-data);
@@ -839,7 +912,13 @@ const TICKER_HELP =
   gap: 6px;
   white-space: normal;
 }
-.kpi-val-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); min-width: 0; }
+.kpi-val-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-width: 0;
+}
 .kpi-val {
   font-family: var(--font-data);
   font-size: 1.15rem;
@@ -850,7 +929,9 @@ const TICKER_HELP =
   white-space: nowrap;
   min-width: 0;
 }
-.kpi-val.fig { font-variant-numeric: tabular-nums; }
+.kpi-val.fig {
+  font-variant-numeric: tabular-nums;
+}
 .kpi-sub {
   color: var(--ink-faint);
   font-size: var(--t-micro);
@@ -869,12 +950,30 @@ const TICKER_HELP =
   color: var(--ink-dim);
   flex: 0 0 auto;
 }
-.kpi-badge.pos { color: var(--long); border-color: var(--long); background: var(--long-wash); }
-.kpi-badge.neg { color: var(--short); border-color: var(--short); background: var(--short-wash); }
-.kpi-badge.flat { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.kpi-badge.pos {
+  color: var(--long);
+  border-color: var(--long);
+  background: var(--long-wash);
+}
+.kpi-badge.neg {
+  color: var(--short);
+  border-color: var(--short);
+  background: var(--short-wash);
+}
+.kpi-badge.flat {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
 
-.w-full { grid-column: 1 / -1; min-width: 0; }
-.w-half { grid-column: span 1; min-width: 0; }
+.w-full {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.w-half {
+  grid-column: span 1;
+  min-width: 0;
+}
 
 .vol-grid {
   display: grid;
@@ -904,8 +1003,12 @@ const TICKER_HELP =
   font-weight: 600;
   color: var(--ink);
 }
-.vol-val.pos { color: var(--long); }
-.vol-val.neg { color: var(--short); }
+.vol-val.pos {
+  color: var(--long);
+}
+.vol-val.neg {
+  color: var(--short);
+}
 .vol-lean {
   color: var(--ink-faint);
   font-size: var(--t-micro);
@@ -913,8 +1016,12 @@ const TICKER_HELP =
   white-space: normal;
   line-height: 1.3;
 }
-.neg-lab { color: var(--short) !important; }
-.pos-lab { color: var(--long) !important; }
+.neg-lab {
+  color: var(--short) !important;
+}
+.pos-lab {
+  color: var(--long) !important;
+}
 .lean-tag {
   display: block;
   margin-top: 2px;
@@ -955,9 +1062,19 @@ const TICKER_HELP =
   letter-spacing: 0.04em;
   cursor: pointer;
 }
-.btn:hover { background: var(--phosphor); color: var(--void); }
-.insiders-link { text-decoration: none; display: inline-flex; align-items: center; }
-.asof-chip { color: var(--ink-faint); letter-spacing: 0.04em; }
+.btn:hover {
+  background: var(--phosphor);
+  color: var(--void);
+}
+.insiders-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+.asof-chip {
+  color: var(--ink-faint);
+  letter-spacing: 0.04em;
+}
 
 .mkt-readouts {
   display: flex;
@@ -965,14 +1082,35 @@ const TICKER_HELP =
   gap: var(--s3);
   padding: var(--s3) var(--s4);
 }
-.note.pad, .pad { padding: var(--s3) var(--s4); }
-.note { color: var(--ink-dim); font-size: var(--t-small); line-height: 1.4; }
-.err { color: var(--short); padding: var(--s3) var(--s4); font-weight: 600; }
+.note.pad,
+.pad {
+  padding: var(--s3) var(--s4);
+}
+.note {
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  line-height: 1.4;
+}
+.err {
+  color: var(--short);
+  padding: var(--s3) var(--s4);
+  font-weight: 600;
+}
 :deep(.loading.w-full),
-.err.w-full { grid-column: 1 / -1; min-height: 180px; }
-.table-container { overflow: auto; max-height: 420px; }
-.grid { width: 100%; border-collapse: collapse; }
-.grid th, .grid td {
+.err.w-full {
+  grid-column: 1 / -1;
+  min-height: 180px;
+}
+.table-container {
+  overflow: auto;
+  max-height: 420px;
+}
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+.grid th,
+.grid td {
   text-align: left;
   padding: 8px 12px;
   border-bottom: var(--hair) solid var(--rule-faint);
@@ -984,19 +1122,55 @@ const TICKER_HELP =
   background: var(--panel-hi);
   z-index: 1;
 }
-.grid th .help { margin-left: 4px; }
-.grid tbody tr { cursor: pointer; }
-.grid tbody tr:hover { background: var(--panel-hi); }
-.num { text-align: right !important; font-variant-numeric: tabular-nums; }
-.fig { font-variant-numeric: tabular-nums; }
-.sym { color: var(--phosphor); font-weight: 700; }
-.pos { color: var(--long); }
-.neg { color: var(--short); }
-.flat { color: var(--ink-dim); }
-.dim { color: var(--ink-faint); }
-.strat { display: block; font-weight: 700; color: var(--ink); }
-.s-file { display: block; font-size: var(--t-micro); max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
-.feat { max-width: 42ch; overflow: hidden; text-overflow: ellipsis; }
+.grid th .help {
+  margin-left: 4px;
+}
+.grid tbody tr {
+  cursor: pointer;
+}
+.grid tbody tr:hover {
+  background: var(--panel-hi);
+}
+.num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+.fig {
+  font-variant-numeric: tabular-nums;
+}
+.sym {
+  color: var(--phosphor);
+  font-weight: 700;
+}
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
+.flat {
+  color: var(--ink-dim);
+}
+.dim {
+  color: var(--ink-faint);
+}
+.strat {
+  display: block;
+  font-weight: 700;
+  color: var(--ink);
+}
+.s-file {
+  display: block;
+  font-size: var(--t-micro);
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.feat {
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .split-tables {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1014,13 +1188,27 @@ const TICKER_HELP =
   font-weight: 700;
   letter-spacing: 0.03em;
 }
-.kind.pos { color: var(--long); }
-.kind.neg { color: var(--short); }
-.kind.flat { color: var(--warn); }
-a { color: var(--phosphor); }
+.kind.pos {
+  color: var(--long);
+}
+.kind.neg {
+  color: var(--short);
+}
+.kind.flat {
+  color: var(--warn);
+}
+a {
+  color: var(--phosphor);
+}
 
 @media (max-width: 1100px) {
-  .pulse-view, .summary-deck, .split-tables { grid-template-columns: 1fr; }
-  .w-half { grid-column: 1 / -1; }
+  .pulse-view,
+  .summary-deck,
+  .split-tables {
+    grid-template-columns: 1fr;
+  }
+  .w-half {
+    grid-column: 1 / -1;
+  }
 }
 </style>

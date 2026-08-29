@@ -38,10 +38,9 @@ const forceNext = ref(false)
 const filter = ref<RightFilter>('SETUPS')
 const selected = ref<string>('')
 
-const feed = useResource(
-  () => api.flowSuggestions(setupsFeedRequest(forceNext.value)),
-  { intervalMs: POLL_MS },
-)
+const feed = useResource(() => api.flowSuggestions(setupsFeedRequest(forceNext.value)), {
+  intervalMs: POLL_MS,
+})
 
 async function scanLive(): Promise<void> {
   forceNext.value = true
@@ -55,20 +54,36 @@ async function scanLive(): Promise<void> {
 const presented = computed(() => presentSetupRows(feed.data.value))
 const rows = computed<LiveOpportunityRow[]>(() => presented.value.rows as LiveOpportunityRow[])
 const available = computed(() => feed.data.value?.available !== false)
-const emptyReason = computed(() => feed.data.value?.reason || feed.data.value?.suggestion?.reason || 'No Flow or board rows yet.')
+const emptyReason = computed(
+  () =>
+    feed.data.value?.reason || feed.data.value?.suggestion?.reason || 'No Flow or board rows yet.',
+)
 
 const coverage = computed(() => presented.value.coverage)
 const qlibPublished = computed(() => feed.data.value?.sources?.qlib?.published === true)
 const marketSession = computed(() => sharedMarketClock?.data.value?.market_session ?? null)
-const planningMode = computed(() => Boolean(marketSession.value && marketSession.value !== 'regular'))
-const setupCount = computed(() => (coverage.value?.suggested_call ?? 0) + (coverage.value?.suggested_put ?? 0))
-const needsDataCount = computed(() => (coverage.value?.suggested_watch ?? 0) + (coverage.value?.suggested_blocked ?? 0))
-const readyCount = computed(() => rows.value.filter((row) => {
-  const plan = row.suggestion?.contract_plan
-  return Boolean(plan?.sizing_eligible && plan?.stable && plan?.action === 'BUY_TO_OPEN')
-}).length)
-const paperActionCount = computed(() => rows.value.filter((row) => row.suggestion?.paper_actionable).length)
-const paperCount = computed(() => Math.max(0, setupCount.value - readyCount.value - paperActionCount.value))
+const planningMode = computed(() =>
+  Boolean(marketSession.value && marketSession.value !== 'regular'),
+)
+const setupCount = computed(
+  () => (coverage.value?.suggested_call ?? 0) + (coverage.value?.suggested_put ?? 0),
+)
+const needsDataCount = computed(
+  () => (coverage.value?.suggested_watch ?? 0) + (coverage.value?.suggested_blocked ?? 0),
+)
+const readyCount = computed(
+  () =>
+    rows.value.filter((row) => {
+      const plan = row.suggestion?.contract_plan
+      return Boolean(plan?.sizing_eligible && plan?.stable && plan?.action === 'BUY_TO_OPEN')
+    }).length,
+)
+const paperActionCount = computed(
+  () => rows.value.filter((row) => row.suggestion?.paper_actionable).length,
+)
+const paperCount = computed(() =>
+  Math.max(0, setupCount.value - readyCount.value - paperActionCount.value),
+)
 
 function hasDirectionalPlan(row: LiveOpportunityRow): boolean {
   return ['CALL', 'PUT'].includes(String(row.suggestion?.right || '').toUpperCase())
@@ -81,7 +96,9 @@ const filtered = computed(() => {
     return rows.value.filter(hasDirectionalPlan)
   }
   if (want === 'NEEDS DATA') {
-    return rows.value.filter((row) => ['WATCH', 'BLOCKED'].includes(String(row.suggestion?.right || '').toUpperCase()))
+    return rows.value.filter((row) =>
+      ['WATCH', 'BLOCKED'].includes(String(row.suggestion?.right || '').toUpperCase()),
+    )
   }
   return rows.value.filter((row) => String(row.suggestion?.right || '').toUpperCase() === want)
 })
@@ -89,7 +106,9 @@ const filtered = computed(() => {
 watch(
   [rows, filtered, () => route.query.symbol],
   () => {
-    const fromQuery = String(route.query.symbol || '').trim().toUpperCase()
+    const fromQuery = String(route.query.symbol || '')
+      .trim()
+      .toUpperCase()
     if (fromQuery && rows.value.some((row) => row.symbol === fromQuery)) {
       selected.value = fromQuery
       return
@@ -114,7 +133,9 @@ function suggestionOf(row: LiveOpportunityRow): FlowSuggestion | null {
 
 function freshnessCopy(row: LiveOpportunityRow): string {
   if (row.freshness?.pass) return 'LIVE'
-  return planningMode.value ? 'CLOSED SNAPSHOT' : freshnessLabel(row.freshness?.status, row.freshness?.pass)
+  return planningMode.value
+    ? 'CLOSED SNAPSHOT'
+    : freshnessLabel(row.freshness?.status, row.freshness?.pass)
 }
 
 function actionCopy(row: LiveOpportunityRow): string {
@@ -146,7 +167,10 @@ function supportsHeadline(row: FlowSuggestion | null | undefined): string {
   return formatSupportLevels(row?.supports)
 }
 
-function invalidationHeadline(row: FlowSuggestion | null | undefined): { value: string, sub: string } {
+function invalidationHeadline(row: FlowSuggestion | null | undefined): {
+  value: string
+  sub: string
+} {
   const mark = setupHeadlineInvalidation({
     invalidation: row?.invalidation,
     invalidationSource: row?.invalidation_source,
@@ -169,14 +193,18 @@ function completenessCopy(row: LiveOpportunityRow | null | undefined): string {
   const suggestion = row?.suggestion
   if (!suggestion) return 'not supplied'
   if (suggestion.risk_levels_complete && row?.confidence?.is_high && row.live_ready) return 'READY'
-  if (suggestion.risk_levels_complete && row?.confidence?.is_high) return 'LEVELS COMPLETE · NOT LIVE READY'
+  if (suggestion.risk_levels_complete && row?.confidence?.is_high)
+    return 'LEVELS COMPLETE · NOT LIVE READY'
   if (suggestion.risk_levels_complete) return 'LEVELS COMPLETE · CONFIDENCE NOT HIGH'
   return 'LEVELS INCOMPLETE'
 }
 
 const meta = computed(() => {
   const cov = coverage.value
-  if (!cov) return feed.data.value?.asof_utc ? `asof ${shortDate(feed.data.value.asof_utc)}` : 'Awaiting Flow + board'
+  if (!cov)
+    return feed.data.value?.asof_utc
+      ? `asof ${shortDate(feed.data.value.asof_utc)}`
+      : 'Awaiting Flow + board'
   return `${cov.union_symbols} names · ${cov.suggested_call ?? 0} call · ${cov.suggested_put ?? 0} put`
 })
 </script>
@@ -188,10 +216,10 @@ const meta = computed(() => {
         <span class="label eyebrow">Flow-derived research setups</span>
         <h1>Setups</h1>
         <p>
-          Selecting a name shows the strike, supports, invalidation, and take profit zones
-          from measured resistance/support, options GEX, positions, and technical analysis.
-          Incomplete or uncalibrated rows stay unmeasured and are never a ready recommendation.
-          Research template. No order ticket.
+          Selecting a name shows the strike, supports, invalidation, and take profit zones from
+          measured resistance/support, options GEX, positions, and technical analysis. Incomplete or
+          uncalibrated rows stay unmeasured and are never a ready recommendation. Research template.
+          No order ticket.
         </p>
       </div>
       <div class="scope-stack">
@@ -227,7 +255,7 @@ const meta = computed(() => {
         />
       </template>
 
-      <div class="readout-grid" v-if="feed.data.value">
+      <div v-if="feed.data.value" class="readout-grid">
         <Readout
           label="Call"
           :value="unmeasured(coverage?.suggested_call ?? 0)"
@@ -256,7 +284,10 @@ const meta = computed(() => {
 
       <div v-if="planningMode" class="planning-strip">
         <span class="label">Planning mode</span>
-        <p>Market is outside regular hours. Directional plans remain usable; freshness and entry authorization stay off until a current regular-session chain clears every gate.</p>
+        <p>
+          Market is outside regular hours. Directional plans remain usable; freshness and entry
+          authorization stay off until a current regular-session chain clears every gate.
+        </p>
       </div>
 
       <div class="toolbar">
@@ -268,12 +299,19 @@ const meta = computed(() => {
             class="tab-btn label"
             :class="{ active: filter === mode }"
             @click="filter = mode"
-          >{{ filterCopy(mode) }}</button>
+          >
+            {{ filterCopy(mode) }}
+          </button>
         </div>
-        <span class="label asof" v-if="feed.data.value?.asof_utc">AS OF {{ shortDate(feed.data.value.asof_utc) }}</span>
+        <span v-if="feed.data.value?.asof_utc" class="label asof"
+          >AS OF {{ shortDate(feed.data.value.asof_utc) }}</span
+        >
       </div>
 
-      <LoadingState v-if="feed.loading.value && !feed.data.value" label="Recombining cached Flow, board, and qlib…" />
+      <LoadingState
+        v-if="feed.loading.value && !feed.data.value"
+        label="Recombining cached Flow, board, and qlib…"
+      />
       <p v-else-if="feed.error.value" class="state err label">{{ feed.error.value }}</p>
       <p v-else-if="!available" class="state label">{{ emptyReason }}</p>
 
@@ -297,7 +335,10 @@ const meta = computed(() => {
               <tr
                 v-for="row in filtered"
                 :key="row.symbol"
-                :class="{ active: row.symbol === selected, stale: !row.freshness?.pass && !hasDirectionalPlan(row) }"
+                :class="{
+                  active: row.symbol === selected,
+                  stale: !row.freshness?.pass && !hasDirectionalPlan(row),
+                }"
                 @click="selectRow(row.symbol)"
               >
                 <td>
@@ -305,12 +346,27 @@ const meta = computed(() => {
                   <span class="basis label">{{ row.signal_basis }}</span>
                 </td>
                 <td>
-                  <span class="right-chip label" :class="suggestedRightTokenClass(suggestionOf(row)?.right)">
+                  <span
+                    class="right-chip label"
+                    :class="suggestedRightTokenClass(suggestionOf(row)?.right)"
+                  >
                     {{ suggestedRightLabel(suggestionOf(row)?.right) }}
                   </span>
                 </td>
-                <td class="fig num">{{ suggestionOf(row)?.strike == null && suggestionOf(row)?.contract_plan?.strike == null ? DASH : num(suggestionOf(row)?.strike ?? suggestionOf(row)?.contract_plan?.strike, 2) }}</td>
-                <td class="fig num">{{ suggestionOf(row)?.spot == null ? DASH : num(suggestionOf(row)?.spot, 2) }}</td>
+                <td class="fig num">
+                  {{
+                    suggestionOf(row)?.strike == null &&
+                    suggestionOf(row)?.contract_plan?.strike == null
+                      ? DASH
+                      : num(
+                          suggestionOf(row)?.strike ?? suggestionOf(row)?.contract_plan?.strike,
+                          2,
+                        )
+                  }}
+                </td>
+                <td class="fig num">
+                  {{ suggestionOf(row)?.spot == null ? DASH : num(suggestionOf(row)?.spot, 2) }}
+                </td>
                 <td class="fig sell">{{ takeProfitHeadline(suggestionOf(row)) }}</td>
                 <td class="fig">{{ qlibAlignmentLabel(suggestionOf(row)?.qlib.alignment) }}</td>
                 <td>
@@ -319,42 +375,62 @@ const meta = computed(() => {
                   </span>
                 </td>
                 <td>
-                  <span class="action-chip label" :class="{ paper: suggestionOf(row)?.paper_actionable, ready: row.live_ready }">
+                  <span
+                    class="action-chip label"
+                    :class="{ paper: suggestionOf(row)?.paper_actionable, ready: row.live_ready }"
+                  >
                     {{ actionCopy(row) }}
                   </span>
                 </td>
-                <td class="label stability" :class="{
-                  stable: suggestionOf(row)?.direction_stable,
-                  churned: suggestionOf(row)?.direction_churned,
-                }">{{ suggestionStabilityCopy(suggestionOf(row)) }}</td>
+                <td
+                  class="label stability"
+                  :class="{
+                    stable: suggestionOf(row)?.direction_stable,
+                    churned: suggestionOf(row)?.direction_churned,
+                  }"
+                >
+                  {{ suggestionStabilityCopy(suggestionOf(row)) }}
+                </td>
               </tr>
             </tbody>
           </table>
           <p v-else class="state label">No rows match {{ filter }}.</p>
         </div>
 
-        <aside class="detail" v-if="active && suggestion">
+        <aside v-if="active && suggestion" class="detail">
           <div class="detail-head">
             <span class="fig sym-lg">{{ active.symbol }}</span>
             <span class="detail-chips">
-              <span class="mode-chip label" :class="suggestion.status">{{ unmeasured(suggestion.status) }}</span>
+              <span class="mode-chip label" :class="suggestion.status">{{
+                unmeasured(suggestion.status)
+              }}</span>
               <span class="right-chip lg label" :class="suggestedRightTokenClass(suggestion.right)">
                 {{ suggestedRightLabel(suggestion.right) }}
               </span>
             </span>
           </div>
-          <p class="reason" v-if="suggestion.reason">{{ suggestion.reason }}</p>
-          <p class="reason mute" v-else>Suggested from {{ active.playbook?.direction_source || 'price/model context' }}.</p>
+          <p v-if="suggestion.reason" class="reason">{{ suggestion.reason }}</p>
+          <p v-else class="reason mute">
+            Suggested from {{ active.playbook?.direction_source || 'price/model context' }}.
+          </p>
           <p v-if="suggestion.bias_right && !suggestion.bias_confirmed" class="bias-watch label">
-            UNSIGNED {{ suggestion.bias_right.toUpperCase() }} BIAS · PAPER CANDIDATE · SIZING LOCKED
+            UNSIGNED {{ suggestion.bias_right.toUpperCase() }} BIAS · PAPER CANDIDATE · SIZING
+            LOCKED
           </p>
           <div v-if="suggestion.paper_actionable" class="paper-action-banner">
             <span class="label">PAPER ACTION · UNSIZED</span>
             <strong>{{ suggestion.paper_action?.replaceAll('_', ' ') }} {{ active.symbol }}</strong>
-            <small>Stable direction, exact contract, GEX risk levels, liquidity, and a two-sided reference quote passed. This does not authorize a live order.</small>
+            <small
+              >Stable direction, exact contract, GEX risk levels, liquidity, and a two-sided
+              reference quote passed. This does not authorize a live order.</small
+            >
           </div>
-          <p class="stability-banner label" :class="{ stable: suggestion.direction_stable, churned: suggestion.direction_churned }">
-            {{ suggestionStabilityCopy(suggestion) }} · REVIEW SCORE {{ suggestion.review_score ?? 0 }}/100
+          <p
+            class="stability-banner label"
+            :class="{ stable: suggestion.direction_stable, churned: suggestion.direction_churned }"
+          >
+            {{ suggestionStabilityCopy(suggestion) }} · REVIEW SCORE
+            {{ suggestion.review_score ?? 0 }}/100
           </p>
 
           <div
@@ -368,7 +444,11 @@ const meta = computed(() => {
             <span class="label">{{ completenessCopy(active) }}</span>
             <strong class="fig">{{ active.confidence?.band || 'UNCALIBRATED' }}</strong>
             <small>
-              {{ suggestion.risk_levels_complete ? 'Strike, supports, invalidation, and take profit are measured.' : `Missing: ${suggestion.risk_missing_fields?.length ? suggestion.risk_missing_fields.join(', ') : 'not supplied'}.` }}
+              {{
+                suggestion.risk_levels_complete
+                  ? 'Strike, supports, invalidation, and take profit are measured.'
+                  : `Missing: ${suggestion.risk_missing_fields?.length ? suggestion.risk_missing_fields.join(', ') : 'not supplied'}.`
+              }}
             </small>
             <small v-if="suggestion.missing_sources?.length">
               Sources unmeasured: {{ missingSourcesCopy(suggestion.missing_sources) }}
@@ -379,7 +459,13 @@ const meta = computed(() => {
             <Readout
               label="Strike"
               :value="strikeHeadline(suggestion)"
-              :sub="suggestion.strike_source ? levelSourceLabel(suggestion.strike_source) : (suggestion.contract_plan?.strike == null ? 'not supplied' : 'positions')"
+              :sub="
+                suggestion.strike_source
+                  ? levelSourceLabel(suggestion.strike_source)
+                  : suggestion.contract_plan?.strike == null
+                    ? 'not supplied'
+                    : 'positions'
+              "
               size="lg"
               wrap
             />
@@ -400,7 +486,9 @@ const meta = computed(() => {
             <Readout
               label="Take profit zones"
               :value="takeProfitHeadline(suggestion)"
-              :sub="suggestion.take_profit_zones?.length ? 'Labeled zones, not a blend' : 'not supplied'"
+              :sub="
+                suggestion.take_profit_zones?.length ? 'Labeled zones, not a blend' : 'not supplied'
+              "
               :tone="rightTone(suggestion.right)"
               size="lg"
               wrap
@@ -410,56 +498,165 @@ const meta = computed(() => {
           <dl class="facts">
             <div>
               <dt class="label">Call wall</dt>
-              <dd class="fig">{{ active.barriers?.call_wall == null ? DASH : num(active.barriers.call_wall, 2) }}</dd>
+              <dd class="fig">
+                {{ active.barriers?.call_wall == null ? DASH : num(active.barriers.call_wall, 2) }}
+              </dd>
             </div>
             <div>
               <dt class="label">Put wall</dt>
-              <dd class="fig">{{ active.barriers?.put_wall == null ? DASH : num(active.barriers.put_wall, 2) }}</dd>
+              <dd class="fig">
+                {{ active.barriers?.put_wall == null ? DASH : num(active.barriers.put_wall, 2) }}
+              </dd>
             </div>
             <div>
               <dt class="label">Qlib score</dt>
-              <dd class="fig">{{ suggestion.qlib.measured ? signed(suggestion.qlib.score, 3) : DASH }}</dd>
+              <dd class="fig">
+                {{ suggestion.qlib.measured ? signed(suggestion.qlib.score, 3) : DASH }}
+              </dd>
             </div>
             <div>
               <dt class="label">Qlib rank</dt>
-              <dd class="fig">{{ suggestion.qlib.rank == null ? DASH : `${suggestion.qlib.rank} / ${unmeasured(suggestion.qlib.n_symbols)}` }}</dd>
+              <dd class="fig">
+                {{
+                  suggestion.qlib.rank == null
+                    ? DASH
+                    : `${suggestion.qlib.rank} / ${unmeasured(suggestion.qlib.n_symbols)}`
+                }}
+              </dd>
             </div>
           </dl>
 
           <div v-if="suggestion.contract_plan" class="contract-reference">
-            <span class="label">Specific contract plan · {{ suggestion.contract_plan.quote_status.replaceAll('_', ' ') }}</span>
+            <span class="label"
+              >Specific contract plan ·
+              {{ suggestion.contract_plan.quote_status.replaceAll('_', ' ') }}</span
+            >
             <strong class="fig">
               {{ suggestion.contract_plan.action.replaceAll('_', ' ') }} · {{ active.symbol }} ·
               {{ suggestion.contract_plan.expiry || 'EXPIRY NOT SUPPLIED' }} ·
-              {{ suggestion.contract_plan.strike == null ? 'STRIKE NOT SUPPLIED' : `$${num(suggestion.contract_plan.strike, 0)} ${suggestion.contract_plan.right.toUpperCase()}` }}
+              {{
+                suggestion.contract_plan.strike == null
+                  ? 'STRIKE NOT SUPPLIED'
+                  : `$${num(suggestion.contract_plan.strike, 0)} ${suggestion.contract_plan.right.toUpperCase()}`
+              }}
             </strong>
             <div class="contract-numbers">
-              <span><i class="label">{{ suggestion.contract_plan.quote_reference_only ? 'Delayed bid' : 'Bid' }}</i>{{ suggestion.contract_plan.bid == null ? 'Not supplied' : `$${num(suggestion.contract_plan.bid, 2)}` }}</span>
-              <span><i class="label">{{ suggestion.contract_plan.quote_reference_only ? 'Delayed midpoint' : 'Sizing debit' }}</i>{{ suggestion.contract_plan.quote_reference_only && suggestion.contract_plan.midpoint != null ? `$${num(suggestion.contract_plan.midpoint, 2)}` : suggestion.contract_plan.sizing_debit == null ? 'Locked' : `$${num(suggestion.contract_plan.sizing_debit, 2)}` }}</span>
-              <span><i class="label">{{ suggestion.contract_plan.quote_reference_only ? 'Delayed ask' : 'Ask' }}</i>{{ suggestion.contract_plan.ask == null ? 'Not supplied' : `$${num(suggestion.contract_plan.ask, 2)}` }}</span>
-              <span><i class="label">Max loss / 1</i>{{ suggestion.contract_plan.reference_max_loss == null ? 'Debit required' : `$${num(suggestion.contract_plan.reference_max_loss, 0)}` }}</span>
+              <span
+                ><i class="label">{{
+                  suggestion.contract_plan.quote_reference_only ? 'Delayed bid' : 'Bid'
+                }}</i
+                >{{
+                  suggestion.contract_plan.bid == null
+                    ? 'Not supplied'
+                    : `$${num(suggestion.contract_plan.bid, 2)}`
+                }}</span
+              >
+              <span
+                ><i class="label">{{
+                  suggestion.contract_plan.quote_reference_only
+                    ? 'Delayed midpoint'
+                    : 'Sizing debit'
+                }}</i
+                >{{
+                  suggestion.contract_plan.quote_reference_only &&
+                  suggestion.contract_plan.midpoint != null
+                    ? `$${num(suggestion.contract_plan.midpoint, 2)}`
+                    : suggestion.contract_plan.sizing_debit == null
+                      ? 'Locked'
+                      : `$${num(suggestion.contract_plan.sizing_debit, 2)}`
+                }}</span
+              >
+              <span
+                ><i class="label">{{
+                  suggestion.contract_plan.quote_reference_only ? 'Delayed ask' : 'Ask'
+                }}</i
+                >{{
+                  suggestion.contract_plan.ask == null
+                    ? 'Not supplied'
+                    : `$${num(suggestion.contract_plan.ask, 2)}`
+                }}</span
+              >
+              <span
+                ><i class="label">Max loss / 1</i
+                >{{
+                  suggestion.contract_plan.reference_max_loss == null
+                    ? 'Debit required'
+                    : `$${num(suggestion.contract_plan.reference_max_loss, 0)}`
+                }}</span
+              >
             </div>
-            <small v-if="suggestion.contract_plan.quote_reference_only" class="missing">{{ suggestion.contract_plan.quote_source?.replaceAll('_', ' ') }} · paper reference only · live sizing locked.</small>
+            <small v-if="suggestion.contract_plan.quote_reference_only" class="missing"
+              >{{ suggestion.contract_plan.quote_source?.replaceAll('_', ' ') }} · paper reference
+              only · live sizing locked.</small
+            >
             <small>{{ suggestion.contract_plan.selection_method }}</small>
-            <small v-if="suggestion.contract_plan.missing_fields.length" class="missing">Provider did not supply: {{ suggestion.contract_plan.missing_fields.join(', ') }}.</small>
-            <small v-if="suggestion.contract_plan.rejection_reasons.length" class="rejected">Blocked: {{ suggestion.contract_plan.rejection_reasons.join(' · ') }}</small>
+            <small v-if="suggestion.contract_plan.missing_fields.length" class="missing"
+              >Provider did not supply:
+              {{ suggestion.contract_plan.missing_fields.join(', ') }}.</small
+            >
+            <small v-if="suggestion.contract_plan.rejection_reasons.length" class="rejected"
+              >Blocked: {{ suggestion.contract_plan.rejection_reasons.join(' · ') }}</small
+            >
             <div v-if="suggestion.contract_plan.play" class="play-card">
-              <span class="label">Play card · {{ suggestion.contract_plan.play.method.replaceAll('_', ' ') }} · not authorized</span>
+              <span class="label"
+                >Play card · {{ suggestion.contract_plan.play.method.replaceAll('_', ' ') }} · not
+                authorized</span
+              >
               <div class="contract-numbers">
-                <span><i class="label">Breakeven</i>${{ num(suggestion.contract_plan.play.breakeven, 2) }}</span>
-                <span><i class="label">Max loss / 1</i>${{ num(suggestion.contract_plan.play.max_loss, 0) }}</span>
-                <span><i class="label">P/L at spot</i>{{ suggestion.contract_plan.play.pnl_at_spot == null ? DASH : `$${num(suggestion.contract_plan.play.pnl_at_spot, 0)}` }}</span>
-                <span><i class="label">P/L at GEX sell</i>{{ suggestion.contract_plan.play.pnl_at_sell == null ? DASH : `$${num(suggestion.contract_plan.play.pnl_at_sell, 0)}` }}</span>
-                <span><i class="label">P/L at invalidation</i>{{ suggestion.contract_plan.play.pnl_at_invalidation == null ? DASH : `$${num(suggestion.contract_plan.play.pnl_at_invalidation, 0)}` }}</span>
-                <span><i class="label">Delta</i>{{ suggestion.contract_plan.play.greeks?.delta == null ? DASH : num(suggestion.contract_plan.play.greeks.delta, 3) }}</span>
+                <span
+                  ><i class="label">Breakeven</i>${{
+                    num(suggestion.contract_plan.play.breakeven, 2)
+                  }}</span
+                >
+                <span
+                  ><i class="label">Max loss / 1</i>${{
+                    num(suggestion.contract_plan.play.max_loss, 0)
+                  }}</span
+                >
+                <span
+                  ><i class="label">P/L at spot</i
+                  >{{
+                    suggestion.contract_plan.play.pnl_at_spot == null
+                      ? DASH
+                      : `$${num(suggestion.contract_plan.play.pnl_at_spot, 0)}`
+                  }}</span
+                >
+                <span
+                  ><i class="label">P/L at GEX sell</i
+                  >{{
+                    suggestion.contract_plan.play.pnl_at_sell == null
+                      ? DASH
+                      : `$${num(suggestion.contract_plan.play.pnl_at_sell, 0)}`
+                  }}</span
+                >
+                <span
+                  ><i class="label">P/L at invalidation</i
+                  >{{
+                    suggestion.contract_plan.play.pnl_at_invalidation == null
+                      ? DASH
+                      : `$${num(suggestion.contract_plan.play.pnl_at_invalidation, 0)}`
+                  }}</span
+                >
+                <span
+                  ><i class="label">Delta</i
+                  >{{
+                    suggestion.contract_plan.play.greeks?.delta == null
+                      ? DASH
+                      : num(suggestion.contract_plan.play.greeks.delta, 3)
+                  }}</span
+                >
               </div>
-              <small v-if="suggestion.contract_plan.play.vol_source === 'unmeasured'">IV unmeasured — expiry P/L only, no Greeks.</small>
+              <small v-if="suggestion.contract_plan.play.vol_source === 'unmeasured'"
+                >IV unmeasured — expiry P/L only, no Greeks.</small
+              >
             </div>
           </div>
 
-          <p class="note" v-if="suggestion.warnings.length">{{ suggestion.warnings.join(' ') }}</p>
-          <details class="entry-checks" v-if="suggestion.blockers.length">
-            <summary class="label">Why live entry is not ready · {{ suggestion.blockers.length }} checks</summary>
+          <p v-if="suggestion.warnings.length" class="note">{{ suggestion.warnings.join(' ') }}</p>
+          <details v-if="suggestion.blockers.length" class="entry-checks">
+            <summary class="label">
+              Why live entry is not ready · {{ suggestion.blockers.length }} checks
+            </summary>
             <ul class="blockers">
               <li v-for="item in suggestion.blockers" :key="item">{{ item }}</li>
             </ul>
@@ -471,7 +668,11 @@ const meta = computed(() => {
             :risk="active.playbook.risk"
             :setup-status="suggestion.status"
             :reference-debit="suggestion.contract_plan?.sizing_debit"
-            :reference-label="suggestion.contract_plan?.sizing_eligible ? 'Stable two-sided chain midpoint' : 'Sizing locked until quote, liquidity, stability, and setup gates pass'"
+            :reference-label="
+              suggestion.contract_plan?.sizing_eligible
+                ? 'Stable two-sided chain midpoint'
+                : 'Sizing locked until quote, liquidity, stability, and setup gates pass'
+            "
           />
 
           <div class="links">
@@ -484,15 +685,30 @@ const meta = computed(() => {
                   spot: suggestion.spot,
                   strike: suggestion.contract_plan?.strike,
                   dte: suggestion.contract_plan?.dte,
-                  vol: suggestion.contract_plan?.implied_volatility ?? suggestion.contract_plan?.play?.vol,
-                  premium: suggestion.contract_plan?.reference_debit ?? suggestion.contract_plan?.play?.premium,
+                  vol:
+                    suggestion.contract_plan?.implied_volatility ??
+                    suggestion.contract_plan?.play?.vol,
+                  premium:
+                    suggestion.contract_plan?.reference_debit ??
+                    suggestion.contract_plan?.play?.premium,
                 }),
               }"
               class="qlink label"
-            >Open play in calculator</RouterLink>
-            <RouterLink :to="{ name: 'options', query: { symbol: active.symbol } }" class="qlink label">Options</RouterLink>
-            <RouterLink :to="{ name: 'flow', query: { symbol: active.symbol } }" class="qlink label">Flow</RouterLink>
-            <RouterLink :to="{ name: 'market', query: { symbol: active.symbol } }" class="qlink label">Market</RouterLink>
+              >Open play in calculator</RouterLink
+            >
+            <RouterLink
+              :to="{ name: 'options', query: { symbol: active.symbol } }"
+              class="qlink label"
+              >Options</RouterLink
+            >
+            <RouterLink :to="{ name: 'flow', query: { symbol: active.symbol } }" class="qlink label"
+              >Flow</RouterLink
+            >
+            <RouterLink
+              :to="{ name: 'market', query: { symbol: active.symbol } }"
+              class="qlink label"
+              >Market</RouterLink
+            >
           </div>
           <p class="fine label">Research template · No order ticket · No execution authorization</p>
         </aside>
@@ -537,7 +753,9 @@ const meta = computed(() => {
   line-height: 1.45;
 }
 
-.eyebrow { color: var(--ink-faint); }
+.eyebrow {
+  color: var(--ink-faint);
+}
 
 .scope-stack {
   display: flex;
@@ -589,8 +807,15 @@ const meta = computed(() => {
   border-bottom: var(--hair) solid var(--call);
   background: var(--call-wash);
 }
-.planning-strip .label { flex: 0 0 auto; color: currentColor; }
-.planning-strip p { margin: 0; color: var(--ink-dim); font-size: var(--t-tiny); }
+.planning-strip .label {
+  flex: 0 0 auto;
+  color: currentColor;
+}
+.planning-strip p {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-tiny);
+}
 
 .toolbar {
   display: flex;
@@ -601,7 +826,11 @@ const meta = computed(() => {
   border-bottom: var(--hair) solid var(--rule);
 }
 
-.filter-tabs { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
 
 .tab-btn {
   padding: 5px 11px;
@@ -632,9 +861,14 @@ const meta = computed(() => {
   cursor: pointer;
 }
 
-.scan-btn:disabled { opacity: 0.6; cursor: wait; }
+.scan-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
 
-.asof { color: var(--ink-faint); }
+.asof {
+  color: var(--ink-faint);
+}
 
 .workspace {
   display: grid;
@@ -642,7 +876,10 @@ const meta = computed(() => {
   min-height: 420px;
 }
 
-.table-wrap { overflow: auto; max-height: 640px; }
+.table-wrap {
+  overflow: auto;
+  max-height: 640px;
+}
 
 .grid {
   width: 100%;
@@ -658,18 +895,31 @@ const meta = computed(() => {
 }
 
 .grid th.num,
-.grid td.num { text-align: right; }
+.grid td.num {
+  text-align: right;
+}
 
-.grid tbody tr { cursor: pointer; }
-.grid tbody tr:hover { background: var(--panel-hi); }
+.grid tbody tr {
+  cursor: pointer;
+}
+.grid tbody tr:hover {
+  background: var(--panel-hi);
+}
 .grid tbody tr.active {
   background: var(--phosphor-wash);
   box-shadow: inset 2px 0 0 var(--phosphor);
 }
-.grid tbody tr.stale { color: var(--ink-faint); }
+.grid tbody tr.stale {
+  color: var(--ink-faint);
+}
 
-.sym { font-weight: 700; margin-right: 8px; }
-.basis { color: var(--ink-faint); }
+.sym {
+  font-weight: 700;
+  margin-right: 8px;
+}
+.basis {
+  color: var(--ink-faint);
+}
 
 .right-chip {
   display: inline-block;
@@ -677,14 +927,34 @@ const meta = computed(() => {
   border: var(--hair) solid var(--rule-hi);
 }
 
-.token-call { color: var(--call); border-color: var(--call); background: var(--call-wash); }
-.token-put { color: var(--put); border-color: var(--put); background: var(--put-wash); }
-.token-warn { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.token-unsigned { color: var(--ink-faint); }
+.token-call {
+  color: var(--call);
+  border-color: var(--call);
+  background: var(--call-wash);
+}
+.token-put {
+  color: var(--put);
+  border-color: var(--put);
+  background: var(--put-wash);
+}
+.token-warn {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+.token-unsigned {
+  color: var(--ink-faint);
+}
 
-.sell { font-variant-numeric: tabular-nums; }
-.fresh.ok { color: var(--phosphor); }
-.fresh.stale { color: var(--warn); }
+.sell {
+  font-variant-numeric: tabular-nums;
+}
+.fresh.ok {
+  color: var(--phosphor);
+}
+.fresh.stale {
+  color: var(--warn);
+}
 .action-chip {
   display: inline-block;
   padding: 2px 7px;
@@ -702,9 +972,16 @@ const meta = computed(() => {
   border-color: var(--phosphor-dim);
   background: var(--phosphor-wash);
 }
-.stability { color: var(--ink-dim); white-space: nowrap; }
-.stability.stable { color: var(--phosphor); }
-.stability.churned { color: var(--short); }
+.stability {
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.stability.stable {
+  color: var(--phosphor);
+}
+.stability.churned {
+  color: var(--short);
+}
 
 .detail {
   border-left: var(--hair) solid var(--rule);
@@ -716,8 +993,12 @@ const meta = computed(() => {
 }
 
 .detail :deep(.risk-inputs),
-.detail :deep(.risk-output) { grid-template-columns: 1fr 1fr; }
-.detail :deep(.risk-inputs label:last-child) { grid-column: 1 / -1; }
+.detail :deep(.risk-output) {
+  grid-template-columns: 1fr 1fr;
+}
+.detail :deep(.risk-inputs label:last-child) {
+  grid-column: 1 / -1;
+}
 
 .detail-head {
   display: flex;
@@ -726,19 +1007,52 @@ const meta = computed(() => {
   gap: var(--s2);
 }
 
-.detail-chips { display: inline-flex; align-items: center; gap: var(--s2); }
-.mode-chip { padding: 3px 7px; color: var(--call-hi); border: var(--hair) solid var(--call); background: var(--call-wash); }
-.mode-chip.candidate { color: var(--phosphor); border-color: var(--phosphor-dim); background: var(--phosphor-wash); }
+.detail-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.mode-chip {
+  padding: 3px 7px;
+  color: var(--call-hi);
+  border: var(--hair) solid var(--call);
+  background: var(--call-wash);
+}
+.mode-chip.candidate {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+}
 .mode-chip.paper_candidate,
 .mode-chip.plan,
-.mode-chip.research_only { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
-.mode-chip.blocked { color: var(--short); border-color: var(--short); background: var(--short-wash); }
+.mode-chip.research_only {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+.mode-chip.blocked {
+  color: var(--short);
+  border-color: var(--short);
+  background: var(--short-wash);
+}
 
-.sym-lg { font-size: var(--t-fig); font-weight: 600; }
-.right-chip.lg { font-size: var(--t-small); padding: 3px 10px; }
+.sym-lg {
+  font-size: var(--t-fig);
+  font-weight: 600;
+}
+.right-chip.lg {
+  font-size: var(--t-small);
+  padding: 3px 10px;
+}
 
-.reason { margin: 0; color: var(--ink-soft); font-size: var(--t-small); }
-.reason.mute { color: var(--ink-faint); }
+.reason {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--t-small);
+}
+.reason.mute {
+  color: var(--ink-faint);
+}
 
 .paper-action-banner {
   display: grid;
@@ -750,8 +1064,14 @@ const meta = computed(() => {
   background: var(--call-wash);
   box-shadow: inset 8px 0 0 color-mix(in srgb, var(--call) 18%, transparent);
 }
-.paper-action-banner strong { font-family: var(--font-data); letter-spacing: 0.02em; }
-.paper-action-banner small { color: var(--ink-dim); line-height: 1.4; }
+.paper-action-banner strong {
+  font-family: var(--font-data);
+  letter-spacing: 0.02em;
+}
+.paper-action-banner small {
+  color: var(--ink-dim);
+  line-height: 1.4;
+}
 
 .completeness {
   display: grid;
@@ -771,15 +1091,24 @@ const meta = computed(() => {
 .completeness.uncalibrated:not(.complete) {
   border-color: var(--warn);
 }
-.completeness strong { font-family: var(--font-data); letter-spacing: 0.04em; }
-.completeness small { color: var(--ink-dim); font-size: var(--t-micro); line-height: 1.4; }
+.completeness strong {
+  font-family: var(--font-data);
+  letter-spacing: 0.04em;
+}
+.completeness small {
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.4;
+}
 
 .levels {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--s3);
 }
-.setup-headlines { grid-template-columns: 1fr 1fr; }
+.setup-headlines {
+  grid-template-columns: 1fr 1fr;
+}
 
 .facts {
   display: grid;
@@ -788,29 +1117,91 @@ const meta = computed(() => {
   margin: 0;
 }
 
-.facts dt { color: var(--ink-faint); }
-.facts dd { margin: 2px 0 0; }
+.facts dt {
+  color: var(--ink-faint);
+}
+.facts dd {
+  margin: 2px 0 0;
+}
 
-.contract-reference { padding: var(--s3); border: var(--hair) solid var(--call); background: var(--call-wash); }
-.contract-reference strong { display: block; margin: 6px 0 var(--s3); color: var(--call-hi); font-size: var(--t-lead); line-height: 1.2; }
-.contract-reference small { display: block; margin-top: var(--s2); color: var(--ink-dim); font-size: var(--t-micro); line-height: 1.4; }
-.contract-reference small.missing { color: var(--warn); }
-.contract-reference small.rejected { color: var(--short); }
+.contract-reference {
+  padding: var(--s3);
+  border: var(--hair) solid var(--call);
+  background: var(--call-wash);
+}
+.contract-reference strong {
+  display: block;
+  margin: 6px 0 var(--s3);
+  color: var(--call-hi);
+  font-size: var(--t-lead);
+  line-height: 1.2;
+}
+.contract-reference small {
+  display: block;
+  margin-top: var(--s2);
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.4;
+}
+.contract-reference small.missing {
+  color: var(--warn);
+}
+.contract-reference small.rejected {
+  color: var(--short);
+}
 .play-card {
   margin-top: var(--s3);
   padding-top: var(--s3);
   border-top: var(--hair) solid var(--rule);
 }
-.bias-watch { padding: var(--s2); color: var(--warn); border-left: 2px solid var(--warn); background: var(--warn-wash); }
-.stability-banner { margin: 0; padding: var(--s2); color: var(--warn); border-left: 2px solid var(--warn); background: var(--warn-wash); }
-.stability-banner.stable { color: var(--phosphor); border-left-color: var(--phosphor); background: var(--phosphor-wash); }
-.stability-banner.churned { color: var(--short); border-left-color: var(--short); background: var(--short-wash); }
-.contract-numbers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: var(--hair) solid var(--rule); }
-.contract-numbers span { padding: var(--s2); color: var(--ink-soft); font-family: var(--font-data); border-right: var(--hair) solid var(--rule); }
-.contract-numbers span:last-child { border-right: 0; }
+.bias-watch {
+  padding: var(--s2);
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  background: var(--warn-wash);
+}
+.stability-banner {
+  margin: 0;
+  padding: var(--s2);
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  background: var(--warn-wash);
+}
+.stability-banner.stable {
+  color: var(--phosphor);
+  border-left-color: var(--phosphor);
+  background: var(--phosphor-wash);
+}
+.stability-banner.churned {
+  color: var(--short);
+  border-left-color: var(--short);
+  background: var(--short-wash);
+}
+.contract-numbers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: var(--hair) solid var(--rule);
+}
+.contract-numbers span {
+  padding: var(--s2);
+  color: var(--ink-soft);
+  font-family: var(--font-data);
+  border-right: var(--hair) solid var(--rule);
+}
+.contract-numbers span:last-child {
+  border-right: 0;
+}
 /* Quote captions ("Delayed midpoint") are wider than a quarter cell — wrap
    rather than inherit the .label ellipsis and lose the "delayed" qualifier. */
-.contract-numbers i { display: block; overflow: visible; margin-bottom: 4px; font-style: normal; line-height: 1.3; text-overflow: clip; white-space: normal; }
+.contract-numbers i {
+  display: block;
+  overflow: visible;
+  margin-bottom: 4px;
+  font-style: normal;
+  line-height: 1.3;
+  text-overflow: clip;
+  white-space: normal;
+}
 
 .blockers {
   margin: 0;
@@ -823,12 +1214,25 @@ const meta = computed(() => {
   border: var(--hair) solid var(--rule);
   background: var(--panel);
 }
-.entry-checks summary { padding: var(--s2); color: var(--warn); cursor: pointer; }
-.entry-checks .blockers { padding: 0 var(--s3) var(--s3) 1.8rem; }
+.entry-checks summary {
+  padding: var(--s2);
+  color: var(--warn);
+  cursor: pointer;
+}
+.entry-checks .blockers {
+  padding: 0 var(--s3) var(--s3) 1.8rem;
+}
 
-.note { margin: 0; color: var(--warn); font-size: var(--t-tiny); }
+.note {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--t-tiny);
+}
 
-.links { display: flex; gap: var(--s2); }
+.links {
+  display: flex;
+  gap: var(--s2);
+}
 
 .qlink {
   padding: 3px 8px;
@@ -837,18 +1241,39 @@ const meta = computed(() => {
   text-decoration: none;
 }
 
-.qlink:hover { color: var(--phosphor); border-color: var(--phosphor-dim); }
+.qlink:hover {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+}
 
-.fine { color: var(--ink-ghost); }
+.fine {
+  color: var(--ink-ghost);
+}
 
-.state { padding: var(--s4); color: var(--ink-dim); }
-.state.err { color: var(--short); }
+.state {
+  padding: var(--s4);
+  color: var(--ink-dim);
+}
+.state.err {
+  color: var(--short);
+}
 
 @media (max-width: 980px) {
-  .workspace { grid-template-columns: 1fr; }
-  .detail { border-left: 0; border-top: var(--hair) solid var(--rule); }
-  .readout-grid { grid-template-columns: 1fr 1fr; }
-  .contract-numbers { grid-template-columns: 1fr 1fr; }
-  .page-head { flex-direction: column; }
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .detail {
+    border-left: 0;
+    border-top: var(--hair) solid var(--rule);
+  }
+  .readout-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .contract-numbers {
+    grid-template-columns: 1fr 1fr;
+  }
+  .page-head {
+    flex-direction: column;
+  }
 }
 </style>

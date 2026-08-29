@@ -66,7 +66,9 @@ describe('PressureDriftChart token & structure gate (shipped SFC)', () => {
   it('has a centered zero midline dividing the two pressure panes', () => {
     const s = src()
     expect(s).toContain('zeroY')
-    expect(s).toMatch(/zeroY\s*=\s*computed\(\(\)\s*=>\s*plotTop\.value\s*\+\s*plotH\.value\s*\/\s*2\)/)
+    expect(s).toMatch(
+      /zeroY\s*=\s*computed\(\(\)\s*=>\s*plotTop\.value\s*\+\s*plotH\.value\s*\/\s*2\)/,
+    )
     expect(s).toMatch(/class="zero"/)
   })
 

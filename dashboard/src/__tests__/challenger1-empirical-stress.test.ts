@@ -202,10 +202,15 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
         }
 
         // 2. Delta Bounds & Parity: 0 <= delta_call <= 1, -1 <= delta_put <= 0, delta_call - delta_put = 1
-        if (call.delta < -1e-7 || call.delta > 1 + 1e-7 || put.delta < -1 - 1e-7 || put.delta > 1e-7) {
+        if (
+          call.delta < -1e-7 ||
+          call.delta > 1 + 1e-7 ||
+          put.delta < -1 - 1e-7 ||
+          put.delta > 1e-7
+        ) {
           deltaViolations++
         }
-        if (Math.abs((call.delta - put.delta) - 1.0) > 1e-5) {
+        if (Math.abs(call.delta - put.delta - 1.0) > 1e-5) {
           deltaViolations++
         }
 
@@ -340,8 +345,8 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
         const aggressor = aggressors[i % aggressors.length]
         const strike = 100 + (i % 50) * 5
         const dte = (i % 60) + 1
-        const premium = (i % 20 + 1) * 50_000 // $50k to $1M
-        const volume = (i % 100 + 1) * 50
+        const premium = ((i % 20) + 1) * 50_000 // $50k to $1M
+        const volume = ((i % 100) + 1) * 50
         const oi = (i % 50) * 100
 
         prints.push({
@@ -433,15 +438,96 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
   describe('5. Table Sorting Permutations & Invariants', () => {
     it('executes all 10 Tape Sort Keys across ascending and descending directions stably', () => {
       const tape = [
-        { symbol: 'NVDA', timestamp: '2026-08-16T10:00:00Z', strike: 120, dte: 7, price: 4.5, trade_class: 'sweep', open_interest: 1000, volume: 2000, premium: 500_000, premium_percentile: 0.95, aggressor: 'buy' },
-        { symbol: 'AAPL', timestamp: '2026-08-16T10:01:00Z', strike: 220, dte: 30, price: 2.1, trade_class: 'block', open_interest: 5000, volume: 1000, premium: 210_000, premium_percentile: 0.70, aggressor: 'sell' },
-        { symbol: 'TSLA', timestamp: '2026-08-16T09:59:00Z', strike: 200, dte: 1, price: 8.0, trade_class: 'split', open_interest: 0, volume: 500, premium: 400_000, premium_percentile: 0.85, aggressor: 'ask' },
-        { symbol: 'SPY', timestamp: '2026-08-16T10:05:00Z', strike: 550, dte: 14, price: 1.2, trade_class: 'multileg', open_interest: 10000, volume: 50000, premium: 1_200_000, premium_percentile: 0.99, aggressor: 'bid' },
-        { symbol: 'AMD', timestamp: '2026-08-16T09:50:00Z', strike: 150, dte: 60, price: 5.0, trade_class: 'standard', open_interest: null, volume: null, premium: null, premium_percentile: null, aggressor: null },
+        {
+          symbol: 'NVDA',
+          timestamp: '2026-08-16T10:00:00Z',
+          strike: 120,
+          dte: 7,
+          price: 4.5,
+          trade_class: 'sweep',
+          open_interest: 1000,
+          volume: 2000,
+          premium: 500_000,
+          premium_percentile: 0.95,
+          aggressor: 'buy',
+        },
+        {
+          symbol: 'AAPL',
+          timestamp: '2026-08-16T10:01:00Z',
+          strike: 220,
+          dte: 30,
+          price: 2.1,
+          trade_class: 'block',
+          open_interest: 5000,
+          volume: 1000,
+          premium: 210_000,
+          premium_percentile: 0.7,
+          aggressor: 'sell',
+        },
+        {
+          symbol: 'TSLA',
+          timestamp: '2026-08-16T09:59:00Z',
+          strike: 200,
+          dte: 1,
+          price: 8.0,
+          trade_class: 'split',
+          open_interest: 0,
+          volume: 500,
+          premium: 400_000,
+          premium_percentile: 0.85,
+          aggressor: 'ask',
+        },
+        {
+          symbol: 'SPY',
+          timestamp: '2026-08-16T10:05:00Z',
+          strike: 550,
+          dte: 14,
+          price: 1.2,
+          trade_class: 'multileg',
+          open_interest: 10000,
+          volume: 50000,
+          premium: 1_200_000,
+          premium_percentile: 0.99,
+          aggressor: 'bid',
+        },
+        {
+          symbol: 'AMD',
+          timestamp: '2026-08-16T09:50:00Z',
+          strike: 150,
+          dte: 60,
+          price: 5.0,
+          trade_class: 'standard',
+          open_interest: null,
+          volume: null,
+          premium: null,
+          premium_percentile: null,
+          aggressor: null,
+        },
       ] as unknown as MarketFlowPrint[]
 
-      type TapeSortKey = 'time' | 'symbol' | 'contract' | 'expiry' | 'fill' | 'trade_class' | 'vol_oi' | 'premium' | 'percentile' | 'aggressor'
-      const sortKeys: TapeSortKey[] = ['time', 'symbol', 'contract', 'expiry', 'fill', 'trade_class', 'vol_oi', 'premium', 'percentile', 'aggressor']
+      type TapeSortKey =
+        | 'time'
+        | 'symbol'
+        | 'contract'
+        | 'expiry'
+        | 'fill'
+        | 'trade_class'
+        | 'vol_oi'
+        | 'premium'
+        | 'percentile'
+        | 'aggressor'
+      const sortKeys: TapeSortKey[] = [
+        'time',
+        'symbol',
+        'contract',
+        'expiry',
+        'fill',
+        'trade_class',
+        'vol_oi',
+        'premium',
+        'percentile',
+        'aggressor',
+      ]
 
       for (const key of sortKeys) {
         for (const dir of ['asc', 'desc'] as const) {
@@ -450,19 +536,37 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
             let av: number | string = -Infinity
             let bv: number | string = -Infinity
 
-            if (key === 'time') { av = a.timestamp || ''; bv = b.timestamp || '' }
-            else if (key === 'symbol') { av = a.symbol || ''; bv = b.symbol || '' }
-            else if (key === 'contract') { av = a.strike ?? -Infinity; bv = b.strike ?? -Infinity }
-            else if (key === 'expiry') { av = a.dte ?? -Infinity; bv = b.dte ?? -Infinity }
-            else if (key === 'fill') { av = a.price ?? -Infinity; bv = b.price ?? -Infinity }
-            else if (key === 'trade_class') { av = a.trade_class || ''; bv = b.trade_class || '' }
-            else if (key === 'vol_oi') {
+            if (key === 'time') {
+              av = a.timestamp || ''
+              bv = b.timestamp || ''
+            } else if (key === 'symbol') {
+              av = a.symbol || ''
+              bv = b.symbol || ''
+            } else if (key === 'contract') {
+              av = a.strike ?? -Infinity
+              bv = b.strike ?? -Infinity
+            } else if (key === 'expiry') {
+              av = a.dte ?? -Infinity
+              bv = b.dte ?? -Infinity
+            } else if (key === 'fill') {
+              av = a.price ?? -Infinity
+              bv = b.price ?? -Infinity
+            } else if (key === 'trade_class') {
+              av = a.trade_class || ''
+              bv = b.trade_class || ''
+            } else if (key === 'vol_oi') {
               av = computeVolOiRatio(a.contracts ?? a.volume, a.open_interest).ratio ?? -Infinity
               bv = computeVolOiRatio(b.contracts ?? b.volume, b.open_interest).ratio ?? -Infinity
+            } else if (key === 'premium') {
+              av = a.premium ?? -Infinity
+              bv = b.premium ?? -Infinity
+            } else if (key === 'percentile') {
+              av = a.premium_percentile ?? -Infinity
+              bv = b.premium_percentile ?? -Infinity
+            } else if (key === 'aggressor') {
+              av = a.aggressor || ''
+              bv = b.aggressor || ''
             }
-            else if (key === 'premium') { av = a.premium ?? -Infinity; bv = b.premium ?? -Infinity }
-            else if (key === 'percentile') { av = a.premium_percentile ?? -Infinity; bv = b.premium_percentile ?? -Infinity }
-            else if (key === 'aggressor') { av = a.aggressor || ''; bv = b.aggressor || '' }
 
             if (typeof av === 'string' || typeof bv === 'string') {
               return mul * String(av).localeCompare(String(bv))
@@ -582,7 +686,12 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
     it('correctly categorizes infinite profit/loss asymptotic labels via evaluateRiskRewardBounds', () => {
       // Long Call -> +∞ Unlimited Profit, Defined Loss (-$500)
       const longCall: CalcLeg[] = [{ id: '1', right: 'call', strike: 100, quantity: 1, premium: 5 }]
-      const lcPoints = evaluateBookDualCurves({ legs: longCall, spot: 100, dteDays: 30, volPct: 25 })
+      const lcPoints = evaluateBookDualCurves({
+        legs: longCall,
+        spot: 100,
+        dteDays: 30,
+        volPct: 25,
+      })
       const lcBounds = evaluateRiskRewardBounds(longCall, lcPoints)
       expect(lcBounds.isProfitUnbounded).toBe(true)
       expect(lcBounds.isLossUnbounded).toBe(false)
@@ -591,8 +700,15 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
       expect(lcBounds.maxLoss).toBe(-500)
 
       // Naked Short Call -> Defined Profit (+$500), -∞ Unlimited Risk
-      const shortCall: CalcLeg[] = [{ id: '1', right: 'call', strike: 100, quantity: -1, premium: 5 }]
-      const scPoints = evaluateBookDualCurves({ legs: shortCall, spot: 100, dteDays: 30, volPct: 25 })
+      const shortCall: CalcLeg[] = [
+        { id: '1', right: 'call', strike: 100, quantity: -1, premium: 5 },
+      ]
+      const scPoints = evaluateBookDualCurves({
+        legs: shortCall,
+        spot: 100,
+        dteDays: 30,
+        volPct: 25,
+      })
       const scBounds = evaluateRiskRewardBounds(shortCall, scPoints)
       expect(scBounds.isProfitUnbounded).toBe(false)
       expect(scBounds.isLossUnbounded).toBe(true)
@@ -719,7 +835,8 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
         if (!r.live || (r.premium ?? 0) < minPremium) return false
         if (query && !r.symbol.includes(query)) return false
         if (right === 'put' && (r.put_flow_pct ?? 0) < 0.5) return false
-        if (dteBand === 'month' && ((r.average_dte ?? 0) <= 7 || (r.average_dte ?? 0) > 30)) return false
+        if (dteBand === 'month' && ((r.average_dte ?? 0) <= 7 || (r.average_dte ?? 0) > 30))
+          return false
         if (moneyness === 'otm' && (r.average_otm_pct ?? 0) < 0.02) return false
         return true
       })

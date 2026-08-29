@@ -10,9 +10,7 @@ withDefaults(
 
 <template>
   <div class="loading" :class="{ compact }" role="status" aria-live="polite">
-    <span class="orb" aria-hidden="true">
-      <i /><i /><i />
-    </span>
+    <span class="orb" aria-hidden="true"> <i /><i /><i /> </span>
     <span class="label text">{{ label }}</span>
   </div>
 </template>
@@ -64,6 +62,8 @@ withDefaults(
   color: var(--ink-faint);
 }
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

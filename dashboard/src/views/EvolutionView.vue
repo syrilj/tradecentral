@@ -12,10 +12,7 @@ import VerdictChip from '@/components/VerdictChip.vue'
  * Never presents GA fitness as live trading authority.
  */
 const selectedId = ref<string | undefined>(undefined)
-const ga = useResource<GaPayload>(
-  () => api.ga(selectedId.value),
-  { intervalMs: 90_000 },
-)
+const ga = useResource<GaPayload>(() => api.ga(selectedId.value), { intervalMs: 90_000 })
 
 watch(
   () => ga.data.value?.selected_run_id,
@@ -36,9 +33,7 @@ const bestFit = computed(() => {
   if (!h.length) return null
   return h[h.length - 1]?.best_fitness ?? null
 })
-const confPass = computed(
-  () => confirmation.value.filter((c) => c.passes_confirmation).length,
-)
+const confPass = computed(() => confirmation.value.filter((c) => c.passes_confirmation).length)
 
 const spark = computed(() => {
   const pts = history.value
@@ -94,8 +89,8 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
         <div class="banner">
           <span class="pill">RESEARCH ONLY</span>
           <span class="banner-text">
-            Fitness never uses the sealed terminal holdout. Survivors are not live signals —
-            promote only through Gates / shadow.
+            Fitness never uses the sealed terminal holdout. Survivors are not live signals — promote
+            only through Gates / shadow.
           </span>
         </div>
         <div class="counts">
@@ -110,11 +105,7 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
             :value="`${confPass}/${confirmation.length || 0}`"
             :tone="confPass > 0 ? 'pos' : 'flat'"
           />
-          <Readout
-            label="Elites"
-            :value="String(elites.length)"
-            tone="accent"
-          />
+          <Readout label="Elites" :value="String(elites.length)" tone="accent" />
         </div>
         <p v-if="ga.data.value?.error" class="err soft">{{ ga.data.value.error }}</p>
       </template>
@@ -148,7 +139,9 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
             >
               <td class="fig name">
                 <div class="run-id">{{ r.run_id }}</div>
-                <div class="dim tiny">{{ r.created_at ? age(String(r.created_at)) : DASH }} ago</div>
+                <div class="dim tiny">
+                  {{ r.created_at ? age(String(r.created_at)) : DASH }} ago
+                </div>
               </td>
               <td class="fig num">{{ fmtFit(r.best_fitness) }}</td>
               <td class="fig num dim">{{ r.n_generations ?? DASH }}</td>
@@ -213,10 +206,7 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
             <td class="fig num">{{ num(e.metrics?.sharpe as number | null, 2) }}</td>
             <td class="fig num">{{ num(e.metrics?.max_drawdown as number | null, 3) }}</td>
             <td>
-              <VerdictChip
-                :verdict="e.alive ? 'GO' : (e.death_reason || 'NO-GO')"
-                size="sm"
-              />
+              <VerdictChip :verdict="e.alive ? 'GO' : e.death_reason || 'NO-GO'" size="sm" />
             </td>
           </tr>
         </tbody>
@@ -251,10 +241,7 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
               {{ num(c.metrics_confirmation?.sharpe as number | null, 2) }}
             </td>
             <td>
-              <VerdictChip
-                :verdict="c.passes_confirmation ? 'GO' : 'NO-GO'"
-                size="sm"
-              />
+              <VerdictChip :verdict="c.passes_confirmation ? 'GO' : 'NO-GO'" size="sm" />
             </td>
           </tr>
         </tbody>

@@ -115,7 +115,10 @@ describe('Market Financials highlight + /quantitative-research', () => {
     expect(ready.cases.bear.price).toBe(88.2)
     expect(ready.cases.bull.price).toBe(210.1)
     expect(ready.factors[0].display).toBe('+45%')
-    const missing = presentModelForecast({ status: 'missing', cases: { bear: { price: 0 }, bull: { price: 0 } } })
+    const missing = presentModelForecast({
+      status: 'missing',
+      cases: { bear: { price: 0 }, bull: { price: 0 } },
+    })
     expect(formatModelPredictedPrice(missing.cases.bear.price)).toBe(DASH)
     expect(formatModelPredictedPrice(missing.cases.bull.price)).toBe(DASH)
     expect(missing.factors).toEqual([])
@@ -173,7 +176,9 @@ describe('mark vs predicted / Street target hit', () => {
     expect(marketViewSource).toContain('presentPredictionHit')
     expect(marketViewSource).toContain('signedPct')
     expect(marketViewSource).not.toMatch(/\+\$\{profile\.forecast\.upside_pct\}%/)
-    expect(marketViewSource).not.toMatch(/recommendations\.(strong_buy|buy|hold|underperform|sell)\s*\?\?\s*0/)
+    expect(marketViewSource).not.toMatch(
+      /recommendations\.(strong_buy|buy|hold|underperform|sell)\s*\?\?\s*0/,
+    )
   })
 })
 

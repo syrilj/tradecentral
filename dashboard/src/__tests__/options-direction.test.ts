@@ -27,19 +27,22 @@ function summary(overrides: Partial<OptionsDirectionSummary> = {}): OptionsDirec
 
 describe('options direction read', () => {
   it('shows a strong bullish read when signed flow and momentum align', () => {
-    const read = buildOptionsDirection(summary({
-      signed_flow_imbalance: 0.62,
-      signed_flow_confidence: 0.875,
-      squeeze: {
-        bullish: 0.74,
-        bearish: 0.08,
-        score: 66,
-        label: 'bullish_squeeze',
-        primary: 'bullish',
-        drivers: ['signed_bullish_flow', 'up_momentum'],
-        theory: { momentum: 0.018, momentum_fresh: true },
-      },
-    }), 'live')
+    const read = buildOptionsDirection(
+      summary({
+        signed_flow_imbalance: 0.62,
+        signed_flow_confidence: 0.875,
+        squeeze: {
+          bullish: 0.74,
+          bearish: 0.08,
+          score: 66,
+          label: 'bullish_squeeze',
+          primary: 'bullish',
+          drivers: ['signed_bullish_flow', 'up_momentum'],
+          theory: { momentum: 0.018, momentum_fresh: true },
+        },
+      }),
+      'live',
+    )
 
     expect(read.state).toBe('bullish')
     expect(read.confidence).toBe('high')
@@ -49,11 +52,14 @@ describe('options direction read', () => {
   })
 
   it('never turns unsigned call-heavy activity into bullish direction', () => {
-    const read = buildOptionsDirection(summary({
-      activity_imbalance: 1,
-      signed_flow_imbalance: null,
-      signed_flow_confidence: 0,
-    }), 'live')
+    const read = buildOptionsDirection(
+      summary({
+        activity_imbalance: 1,
+        signed_flow_imbalance: null,
+        signed_flow_confidence: 0,
+      }),
+      'live',
+    )
 
     expect(read.state).toBe('neutral')
     expect(read.headline).toBe('NO DIRECTION')
@@ -65,20 +71,23 @@ describe('options direction read', () => {
   })
 
   it('uses fresh momentum as the underlier lean when the tape has no buy/sell side', () => {
-    const read = buildOptionsDirection(summary({
-      activity_imbalance: 0.6,
-      signed_flow_imbalance: null,
-      signed_flow_confidence: 0,
-      squeeze: {
-        bullish: 0.03,
-        bearish: 0,
-        score: 3.2,
-        label: 'quiet',
-        primary: 'quiet',
-        drivers: ['up_momentum', 'call_wall_proximity'],
-        theory: { momentum: 0.3047, momentum_fresh: true },
-      },
-    }), 'stale')
+    const read = buildOptionsDirection(
+      summary({
+        activity_imbalance: 0.6,
+        signed_flow_imbalance: null,
+        signed_flow_confidence: 0,
+        squeeze: {
+          bullish: 0.03,
+          bearish: 0,
+          score: 3.2,
+          label: 'quiet',
+          primary: 'quiet',
+          drivers: ['up_momentum', 'call_wall_proximity'],
+          theory: { momentum: 0.3047, momentum_fresh: true },
+        },
+      }),
+      'stale',
+    )
 
     expect(read.state).toBe('bullish')
     expect(read.headline).toBe('BULLISH')
@@ -96,19 +105,22 @@ describe('options direction read', () => {
   })
 
   it('lets signed flow set the lean even when squeeze fuel is too small to fire', () => {
-    const read = buildOptionsDirection(summary({
-      signed_flow_imbalance: -0.4,
-      signed_flow_confidence: 0.5,
-      squeeze: {
-        bullish: 0,
-        bearish: 0.08,
-        score: -6,
-        label: 'quiet',
-        primary: 'quiet',
-        drivers: ['signed_bearish_flow'],
-        theory: { momentum: 0.001, momentum_fresh: true },
-      },
-    }), 'live')
+    const read = buildOptionsDirection(
+      summary({
+        signed_flow_imbalance: -0.4,
+        signed_flow_confidence: 0.5,
+        squeeze: {
+          bullish: 0,
+          bearish: 0.08,
+          score: -6,
+          label: 'quiet',
+          primary: 'quiet',
+          drivers: ['signed_bearish_flow'],
+          theory: { momentum: 0.001, momentum_fresh: true },
+        },
+      }),
+      'live',
+    )
 
     expect(read.state).toBe('bearish')
     expect(read.basis).toBe('SIGNED FLOW')
@@ -116,19 +128,22 @@ describe('options direction read', () => {
   })
 
   it('fails to mixed when signed flow and momentum disagree', () => {
-    const read = buildOptionsDirection(summary({
-      signed_flow_imbalance: 0.5,
-      signed_flow_confidence: 0.75,
-      squeeze: {
-        bullish: 0.42,
-        bearish: 0.12,
-        score: 30,
-        label: 'bullish_lean',
-        primary: 'bullish',
-        drivers: ['signed_bullish_flow', 'down_momentum'],
-        theory: { momentum: -0.02, momentum_fresh: true },
-      },
-    }), 'live')
+    const read = buildOptionsDirection(
+      summary({
+        signed_flow_imbalance: 0.5,
+        signed_flow_confidence: 0.75,
+        squeeze: {
+          bullish: 0.42,
+          bearish: 0.12,
+          score: 30,
+          label: 'bullish_lean',
+          primary: 'bullish',
+          drivers: ['signed_bullish_flow', 'down_momentum'],
+          theory: { momentum: -0.02, momentum_fresh: true },
+        },
+      }),
+      'live',
+    )
 
     expect(read.state).toBe('mixed')
     expect(read.headline).toBe('MIXED / WAIT')
@@ -137,19 +152,22 @@ describe('options direction read', () => {
   })
 
   it('downgrades an otherwise qualified read when its inputs are stale', () => {
-    const read = buildOptionsDirection(summary({
-      signed_flow_imbalance: -0.4,
-      signed_flow_confidence: 0.5,
-      squeeze: {
-        bullish: 0.06,
-        bearish: 0.5,
-        score: -44,
-        label: 'bearish_squeeze',
-        primary: 'bearish',
-        drivers: ['signed_bearish_flow'],
-        theory: { momentum: -0.01, momentum_fresh: true },
-      },
-    }), 'stale')
+    const read = buildOptionsDirection(
+      summary({
+        signed_flow_imbalance: -0.4,
+        signed_flow_confidence: 0.5,
+        squeeze: {
+          bullish: 0.06,
+          bearish: 0.5,
+          score: -44,
+          label: 'bearish_squeeze',
+          primary: 'bearish',
+          drivers: ['signed_bearish_flow'],
+          theory: { momentum: -0.01, momentum_fresh: true },
+        },
+      }),
+      'stale',
+    )
 
     expect(read.state).toBe('bearish')
     expect(read.tapeStale).toBe(true)
@@ -166,20 +184,23 @@ describe('options direction read', () => {
   })
 
   it('keeps explicitly missing metrics blank instead of coercing them to zero', () => {
-    const read = buildOptionsDirection(summary({
-      activity_imbalance: null,
-      signed_flow_imbalance: null,
-      signed_flow_confidence: null,
-      squeeze: {
-        bullish: 0,
-        bearish: 0,
-        score: 0,
-        label: 'quiet',
-        primary: 'quiet',
-        drivers: [],
-        theory: { momentum: null, momentum_fresh: true },
-      },
-    }), 'live')
+    const read = buildOptionsDirection(
+      summary({
+        activity_imbalance: null,
+        signed_flow_imbalance: null,
+        signed_flow_confidence: null,
+        squeeze: {
+          bullish: 0,
+          bearish: 0,
+          score: 0,
+          label: 'quiet',
+          primary: 'quiet',
+          drivers: [],
+          theory: { momentum: null, momentum_fresh: true },
+        },
+      }),
+      'live',
+    )
 
     expect(read.activity).toBe('unavailable')
     expect(read.momentum).toBeNull()
@@ -192,19 +213,22 @@ import { renderToString } from 'vue/server-renderer'
 import OptionsDirectionBrief from '../components/OptionsDirectionBrief.vue'
 
 describe('OptionsDirectionBrief Component & Positioning Telemetry Map (R1)', () => {
-  const baseRead = buildOptionsDirection(summary({
-    signed_flow_imbalance: 0.5,
-    signed_flow_confidence: 0.8,
-    squeeze: {
-      bullish: 0.6,
-      bearish: 0.1,
-      score: 50,
-      label: 'bullish_squeeze',
-      primary: 'bullish',
-      drivers: ['signed_bullish_flow'],
-      theory: { momentum: 0.02, momentum_fresh: true },
-    },
-  }), 'live')
+  const baseRead = buildOptionsDirection(
+    summary({
+      signed_flow_imbalance: 0.5,
+      signed_flow_confidence: 0.8,
+      squeeze: {
+        bullish: 0.6,
+        bearish: 0.1,
+        score: 50,
+        label: 'bullish_squeeze',
+        primary: 'bullish',
+        drivers: ['signed_bullish_flow'],
+        theory: { momentum: 0.02, momentum_fresh: true },
+      },
+    }),
+    'live',
+  )
 
   async function renderBrief(props: {
     symbol?: string
@@ -406,19 +430,22 @@ describe('OptionsDirectionBrief Component & Positioning Telemetry Map (R1)', () 
   })
 
   it('formats zero score as +0.0 on directional score block', async () => {
-    const zeroScoreRead = buildOptionsDirection(summary({
-      signed_flow_imbalance: null,
-      signed_flow_confidence: 0,
-      squeeze: {
-        bullish: 0,
-        bearish: 0,
-        score: 0,
-        label: 'quiet',
-        primary: 'quiet',
-        drivers: [],
-        theory: { momentum: 0, momentum_fresh: true },
-      },
-    }), 'live')
+    const zeroScoreRead = buildOptionsDirection(
+      summary({
+        signed_flow_imbalance: null,
+        signed_flow_confidence: 0,
+        squeeze: {
+          bullish: 0,
+          bearish: 0,
+          score: 0,
+          label: 'quiet',
+          primary: 'quiet',
+          drivers: [],
+          theory: { momentum: 0, momentum_fresh: true },
+        },
+      }),
+      'live',
+    )
 
     const html = await renderBrief({
       read: zeroScoreRead,
@@ -522,4 +549,3 @@ describe('OptionsDirectionBrief Component & Positioning Telemetry Map (R1)', () 
     expect(html).not.toContain('FLIP $0')
   })
 })
-

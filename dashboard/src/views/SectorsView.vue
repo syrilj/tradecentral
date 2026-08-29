@@ -28,23 +28,25 @@ const selectedCategory = ref<'all' | 'in' | 'out'>('all')
 const expandedEtf = ref<string | null>(null)
 
 const d = computed(() => status.data.value)
-const flow = computed(() => (sectorFlowRes?.data.value ?? d.value?.sector_flow) as
-  | {
-      money_in?: string[]
-      money_out?: string[]
-      sectors_ranked?: SectorRow[]
-      watch_names?: WatchRow[]
-      market_context?: Record<string, number | boolean | string>
-      asof?: string | null
-      asof_bar?: string | null
-      source?: string | null
-    }
-  | undefined)
+const flow = computed(
+  () =>
+    (sectorFlowRes?.data.value ?? d.value?.sector_flow) as
+      | {
+          money_in?: string[]
+          money_out?: string[]
+          sectors_ranked?: SectorRow[]
+          watch_names?: WatchRow[]
+          market_context?: Record<string, number | boolean | string>
+          asof?: string | null
+          asof_bar?: string | null
+          source?: string | null
+        }
+      | undefined,
+)
 
 const sectorLoading = computed(() =>
   Boolean(
-    sectorFlowRes?.loading.value
-    || (status.loading.value && !(flow.value?.sectors_ranked?.length)),
+    sectorFlowRes?.loading.value || (status.loading.value && !flow.value?.sectors_ranked?.length),
   ),
 )
 const sectorAsOf = computed(() => flow.value?.asof_bar ?? null)
@@ -54,9 +56,7 @@ const sectorAgeDays = computed(() => {
   if (!Number.isFinite(stamp)) return null
   return Math.max(0, Math.floor((Date.now() - stamp) / 86_400_000))
 })
-const sectorStale = computed(() =>
-  sectorAgeDays.value == null || sectorAgeDays.value > 3,
-)
+const sectorStale = computed(() => sectorAgeDays.value == null || sectorAgeDays.value > 3)
 const rotationMeta = computed(() => {
   if (!sectorAsOf.value) return sectorLoading.value ? 're-running' : 'date unknown'
   const bar = shortDate(sectorAsOf.value)
@@ -97,9 +97,7 @@ const mkt = computed(() => {
   return raw && typeof raw === 'object' ? raw : undefined
 })
 
-const flowMax = computed(() =>
-  Math.max(1e-6, ...sectors.value.map((s) => Math.abs(s.flow_score))),
-)
+const flowMax = computed(() => Math.max(1e-6, ...sectors.value.map((s) => Math.abs(s.flow_score))))
 
 const accumulationSectors = computed(() => sectors.value.filter((s) => s.flow_score > 0))
 const distributionSectors = computed(() => sectors.value.filter((s) => s.flow_score < 0))
@@ -117,7 +115,12 @@ const topOut = computed(() => {
 const filteredWatch = computed(() => {
   const query = watchSearch.value.trim().toUpperCase()
   return watch.value.filter((w) => {
-    if (query && !w.symbol.includes(query) && !w.sector_hint.toUpperCase().includes(query) && !w.etf.includes(query)) {
+    if (
+      query &&
+      !w.symbol.includes(query) &&
+      !w.sector_hint.toUpperCase().includes(query) &&
+      !w.etf.includes(query)
+    ) {
       return false
     }
     if (selectedCategory.value === 'in') return w.score >= 0
@@ -156,7 +159,8 @@ const expandedNames = computed(() => {
           </span>
         </div>
         <span class="kpi-sub">
-          SPY 1D: {{ signedPct(Number(mkt?.spy_ret_1d ?? 0) * 100, 2) }} · 5D: {{ signedPct(Number(mkt?.spy_ret_5d ?? 0) * 100, 2) }}
+          SPY 1D: {{ signedPct(Number(mkt?.spy_ret_1d ?? 0) * 100, 2) }} · 5D:
+          {{ signedPct(Number(mkt?.spy_ret_5d ?? 0) * 100, 2) }}
         </span>
       </div>
 
@@ -189,12 +193,12 @@ const expandedNames = computed(() => {
       <div class="kpi-card">
         <span class="label kpi-label">Sector Flow Breadth</span>
         <div class="kpi-val-row">
-          <span class="kpi-val fig">{{ accumulationSectors.length }} In / {{ distributionSectors.length }} Out</span>
+          <span class="kpi-val fig"
+            >{{ accumulationSectors.length }} In / {{ distributionSectors.length }} Out</span
+          >
           <span class="kpi-badge flat">BREADTH</span>
         </div>
-        <span class="kpi-sub">
-          {{ sectors.length }} sector ETFs tracked
-        </span>
+        <span class="kpi-sub"> {{ sectors.length }} sector ETFs tracked </span>
       </div>
     </div>
 
@@ -224,21 +228,44 @@ const expandedNames = computed(() => {
       </template>
       <LoadingState v-if="sectorLoading && !sectors.length" label="Loading sector flow" compact />
       <div v-if="mkt" class="mkt-readouts">
-        <Readout label="SPY 1D Return" :value="signedPct(Number(mkt.spy_ret_1d) * 100)" :tone="tone(mkt.spy_ret_1d)" size="sm" />
-        <Readout label="SPY 5D Return" :value="signedPct(Number(mkt.spy_ret_5d) * 100)" :tone="tone(mkt.spy_ret_5d)" size="sm" />
-        <Readout label="SPY 21D Return" :value="signedPct(Number(mkt.spy_ret_21d) * 100)" :tone="tone(mkt.spy_ret_21d)" size="sm" />
+        <Readout
+          label="SPY 1D Return"
+          :value="signedPct(Number(mkt.spy_ret_1d) * 100)"
+          :tone="tone(mkt.spy_ret_1d)"
+          size="sm"
+        />
+        <Readout
+          label="SPY 5D Return"
+          :value="signedPct(Number(mkt.spy_ret_5d) * 100)"
+          :tone="tone(mkt.spy_ret_5d)"
+          size="sm"
+        />
+        <Readout
+          label="SPY 21D Return"
+          :value="signedPct(Number(mkt.spy_ret_21d) * 100)"
+          :tone="tone(mkt.spy_ret_21d)"
+          size="sm"
+        />
         <Readout
           label="SPY Trend"
           :value="mkt.spy_above_ma20 ? 'ABOVE MA20' : 'BELOW MA20'"
           :tone="mkt.spy_above_ma20 ? 'pos' : 'neg'"
           size="sm"
         />
-        <Readout label="QQQ 5D RS vs SPY" :value="signedPct(Number(mkt.qqq_spy_rs_5d) * 100)" :tone="tone(mkt.qqq_spy_rs_5d)" size="sm" />
+        <Readout
+          label="QQQ 5D RS vs SPY"
+          :value="signedPct(Number(mkt.qqq_spy_rs_5d) * 100)"
+          :tone="tone(mkt.qqq_spy_rs_5d)"
+          size="sm"
+        />
       </div>
 
       <!-- Single rotation visual — click a row to expand names under it -->
       <div v-if="sectors.length" class="rotation-strip">
-        <template v-for="s in [...sectors].sort((a, b) => b.flow_score - a.flow_score)" :key="'rot-' + s.etf">
+        <template
+          v-for="s in [...sectors].sort((a, b) => b.flow_score - a.flow_score)"
+          :key="'rot-' + s.etf"
+        >
           <div
             class="rot-row"
             :class="[s.flow_score >= 0 ? 'in' : 'out', { open: expandedEtf === s.etf }]"
@@ -252,15 +279,23 @@ const expandedNames = computed(() => {
                 :style="{ width: `${Math.min(100, (Math.abs(s.flow_score) / flowMax) * 100)}%` }"
               />
             </span>
-            <span class="fig rot-score" :class="tone(s.flow_score)">{{ signedPct(s.flow_score * 100, 1) }}</span>
-            <span class="fig rot-rs" :class="tone(s.ret_5d)">{{ signedPct(s.ret_5d * 100, 1) }} 5D</span>
-            <span class="fig rot-rs" :class="tone(s.rs_5d)">{{ signedPct(s.rs_5d * 100, 1) }} RS</span>
+            <span class="fig rot-score" :class="tone(s.flow_score)">{{
+              signedPct(s.flow_score * 100, 1)
+            }}</span>
+            <span class="fig rot-rs" :class="tone(s.ret_5d)"
+              >{{ signedPct(s.ret_5d * 100, 1) }} 5D</span
+            >
+            <span class="fig rot-rs" :class="tone(s.rs_5d)"
+              >{{ signedPct(s.rs_5d * 100, 1) }} RS</span
+            >
             <span class="rot-chev label">{{ expandedEtf === s.etf ? '▴' : '▾' }}</span>
           </div>
           <div v-if="expandedEtf === s.etf" class="rot-expand">
             <div class="rot-expand-head">
               <span class="label">{{ s.etf }} · surfaced names</span>
-              <button class="filter-btn label" type="button" @click.stop="open(s.etf)">OPEN ETF ↗</button>
+              <button class="filter-btn label" type="button" @click.stop="open(s.etf)">
+                OPEN ETF ↗
+              </button>
             </div>
             <div v-if="expandedNames.length" class="name-chips">
               <button
@@ -281,12 +316,19 @@ const expandedNames = computed(() => {
       </div>
       <p v-else-if="!status.loading.value" class="note pad">No sector flow data available.</p>
       <p v-if="sectors.length" class="note tiny pad-x">
-        Green = accumulation · red = distribution. Click a sector to expand stock names; click a name for Market.
+        Green = accumulation · red = distribution. Click a sector to expand stock names; click a
+        name for Market.
       </p>
     </Panel>
 
     <!-- Full catalog (filterable) stays below for search across all sleeves -->
-    <Panel label="All surfaced names" index="02" :meta="`${filteredWatch.length} shown`" class="w-full" flush>
+    <Panel
+      label="All surfaced names"
+      index="02"
+      :meta="`${filteredWatch.length} shown`"
+      class="w-full"
+      flush
+    >
       <template #action>
         <div class="action-bar">
           <div class="filter-group">
@@ -347,8 +389,14 @@ const expandedNames = computed(() => {
                     :class="(w.score ?? 0) >= 0 ? 'in' : 'out'"
                     :style="
                       (w.score ?? 0) >= 0
-                        ? { left: '50%', width: `${Math.min(50, Math.abs(Number(w.score ?? 0)) / flowMax * 50)}%` }
-                        : { right: '50%', width: `${Math.min(50, Math.abs(Number(w.score ?? 0)) / flowMax * 50)}%` }
+                        ? {
+                            left: '50%',
+                            width: `${Math.min(50, (Math.abs(Number(w.score ?? 0)) / flowMax) * 50)}%`,
+                          }
+                        : {
+                            right: '50%',
+                            width: `${Math.min(50, (Math.abs(Number(w.score ?? 0)) / flowMax) * 50)}%`,
+                          }
                     "
                   />
                 </span>
@@ -362,7 +410,11 @@ const expandedNames = computed(() => {
           </tbody>
         </table>
         <p v-else class="note pad">
-          {{ watch.length === 0 ? 'No watch names surfaced by the flow engine.' : 'No watch names match the filter.' }}
+          {{
+            watch.length === 0
+              ? 'No watch names surfaced by the flow engine.'
+              : 'No watch names match the filter.'
+          }}
         </p>
       </div>
     </Panel>
@@ -376,8 +428,12 @@ const expandedNames = computed(() => {
   gap: var(--s4);
   align-items: start;
 }
-.w-full { grid-column: 1 / -1; }
-.w-half { grid-column: span 2; }
+.w-full {
+  grid-column: 1 / -1;
+}
+.w-half {
+  grid-column: span 2;
+}
 
 /* ---- Summary Deck -------------------------------------------------------- */
 .summary-deck {
@@ -396,8 +452,12 @@ const expandedNames = computed(() => {
   flex-direction: column;
   gap: 4px;
 }
-.kpi-card.armed { border-color: var(--long); }
-.kpi-card.held { border-color: var(--short); }
+.kpi-card.armed {
+  border-color: var(--long);
+}
+.kpi-card.held {
+  border-color: var(--short);
+}
 
 .kpi-label {
   font-size: var(--t-micro);
@@ -427,12 +487,28 @@ const expandedNames = computed(() => {
   border-radius: 2px;
   text-transform: uppercase;
 }
-.kpi-badge.pos { color: var(--long); background: var(--long-wash); }
-.kpi-badge.neg { color: var(--short); background: var(--short-wash); }
-.kpi-badge.flat { color: var(--ink-dim); background: var(--rule); }
+.kpi-badge.pos {
+  color: var(--long);
+  background: var(--long-wash);
+}
+.kpi-badge.neg {
+  color: var(--short);
+  background: var(--short-wash);
+}
+.kpi-badge.flat {
+  color: var(--ink-dim);
+  background: var(--rule);
+}
 
-.kpi-sub { font-size: var(--t-micro); color: var(--ink-dim); }
-.fl-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kpi-sub {
+  font-size: var(--t-micro);
+  color: var(--ink-dim);
+}
+.fl-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ---- Market Context Strip & Cards --------------------------------------- */
 .mkt-readouts {
@@ -463,11 +539,22 @@ const expandedNames = computed(() => {
   border-bottom: var(--hair) solid var(--rule-faint);
   min-width: 0;
 }
-.rot-row:hover { background: var(--panel-hi); }
-.rot-row.open { background: var(--panel-hi); }
-.rot-row.in { box-shadow: inset 2px 0 0 var(--long); }
-.rot-row.out { box-shadow: inset 2px 0 0 var(--short); }
-.rot-chev { color: var(--ink-ghost); text-align: right; }
+.rot-row:hover {
+  background: var(--panel-hi);
+}
+.rot-row.open {
+  background: var(--panel-hi);
+}
+.rot-row.in {
+  box-shadow: inset 2px 0 0 var(--long);
+}
+.rot-row.out {
+  box-shadow: inset 2px 0 0 var(--short);
+}
+.rot-chev {
+  color: var(--ink-ghost);
+  text-align: right;
+}
 .rot-expand {
   padding: 8px 12px 12px 14px;
   border-bottom: var(--hair) solid var(--rule);
@@ -497,11 +584,24 @@ const expandedNames = computed(() => {
   cursor: pointer;
   font-size: var(--t-micro);
 }
-.name-chip:hover { border-color: var(--phosphor-dim); color: var(--phosphor); }
-.name-chip.in { border-left: 2px solid var(--long); }
-.name-chip.out { border-left: 2px solid var(--short); }
-.name-chip .fig:first-child { font-weight: 700; color: var(--phosphor); }
-.rot-etf { font-weight: 700; color: var(--phosphor); }
+.name-chip:hover {
+  border-color: var(--phosphor-dim);
+  color: var(--phosphor);
+}
+.name-chip.in {
+  border-left: 2px solid var(--long);
+}
+.name-chip.out {
+  border-left: 2px solid var(--short);
+}
+.name-chip .fig:first-child {
+  font-weight: 700;
+  color: var(--phosphor);
+}
+.rot-etf {
+  font-weight: 700;
+  color: var(--phosphor);
+}
 .rot-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -521,9 +621,17 @@ const expandedNames = computed(() => {
   height: 100%;
   max-width: 100%;
 }
-.rot-bar i.in { background: var(--long); }
-.rot-bar i.out { background: var(--short); }
-.rot-score, .rot-rs { text-align: right; font-size: var(--t-small); }
+.rot-bar i.in {
+  background: var(--long);
+}
+.rot-bar i.out {
+  background: var(--short);
+}
+.rot-score,
+.rot-rs {
+  text-align: right;
+  font-size: var(--t-small);
+}
 
 .sector-cards-grid {
   display: grid;
@@ -549,17 +657,36 @@ const expandedNames = computed(() => {
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
   transform: translateY(-1px);
 }
-.sector-card.card-in { border-left: 3px solid var(--long); }
-.sector-card.card-out { border-left: 3px solid var(--short); }
+.sector-card.card-in {
+  border-left: 3px solid var(--long);
+}
+.sector-card.card-out {
+  border-left: 3px solid var(--short);
+}
 
 .card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-.card-etf { font-family: var(--font-data); font-size: 1.1rem; font-weight: 600; color: var(--phosphor); }
-.card-score { font-family: var(--font-data); font-size: var(--t-micro); font-weight: 600; }
-.card-name { font-size: var(--t-micro); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-etf {
+  font-family: var(--font-data);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--phosphor);
+}
+.card-score {
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+}
+.card-name {
+  font-size: var(--t-micro);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .card-metrics {
   display: flex;
@@ -596,7 +723,10 @@ const expandedNames = computed(() => {
   border-radius: var(--r-xs);
   cursor: pointer;
 }
-.filter-btn.active { background: var(--panel-raise); color: var(--phosphor); }
+.filter-btn.active {
+  background: var(--panel-raise);
+  color: var(--phosphor);
+}
 
 .search-input {
   background: var(--panel-hi);
@@ -615,11 +745,21 @@ const expandedNames = computed(() => {
   overflow-y: auto;
   scrollbar-width: thin;
 }
-.watch-expanded { max-height: min(70vh, 720px); }
-.pos { color: var(--long); }
-.neg { color: var(--short); }
+.watch-expanded {
+  max-height: min(70vh, 720px);
+}
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
 
-.grid { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
 .grid th {
   text-align: left;
   padding: var(--s3) var(--s4);
@@ -631,29 +771,91 @@ const expandedNames = computed(() => {
   font-weight: 700;
   z-index: 1;
 }
-.grid td { padding: var(--s2) var(--s4); border-bottom: var(--hair) solid var(--rule-faint); color: var(--ink); vertical-align: middle; }
-.grid tbody tr { cursor: pointer; }
-.grid tbody tr:hover { background: var(--panel-raise); }
+.grid td {
+  padding: var(--s2) var(--s4);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  color: var(--ink);
+  vertical-align: middle;
+}
+.grid tbody tr {
+  cursor: pointer;
+}
+.grid tbody tr:hover {
+  background: var(--panel-raise);
+}
 
-.etf-sym, .sym { color: var(--phosphor); font-weight: 700; }
-.name-cell { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.num { text-align: right; }
-.dim { color: var(--ink-dim); }
+.etf-sym,
+.sym {
+  color: var(--phosphor);
+  font-weight: 700;
+}
+.name-cell {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.num {
+  text-align: right;
+}
+.dim {
+  color: var(--ink-dim);
+}
 
-.fl-track { position: relative; height: 10px; background: var(--panel-hi); display: block; border-radius: 1px; width: 100%; min-width: 90px; }
-.fl-fill { position: absolute; top: 0; bottom: 0; border-radius: 1px; }
-.fl-fill.in { background: var(--long); }
-.fl-fill.out { background: var(--short); }
-.fl-mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: var(--hair); background: var(--rule-hi); }
+.fl-track {
+  position: relative;
+  height: 10px;
+  background: var(--panel-hi);
+  display: block;
+  border-radius: 1px;
+  width: 100%;
+  min-width: 90px;
+}
+.fl-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 1px;
+}
+.fl-fill.in {
+  background: var(--long);
+}
+.fl-fill.out {
+  background: var(--short);
+}
+.fl-mid {
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: var(--hair);
+  background: var(--rule-hi);
+}
 
-.note { color: var(--ink-dim); font-size: var(--t-small); }
-.note.pad { padding: var(--s5) var(--s4); }
-.note.pad-x { padding: var(--s3) var(--s4) var(--s4); }
-.note.tiny { font-size: var(--t-micro); margin-top: var(--s3); }
+.note {
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+}
+.note.pad {
+  padding: var(--s5) var(--s4);
+}
+.note.pad-x {
+  padding: var(--s3) var(--s4) var(--s4);
+}
+.note.tiny {
+  font-size: var(--t-micro);
+  margin-top: var(--s3);
+}
 
 @media (max-width: 1200px) {
-  .summary-deck { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sectors-view { grid-template-columns: 1fr; }
-  .w-half { grid-column: span 1; }
+  .summary-deck {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .sectors-view {
+    grid-template-columns: 1fr;
+  }
+  .w-half {
+    grid-column: span 1;
+  }
 }
 </style>

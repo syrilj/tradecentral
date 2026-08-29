@@ -43,8 +43,9 @@ export function formatMarketCountdown(
   const hours = Math.floor((seconds % 86_400) / 3_600)
   const minutes = Math.floor((seconds % 3_600) / 60)
   const secs = seconds % 60
-  const countdown = days > 0
-    ? `${days}D ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
-    : `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+  const countdown =
+    days > 0
+      ? `${days}D ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+      : `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
   return `${MARKET_TRANSITION_VERBS[nextTransition] ?? 'NEXT'} ${countdown}`
 }

@@ -181,7 +181,14 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
       const rows = [
         { strike: 570, call_gex_m: 50, put_gex_m: -20, net_gex_m: 30, call_oi: 1000, put_oi: 500 },
         { strike: 580, call_gex_m: 80, put_gex_m: -80, net_gex_m: 0, call_oi: 2000, put_oi: 2000 },
-        { strike: 590, call_gex_m: 30, put_gex_m: -100, net_gex_m: -70, call_oi: 600, put_oi: 2500 },
+        {
+          strike: 590,
+          call_gex_m: 30,
+          put_gex_m: -100,
+          net_gex_m: -70,
+          call_oi: 600,
+          put_oi: 2500,
+        },
       ]
 
       const top = 30
@@ -254,11 +261,7 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
     })
 
     it('interpolates exact x-coordinate for arbitrary strike prices', () => {
-      const rows = [
-        { strike: 500 },
-        { strike: 550 },
-        { strike: 600 },
-      ]
+      const rows = [{ strike: 500 }, { strike: 550 }, { strike: 600 }]
       const left = 50
       const bandW = 60
       const bandCenter = (idx: number) => left + bandW * (idx + 0.5)
@@ -296,7 +299,9 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
       ]
       const zeroY = 120
 
-      const line = bars.map((b, i) => `${i === 0 ? 'M' : 'L'} ${b.cx.toFixed(1)} ${b.cumNetY.toFixed(1)}`).join(' ')
+      const line = bars
+        .map((b, i) => `${i === 0 ? 'M' : 'L'} ${b.cx.toFixed(1)} ${b.cumNetY.toFixed(1)}`)
+        .join(' ')
       const area = `${line} L ${bars[bars.length - 1].cx.toFixed(1)} ${zeroY.toFixed(1)} L ${bars[0].cx.toFixed(1)} ${zeroY.toFixed(1)} Z`
 
       expect(area.startsWith('M 100.0 80.0')).toBe(true)
@@ -308,8 +313,9 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
   describe('ProbabilityDensityChart 2D Lognormal Tails & Risk Calculator Math', () => {
     function cdfNormal(x: number): number {
       const t = 1 / (1 + 0.2316419 * Math.abs(x))
-      const d = 0.3989423 * Math.exp(-x * x / 2)
-      const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
+      const d = 0.3989423 * Math.exp((-x * x) / 2)
+      const p =
+        d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
       return x >= 0 ? 1 - p : p
     }
 
@@ -356,7 +362,7 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
 
     it('partitions 2D lognormal area path into distinct put (lower) and call (upper) tail segments', () => {
       const spot = 500
-      const iv = 0.20
+      const iv = 0.2
       const T = 45 / 365
       const sigma = iv * Math.sqrt(T)
       const mu = Math.log(spot) - 0.5 * sigma * sigma
@@ -394,7 +400,9 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
       const spotY = H - pad.b - (spotDens / maxD) * plotH
 
       const lowerPts = pts.filter((p) => p.price <= spot)
-      const lowerSegments = lowerPts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`)
+      const lowerSegments = lowerPts.map(
+        (p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`,
+      )
       lowerSegments.push(`L${spotX.toFixed(2)},${spotY.toFixed(2)}`)
       const putArea = `${lowerSegments.join(' ')} L${spotX.toFixed(2)},${baseBottom} L${pts[0].x.toFixed(2)},${baseBottom} Z`
 
@@ -414,7 +422,7 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
     it('calculates risk-neutral target price probabilities and Z-scores', () => {
       const spot = 500
       const targetPrice = 525 // +5%
-      const iv = 0.20
+      const iv = 0.2
       const T = 30 / 365
       const sigma = iv * Math.sqrt(T)
 
@@ -484,7 +492,9 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
       expect(gexMapSrc).toContain('stroke: var(--call-hi)')
       expect(gexMapSrc).toContain('stroke: var(--put-hi)')
       expect(gexMapSrc).toContain('stroke: var(--rule-hi)')
-      expect(gexMapSrc).toContain('transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1)')
+      expect(gexMapSrc).toMatch(
+        /transition:\s*transform\s*0\.15s\s*cubic-bezier\(0\.16,\s*1,\s*0\.3,\s*1\)/,
+      )
       expect(gexMapSrc).toContain('level-chip')
     })
 

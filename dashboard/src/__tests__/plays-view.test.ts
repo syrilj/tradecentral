@@ -49,7 +49,7 @@ describe('Plays of the Day workspace', () => {
     expect(view).toContain('PCR VOL')
     expect(apiSrc).toContain('bounce_setups')
     expect(apiSrc).toContain('breakdown_setups')
-    expect(apiSrc).toContain("engine?: string | null")
+    expect(apiSrc).toContain('engine?: string | null')
   })
 
   it('polls for fresh plays while the desk is open', () => {

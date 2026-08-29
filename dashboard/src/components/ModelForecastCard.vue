@@ -180,8 +180,8 @@ function fromSpot(price: number | null): string | null {
           :class="ret.total >= 0 ? 'pos' : 'neg'"
           :data-testid="`model-forecast-implied-return${sfx}`"
         >
-          {{ signedPct(ret.total * 100, 1) }} over
-          {{ props.forecast.timeframe || 'the horizon' }}<template v-if="showAnnualised"
+          {{ signedPct(ret.total * 100, 1) }} over {{ props.forecast.timeframe || 'the horizon'
+          }}<template v-if="showAnnualised"
             >, {{ signedPct(ret.annual! * 100, 1) }} a year</template
           >
         </span>
@@ -235,9 +235,7 @@ function fromSpot(price: number | null): string | null {
 
       <div class="mf-metric mf-metric-wide">
         <span class="mf-lbl label">Gearing up towards</span>
-        <strong class="mf-val lab">{{
-          formatGearingUp(props.forecast.gearingUpTowards)
-        }}</strong>
+        <strong class="mf-val lab">{{ formatGearingUp(props.forecast.gearingUpTowards) }}</strong>
       </div>
     </div>
 
@@ -284,11 +282,7 @@ function fromSpot(price: number | null): string | null {
       </div>
     </div>
 
-    <div
-      v-if="props.caseRange"
-      class="mf-range"
-      :data-testid="`model-forecast-range${sfx}`"
-    >
+    <div v-if="props.caseRange" class="mf-range" :data-testid="`model-forecast-range${sfx}`">
       <div class="mf-range-track">
         <span
           class="mf-range-span"
@@ -624,7 +618,6 @@ function fromSpot(price: number | null): string | null {
 .mf-sub.neg {
   color: var(--short);
 }
-
 
 @media (max-width: 720px) {
   .mf-head {
