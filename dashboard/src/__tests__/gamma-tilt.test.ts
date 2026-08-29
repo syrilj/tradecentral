@@ -139,6 +139,7 @@ function makeCharm(overrides: Partial<CharmSummary> = {}): CharmSummary {
     abs_charm_flow: 0,
     contracts_measured: 100,
     contracts_skipped: 0,
+    skipped_reasons: {},
     pressure: 'balanced',
     source: 'test',
     ...overrides,

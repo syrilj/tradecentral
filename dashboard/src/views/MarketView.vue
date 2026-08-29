@@ -3065,8 +3065,8 @@ const finChartData = computed(() => {
                 class="seg-b label"
                 :class="{ on: institutionPageSize === size }"
                 @click="
-                  institutionPageSize = size
-                  institutionPage = 1
+                  institutionPageSize = size;
+                  institutionPage = 1;
                 "
               >
                 {{ size === 'all' ? 'All' : size }}

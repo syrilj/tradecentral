@@ -10,6 +10,7 @@ import {
   calculateTrackWidthPct,
   buildTakeaways,
   RING_CIRCUMFERENCE,
+  RING_RADIUS,
 } from '@/squeezeCalc'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -158,6 +159,16 @@ describe('Squeeze Screener Calculation Suite', () => {
       expect(calculateRingOffset(40, customC)).toBeCloseTo(60, 2)
       expect(calculateRingOffset(-40, customC)).toBeCloseTo(60, 2)
     })
+
+    it('derives RING_CIRCUMFERENCE from RING_RADIUS (2πr) so it can never drift from the SVG radius', () => {
+      // Regression: RING_CIRCUMFERENCE was previously a standalone literal
+      // (263.89) that had to be kept in sync by hand with RING_RADIUS and the
+      // SVG's r="42" attribute. It is now computed, so the two can never
+      // silently disagree.
+      expect(RING_RADIUS).toBe(42)
+      expect(RING_CIRCUMFERENCE).toBeCloseTo(2 * Math.PI * 42, 8)
+      expect(RING_CIRCUMFERENCE).toBeCloseTo(263.8938, 3)
+    })
   })
 
   describe('3. Currency Formatting for Near-Spot Net GEX', () => {
@@ -301,6 +312,30 @@ describe('Squeeze Screener Calculation Suite', () => {
     it('binds calculated track width helper across factors and alt tracks', () => {
       expect(vueSrc).toContain('calculateTrackWidthPct(f.score, f.max)')
       expect(vueSrc).toContain('calculateTrackWidthPct(otherSide.setup.score, 100)')
+    })
+
+    it('renders an unmeasured dash — not a fake $0.00 — for a null wall or gamma-flip level', () => {
+      // Regression: api.ts documents that squeeze/GEX/wall fields are
+      // "null = unmeasured, NOT zero" (see api.ts:1000). The WALL and FLIP
+      // cells used to fall back to the literal string '$0.00' when the
+      // backend sent null, which is indistinguishable from a real $0 price
+      // and reads as a broken panel. They must fall back to DASH instead.
+      expect(vueSrc).not.toContain(": '$0.00'")
+      expect(vueSrc).toContain('featuredWall.level != null ? optUsd(featuredWall.level) : DASH')
+      expect(vueSrc).toContain('levels?.gamma_flip != null ? optUsd(levels.gamma_flip) : DASH')
+    })
+
+    it('shows a distinct "structure unmeasured" state instead of a fake 0/100 ring when a squeeze payload carries no scored setup', () => {
+      // Regression: when `squeeze` is a real (truthy) object but neither
+      // bullish_setup nor bearish_setup is populated, calculateFeaturedSetup
+      // still returns a side with `setup: undefined`. The board previously
+      // rendered anyway, showing a hard "0/100 UNLIKELY" ring that looks
+      // identical to a genuinely measured quiet market. The template must
+      // gate the scored board on `featured.setup` and show an explicit
+      // in-between state for "payload present, nothing scored".
+      expect(vueSrc).toContain('v-if="squeeze && featured.setup"')
+      expect(vueSrc).toContain('v-else-if="squeeze"')
+      expect(vueSrc).toContain('Structure unmeasured')
     })
   })
 })

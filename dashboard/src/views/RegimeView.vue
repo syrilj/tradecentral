@@ -69,9 +69,7 @@ const BREADTH_POLL_MS = 75_000
 const route = useRoute()
 const router = useRouter()
 
-const initialSymbol = (
-  typeof route.query.symbol === 'string' && route.query.symbol ? route.query.symbol : 'SPY'
-).toUpperCase()
+const initialSymbol = (typeof route.query.symbol === 'string' && route.query.symbol ? route.query.symbol : 'SPY').toUpperCase()
 const symbolInput = ref(initialSymbol)
 const symbol = ref(initialSymbol)
 
@@ -655,8 +653,8 @@ function onBreadthActivate(): void {
             class="ticker-chip font-mono"
             :class="{ active: symbol === sym }"
             @click="
-              symbolInput = sym
-              applySymbol()
+              symbolInput = sym;
+              applySymbol();
             "
           >
             {{ sym }}
@@ -672,9 +670,9 @@ function onBreadthActivate(): void {
               class="win-chip font-mono"
               :class="{ active: window === w }"
               @click="
-                window = w
-                void stateRes.refresh()
-                void signalsRes.refresh()
+                window = w;
+                void stateRes.refresh();
+                void signalsRes.refresh();
               "
             >
               {{ w.toUpperCase() }}
@@ -685,9 +683,9 @@ function onBreadthActivate(): void {
               class="win-chip font-mono"
               :class="{ active: barsMode === 'daily' }"
               @click="
-                barsMode = 'daily'
-                void stateRes.refresh()
-                void signalsRes.refresh()
+                barsMode = 'daily';
+                void stateRes.refresh();
+                void signalsRes.refresh();
               "
             >
               1D
@@ -696,9 +694,9 @@ function onBreadthActivate(): void {
               class="win-chip font-mono"
               :class="{ active: barsMode === '1h' }"
               @click="
-                barsMode = '1h'
-                void stateRes.refresh()
-                void signalsRes.refresh()
+                barsMode = '1h';
+                void stateRes.refresh();
+                void signalsRes.refresh();
               "
             >
               1H
@@ -1128,11 +1126,7 @@ function onBreadthActivate(): void {
             </ul>
           </Panel>
 
-          <Panel
-            v-if="regimeState && regimeState.regime !== 'unmeasurable'"
-            label="Probabilities"
-            index="C"
-          >
+          <Panel v-if="regimeState && regimeState.regime !== 'unmeasurable'" label="Probabilities" index="C">
             <p v-if="densityUnreliable" class="unmeasurable-note" role="status">
               Density not reliable — {{ pctFrac(withheldMassPct) }} of its mass was negative before
               clipping, so no probability is stated. Usually a put/call step at the money on a very

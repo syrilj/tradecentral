@@ -345,8 +345,8 @@ const pivotLadder = computed(() => {
           class="ticker-chip font-mono"
           :class="{ active: symbol === sym }"
           @click="
-            symbolInput = sym
-            updateSymbol()
+            symbolInput = sym;
+            updateSymbol();
           "
         >
           {{ sym }}

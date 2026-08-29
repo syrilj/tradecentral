@@ -11,7 +11,6 @@ const BASE = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 const configuredTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000)
 const REQUEST_TIMEOUT_MS =
   Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 30_000
-
 import type { RegimeBreadthPayload } from './regimeContracts'
 import type {
   MicrostructureRegimeSnapshot,
@@ -20,6 +19,7 @@ import type {
   SystematicSignalsPayload,
   BacktestTearsheet,
 } from './microstructureContracts'
+
 
 type AuthTokenProvider = () => Promise<string | null>
 let authTokenProvider: AuthTokenProvider | null = null
@@ -902,13 +902,25 @@ export interface ChainStrikeRow {
   charm_flow: number
 }
 
+/** Why a contract could not be charmed. Keys are omitted when the count is 0. */
+export interface CharmSkippedReasons {
+  malformed_row?: number
+  missing_dte?: number
+  expiring_within_one_day?: number
+  missing_or_implausible_iv?: number
+}
+
 export interface CharmSummary {
   net_charm_flow: number
   call_charm_flow: number
   put_charm_flow: number
+  /** Gross magnitude: sum of per-strike |flow|, NOT |sum of flows|. */
   abs_charm_flow: number
+  /** Contracts that produced a charm value. measured + skipped === chain size. */
   contracts_measured: number
   contracts_skipped: number
+  /** Breakdown of `contracts_skipped` so the UI can explain an empty chart. */
+  skipped_reasons: CharmSkippedReasons
   pressure: 'selling' | 'buying' | 'balanced'
   source: string
 }
@@ -921,6 +933,16 @@ export interface PressureGauge {
     delta_weighted_call_vol: number
     delta_weighted_put_vol: number
     net_gex_m: number
+  }
+  /**
+   * Per-channel net/gross ratio in [-1, 1] that produced `imbalance`.
+   * `null` = that channel had no gross magnitude and abstained from the blend
+   * (it did NOT vote "balanced"). Render null as "no data", never as 0.
+   */
+  channels: {
+    charm: number | null
+    volume: number | null
+    gex: number | null
   }
   weights: { alpha: number; beta: number }
   convention_note: string
@@ -1627,6 +1649,7 @@ export interface OptionsIntelligence {
   gex_history: GexHistoryPoint[]
   anomalies: { count: number; method: string }
   probability: OptionsProbability
+  spot_source?: string | null
   warnings: string[]
   caveats: string[]
 }

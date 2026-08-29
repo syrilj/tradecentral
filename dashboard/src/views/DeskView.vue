@@ -324,12 +324,8 @@ const reconciliation = computed(() => d.value?.signal_reconciliation)
 const reconciledBySymbol = computed(
   () => new Map((reconciliation.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row])),
 )
-const signalsBySymbol = computed(
-  () => new Map(signals.value.map((s) => [s.symbol?.toUpperCase() ?? '', s])),
-)
-const peadBySymbol = computed(
-  () => new Map(pead.value.map((p) => [p.symbol?.toUpperCase() ?? '', p])),
-)
+const signalsBySymbol = computed(() => new Map(signals.value.map((s) => [s.symbol?.toUpperCase() ?? '', s])))
+const peadBySymbol = computed(() => new Map(pead.value.map((p) => [p.symbol?.toUpperCase() ?? '', p])))
 
 watch(
   () => scan.value?.depth,
@@ -1233,11 +1229,7 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table
-          v-if="filteredPead.length"
-          class="grid table-pead"
-          :class="{ 'is-split': dualViewMode === 'split' }"
-        >
+        <table v-if="filteredPead.length" class="grid table-pead" :class="{ 'is-split': dualViewMode === 'split' }">
           <thead>
             <tr>
               <th class="label col-sym">Symbol</th>
@@ -1269,11 +1261,7 @@ function navTo(name: string): void {
               <td class="fig num col-score" :class="tone(c.evidence?.pead_score)">
                 {{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}
               </td>
-              <td
-                v-if="dualViewMode !== 'split'"
-                class="fig num col-gap"
-                :class="tone(c.evidence?.gap_std)"
-              >
+              <td v-if="dualViewMode !== 'split'" class="fig num col-gap" :class="tone(c.evidence?.gap_std)">
                 {{ num(c.evidence?.gap_std, 2) }}
               </td>
               <td v-if="dualViewMode !== 'split'" class="fig num col-vol">
@@ -1357,11 +1345,7 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table
-          v-if="filteredSignals.length"
-          class="grid table-directional"
-          :class="{ 'is-split': dualViewMode === 'split' }"
-        >
+        <table v-if="filteredSignals.length" class="grid table-directional" :class="{ 'is-split': dualViewMode === 'split' }">
           <thead>
             <tr>
               <th class="label col-sym">Symbol</th>

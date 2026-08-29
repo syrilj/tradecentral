@@ -3,7 +3,7 @@ import { computed, ref, useId } from 'vue'
 import type { CharmStrikeRow } from '@/api'
 import { linearScale, linePath, niceTicks } from '@/charts'
 import { useChartSize } from '@/composables/useChartSize'
-import { compact, num } from '@/format'
+import { compact, num, DASH } from '@/format'
 
 /**
  * Charm flow by strike — the time-decay pressure chart.
@@ -75,6 +75,33 @@ const ordered = computed(() =>
     .filter((r) => Number.isFinite(r.strike) && Number.isFinite(r.net_charm_flow))
     .sort((a, b) => a.strike - b.strike),
 )
+
+/** True for a finite, genuinely non-zero flow value (NaN/undefined never
+ * count as "signal" — they must not masquerade as real, non-missing data). */
+function hasFlow(v: number): boolean {
+  return Number.isFinite(v) && v !== 0
+}
+
+/**
+ * The backend emits a row for every strike in the chain and sets
+ * call/put/net charm flow to exactly 0 whenever Black-Scholes charm could
+ * not be computed (missing/implausible IV or OI) — see `_charm_map` in
+ * options_intelligence.py. That means "no usable data" arrives as a
+ * legitimate-looking 0, indistinguishable from a strike that is genuinely
+ * balanced. A whole chain with missing IV/OI therefore passes the
+ * `ordered` filter (0 is finite) but carries no real signal anywhere.
+ *
+ * `hasSignal` is true as soon as ANY strike shows a real (finite, non-zero)
+ * flow; `noData` is the inverse — true only when every single strike is
+ * zero (or the chain is empty), which is the actual "missing IV/OI" case.
+ * A chain with a partial dropout (a few OTM strikes missing IV, the rest
+ * fine) still has signal and renders normally — only a wholesale outage
+ * trips the empty state.
+ */
+const hasSignal = computed(() => ordered.value.some((r) =>
+  hasFlow(r.net_charm_flow) || hasFlow(r.call_charm_flow) || hasFlow(r.put_charm_flow)))
+
+const noData = computed(() => ordered.value.length === 0 || !hasSignal.value)
 
 const strikeDomain = computed(() => {
   const strikes = ordered.value.map((r) => r.strike)
@@ -149,12 +176,13 @@ const bars = computed<FlowBar[]>(() => {
   })
 })
 
-/** Net pressure trace across strikes. */
-const netPath = computed(() =>
-  linePath(
-    ordered.value.map((r) => ({ x: xScale.value(r.strike), y: yScale.value(r.net_charm_flow) })),
-  ),
-)
+/** Net pressure trace across strikes. Suppressed entirely when noData: a
+ * flat line drawn along the zero midline (which is what an all-zero chain
+ * would otherwise produce) reads as "measured and balanced", not "unmeasured" —
+ * exactly the fake-zero this component exists to avoid. */
+const netPath = computed(() => noData.value ? '' : linePath(
+  ordered.value.map((r) => ({ x: xScale.value(r.strike), y: yScale.value(r.net_charm_flow) })),
+))
 
 /** Totals: positive net flow = selling pressure, negative = buying pressure. */
 const totalSell = computed(() =>
@@ -164,7 +192,8 @@ const totalBuy = computed(() =>
   ordered.value.reduce((a, r) => a + Math.max(0, -r.net_charm_flow), 0),
 )
 const netTotal = computed(() => totalSell.value - totalBuy.value)
-const regime = computed<'selling' | 'buying' | 'balanced'>(() => {
+const regime = computed<'selling' | 'buying' | 'balanced' | 'no-data'>(() => {
+  if (noData.value) return 'no-data'
   const total = totalSell.value + totalBuy.value
   if (total <= 0) return 'balanced'
   const share = netTotal.value / total
@@ -172,6 +201,31 @@ const regime = computed<'selling' | 'buying' | 'balanced'>(() => {
   if (share < -0.05) return 'buying'
   return 'balanced'
 })
+
+/** Header readout strings. Rendered as the DASH placeholder rather than
+ * "0" when noData — per format.ts's own rule, a zero that means "missing"
+ * is a lie, and Σ SELL/Σ BUY/NET are exactly that kind of figure. */
+const totalSellDisplay = computed(() => noData.value ? DASH : compact(totalSell.value))
+const totalBuyDisplay = computed(() => noData.value ? DASH : compact(totalBuy.value))
+const netTotalDisplay = computed(() => noData.value
+  ? DASH
+  : `${netTotal.value > 0 ? '+' : ''}${compact(netTotal.value)}`)
+
+/**
+ * Shares/day label for the flow axis and breakdowns. `compact()` floors
+ * anything under 1000 to a whole number, so a chain whose real flow
+ * magnitudes sit below 1 sh/d (a thin chain, tiny OI) would print "0" on
+ * every single tick — indistinguishable from the true all-zero/no-data
+ * case this component now detects separately. Fall back to decimal
+ * precision for that sub-1 range; compact() remains correct (and far more
+ * readable) everywhere above it, including at 1e7+ magnitudes.
+ */
+function flowLabel(v: number): string {
+  if (!Number.isFinite(v)) return DASH
+  const a = Math.abs(v)
+  if (a > 0 && a < 1) return v.toFixed(a < 0.01 ? 4 : 2)
+  return compact(v)
+}
 
 const flowTicks = computed(() => {
   const t = niceTicks(0, flowMax.value, 3)
@@ -231,7 +285,7 @@ const focus = computed(() => {
 function onMove(e: MouseEvent): void {
   const el = svgEl.value
   const n = bars.value.length
-  if (!el || n === 0) {
+  if (!el || n === 0 || noData.value) {
     hoverIdx.value = null
     return
   }
@@ -273,18 +327,20 @@ function onMove(e: MouseEvent): void {
                 ? 'SELLING PRESSURE'
                 : regime === 'buying'
                   ? 'BUYING PRESSURE'
-                  : 'BALANCED'
+                  : regime === 'no-data'
+                    ? 'NO DATA'
+                    : 'BALANCED'
             }}
           </b>
         </span>
-        <span class="prem-sum sell">Σ SELL {{ compact(totalSell) }} sh/d</span>
-        <span class="prem-sum buy">Σ BUY {{ compact(totalBuy) }} sh/d</span>
+        <span class="prem-sum sell">Σ SELL {{ totalSellDisplay }} sh/d</span>
+        <span class="prem-sum buy">Σ BUY {{ totalBuyDisplay }} sh/d</span>
         <span
           class="imbalance"
           :class="regime"
           title="Net charm flow: shares/day dealers must trade to stay delta-hedged from time decay"
         >
-          NET {{ netTotal > 0 ? '+' : '' }}{{ compact(netTotal) }} sh/d
+          NET {{ netTotalDisplay }} sh/d
         </span>
       </div>
 
@@ -299,16 +355,17 @@ function onMove(e: MouseEvent): void {
         >
           DEALERS {{ focus.dealerAction }}
         </span>
-        <span v-if="focus.net > 0" class="sell fig">SELL {{ compact(focus.net) }} sh/d</span>
-        <span v-else-if="focus.net < 0" class="buy fig">BUY {{ compact(-focus.net) }} sh/d</span>
+        <span v-if="focus.net > 0" class="sell fig">SELL {{ flowLabel(focus.net) }} sh/d</span>
+        <span v-else-if="focus.net < 0" class="buy fig">BUY {{ flowLabel(-focus.net) }} sh/d</span>
         <span class="label flow-breakdown">
-          C: {{ compact(focus.callFlow) }} sh/d ({{ compact(focus.callOi) }} OI) · P:
-          {{ compact(focus.putFlow) }} sh/d ({{ compact(focus.putOi) }} OI)
+          C: {{ flowLabel(focus.callFlow) }} sh/d ({{ compact(focus.callOi) }} OI) ·
+          P: {{ flowLabel(focus.putFlow) }} sh/d ({{ compact(focus.putOi) }} OI)
         </span>
       </div>
-      <div v-else class="scale-note label">
-        shares/day · hover any strike bar to inspect dealer hedge flow
+      <div v-else-if="noData" class="scale-note label">
+        chain returned strikes but Black-Scholes charm could not be computed (missing/implausible IV or OI) — no usable flow data
       </div>
+      <div v-else class="scale-note label">shares/day · hover any strike bar to inspect dealer hedge flow</div>
     </div>
 
     <!-- Chart canvas -->
@@ -318,7 +375,9 @@ function onMove(e: MouseEvent): void {
         class="pressure-svg"
         :viewBox="`0 0 ${W} ${H}`"
         role="img"
-        :aria-label="`${symbol} charm flow by strike — selling pressure above zero, buying pressure below`"
+        :aria-label="noData
+          ? `${symbol} charm flow by strike — no usable data, chain missing IV or OI`
+          : `${symbol} charm flow by strike — selling pressure above zero, buying pressure below`"
         preserveAspectRatio="xMidYMid meet"
         @mousemove="onMove"
         @mouseleave="hoverIdx = null"
@@ -379,26 +438,10 @@ function onMove(e: MouseEvent): void {
         <g class="grid-lines">
           <line class="zero" :x1="pad.l" :x2="W - pad.r" :y1="zeroY" :y2="zeroY" />
           <template v-for="tick in flowTicks" :key="`ft-${tick.value}`">
-            <line
-              v-if="tick.value > 0"
-              :x1="pad.l"
-              :x2="W - pad.r"
-              :y1="tick.sellY"
-              :y2="tick.sellY"
-            />
-            <line
-              v-if="tick.value > 0"
-              :x1="pad.l"
-              :x2="W - pad.r"
-              :y1="tick.buyY"
-              :y2="tick.buyY"
-            />
-            <text :x="pad.l - 8" :y="tick.sellY + 3" text-anchor="end">
-              +{{ compact(tick.value) }}
-            </text>
-            <text :x="pad.l - 8" :y="tick.buyY + 3" text-anchor="end">
-              -{{ compact(tick.value) }}
-            </text>
+            <line v-if="tick.value > 0" :x1="pad.l" :x2="W - pad.r" :y1="tick.sellY" :y2="tick.sellY" />
+            <line v-if="tick.value > 0" :x1="pad.l" :x2="W - pad.r" :y1="tick.buyY" :y2="tick.buyY" />
+            <text v-if="tick.value > 0" :x="pad.l - 8" :y="tick.sellY + 3" text-anchor="end">+{{ flowLabel(tick.value) }}</text>
+            <text v-if="tick.value > 0" :x="pad.l - 8" :y="tick.buyY + 3" text-anchor="end">-{{ flowLabel(tick.value) }}</text>
           </template>
           <text :x="pad.l - 8" :y="zeroY + 3" text-anchor="end" class="zero-label">0</text>
         </g>
@@ -452,7 +495,7 @@ function onMove(e: MouseEvent): void {
               :height="bar.sellH"
               rx="1.5"
             >
-              <title>K {{ num(bar.strike) }} · selling pressure {{ compact(bar.net) }} sh/d</title>
+              <title>K {{ num(bar.strike) }} · selling pressure {{ flowLabel(bar.net) }} sh/d</title>
             </rect>
 
             <!-- Buying pressure bar (grows DOWN from zeroY) -->
@@ -465,7 +508,7 @@ function onMove(e: MouseEvent): void {
               :height="bar.buyH"
               rx="1.5"
             >
-              <title>K {{ num(bar.strike) }} · buying pressure {{ compact(-bar.net) }} sh/d</title>
+              <title>K {{ num(bar.strike) }} · buying pressure {{ flowLabel(-bar.net) }} sh/d</title>
             </rect>
 
             <!-- Active strike highlight marker on trace -->
@@ -500,8 +543,10 @@ function onMove(e: MouseEvent): void {
           </template>
         </g>
 
-        <!-- Empty state -->
-        <text v-if="!bars.length" class="empty" :x="W / 2" :y="zeroY" text-anchor="middle">
+        <!-- Empty state: fires both when the chain is literally empty AND
+             when every strike passed the finite-value filter but carries no
+             real flow (the "whole chain missing IV/OI" case — see noData). -->
+        <text v-if="noData" class="empty" :x="W / 2" :y="zeroY" text-anchor="middle">
           NO CHARM DATA — CHAIN MISSING IV OR OI
         </text>
       </svg>
@@ -578,6 +623,10 @@ function onMove(e: MouseEvent): void {
 .main-px b.balanced {
   color: var(--ink-dim);
 }
+.main-px b.no-data {
+  color: var(--ink-faint);
+  font-style: italic;
+}
 
 .prem-sum.sell {
   color: var(--put-hi);
@@ -604,6 +653,10 @@ function onMove(e: MouseEvent): void {
 }
 .imbalance.balanced {
   color: var(--ink-dim);
+}
+.imbalance.no-data {
+  color: var(--ink-faint);
+  font-style: italic;
 }
 
 .probe-inline {

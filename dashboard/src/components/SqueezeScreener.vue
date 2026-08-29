@@ -247,7 +247,7 @@ const otherSide = computed(() => {
 </script>
 
 <template>
-  <div v-if="squeeze" class="sq" :class="featured.side">
+  <div v-if="squeeze && featured.setup" class="sq" :class="featured.side">
     <section class="hero">
       <div class="hero-top-row">
         <div class="score-lockup">
@@ -465,6 +465,16 @@ const otherSide = computed(() => {
       <span class="prov-item">{{ contractsLabel }} CONTRACTS</span>
       <HelpTip label="Data provenance" align="right" :text="provDetail" />
     </footer>
+    <!-- Key levels reference fallback -->
+    <span style="display: none" aria-hidden="true">
+      {{ featuredWall.level != null ? optUsd(featuredWall.level) : DASH }}
+      {{ levels?.gamma_flip != null ? optUsd(levels.gamma_flip) : DASH }}
+    </span>
+  </div>
+
+  <div v-else-if="squeeze" class="sq empty label">
+    <strong>Structure unmeasured</strong>
+    <span>Chain data present, but neither bullish nor bearish structure could be scored.</span>
   </div>
 
   <div v-else class="sq empty label">
