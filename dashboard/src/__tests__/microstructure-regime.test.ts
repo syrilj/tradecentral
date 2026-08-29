@@ -28,10 +28,11 @@ describe('Microstructure Regime Dynamics contracts', () => {
       spot: 502.5,
       asof: '2026-08-28T16:00:00Z',
       regime: 'positive_gamma',
-      regime_confidence: 0.92,
+      regime_strength: 0.62,
       net_gex_m: 165.7,
       call_gex_m: 220.3,
       put_gex_m: -54.6,
+      net_gex_profile_m: 163.9,
       net_vex_m: -12.4,
       net_chex_m: 4.8,
       hedging_flow_m: 8.2,
@@ -41,9 +42,19 @@ describe('Microstructure Regime Dynamics contracts', () => {
       put_wall: 490,
       volatility_trigger: 505,
       absolute_gamma_peak: 500,
+      quality: {
+        measurable: true,
+        contracts: 420,
+        strikes: 60,
+        total_open_interest: 1_250_000,
+        iv_fallback_contracts: 0,
+        flip_located: true,
+        dealer_convention: 'index',
+        reason: null,
+      },
       topography: topo,
       strikes: [],
-      synthetic_gex_profile: [
+      gex_profile: [
         { spot: 490, net_gex_m: -10 },
         { spot: 500, net_gex_m: 165.7 },
       ],
@@ -52,9 +63,72 @@ describe('Microstructure Regime Dynamics contracts', () => {
 
     expect(snapshot.symbol).toBe('SPY')
     expect(snapshot.regime).toBe('positive_gamma')
-    expect(snapshot.spot).toBeGreaterThan(snapshot.gamma_flip)
+    expect(snapshot.spot).toBeGreaterThan(snapshot.gamma_flip!)
     expect(snapshot.topography.quadrant).toBe('forward_positive_ramp')
     expect(snapshot.net_gex_m).toBeGreaterThan(0)
+    expect(snapshot.quality.measurable).toBe(true)
+  })
+
+  it('models a withheld snapshot with every structural level null', () => {
+    // The shape the server returns when there is no chain. Nothing numeric may
+    // survive, so a withheld read cannot be mistaken for a balanced one.
+    const withheld: MicrostructureRegimeSnapshot = {
+      symbol: 'ZZZZ',
+      spot: 12.34,
+      asof: '2026-08-28T16:00:00Z',
+      regime: 'unmeasurable',
+      regime_strength: 0,
+      net_gex_m: 0,
+      call_gex_m: 0,
+      put_gex_m: 0,
+      net_gex_profile_m: null,
+      net_vex_m: 0,
+      net_chex_m: 0,
+      hedging_flow_m: null,
+      zero_dte_charm_drift_m: 0,
+      gamma_flip: null,
+      call_wall: null,
+      put_wall: null,
+      volatility_trigger: null,
+      absolute_gamma_peak: null,
+      quality: {
+        measurable: false,
+        contracts: 0,
+        strikes: 0,
+        total_open_interest: 0,
+        iv_fallback_contracts: 0,
+        flip_located: false,
+        dealer_convention: 'index',
+        reason: "no option chain available for 'ZZZZ'",
+      },
+      topography: {
+        quadrant: 'unmeasurable',
+        title: 'Not measurable',
+        description: 'No dealer gamma surface could be measured.',
+        dealer_hedging_action: 'Unknown.',
+        expected_market_behavior: 'No claim.',
+        gex_above_spot_m: 0,
+        gex_below_spot_m: 0,
+        gex_ratio: 0,
+        call_wall: null,
+        put_wall: null,
+        gamma_flip: null,
+        volatility_trigger: null,
+        absolute_gamma_peak: null,
+      },
+      strikes: [],
+      gex_profile: [],
+      notes: ['Regime withheld.'],
+    }
+
+    expect(withheld.regime).toBe('unmeasurable')
+    expect(withheld.quality.measurable).toBe(false)
+    expect(withheld.quality.reason).toBeTruthy()
+    expect(withheld.gamma_flip).toBeNull()
+    expect(withheld.call_wall).toBeNull()
+    expect(withheld.put_wall).toBeNull()
+    expect(withheld.hedging_flow_m).toBeNull()
+    expect(withheld.gex_profile).toHaveLength(0)
   })
 
   it('correctly models negative gamma breakout signal execution properties', () => {

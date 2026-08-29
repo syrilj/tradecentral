@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSmile, riskNeutralDensity } from '@/riskNeutralDensity'
+import { availableSmileExpiries, buildSmile, riskNeutralDensity } from '@/riskNeutralDensity'
 import type { IvStrikeRow, OptionsIntelligence, StackedSignals } from '@/api'
 import type { Smile, SmilePoint } from '@/regimeContracts'
 
@@ -319,6 +319,121 @@ describe('riskNeutralDensity — failure paths never throw, always explain', () 
     const result = riskNeutralDensity(smile)
     expect(result.grid).toBeNull()
     expect(result.unavailableReason).not.toBeNull()
+  })
+})
+
+describe('buildSmile prefers a single expiry over the blended surface', () => {
+  /*
+   * `stacked_signals.iv_surface` averages IV across EVERY expiry at each
+   * strike. A 0DTE wing and a 90DTE wing at the same strike carry very
+   * different implied vols, so the blend is not the smile of any traded
+   * expiry: repricing calls off it yields a non-convex call curve whose second
+   * derivative is negative over wide stretches. That is what put the regime
+   * page's probability panel permanently behind its "density not reliable"
+   * notice — the panel was not broken, it was correctly refusing to report a
+   * density built from the wrong input.
+   */
+  function perExpiryPayload() {
+    const base = basePayload({
+      summary: { ...basePayload().summary, spot: 100 },
+      probability: { available: true, method: 'test', horizon_days: 30, atm_iv: 0.25 },
+      stacked_signals: stackedSignals([
+        // Blended surface: deliberately different IVs, so a smile built from
+        // it is distinguishable from one built per expiry.
+        ivRow(90, 0.6, 0.6),
+        ivRow(95, 0.55, 0.55),
+        ivRow(100, 0.5, 0.5),
+        ivRow(105, 0.55, 0.55),
+        ivRow(110, 0.6, 0.6),
+      ]),
+    })
+    base.stacked_signals!.iv_surface_by_expiry = [
+      {
+        expiry: '2026-08-29',
+        dte: 0,
+        years: 0.25 / 365,
+        atm_iv: 0.3,
+        strikes_measured: 5,
+        points: [
+          { strike: 98, call_iv: 0.34, put_iv: 0.34 },
+          { strike: 99, call_iv: 0.32, put_iv: 0.32 },
+          { strike: 100, call_iv: 0.3, put_iv: 0.3 },
+          { strike: 101, call_iv: 0.32, put_iv: 0.32 },
+          { strike: 102, call_iv: 0.34, put_iv: 0.34 },
+        ],
+      },
+      {
+        expiry: '2026-09-30',
+        dte: 32,
+        years: 32 / 365,
+        atm_iv: 0.2,
+        strikes_measured: 5,
+        points: [
+          { strike: 90, call_iv: 0.24, put_iv: 0.24 },
+          { strike: 95, call_iv: 0.22, put_iv: 0.22 },
+          { strike: 100, call_iv: 0.2, put_iv: 0.2 },
+          { strike: 105, call_iv: 0.22, put_iv: 0.22 },
+          { strike: 110, call_iv: 0.24, put_iv: 0.24 },
+        ],
+      },
+    ]
+    return base
+  }
+
+  it('defaults to the nearest expiry, not the payload nearest-to-30-day horizon', () => {
+    const smile = buildSmile(perExpiryPayload())!
+    expect(smile.blended).toBe(false)
+    expect(smile.expiry).toBe('2026-08-29')
+    expect(smile.dte).toBe(0)
+    // 0DTE horizon, floored so sigma*sqrt(T) does not collapse to zero.
+    expect(smile.tYears).toBeGreaterThan(0)
+    expect(smile.tYears).toBeLessThan(1 / 365)
+  })
+
+  it('honours an explicit expiry pick', () => {
+    const smile = buildSmile(perExpiryPayload(), '2026-09-30')!
+    expect(smile.expiry).toBe('2026-09-30')
+    expect(smile.dte).toBe(32)
+    expect(smile.tYears).toBeCloseTo(32 / 365, 6)
+  })
+
+  it('falls back to the nearest expiry when the requested one is not quoted', () => {
+    const smile = buildSmile(perExpiryPayload(), '2099-01-01')!
+    expect(smile.expiry).toBe('2026-08-29')
+  })
+
+  it('marks the legacy blended path so callers can refuse to report from it', () => {
+    const payload = perExpiryPayload()
+    delete payload.stacked_signals!.iv_surface_by_expiry
+    const smile = buildSmile(payload)!
+    expect(smile.blended).toBe(true)
+  })
+
+  it('produces a cleaner density from one expiry than from the blend', () => {
+    // The real test of the fix: less mass has to be clipped away.
+    const perExpiry = riskNeutralDensity(buildSmile(perExpiryPayload()))
+    expect(perExpiry.grid).not.toBeNull()
+    expect(perExpiry.clippedMass).toBeLessThan(0.25)
+  })
+
+  it('skips expiries too sparse to interpolate', () => {
+    const payload = perExpiryPayload()
+    payload.stacked_signals!.iv_surface_by_expiry = [
+      {
+        expiry: '2026-08-29',
+        dte: 0,
+        years: 0.25 / 365,
+        atm_iv: 0.3,
+        strikes_measured: 2,
+        points: [
+          { strike: 99, call_iv: 0.32, put_iv: 0.32 },
+          { strike: 100, call_iv: 0.3, put_iv: 0.3 },
+        ],
+      },
+      payload.stacked_signals!.iv_surface_by_expiry![1],
+    ]
+    expect(availableSmileExpiries(payload).map((e) => e.expiry)).toEqual(['2026-09-30'])
+    expect(buildSmile(payload)!.expiry).toBe('2026-09-30')
   })
 })
 

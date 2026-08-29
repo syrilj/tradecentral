@@ -1033,12 +1033,28 @@ export interface ConfluenceCluster {
   labels: string[]
   above_spot: boolean
 }
+/** One expiry's own smile. */
+export interface IvExpirySmile {
+  expiry: string
+  dte: number | null
+  /** Year fraction to expiry, floored so a 0DTE horizon does not collapse. */
+  years: number
+  atm_iv: number | null
+  strikes_measured: number
+  points: Array<{ strike: number; call_iv: number | null; put_iv: number | null }>
+}
+
 export interface StackedSignals {
   theta_by_strike: ThetaVannaStrikeRow[]
   theta_summary: ThetaSummary
   vanna_summary: VannaSummary
+  /** Blended across every expiry — a skew/wall lens, NOT a density input. */
   iv_surface: IvStrikeRow[]
   iv_summary: IvSurfaceSummary
+  /** Per-expiry smiles. Anything building a risk-neutral density uses these:
+   *  the blended surface above is not the smile of any traded expiry, and
+   *  repricing off it drives the density negative. */
+  iv_surface_by_expiry?: IvExpirySmile[]
   volume_profile: VolumeProfileBin[]
   volume_profile_summary: VolumeProfileSummary
   confluence: ConfluenceCluster[]
@@ -1046,6 +1062,7 @@ export interface StackedSignals {
     theta_vanna_contracts_measured: number
     theta_vanna_contracts_skipped: number
     iv_strikes_measured: number
+    iv_expiries_measured?: number
     volume_profile_available: boolean
   }
 }

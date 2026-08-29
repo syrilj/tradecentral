@@ -138,15 +138,27 @@ describe('two clocks', () => {
 
   it('builds the smile and risk-neutral density exactly once per slow payload, cached in a shallowRef', () => {
     expect(view).toContain('const slowDerived = shallowRef')
-    // The build happens inside the watcher keyed on the SLOW resource's
-    // data, not inside any computed that would re-run on the fast tick.
-    const watcherBlock = view.slice(
-      view.indexOf('watch(\n  () => optionsRes.data.value'),
-      view.indexOf('watch(\n  () => optionsRes.data.value') + 400,
-    )
-    expect(watcherBlock).toContain('buildSmile(payload)')
+    // The build happens inside the watcher keyed on the SLOW resource's data
+    // (and the operator's expiry pick), not inside any computed that would
+    // re-run on the fast tick.
+    const start = view.indexOf('watch(\n  [() => optionsRes.data.value, smileExpiry]')
+    expect(start).toBeGreaterThan(-1)
+    const watcherBlock = view.slice(start, start + 500)
+    expect(watcherBlock).toContain('buildSmile(payload, expiry)')
     expect(watcherBlock).toContain('riskNeutralDensity(smile)')
     expect(watcherBlock).toContain('slowDerived.value =')
+  })
+
+  it('builds the density from ONE expiry, selectable, not the blended surface', () => {
+    // Blending every expiry's IV at each strike is what made the repriced call
+    // curve non-convex, drove the density negative, and left the probability
+    // panel permanently behind its own "not reliable" notice.
+    expect(view).toContain('availableSmileExpiries')
+    expect(view).toContain('const smileExpiry = ref<string | null>(null)')
+    expect(view).toContain('const expiryChoices = computed(')
+    // A stale expiry string from the previous symbol must not silently fall
+    // through to "nearest" on the new one.
+    expect(view).toContain('watch(symbol, () => {')
   })
 
   it('recomputes the regime stack from the cached smile, not from a fresh network read', () => {
@@ -176,19 +188,41 @@ describe('withholds probabilities when the density is not trustworthy', () => {
    * that calibrates out. Interpolating that step drove ~28% of density mass
    * negative — and the view printed probabilities to two decimals anyway.
    */
-  it('gates probabilities behind a clipped-mass ceiling', () => {
-    expect(view).toContain('MAX_TRUSTWORTHY_CLIPPED_MASS')
-    expect(view).toContain('const densityUnreliable = computed(')
+  it('grades the density in three bands rather than blanking on any noise', () => {
+    // All-or-nothing at 10% clipped mass meant the panel was blank far more
+    // often than populated, which reads as broken rather than careful. A
+    // distribution that lost a few percent of mass is still worth showing when
+    // the loss is stated; one that lost a quarter of it is not.
+    expect(view).toContain('const CLIPPED_MASS_CLEAN = 0.02')
+    expect(view).toContain('const CLIPPED_MASS_UNUSABLE = 0.25')
+    expect(view).toContain("const densityGrade = computed<'clean' | 'degraded' | 'unusable'>")
+    expect(view).toContain(
+      "const densityUnreliable = computed(() => densityGrade.value === 'unusable')",
+    )
+  })
+
+  it('gates probabilities on both the clipped-mass ceiling and a blended smile', () => {
     // The gate must short-circuit the computed, not merely hide the markup:
     // a consumer reading `probabilities` must get null, not a broken number.
     const probsBlock = view.slice(view.indexOf('const probabilities = computed'))
-    expect(probsBlock.slice(0, 300)).toContain('if (densityUnreliable.value) return null')
+    expect(probsBlock.slice(0, 300)).toContain(
+      'if (densityUnreliable.value || smileBlended.value) return null',
+    )
   })
 
   it('states the withheld reason instead of rendering the figures', () => {
-    expect(view).toContain('v-if="densityUnreliable"')
-    expect(view).toMatch(/Density not reliable/)
+    expect(view).toContain('v-if="smileBlended"')
+    expect(view).toContain('v-else-if="densityUnreliable"')
+    expect(view).toMatch(/Density not usable/)
     expect(view).toContain('v-else class="prob-grid"')
+  })
+
+  it('states the horizon every probability is conditional on', () => {
+    // "62% between the walls" means something completely different at 0DTE
+    // than at 30 days; the figure is unreadable without its horizon.
+    expect(view).toContain('const probabilityHorizon = computed<string | null>')
+    expect(view).toContain('v-if="probabilityHorizon"')
+    expect(view).toMatch(/0DTE/)
   })
 
   it('does not double-report: the softer clipped warning yields to the hard gate', () => {
@@ -401,14 +435,16 @@ describe('tilt constants are on screen, not hidden behind the probability', () =
     expect(view).toContain('regimeState.slopeScaleM != null')
   })
 
-  it('shows clippedMass only when material (>2%), not on every render', () => {
+  it('shows the clipped-mass warning only in the degraded band, not on every render', () => {
     expect(view).toContain(
-      'const clippedMassMaterial = computed(() => (clippedMassPct.value ?? 0) > 0.02)',
+      "const clippedMassMaterial = computed(() => densityGrade.value === 'degraded')",
     )
-    // Two tiers, and they must not both fire: this soft advisory is for a
-    // usable-but-noisy density, and it defers once the hard reliability gate
-    // has already withheld the figures outright.
-    expect(view).toContain('v-if="clippedMassMaterial && !densityUnreliable"')
+    // Three tiers, and only one may speak: this soft advisory is for a
+    // usable-but-noisy density, and it defers once either hard gate (unusable
+    // density, or a blended smile) has already withheld the figures outright.
+    expect(view).toContain(
+      'v-if="clippedMassMaterial && !densityUnreliable && !smileBlended"',
+    )
   })
 })
 

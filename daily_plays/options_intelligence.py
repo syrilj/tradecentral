@@ -2671,6 +2671,83 @@ def _stacked_iv_surface(
     return rows_out, summary
 
 
+def _iv_surface_by_expiry(
+    *, chain_rows: Sequence[Mapping[str, Any]], spot: float, asof: datetime,
+) -> list[dict[str, Any]]:
+    """One IV smile per expiry — the input a risk-neutral density actually needs.
+
+    `_stacked_iv_surface` above collapses the whole chain into a single
+    per-strike IV by averaging across every expiry. That is the right shape for
+    a skew/wall lens, and the wrong shape for Breeden-Litzenberger: a 0DTE wing
+    and a 90DTE wing at the same strike carry very different implied vols, so
+    the blended curve is not the smile of any traded expiry. Repricing calls off
+    it produces a non-convex call curve, whose second derivative goes negative
+    over wide stretches -- which is exactly the "density not reliable, N% of its
+    mass was negative before clipping" state that left the regime page's
+    probability panel blank most of the time.
+
+    Each entry here is a single expiry's own smile, so the density built from it
+    is the density of a distribution the market actually quotes, at a horizon
+    the operator can name.
+    """
+    asof_day = asof.date() if isinstance(asof, datetime) else asof
+    by_expiry: dict[date, dict[float, dict[str, float]]] = {}
+    for row in chain_rows:
+        expiry = row.get("expiry")
+        strike = _number(row.get("strike"))
+        iv = _number(row.get("iv"))
+        right = row.get("right")
+        if not isinstance(expiry, date) or not strike or iv is None:
+            continue
+        if not 0.005 <= iv <= 5.0 or right not in {"call", "put"}:
+            continue
+        oi = _integer(row.get("open_interest")) or 0
+        vol = _integer(row.get("volume")) or 0
+        weight = oi + vol * 0.25
+        if weight <= 0:
+            # A contract with neither OI nor volume has a quote nobody stands
+            # behind; including it lets a stale mark set the wing.
+            continue
+        cell = by_expiry.setdefault(expiry, {}).setdefault(
+            strike, {"call_iv_sum": 0.0, "call_iv_w": 0.0, "put_iv_sum": 0.0, "put_iv_w": 0.0},
+        )
+        cell[f"{right}_iv_sum"] += iv * weight
+        cell[f"{right}_iv_w"] += weight
+
+    out: list[dict[str, Any]] = []
+    for expiry, strikes in sorted(by_expiry.items()):
+        points = []
+        for strike, value in sorted(strikes.items()):
+            call_iv = value["call_iv_sum"] / value["call_iv_w"] if value["call_iv_w"] > 0 else None
+            put_iv = value["put_iv_sum"] / value["put_iv_w"] if value["put_iv_w"] > 0 else None
+            if call_iv is None and put_iv is None:
+                continue
+            points.append({
+                "strike": strike,
+                "call_iv": round(call_iv, 6) if call_iv is not None else None,
+                "put_iv": round(put_iv, 6) if put_iv is not None else None,
+            })
+        # PCHIP needs four nodes; fewer is not a smile, it is a few quotes.
+        if len(points) < 4:
+            continue
+        atm_row = min(points, key=lambda row: abs(row["strike"] - spot)) if spot > 0 else None
+        atm_values = [
+            v for v in ((atm_row or {}).get("call_iv"), (atm_row or {}).get("put_iv")) if v is not None
+        ]
+        dte = (expiry - asof_day).days if isinstance(asof_day, date) else None
+        out.append({
+            "expiry": expiry.isoformat(),
+            "dte": dte,
+            # A 0DTE expiry still has real intraday life; floor the horizon at a
+            # few hours rather than zero so sigma*sqrt(T) does not collapse.
+            "years": round(max(float(dte if dte is not None else 1), 0.25) / 365.0, 8),
+            "atm_iv": round(sum(atm_values) / len(atm_values), 6) if atm_values else None,
+            "strikes_measured": len(points),
+            "points": points,
+        })
+    return out
+
+
 def _stacked_volume_profile(
     *, price_series: Sequence[Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -2930,6 +3007,11 @@ def build_options_intelligence(
     )
     iv_surface, iv_summary = _stacked_iv_surface(
         chain_rows=filtered_chain, spot=resolved_spot,
+    )
+    iv_surface_by_expiry = _iv_surface_by_expiry(
+        # Same clock `_gex_map` dates its by-expiry totals from, so DTE is
+        # consistent across every per-expiry block in the payload.
+        chain_rows=filtered_chain, spot=resolved_spot, asof=chain_asof,
     )
     volume_profile, volume_profile_summary = _stacked_volume_profile(
         price_series=price_series,
@@ -3274,6 +3356,9 @@ def build_options_intelligence(
             "vanna_summary": vanna_summary,
             "iv_surface": iv_surface,
             "iv_summary": iv_summary,
+            # Per-expiry smiles. The blended `iv_surface` above stays as the
+            # skew/wall lens; anything building a density must use this instead.
+            "iv_surface_by_expiry": iv_surface_by_expiry,
             "volume_profile": volume_profile,
             "volume_profile_summary": volume_profile_summary,
             "confluence": confluence,
@@ -3281,6 +3366,7 @@ def build_options_intelligence(
                 "theta_vanna_contracts_measured": len(tv_chain_rows),
                 "theta_vanna_contracts_skipped": tv_skipped,
                 "iv_strikes_measured": len(iv_surface),
+                "iv_expiries_measured": len(iv_surface_by_expiry),
                 "volume_profile_available": bool(volume_profile_summary.get("available")),
             },
         },

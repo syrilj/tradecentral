@@ -8,10 +8,28 @@ const props = defineProps<{
   spot: number | null
 }>()
 
+/**
+ * The four quadrants are all defined relative to the zero-gamma flip. When the
+ * server could not locate one — a chain whose net gamma holds a single sign
+ * across the whole tested range, which is common — it sends
+ * `quadrant: 'unmeasurable'` rather than picking a label. The grid must then
+ * highlight nothing and the metrics strip must not print its zeros as though
+ * they were a measurement.
+ */
 const quadrantInfo = computed(() => {
-  if (!props.topography) return null
-  return props.topography
+  const t = props.topography
+  return t && t.quadrant !== 'unmeasurable' ? t : null
 })
+
+/** Present but unmeasurable — distinct from absent, and worth saying why. */
+const withheld = computed(() =>
+  props.topography?.quadrant === 'unmeasurable' ? props.topography : null,
+)
+
+/** Level with its currency symbol, or a bare dash — never "$—". */
+function level(v: number | null | undefined): string {
+  return v != null && Number.isFinite(v) ? `$${num(v, 2)}` : '—'
+}
 </script>
 
 <template>
@@ -123,15 +141,23 @@ const quadrantInfo = computed(() => {
       </div>
       <div class="metric-item">
         <span class="m-label">Volatility Trigger</span>
-        <span class="m-val font-mono text-warn"
-          >${{ num(quadrantInfo.volatility_trigger, 2) }}</span
-        >
+        <span class="m-val font-mono text-warn">{{ level(quadrantInfo.volatility_trigger) }}</span>
       </div>
     </div>
+
+    <p v-else-if="withheld" class="withheld-note">{{ withheld.description }}</p>
   </div>
 </template>
 
 <style scoped>
+.withheld-note {
+  padding: var(--s3);
+  border-top: var(--hair) solid var(--rule);
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.5;
+}
+
 .topography-card {
   background: var(--panel);
   border: 1px solid var(--rule);
