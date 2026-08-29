@@ -24,7 +24,7 @@
  * Pure function, no I/O. Recomputed on chain refetch (~75s), not every tick.
  */
 
-import type { OptionsIntelligence } from '@/api'
+import type { IvExpirySmile, OptionsIntelligence } from '@/api'
 import type { RiskNeutralResult, Smile, SmilePoint } from '@/regimeContracts'
 
 const DEFAULT_GRID_POINTS = 400
@@ -114,11 +114,51 @@ function restrictToHorizonWindow(
   }
 }
 
-export function buildSmile(payload: OptionsIntelligence | null): Smile | null {
+/**
+ * The expiries this payload can build a density from, nearest first.
+ *
+ * Empty when the server has not started sending `iv_surface_by_expiry` — the
+ * caller then falls back to the blended surface, with the caveat documented on
+ * `buildSmile`.
+ */
+export function availableSmileExpiries(payload: OptionsIntelligence | null): IvExpirySmile[] {
+  const rows = payload?.stacked_signals?.iv_surface_by_expiry ?? []
+  return [...rows]
+    .filter((r) => r.points.length >= 4 && r.years > 0)
+    .sort((a, b) => (a.dte ?? 1e9) - (b.dte ?? 1e9))
+}
+
+/**
+ * Build a single-expiry smile.
+ *
+ * `expiry` selects which one; omitted, it takes the nearest expiry that has
+ * enough strikes — the front-month/0DTE smile, which is the horizon this page
+ * is actually about. A dealer-gamma regime read is an intraday claim, and
+ * pairing it with a 30-day distribution answered a question nobody on this
+ * screen was asking.
+ *
+ * FALLBACK: when the payload predates `iv_surface_by_expiry`, this drops back
+ * to the blended `iv_surface`, which averages IV across every expiry at each
+ * strike. That blend is not any traded expiry's smile; repricing calls off it
+ * yields a non-convex curve whose second derivative is negative over wide
+ * stretches, so the density that comes out is mostly clipping artifact. The
+ * fallback exists so an older payload degrades instead of breaking — it is not
+ * a supported way to compute a probability, and `blended` on the result says so.
+ */
+export function buildSmile(
+  payload: OptionsIntelligence | null,
+  expiry?: string | null,
+): Smile | null {
   if (!payload) return null
 
   const spot = finite(payload.summary?.spot)
   if (spot == null || spot <= 0) return null
+
+  const perExpiry = availableSmileExpiries(payload)
+  if (perExpiry.length > 0) {
+    const chosen = (expiry ? perExpiry.find((e) => e.expiry === expiry) : null) ?? perExpiry[0]
+    return buildSmileFromExpiry(chosen, spot, payload)
+  }
 
   const rows = payload.stacked_signals?.iv_surface ?? []
   const points: SmilePoint[] = []
@@ -177,6 +217,65 @@ export function buildSmile(payload: OptionsIntelligence | null): Smile | null {
     // averages out.
     riskFreeRate: resolveRiskFreeRate(payload),
     expiry: payload.chain_context?.selected_expiry ?? '',
+    dte: horizonDays ?? null,
+    blended: true,
+    observedStrikes: windowed.length,
+  }
+}
+
+/**
+ * Smile from ONE expiry's quoted IVs.
+ *
+ * Same OTM-preferred side selection and horizon window as the legacy path, but
+ * the horizon is this expiry's own year fraction rather than the payload's
+ * nearest-to-30-day figure — so sigma*sqrt(T), and therefore the window, the
+ * density width and every probability downstream, all describe the expiry the
+ * strikes were actually quoted on.
+ */
+function buildSmileFromExpiry(
+  smile: IvExpirySmile,
+  spot: number,
+  payload: OptionsIntelligence,
+): Smile | null {
+  const points: SmilePoint[] = []
+  for (const row of smile.points) {
+    const strike = finite(row?.strike)
+    if (strike == null || strike <= 0) continue
+    // OTM side first: it is the actively quoted, tightly-spread half of the
+    // chain. The ITM mirror at the same strike is often stale or synthesized
+    // from put-call parity rather than its own flow.
+    const otmIv = strike <= spot ? row.put_iv : row.call_iv
+    const itmIv = strike <= spot ? row.call_iv : row.put_iv
+    const iv = finite(otmIv) ?? finite(itmIv)
+    if (iv == null || iv <= 0) continue
+    points.push({ strike, iv, logMoneyness: Math.log(strike / spot) })
+  }
+
+  points.sort((a, b) => a.logMoneyness - b.logMoneyness)
+  const deduped: SmilePoint[] = []
+  for (const p of points) {
+    if (deduped.length > 0 && deduped[deduped.length - 1].logMoneyness === p.logMoneyness) {
+      deduped[deduped.length - 1] = p
+    } else {
+      deduped.push(p)
+    }
+  }
+  if (deduped.length < 4) return null
+
+  const tYears = smile.years > 0 ? smile.years : 1 / 365
+  const atmIv = finite(smile.atm_iv) ?? medianIv(deduped)
+  const { windowed, halfWidth } = restrictToHorizonWindow(deduped, atmIv, tYears)
+
+  return {
+    points: windowed,
+    windowHalfWidth: halfWidth,
+    strikesDropped: deduped.length - windowed.length,
+    spot,
+    tYears,
+    riskFreeRate: resolveRiskFreeRate(payload),
+    expiry: smile.expiry,
+    dte: smile.dte,
+    blended: false,
     observedStrikes: windowed.length,
   }
 }

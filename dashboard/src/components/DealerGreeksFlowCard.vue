@@ -7,12 +7,31 @@ const props = defineProps<{
   snapshot: MicrostructureRegimeSnapshot | null
 }>()
 
-const isNetGexPositive = computed(() => (props.snapshot?.net_gex_m ?? 0) >= 0)
-const isNetVexPositive = computed(() => (props.snapshot?.net_vex_m ?? 0) >= 0)
-const isNetChexPositive = computed(() => (props.snapshot?.net_chex_m ?? 0) >= 0)
-const isHedgingFlowPositive = computed(() => (props.snapshot?.hedging_flow_m ?? 0) >= 0)
+/**
+ * An unmeasurable snapshot carries zeros in every Greek, because there was
+ * nothing to measure. Rendered through this card those zeros become
+ * "NET GEX +0.00M · Net Market Inflow (Dealers absorb supply)" — a confident
+ * balanced read of a chain that does not exist. So the card keys off
+ * `quality.measurable`, not merely off the snapshot being non-null.
+ */
+const snap = computed(() => {
+  const s = props.snapshot
+  return s && s.quality?.measurable !== false ? s : null
+})
 
-const spot = computed(() => props.snapshot?.spot ?? null)
+const isNetGexPositive = computed(() => (snap.value?.net_gex_m ?? 0) >= 0)
+const isNetVexPositive = computed(() => (snap.value?.net_vex_m ?? 0) >= 0)
+const isNetChexPositive = computed(() => (snap.value?.net_chex_m ?? 0) >= 0)
+
+/** Null-aware: a withheld hedging flow gets neither tone nor a direction
+ *  sentence. `?? 0` would have painted "positive" onto an absent number. */
+const hedgingFlowSign = computed<1 | -1 | null>(() => {
+  const v = snap.value?.hedging_flow_m
+  if (v == null || !Number.isFinite(v)) return null
+  return v >= 0 ? 1 : -1
+})
+
+const spot = computed(() => snap.value?.spot ?? null)
 
 function distToLevel(lvl: number | null): string {
   if (!spot.value || !lvl || lvl <= 0) return DASH
@@ -20,11 +39,16 @@ function distToLevel(lvl: number | null): string {
   return optSigned(diff, 1) + '%'
 }
 
+/** Level with its currency symbol, or a bare dash — never "$—". */
+function level(v: number | null | undefined): string {
+  return v != null && Number.isFinite(v) ? `$${num(v, 2)}` : DASH
+}
+
 // Visual meter calculations
 const callGexRatio = computed(() => {
-  if (!props.snapshot) return 50
-  const call = Math.max(0, props.snapshot.call_gex_m)
-  const put = Math.max(0, Math.abs(props.snapshot.put_gex_m))
+  if (!snap.value) return 50
+  const call = Math.max(0, snap.value.call_gex_m)
+  const put = Math.max(0, Math.abs(snap.value.put_gex_m))
   const total = call + put
   if (total <= 0) return 50
   return Math.round((call / total) * 100)
@@ -38,13 +62,18 @@ const callGexRatio = computed(() => {
         <span class="eyebrow">DEALER GREEKS &amp; SECOND-ORDER FLOWS</span>
         <h3 class="card-title">Instantaneous Hedging Differential</h3>
       </div>
-      <div v-if="snapshot" class="formula-badge">
+      <div v-if="snap" class="formula-badge">
         F<sub>hedge</sub> = GEX&middot;&Delta;S + VEX&middot;&Delta;&sigma; + CHEX
       </div>
     </div>
 
-    <!-- 4-Metric Grid with Visual Balance Meters -->
-    <div class="metrics-row">
+    <!-- 4-Metric Grid with Visual Balance Meters.
+         Gated on the whole row, not on each value: dashing the numbers out
+         while leaving the tone classes and state pills ("VOL DAMPEN",
+         "IV Collapse -> Dealer Buying Flow") still asserts a dealer posture
+         that was never measured. The pills come from `x ?? 0 >= 0`, so an
+         absent reading paints as positive. -->
+    <div v-if="snap" class="metrics-row">
       <!-- 1. Net GEX -->
       <div class="greek-box" :class="{ positive: isNetGexPositive, negative: !isNetGexPositive }">
         <div class="box-top">
@@ -54,7 +83,7 @@ const callGexRatio = computed(() => {
           </span>
         </div>
         <div class="greek-val font-mono">
-          {{ snapshot ? optSigned(snapshot.net_gex_m, 2) : DASH }}M
+          {{ snap ? optSigned(snap.net_gex_m, 2) : DASH }}M
         </div>
         <!-- Visual Call vs Put Ratio Bar -->
         <div class="ratio-bar-wrap">
@@ -64,8 +93,8 @@ const callGexRatio = computed(() => {
           </div>
         </div>
         <div class="greek-sub">
-          Calls: +${{ snapshot ? num(snapshot.call_gex_m, 1) : DASH }}M | Puts: -${{
-            snapshot ? num(Math.abs(snapshot.put_gex_m), 1) : DASH
+          Calls: +${{ snap ? num(snap.call_gex_m, 1) : DASH }}M | Puts: -${{
+            snap ? num(Math.abs(snap.put_gex_m), 1) : DASH
           }}M
         </div>
       </div>
@@ -79,7 +108,7 @@ const callGexRatio = computed(() => {
           </span>
         </div>
         <div class="greek-val font-mono">
-          {{ snapshot ? optSigned(snapshot.net_vex_m, 2) : DASH }}M
+          {{ snap ? optSigned(snap.net_vex_m, 2) : DASH }}M
         </div>
         <div class="greek-sub">
           {{
@@ -99,74 +128,105 @@ const callGexRatio = computed(() => {
           </span>
         </div>
         <div class="greek-val font-mono">
-          {{ snapshot ? optSigned(snapshot.net_chex_m, 2) : DASH }}M/d
+          {{ snap ? optSigned(snap.net_chex_m, 2) : DASH }}M/d
         </div>
         <div class="greek-sub">
-          0DTE Charm Drift: +${{ snapshot ? num(snapshot.zero_dte_charm_drift_m, 2) : DASH }}M/day
+          0DTE Charm Drift: +${{ snap ? num(snap.zero_dte_charm_drift_m, 2) : DASH }}M/day
         </div>
       </div>
 
       <!-- 4. Total Hedging Flow F_hedge -->
       <div
         class="greek-box total-flow"
-        :class="{ positive: isHedgingFlowPositive, negative: !isHedgingFlowPositive }"
+        :class="{
+          positive: hedgingFlowSign === 1,
+          negative: hedgingFlowSign === -1,
+        }"
       >
         <div class="box-top">
           <span class="greek-label">TOTAL HEDGING FLOW (F<sub>hedge</sub>)</span>
-          <span class="state-pill" :class="isHedgingFlowPositive ? 'pos' : 'neg'">
-            {{ isHedgingFlowPositive ? 'SUPPORTIVE' : 'EXTRACTION' }}
+          <span
+            v-if="hedgingFlowSign !== null"
+            class="state-pill"
+            :class="hedgingFlowSign === 1 ? 'pos' : 'neg'"
+          >
+            {{ hedgingFlowSign === 1 ? 'SUPPORTIVE' : 'EXTRACTION' }}
           </span>
         </div>
         <div class="greek-val font-mono font-bold">
-          {{ snapshot ? optSigned(snapshot.hedging_flow_m, 2) : DASH }}M
+          <template v-if="hedgingFlowSign !== null"
+            >{{ optSigned(snap?.hedging_flow_m, 2) }}M</template
+          >
+          <template v-else>{{ DASH }}</template>
         </div>
+        <!-- F_hedge is a flow RATE: it needs a measured spot and IV velocity,
+             not an assumed one. Withheld means withheld — no direction
+             sentence, no tone, no pill. -->
         <div class="greek-sub">
           {{
-            isHedgingFlowPositive
-              ? 'Net Market Inflow (Dealers absorb supply)'
-              : 'Net Liquidity Extraction (Selling into drop)'
+            hedgingFlowSign === null
+              ? 'Not measured — needs a live spot and IV velocity, which this feed does not yet carry.'
+              : hedgingFlowSign === 1
+                ? 'Net Market Inflow (Dealers absorb supply)'
+                : 'Net Liquidity Extraction (Selling into drop)'
           }}
         </div>
       </div>
     </div>
 
     <!-- Structural Boundaries Strip with Distance Percentages -->
-    <div v-if="snapshot" class="boundaries-strip">
+    <!-- Levels print through `level()`, which emits a bare dash rather than
+         "$—" when one could not be measured. -->
+    <div v-if="snap" class="boundaries-strip">
       <div class="bound-item">
         <span class="b-label">PUT WALL (SUPPORT)</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-put-hi">${{ num(snapshot.put_wall, 2) }}</span>
-          <span class="b-dist font-mono">({{ distToLevel(snapshot.put_wall) }})</span>
+          <span class="b-val font-mono text-put-hi">{{ level(snap.put_wall) }}</span>
+          <span class="b-dist font-mono">({{ distToLevel(snap.put_wall) }})</span>
         </div>
       </div>
       <div class="bound-item">
         <span class="b-label">GAMMA FLIP (S*)</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-warn">${{ num(snapshot.gamma_flip, 2) }}</span>
-          <span class="b-dist font-mono">({{ distToLevel(snapshot.gamma_flip) }})</span>
+          <span class="b-val font-mono text-warn">{{ level(snap.gamma_flip) }}</span>
+          <span class="b-dist font-mono">
+            ({{ snap.gamma_flip != null ? distToLevel(snap.gamma_flip) : 'none in range' }})
+          </span>
         </div>
       </div>
       <div class="bound-item">
         <span class="b-label">CALL WALL (RESISTANCE)</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-call-hi">${{ num(snapshot.call_wall, 2) }}</span>
-          <span class="b-dist font-mono">({{ distToLevel(snapshot.call_wall) }})</span>
+          <span class="b-val font-mono text-call-hi">{{ level(snap.call_wall) }}</span>
+          <span class="b-dist font-mono">({{ distToLevel(snap.call_wall) }})</span>
         </div>
       </div>
       <div class="bound-item">
         <span class="b-label">ABSOLUTE GAMMA PEAK</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-phosphor"
-            >${{ num(snapshot.absolute_gamma_peak, 2) }}</span
-          >
-          <span class="b-dist font-mono">({{ distToLevel(snapshot.absolute_gamma_peak) }})</span>
+          <span class="b-val font-mono text-phosphor">{{ level(snap.absolute_gamma_peak) }}</span>
+          <span class="b-dist font-mono">({{ distToLevel(snap.absolute_gamma_peak) }})</span>
         </div>
       </div>
     </div>
+
+    <!-- Withheld, and why. Zeros in every Greek box would read as a balanced
+         market rather than an absent one. -->
+    <p v-else-if="snapshot" class="withheld-note">
+      Dealer Greeks withheld — {{ snapshot.quality?.reason ?? 'no measurable option chain' }}.
+    </p>
   </div>
 </template>
 
 <style scoped>
+.withheld-note {
+  padding: var(--s3);
+  border-top: var(--hair) solid var(--rule);
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.5;
+}
+
 .greeks-flow-card {
   background: var(--panel);
   border: 1px solid var(--rule);

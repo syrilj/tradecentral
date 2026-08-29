@@ -42,7 +42,7 @@ import type {
   BacktestTearsheet,
 } from '@/microstructureContracts'
 import { buildRegimeState } from '@/gammaRegime'
-import { buildSmile, riskNeutralDensity } from '@/riskNeutralDensity'
+import { availableSmileExpiries, buildSmile, riskNeutralDensity } from '@/riskNeutralDensity'
 import { applyTilt, deriveTilt, regimeProbabilities } from '@/gammaTilt'
 import {
   computeRuleOf16ExpectedMove,
@@ -57,6 +57,7 @@ import LoadingState from '@/components/LoadingState.vue'
 import RegimeSurfaceChart from '@/components/RegimeSurfaceChart.vue'
 import RegimeBreadthStrip from '@/components/RegimeBreadthStrip.vue'
 import MicrostructureTopographyCard from '@/components/MicrostructureTopographyCard.vue'
+import DealerGammaMap from '@/components/DealerGammaMap.vue'
 import DealerGreeksFlowCard from '@/components/DealerGreeksFlowCard.vue'
 import SectorPairCorrelationCard from '@/components/SectorPairCorrelationCard.vue'
 import CausalEnvelopeChart from '@/components/CausalEnvelopeChart.vue'
@@ -99,24 +100,48 @@ const optionsRes = useResource<OptionsIntelligence>(() => api.options({ symbol: 
   enabled: () => activated.value,
 })
 
-/** Built exactly once per SLOW payload, never on the fast tick. */
+/**
+ * Which expiry the density is built from.
+ *
+ * This used to be implicit and wrong for the page: `buildSmile` took the
+ * payload's blended IV surface (every expiry averaged together at each strike)
+ * on the nearest-to-30-day horizon. Blending expiries is what made the repriced
+ * call curve non-convex, which drove the density negative, which tripped the
+ * clipped-mass guard — so "Density not reliable" was the panel's normal state
+ * rather than its exception. And a 30-day distribution is the wrong question
+ * for a page reading intraday dealer hedging in the first place.
+ *
+ * Null means "nearest expiry with a usable smile", which on a live desk is the
+ * front/0DTE contract. The operator can pick another from the strip.
+ */
+const smileExpiry = ref<string | null>(null)
+
+const expiryChoices = computed(() => availableSmileExpiries(optionsRes.data.value))
+
+/** Built exactly once per SLOW payload (or expiry change), never on the fast tick. */
 const slowDerived = shallowRef<{ smile: Smile | null; riskNeutral: RiskNeutralResult | null }>({
   smile: null,
   riskNeutral: null,
 })
 
 watch(
-  () => optionsRes.data.value,
-  (payload) => {
+  [() => optionsRes.data.value, smileExpiry],
+  ([payload, expiry]) => {
     if (!payload) {
       slowDerived.value = { smile: null, riskNeutral: null }
       return
     }
-    const smile = buildSmile(payload)
+    const smile = buildSmile(payload, expiry)
     slowDerived.value = { smile, riskNeutral: riskNeutralDensity(smile) }
   },
   { immediate: true },
 )
+
+/** Reset the expiry pick when the symbol changes — an expiry string from the
+ *  previous symbol's chain would silently fall through to "nearest". */
+watch(symbol, () => {
+  smileExpiry.value = null
+})
 
 /* ---- FAST clock: live spot & VIX benchmark quotes ----------------------- */
 
@@ -235,9 +260,6 @@ const tiltedResult = computed<RiskNeutralResult | null>(() => {
 })
 
 const clippedMassPct = computed<number | null>(() => tiltedResult.value?.clippedMass ?? null)
-const clippedMassMaterial = computed(() => (clippedMassPct.value ?? 0) > 0.02)
-
-const MAX_TRUSTWORTHY_CLIPPED_MASS = 0.1
 
 const rawClippedMassPct = computed<number | null>(
   () => slowDerived.value.riskNeutral?.clippedMass ?? null,
@@ -245,12 +267,55 @@ const rawClippedMassPct = computed<number | null>(
 const withheldMassPct = computed(() =>
   Math.max(clippedMassPct.value ?? 0, rawClippedMassPct.value ?? 0),
 )
-const densityUnreliable = computed(() => withheldMassPct.value > MAX_TRUSTWORTHY_CLIPPED_MASS)
+
+/**
+ * Three grades, not two.
+ *
+ * The panel used to be all-or-nothing: above 10% clipped mass every number
+ * disappeared behind "Density not reliable". Combined with the blended-expiry
+ * smile that produced most of that clipping, the practical result was a
+ * probability panel that was blank far more often than it was populated —
+ * which reads to an operator as broken, not as careful.
+ *
+ * Now: under 2% the read is clean; between 2% and 25% the numbers show WITH the
+ * clipped fraction stated beside them, because a distribution that lost a few
+ * percent of mass to smile noise is still worth more than nothing when it is
+ * labelled; above 25% the shape is clipping artifact rather than a
+ * distribution and the numbers are genuinely withheld.
+ */
+const CLIPPED_MASS_CLEAN = 0.02
+const CLIPPED_MASS_UNUSABLE = 0.25
+
+const densityGrade = computed<'clean' | 'degraded' | 'unusable'>(() => {
+  if (withheldMassPct.value > CLIPPED_MASS_UNUSABLE) return 'unusable'
+  if (withheldMassPct.value > CLIPPED_MASS_CLEAN) return 'degraded'
+  return 'clean'
+})
+
+const densityUnreliable = computed(() => densityGrade.value === 'unusable')
+const clippedMassMaterial = computed(() => densityGrade.value === 'degraded')
+
+/** Density from a blended smile is not a density of anything the market
+ *  quotes — see buildSmile. Withhold rather than label. */
+const smileBlended = computed(() => slowDerived.value.smile?.blended === true)
 
 const probabilities = computed<RegimeProbabilities | null>(() => {
   if (!regimeState.value) return null
-  if (densityUnreliable.value) return null
+  if (densityUnreliable.value || smileBlended.value) return null
   return regimeProbabilities(tiltedResult.value?.grid ?? null, regimeState.value)
+})
+
+/** The horizon every probability below is stated over. Without this on screen
+ *  the numbers are unreadable: "62% between the walls" means something
+ *  completely different at 0DTE than at 30 days. */
+const probabilityHorizon = computed<string | null>(() => {
+  const sm = slowDerived.value.smile
+  if (!sm) return null
+  const d = sm.dte
+  if (d == null) return sm.expiry || null
+  if (d <= 0) return 'today (0DTE)'
+  if (d === 1) return '1 day'
+  return `${d} days`
 })
 
 const verdictText = computed<string | null>(() => {
@@ -413,110 +478,179 @@ const latestStatePoint = computed(() => {
   return pts.length > 0 ? pts[pts.length - 1] : null
 })
 
-const tacticalBias = computed(() => {
-  const spot = effectiveSpot.value ?? microRegimeRes.data.value?.spot ?? null
-  const flip = microRegimeRes.data.value?.gamma_flip ?? null
-  const netGex = microRegimeRes.data.value?.net_gex_m ?? 0
-  const vel = latestStatePoint.value?.kalman_velocity ?? 0
+/**
+ * THE regime read for this page.
+ *
+ * Both tabs used to answer "what regime is this" independently: the briefing
+ * below re-derived it from the microstructure endpoint's net GEX and flip,
+ * while the surface tab's verdict came from `buildRegimeState` over
+ * `gex_price_profile`. Two derivations, two sign conventions upstream, and no
+ * indication to the operator which one to believe when they disagreed -- which
+ * on any single-name symbol was always.
+ *
+ * There is now one read. `regimeState` is it: it recomputes on the fast spot
+ * clock from the same GEX profile the server classifies against, so the
+ * briefing, the verdict, the playbook and the map all move together. The
+ * snapshot contributes the things only it measures -- higher-order Greeks,
+ * topography, chain quality -- and never a second opinion on the regime.
+ */
+const chainMeasurable = computed(() => microRegimeRes.data.value?.quality?.measurable !== false)
 
-  if (!spot || !flip) {
-    return {
-      title: 'AWAITING SURFACE READ',
-      bias: 'NEUTRAL',
-      toneClass: 'neutral',
-      stance: 'Calculating structural levels...',
-      action: 'Wait for network sync',
-    }
-  }
-
-  const isAboveFlip = spot >= flip
-
-  if (isAboveFlip && netGex > 0) {
-    if (vel >= 0) {
-      return {
-        title: 'BULLISH EXPANSION & SUPPORTIVE GEX',
-        bias: 'BULLISH',
-        toneClass: 'bullish',
-        stance:
-          'Dealers provide supportive gamma cushion below spot. Upside momentum supported by dealer rebalancing.',
-        action: 'Buy pullbacks toward Causal Kernel Mean m(t) with target at Call Wall.',
-      }
-    } else {
-      return {
-        title: 'LONG GAMMA CONVERGENCE (MEAN-REVERTING)',
-        bias: 'RANGE-BOUND / MEAN-REVERT',
-        toneClass: 'bullish',
-        stance:
-          'Dealers actively sell rallies and buy dips, dampening volatility toward latent equilibrium.',
-        action: 'Fade upper/lower envelope extremes; take profits quickly near Kernel Mean.',
-      }
-    }
-  } else if (!isAboveFlip && netGex < 0) {
-    if (vel <= 0) {
-      return {
-        title: 'BEARISH CASCADE RISK (NEGATIVE GEX)',
-        bias: 'BEARISH',
-        toneClass: 'bearish',
-        stance:
-          'Short gamma tape. Dealer delta hedging accelerates selling on down moves. High downside void risk.',
-        action: 'Sell breakdown rallies to Gamma Flip S*; avoid unhedged long positions.',
-      }
-    } else {
-      return {
-        title: 'SHORT-SQUEEZE EXPANSION SPRINT',
-        bias: 'SHORT SQUEEZE',
-        toneClass: 'squeeze',
-        stance:
-          'Price rebounding below flip against negative GEX overhead. Dealers forced to cover delta on rallies.',
-        action: 'Momentum long with tight trailing stop at Gamma Flip S*.',
-      }
-    }
-  } else {
-    return {
-      title: 'TRANSITION FLIP PIVOT STRADDLE',
-      bias: 'BREAKOUT WATCH',
-      toneClass: 'transition',
-      stance:
-        'Spot is straddling the Zero-Gamma Flip boundary. Tape is undecided with symmetric trigger risk.',
-      action: 'Wait for confirmed breakout above Call Wall or breakdown below Put Wall.',
-    }
+const regimeRead = computed(() => {
+  const s = regimeState.value
+  const snap = microRegimeRes.data.value
+  const measurable = s != null && s.regime !== 'unmeasurable' && chainMeasurable.value
+  return {
+    /** 'long' | 'short' | 'flip' | null when withheld. */
+    side: measurable ? s!.regime : null,
+    netGammaM: measurable ? s!.netGammaM : null,
+    spot: s?.spot ?? snap?.spot ?? null,
+    zeroGamma: measurable ? s!.zeroGamma : null,
+    callWall: measurable ? s!.callWall : null,
+    putWall: measurable ? s!.putWall : null,
+    pinStrike: measurable ? s!.pinStrike : null,
+    distanceToFlip: measurable ? s!.distanceToFlip : null,
+    strength: snap?.regime_strength ?? null,
+    withheldReason: measurable
+      ? null
+      : (snap?.quality?.reason ??
+        (s == null ? 'waiting for the first chain read' : 'no open interest observed')),
   }
 })
 
-// Structural Pivot Ladder for quick orientation
-const pivotLadder = computed(() => {
-  const spot = effectiveSpot.value ?? microRegimeRes.data.value?.spot ?? 0
-  const pt = latestStatePoint.value
-  const snap = microRegimeRes.data.value
-  const em = expectedMove.value
-  if (!snap || !pt) return []
+const tacticalBias = computed(() => {
+  const r = regimeRead.value
+  const vel = latestStatePoint.value?.kalman_velocity ?? 0
 
-  const list = [
-    { label: 'CALL WALL', price: snap.call_wall, role: 'Resistance Wall', tone: 'call' },
+  if (r.side == null) {
+    return {
+      title: 'REGIME WITHHELD',
+      bias: 'NO READ',
+      toneClass: 'neutral',
+      stance: `No dealer-gamma surface is measurable right now — ${r.withheldReason}.`,
+      action:
+        'This surface contributes nothing to a decision until a chain reads. Do not infer a neutral tape from a blank one.',
+    }
+  }
+
+  // A flip level is not required to state the regime — the sign of net dealer
+  // gamma is the regime. It is only required to name a *boundary*, so every
+  // line that cites S* below is guarded on it existing.
+  const hasFlip = r.zeroGamma != null
+
+  if (r.side === 'long') {
+    return vel >= 0
+      ? {
+          title: 'LONG GAMMA · SUPPORTIVE INTO STRENGTH',
+          bias: 'RANGE-BOUND / UPWARD DRIFT',
+          toneClass: 'bullish',
+          stance:
+            'Dealers are long gamma: they sell strength and buy weakness, so extensions fade and price gravitates toward heavy open interest. Kalman velocity is positive, so the drift inside that damping is upward.',
+          action:
+            'Buy pullbacks toward the causal kernel mean m(t); target the call wall, and expect the grind rather than the gap.',
+        }
+      : {
+          title: 'LONG GAMMA CONVERGENCE (MEAN-REVERTING)',
+          bias: 'MEAN-REVERT',
+          toneClass: 'bullish',
+          stance:
+            'Dealers are long gamma and hedging damps both directions toward the pin. Velocity is negative, so the fade is currently working downward.',
+          action:
+            'Fade envelope extremes back to the kernel mean; take profit quickly — the same damping that gives the entry caps the target.',
+        }
+  }
+
+  if (r.side === 'short') {
+    return vel <= 0
+      ? {
+          title: 'SHORT GAMMA · DOWNSIDE AMPLIFICATION',
+          bias: 'BEARISH',
+          toneClass: 'bearish',
+          stance:
+            'Dealers are short gamma: hedging sells into weakness, so down moves feed on dealer supply instead of meeting it. Velocity is negative and aligned with that flow.',
+          action: hasFlip
+            ? 'Sell rallies that fail beneath the flip; size down and widen stops — realized vol expands in this regime.'
+            : 'Sell rallies that fail at the upper envelope; size down and widen stops — realized vol expands in this regime.',
+        }
+      : {
+          title: 'SHORT GAMMA · SQUEEZE EXPANSION',
+          bias: 'SHORT SQUEEZE',
+          toneClass: 'squeeze',
+          stance:
+            'Dealers are short gamma while velocity has turned up, so the same hedging that accelerated the decline now forces buying into the rally.',
+          action: hasFlip
+            ? 'Momentum long with a trailing stop at the flip — the squeeze ends where hedging flips back to damping.'
+            : 'Momentum long with a trailing stop at the kernel mean; no flip level is measurable to anchor the exit.',
+        }
+  }
+
+  return {
+    title: 'STRADDLING THE ZERO-GAMMA FLIP',
+    bias: 'BREAKOUT WATCH',
+    toneClass: 'transition',
+    stance:
+      'Net dealer gamma is inside the neutral band around the flip. The regime is genuinely undecided, and this surface gives no directional edge until it resolves.',
+    action:
+      'Wait. The tradeable event is the boundary break — above the call wall or below the put wall — not a position taken inside the band.',
+  }
+})
+
+/**
+ * Structural pivot ladder — every level the operator can act on, on one price
+ * axis, sorted high to low.
+ *
+ * Gamma levels come from `regimeRead` (the single regime read), NOT from the
+ * snapshot directly, so the ladder cannot print a wall the verdict above it
+ * disagrees with. Levels that are genuinely unmeasurable are dropped rather
+ * than defaulted — a "PUT WALL" line at a placeholder price is worse than no
+ * line, because the operator will hang a stop on it.
+ */
+const pivotLadder = computed(() => {
+  const r = regimeRead.value
+  const spot = r.spot ?? 0
+  const pt = latestStatePoint.value
+  const em = expectedMove.value
+
+  const list: Array<{ label: string; price: number | null; role: string; tone: string }> = [
+    { label: 'CALL WALL', price: r.callWall, role: 'Heaviest call gamma above spot', tone: 'call' },
     ...(em
-      ? [
-          {
-            label: '+1D EM (VIX/16)',
-            price: em.em1dHigh,
-            role: 'Rule of 16 Upper 1σ',
-            tone: 'warn',
-          },
-        ]
+      ? [{ label: '+1D EM (VIX/16)', price: em.em1dHigh, role: 'Rule of 16 upper 1σ', tone: 'warn' }]
       : []),
-    { label: 'UPPER ENVELOPE', price: pt.nw_upper, role: 'Dynamic +2σ Band', tone: 'call' },
-    { label: 'SPOT PRICE', price: spot, role: 'Current Underlying', tone: 'spot' },
-    { label: 'KERNEL MEAN m(t)', price: pt.nw_mean, role: 'Latent Equilibrium', tone: 'phosphor' },
-    { label: 'GAMMA FLIP S*', price: snap.gamma_flip, role: 'Regime Boundary', tone: 'warn' },
-    { label: 'LOWER ENVELOPE', price: pt.nw_lower, role: 'Dynamic -2σ Band', tone: 'put' },
+    ...(pt
+      ? [{ label: 'UPPER ENVELOPE', price: pt.nw_upper, role: 'Causal NW +ασ band', tone: 'call' }]
+      : []),
+    { label: 'SPOT PRICE', price: spot > 0 ? spot : null, role: 'Current underlying', tone: 'spot' },
+    ...(pt
+      ? [{ label: 'KERNEL MEAN m(t)', price: pt.nw_mean, role: 'Latent equilibrium', tone: 'phosphor' }]
+      : []),
+    { label: 'PIN', price: r.pinStrike, role: 'Peak |net GEX| strike', tone: 'phosphor' },
+    { label: 'GAMMA FLIP S*', price: r.zeroGamma, role: 'Regime boundary', tone: 'warn' },
+    ...(pt
+      ? [{ label: 'LOWER ENVELOPE', price: pt.nw_lower, role: 'Causal NW −ασ band', tone: 'put' }]
+      : []),
     ...(em
-      ? [{ label: '-1D EM (VIX/16)', price: em.em1dLow, role: 'Rule of 16 Lower 1σ', tone: 'warn' }]
+      ? [{ label: '-1D EM (VIX/16)', price: em.em1dLow, role: 'Rule of 16 lower 1σ', tone: 'warn' }]
       : []),
-    { label: 'PUT WALL', price: snap.put_wall, role: 'Support Floor', tone: 'put' },
+    { label: 'PUT WALL', price: r.putWall, role: 'Heaviest put gamma below spot', tone: 'put' },
   ]
 
   return list
-    .filter((x) => x.price != null && x.price > 0)
-    .sort((a, b) => (b.price ?? 0) - (a.price ?? 0))
+    .filter((x): x is { label: string; price: number; role: string; tone: string } =>
+      x.price != null && Number.isFinite(x.price) && x.price > 0,
+    )
+    .sort((a, b) => b.price - a.price)
+})
+
+/** Levels the ladder had to drop, named so their absence is visible rather
+ *  than silently looking like a shorter list. */
+const missingLevels = computed<string[]>(() => {
+  const r = regimeRead.value
+  if (r.side == null) return []
+  const out: string[] = []
+  if (r.callWall == null) out.push('call wall')
+  if (r.putWall == null) out.push('put wall')
+  if (r.zeroGamma == null) out.push('gamma flip')
+  return out
 })
 
 /* ---- activation --------------------------------------------------------- */
@@ -808,6 +942,11 @@ function onBreadthActivate(): void {
                 <span class="p-price">${{ num(p.price, 2) }}</span>
               </span>
             </div>
+            <!-- Levels that could not be measured are named, not silently
+                 omitted: a shorter ladder otherwise looks like a complete one. -->
+            <span v-if="missingLevels.length" class="ladder-missing font-mono">
+              not measurable: {{ missingLevels.join(', ') }}
+            </span>
           </div>
 
           <!-- Rule of 16 Expected Move Volatility Strip -->
@@ -880,6 +1019,32 @@ function onBreadthActivate(): void {
           @select-symbol="selectPairSymbol"
         />
 
+        <!-- Dealer gamma map: the surface every level above is read off.
+             The endpoint has always computed this; until now nothing drew it,
+             so the page asserted a flip and two walls with no way to see
+             whether the curve behind them supported the claim. -->
+        <Panel label="Dealer gamma map" index="G">
+          <template #action>
+            <span class="label">
+              {{
+                microRegimeRes.data.value?.quality?.dealer_convention === 'equity'
+                  ? 'EQUITY CONVENTION'
+                  : 'INDEX CONVENTION · DEALER LONG CALLS / SHORT PUTS'
+              }}
+            </span>
+          </template>
+          <DealerGammaMap
+            :profile="microRegimeRes.data.value?.gex_profile ?? []"
+            :strikes="microRegimeRes.data.value?.strikes ?? []"
+            :quality="microRegimeRes.data.value?.quality ?? null"
+            :spot="regimeRead.spot"
+            :zero-gamma="regimeRead.zeroGamma"
+            :call-wall="regimeRead.callWall"
+            :put-wall="regimeRead.putWall"
+            :pin-strike="regimeRead.pinStrike"
+          />
+        </Panel>
+
         <!-- 3. Dual-Pane Synchronized Interactive Visualizers -->
         <Panel label="Causal Nadaraya-Watson Envelope & Anchored VWAP">
           <template #action>
@@ -901,9 +1066,9 @@ function onBreadthActivate(): void {
             :points="stateRes.data.value?.points ?? []"
             :anchors="vwapRes.data.value?.anchors ?? []"
             :signals="signalsRes.data.value?.signals ?? []"
-            :call-wall="microRegimeRes.data.value?.call_wall ?? null"
-            :put-wall="microRegimeRes.data.value?.put_wall ?? null"
-            :gamma-flip="microRegimeRes.data.value?.gamma_flip ?? null"
+            :call-wall="regimeRead.callWall"
+            :put-wall="regimeRead.putWall"
+            :gamma-flip="regimeRead.zeroGamma"
             :expected-move="expectedMove"
           />
         </Panel>
@@ -1127,10 +1292,45 @@ function onBreadthActivate(): void {
           </Panel>
 
           <Panel v-if="regimeState && regimeState.regime !== 'unmeasurable'" label="Probabilities" index="C">
-            <p v-if="densityUnreliable" class="unmeasurable-note" role="status">
-              Density not reliable — {{ pctFrac(withheldMassPct) }} of its mass was negative before
-              clipping, so no probability is stated. Usually a put/call step at the money on a very
-              short expiry; a later expiry normally reads cleanly.
+            <!-- Horizon first. Every number below is conditional on it, and
+                 the same figure means something entirely different at 0DTE
+                 than at 30 days. -->
+            <p v-if="probabilityHorizon" class="prob-horizon label wraps">
+              Over <b>{{ probabilityHorizon }}</b>
+              <template v-if="slowDerived.smile?.expiry">
+                · expiry {{ slowDerived.smile.expiry }}</template
+              >
+            </p>
+
+            <div v-if="expiryChoices.length > 1" class="expiry-strip">
+              <button
+                class="exp-chip font-mono"
+                :class="{ active: smileExpiry === null }"
+                @click="smileExpiry = null"
+              >
+                NEAREST
+              </button>
+              <button
+                v-for="e in expiryChoices.slice(0, 6)"
+                :key="e.expiry"
+                class="exp-chip font-mono"
+                :class="{ active: smileExpiry === e.expiry }"
+                @click="smileExpiry = e.expiry"
+              >
+                {{ e.dte != null ? `${e.dte}D` : e.expiry }}
+              </button>
+            </div>
+
+            <p v-if="smileBlended" class="unmeasurable-note" role="status">
+              This chain payload carries no per-expiry smile, only the surface blended across every
+              expiry. A blended smile is not any traded expiry's, so a density built from it is
+              mostly clipping artifact — no probability is stated rather than one that looks
+              precise and is not.
+            </p>
+            <p v-else-if="densityUnreliable" class="unmeasurable-note" role="status">
+              Density not usable — {{ pctFrac(withheldMassPct) }} of its mass was negative before
+              clipping, so the shape is artifact rather than a distribution. Usually a put/call step
+              at the money on a very short expiry; try a later expiry above.
             </p>
             <div v-else class="prob-grid">
               <Readout
@@ -1174,12 +1374,13 @@ function onBreadthActivate(): void {
               />
             </div>
             <p
-              v-if="clippedMassMaterial && !densityUnreliable"
+              v-if="clippedMassMaterial && !densityUnreliable && !smileBlended"
               class="clipped-warning"
               role="alert"
             >
-              {{ pctFrac(clippedMassPct ?? 0) }} of density mass clipped before renormalizing — the
-              smile was too noisy to fully trust this read.
+              {{ pctFrac(withheldMassPct) }} of density mass was negative before clipping — the
+              smile is noisy here, so read these as approximate. They are shown rather than hidden
+              because a labelled approximation beats a blank panel.
             </p>
           </Panel>
 
@@ -1543,6 +1744,43 @@ function onBreadthActivate(): void {
   gap: 1.25rem;
   font-size: 0.75rem;
   color: var(--ink-dim);
+}
+
+.prob-horizon {
+  margin-bottom: var(--s2);
+  color: var(--ink-dim);
+}
+
+.prob-horizon b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.expiry-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+  margin-bottom: var(--s3);
+}
+
+.exp-chip {
+  padding: 2px var(--s2);
+  border: var(--hair) solid var(--rule);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  cursor: pointer;
+}
+
+.exp-chip.active {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+.ladder-missing {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  letter-spacing: var(--track-label);
 }
 
 .pivot-ladder-strip {

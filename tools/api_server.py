@@ -441,6 +441,8 @@ from edge.research.microstructure_regime import (  # noqa: E402
     TopographyState,
     MicrostructureRegimeSnapshot,
     compute_microstructure_regime,
+    SharedLevels,
+    unmeasurable_regime_snapshot,
 )
 from edge.research.state_estimation import (  # noqa: E402
     NadarayaWatsonEnvelopeResult,
@@ -1919,81 +1921,136 @@ def _kalman_trend_payload(
 # Microstructure Regime Dynamics, State Estimation & Systematic Execution Payloads
 # ---------------------------------------------------------------------------
 
+#: Dealer sign convention for every gamma figure this server publishes:
+#: customers are assumed net short calls / net long puts, so dealer call gamma
+#: is +1 and dealer put gamma is -1.
+#:
+#: It is pinned here rather than varied per symbol on purpose. The endpoint used
+#: to flip the call sign for anything outside a hardcoded index list, while
+#: `daily_plays.options_intelligence._gex_map` -- feeding the same page through
+#: `gex_price_profile` -- always used +1. Every single-name symbol therefore
+#: rendered two opposite-signed answers side by side. Whether the equity
+#: convention is the better model is a real question; a page that silently uses
+#: both at once is not a defensible way to ask it.
+_DEALER_CONVENTION = "index"
+
 _MICROSTRUCTURE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _MICROSTRUCTURE_CACHE_TTL_S = 60.0
 _MICROSTRUCTURE_LOCK = threading.Lock()
 
 
 def _microstructure_regime_payload(symbol: str, query: dict) -> tuple[dict, int]:
-    """Microstructure regime, second/third order dealer Greeks, and 4-quadrant topography."""
-    np = _get_np()
+    """Microstructure regime, second/third order dealer Greeks, and 4-quadrant topography.
+
+    Single source of truth for the /regime page. The structural levels (net GEX
+    profile, flip, walls) are measured once by `_options_payload` -- which the
+    front end also reads directly as `gex_price_profile` -- and handed to
+    `compute_microstructure_regime` via SharedLevels so the classification is
+    derived from exactly the numbers that get rendered.
+
+    Previously this ran a second, independent measurement here and then
+    overwrote four headline fields of the result with the first one's values,
+    leaving `regime`, `topography`, the regime-strength score and `strikes`
+    derived from the numbers that had just been replaced. Every single-name symbol then
+    showed a positive net GEX figure beside a "negative_gamma" classification,
+    because the two measurements also used opposite dealer sign conventions.
+    """
     rate = _safe_float(query.get("rate", ["0.045"])[0], 0.045, lo=-0.05, hi=0.25)
-    is_index = symbol.upper() in {"SPY", "QQQ", "IWM", "DIA", "SPX", "NDX", "RUT", "VOO", "IVV"}
 
     try:
         opt_payload, status = _options_payload(symbol, query)
-        chain_rows = []
-        spot = None
-        if status == 200 and isinstance(opt_payload, dict):
-            summary = opt_payload.get("summary", {}) if isinstance(opt_payload.get("summary"), dict) else {}
-            spot = summary.get("spot") or opt_payload.get("spot")
-            chain_rows = opt_payload.get("chain_by_strike") or opt_payload.get("chain_rows") or opt_payload.get("open_interest_profile") or []
     except Exception:
-        opt_payload = None
-        chain_rows = []
-        spot = None
+        opt_payload, status = None, 500
+
+    summary: dict[str, Any] = {}
+    chain_rows: list = []
+    spot = None
+    if status == 200 and isinstance(opt_payload, dict):
+        raw_summary = opt_payload.get("summary")
+        summary = raw_summary if isinstance(raw_summary, dict) else {}
+        spot = summary.get("spot") or opt_payload.get("spot")
+        chain_rows = (
+            opt_payload.get("chain_by_strike")
+            or opt_payload.get("chain_rows")
+            or opt_payload.get("open_interest_profile")
+            or []
+        )
 
     if spot is None or spot <= 0:
         quote = _symbol_quote(symbol)
-        spot = float(quote.get("last") or 500.0)
-
-    if not chain_rows:
-        strikes = np.linspace(spot * 0.85, spot * 1.15, 31)
-        for k in strikes:
-            dist = abs(k - spot) / spot
-            oi_base = int(max(500, 15000 * math.exp(-dist * 12.0)))
-            chain_rows.append({
-                "strike": float(k),
-                "right": "call",
-                "open_interest": oi_base,
-                "volume": int(oi_base * 0.1),
-                "implied_volatility": 0.18 + 0.10 * dist,
-                "dte": 14,
-            })
-            chain_rows.append({
-                "strike": float(k),
-                "right": "put",
-                "open_interest": int(oi_base * 1.2 if k <= spot else oi_base * 0.8),
-                "volume": int(oi_base * 0.08),
-                "implied_volatility": 0.22 + 0.15 * dist,
-                "dte": 14,
-            })
+        spot = _safe_float(quote.get("last"), 0.0, lo=0.0, hi=1e9)
 
     asof_ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+    if not spot or spot <= 0:
+        return asdict(
+            unmeasurable_regime_snapshot(
+                symbol=symbol,
+                spot=0.0,
+                asof=asof_ts,
+                dealer_convention=_DEALER_CONVENTION,
+                contracts=0,
+                strikes=0,
+                total_open_interest=0,
+                reason=f"no spot price available for '{symbol}'",
+            )
+        ), 200
+
+    if not chain_rows:
+        # There is no substitute for a real chain. This used to synthesize a
+        # 31-strike ladder from np.linspace with exponentially-decaying open
+        # interest and then render a full tactical briefing on it, with nothing
+        # in the payload marking it as invented -- the most dangerous thing this
+        # endpoint could do to someone sizing a live trade.
+        return asdict(
+            unmeasurable_regime_snapshot(
+                symbol=symbol,
+                spot=float(spot),
+                asof=asof_ts,
+                dealer_convention=_DEALER_CONVENTION,
+                contracts=0,
+                strikes=0,
+                total_open_interest=0,
+                reason=f"no option chain available for '{symbol}'",
+            )
+        ), 200
+
+    # Measured spot velocity: today's return so far, as a fraction. Withheld
+    # (None) when there is no previous close to measure against, which withholds
+    # `hedging_flow_m` in turn -- it used to be computed from a hardcoded
+    # ds_dt_pct=0.002 / dvol_dt_pct=-0.005, making a constant look like a
+    # live reading of the tape.
+    ds_dt_pct = None
+    quote = _symbol_quote(symbol)
+    last = _safe_float(quote.get("last"), 0.0, lo=0.0, hi=1e9)
+    prev_close = _safe_float(quote.get("prev_close"), 0.0, lo=0.0, hi=1e9)
+    if last > 0 and prev_close > 0:
+        ds_dt_pct = (last - prev_close) / prev_close
+
+    shared = None
+    profile = opt_payload.get("gex_price_profile") if isinstance(opt_payload, dict) else None
+    if isinstance(profile, list) and len(profile) >= 2:
+        shared = SharedLevels(
+            gex_profile=profile,
+            call_wall=summary.get("call_wall"),
+            put_wall=summary.get("put_wall"),
+        )
+
     snapshot = compute_microstructure_regime(
         chain_rows,
         symbol=symbol,
-        spot=spot,
+        spot=float(spot),
         rate=rate,
         asof=asof_ts,
-        is_index=is_index,
-        ds_dt_pct=0.002,
-        dvol_dt_pct=-0.005,
+        is_index=True,  # see _DEALER_CONVENTION
+        ds_dt_pct=ds_dt_pct,
+        # No IV velocity is measured anywhere in this stack yet, so the vanna
+        # term of F_hedge cannot be computed and the whole figure is withheld
+        # rather than partially assumed.
+        dvol_dt_pct=None,
+        shared_levels=shared,
     )
-    res_dict = asdict(snapshot)
-    if isinstance(opt_payload, dict):
-        summary = opt_payload.get("summary", {}) if isinstance(opt_payload.get("summary"), dict) else {}
-        if summary.get("call_wall") is not None:
-            res_dict["call_wall"] = summary["call_wall"]
-        if summary.get("put_wall") is not None:
-            res_dict["put_wall"] = summary["put_wall"]
-        if summary.get("gamma_flip") is not None:
-            res_dict["gamma_flip"] = summary["gamma_flip"]
-        if summary.get("pin_strike") is not None:
-            res_dict["pin_strike"] = summary["pin_strike"]
-        if summary.get("total_gex_m") is not None:
-            res_dict["net_gex_m"] = round(summary["total_gex_m"], 4)
-    return res_dict, 200
+    return asdict(snapshot), 200
 
 
 def _state_estimation_payload(symbol: str, query: dict) -> tuple[dict, int]:
@@ -2139,30 +2196,25 @@ def _systematic_signals_payload(symbol: str, query: dict) -> tuple[dict, int]:
     nw_anchor = causal_nadaraya_watson_envelope(prices, base_bandwidth=h, alpha=alpha, use_dynamic_bandwidth=True)
     k_mean_anchor = nw_anchor.mean
 
-    # Dynamically scale microstructure levels across historical bars
+    # Historical dealer-gamma levels are NOT reconstructed here.
+    #
+    # This used to take today's flip/wall offsets from spot and glue them onto
+    # the kernel mean at every historical bar, then set net GEX to
+    # +/-|today's net GEX| by which side of that synthetic line price sat on.
+    # Every bar in a one-year window was therefore assigned today's gamma
+    # structure -- look-ahead in the plainest sense -- and the resulting
+    # tearsheet measured a gamma-conditioned strategy against gamma data that
+    # never existed. Its Sharpe and drawdown were not estimates of anything.
+    #
+    # Reconstructing them truthfully needs a historical chain snapshot per bar,
+    # which this stack does not store. Until it does, the signal engine runs on
+    # price/volume structure alone and says so, which is a smaller claim that
+    # happens to be true.
     flip_series = None
     cwall_series = None
     pwall_series = None
     gex_series = None
-    try:
-        snap_payload, snap_status = _microstructure_regime_payload(symbol, {})
-        if snap_status == 200 and isinstance(snap_payload, dict) and snap_payload.get("spot"):
-            snap_spot = float(snap_payload["spot"])
-            flip_val = float(snap_payload.get("gamma_flip") or snap_spot * 0.985)
-            cwall_val = float(snap_payload.get("call_wall") or snap_spot * 1.025)
-            pwall_val = float(snap_payload.get("put_wall") or snap_spot * 0.975)
-            net_gex_val = float(snap_payload.get("net_gex_m") or 50.0)
-
-            flip_offset = flip_val - snap_spot
-            cwall_offset = cwall_val - snap_spot
-            pwall_offset = pwall_val - snap_spot
-
-            flip_series = k_mean_anchor + flip_offset
-            cwall_series = k_mean_anchor + cwall_offset
-            pwall_series = k_mean_anchor + pwall_offset
-            gex_series = np.where(prices >= flip_series, abs(net_gex_val), -abs(net_gex_val))
-    except Exception:
-        pass
+    del k_mean_anchor
 
     signals, nw_res, kalman_res, vwap_res = generate_microstructure_signals(
         prices,
@@ -2190,6 +2242,11 @@ def _systematic_signals_payload(symbol: str, query: dict) -> tuple[dict, int]:
         "latest_signal": latest_sig,
         "active_signals_count": len(active_signals),
         "signals": sig_dicts,
+        # Stated in the payload so the UI cannot present these as
+        # dealer-gamma-conditioned signals when no historical gamma exists.
+        "gamma_conditioned": False,
+        "basis": "price and volume structure only -- no historical dealer gamma is stored, "
+                 "so the gamma-regime terms of this model are inactive over history",
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     }, 200
 
@@ -2218,34 +2275,14 @@ def _systematic_backtest_payload(symbol: str, query: dict) -> tuple[dict, int]:
     volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
     dates = [idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx) for idx in win.index]
 
-    # Compute initial NW envelope to anchor dynamic structural series
-    nw_anchor = causal_nadaraya_watson_envelope(prices, base_bandwidth=20.0, alpha=2.0, use_dynamic_bandwidth=True)
-    k_mean_anchor = nw_anchor.mean
-
-    # Dynamically scale microstructure levels across historical bars
+    # No reconstructed dealer-gamma history -- see the note in
+    # _systematic_signals_payload. Back-testing gamma-conditioned rules against
+    # today's gamma structure projected over a year of bars produced a tearsheet
+    # whose numbers described nothing, which is worse than having no tearsheet.
     flip_series = None
     cwall_series = None
     pwall_series = None
     gex_series = None
-    try:
-        snap_payload, snap_status = _microstructure_regime_payload(symbol, {})
-        if snap_status == 200 and isinstance(snap_payload, dict) and snap_payload.get("spot"):
-            snap_spot = float(snap_payload["spot"])
-            flip_val = float(snap_payload.get("gamma_flip") or snap_spot * 0.985)
-            cwall_val = float(snap_payload.get("call_wall") or snap_spot * 1.025)
-            pwall_val = float(snap_payload.get("put_wall") or snap_spot * 0.975)
-            net_gex_val = float(snap_payload.get("net_gex_m") or 50.0)
-
-            flip_offset = flip_val - snap_spot
-            cwall_offset = cwall_val - snap_spot
-            pwall_offset = pwall_val - snap_spot
-
-            flip_series = k_mean_anchor + flip_offset
-            cwall_series = k_mean_anchor + cwall_offset
-            pwall_series = k_mean_anchor + pwall_offset
-            gex_series = np.where(prices >= flip_series, abs(net_gex_val), -abs(net_gex_val))
-    except Exception:
-        pass
 
     tearsheet = run_microstructure_backtest(
         prices,
@@ -2262,6 +2299,11 @@ def _systematic_backtest_payload(symbol: str, query: dict) -> tuple[dict, int]:
     )
 
     out = asdict(tearsheet)
+    out["gamma_conditioned"] = False
+    out["basis"] = (
+        "price and volume structure only -- no historical dealer-gamma snapshots are "
+        "stored, so the gamma-regime terms of the live model are inactive in this backtest"
+    )
     return out, 200
 
 

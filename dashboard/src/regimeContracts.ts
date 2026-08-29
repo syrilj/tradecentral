@@ -92,6 +92,15 @@ export interface Smile {
   tYears: number
   riskFreeRate: number
   expiry: string
+  /** Calendar days to this expiry, when the payload states it. */
+  dte?: number | null
+  /**
+   * True when the points came from the expiry-blended `iv_surface` rather than
+   * one expiry's own smile — a legacy-payload fallback only. A blended smile is
+   * not any traded expiry's, so the density built from it is dominated by
+   * clipping artifact and no probability read off it should be shown as one.
+   */
+  blended?: boolean
   /** Strikes that actually carried a usable IV, before interpolation. */
   observedStrikes: number
   /**

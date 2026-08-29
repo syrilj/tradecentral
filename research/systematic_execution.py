@@ -50,7 +50,7 @@ class ExecutionSignal:
     action: str             # "ENTER_LONG" | "ENTER_SHORT" | "EXIT_LONG" | "EXIT_SHORT" | "HOLD" | "NONE"
     direction: str          # "long" | "short" | "flat"
     price: float
-    regime: str             # "positive_gamma" | "negative_gamma" | "neutral_transition"
+    regime: str             # "positive_gamma" | "negative_gamma" | "neutral_transition" | "gamma_unmeasured"
     topography_quadrant: str
     setup_name: str         # e.g. "PosGEX_LowerBand_Exhaustion", "NegGEX_PutWall_Cascade", "0DTE_Charm_MeltUp"
     conviction: float       # 0.0 to 1.0
@@ -65,9 +65,13 @@ class ExecutionSignal:
     upper_envelope: float
     lower_envelope: float
     anchored_vwap: float
-    call_wall: float
-    put_wall: float
-    gamma_flip: float
+    #: None whenever no dealer-gamma series was supplied for this bar. The
+    #: engine previously substituted s_t * 1.025 / 0.975 / 0.985 here, so a
+    #: signal ticket displayed three precise-looking structural levels that
+    #: were fixed percentages of the bar's own close.
+    call_wall: float | None
+    put_wall: float | None
+    gamma_flip: float | None
     notes: list[str] = field(default_factory=list)
 
 
@@ -241,10 +245,19 @@ def generate_microstructure_signals(
         s_prev = p[t - 1] if t > 0 else s_t
         ts = ts_list[t]
 
-        flip = gamma_flip_series[t] if gamma_flip_series is not None and len(gamma_flip_series) == n else (s_t * 0.985)
-        c_wall = call_wall_series[t] if call_wall_series is not None and len(call_wall_series) == n else (s_t * 1.025)
-        p_wall = put_wall_series[t] if put_wall_series is not None and len(put_wall_series) == n else (s_t * 0.975)
-        net_gex = net_gex_series[t] if net_gex_series is not None and len(net_gex_series) == n else (100.0 if s_t >= flip else -100.0)
+        # Structural levels are used only when they were actually supplied.
+        # Falling back to fixed percentages of the current close manufactured a
+        # "gamma flip" that was, by construction, always 1.5% below spot -- so
+        # every bar read as positive gamma and the regime branch below was
+        # decided by arithmetic on the price rather than by dealer positioning.
+        has_gamma = (
+            gamma_flip_series is not None and len(gamma_flip_series) == n
+            and net_gex_series is not None and len(net_gex_series) == n
+        )
+        flip = float(gamma_flip_series[t]) if has_gamma else None
+        c_wall = float(call_wall_series[t]) if call_wall_series is not None and len(call_wall_series) == n else None
+        p_wall = float(put_wall_series[t]) if put_wall_series is not None and len(put_wall_series) == n else None
+        net_gex = float(net_gex_series[t]) if has_gamma else None
         net_chex = net_chex_series[t] if net_chex_series is not None and len(net_chex_series) == n else 0.0
 
         upper_band = nw_res.upper[t]
@@ -262,11 +275,20 @@ def generate_microstructure_signals(
         lag_k = max(0, t - 5)
         trend_up = k_mean >= nw_res.mean[lag_k]
 
-        # Topography Quadrant
-        is_pos_gex = (s_t >= flip) and (net_gex >= 0)
-        regime = "positive_gamma" if is_pos_gex else "negative_gamma"
-        if abs(s_t - flip) <= 0.0025 * s_t:
-            regime = "neutral_transition"
+        # Topography Quadrant.
+        #
+        # With no gamma data the engine does not guess at a gamma regime. It
+        # falls back to the price-structure analogue of the same question --
+        # is the tape extending or reverting -- read off the Kalman velocity
+        # z-score, and labels it "gamma_unmeasured" so nothing downstream
+        # reports a dealer-positioning claim that was never measured.
+        if not has_gamma:
+            regime = "gamma_unmeasured"
+        else:
+            is_pos_gex = (s_t >= flip) and (net_gex >= 0)
+            regime = "positive_gamma" if is_pos_gex else "negative_gamma"
+            if abs(s_t - flip) <= 0.0025 * s_t:
+                regime = "neutral_transition"
 
         action = "NONE"
         direction = "flat"
@@ -279,22 +301,56 @@ def generate_microstructure_signals(
 
         # 0DTE Charm unhedging check: Afternoon session (e.g. index > 70% of day or timestamp has '14:'/'15:')
         is_afternoon = ("14:" in ts or "15:" in ts or (n >= 20 and t >= int(n * 0.7)))
-        charm_melt_up_active = enable_0dte_charm_override and is_afternoon and (net_chex > 0 or net_gex > 0)
+        charm_melt_up_active = (
+            enable_0dte_charm_override
+            and is_afternoon
+            and (net_chex > 0 or (net_gex is not None and net_gex > 0))
+        )
 
-        # Decision Tree
+        # Decision Tree.
+        #
+        # `mode` is what actually selects the branch: "revert" runs the
+        # band-fade setups, "extend" the breakout setups. With gamma measured,
+        # the regime picks it (long gamma dampens -> revert; short gamma
+        # amplifies -> extend). Without gamma, kinematics pick it -- a velocity
+        # z-score beyond the breakout threshold is the price-only evidence that
+        # the tape is extending. Same setups either way; only the evidence for
+        # choosing between them changes, and the ticket says which it was.
         if regime == "positive_gamma":
-            topography_quadrant = "forward_positive_ramp" if c_wall - s_t <= s_t - p_wall else "backward_positive_ramp"
+            mode = "revert"
+        elif regime == "negative_gamma":
+            mode = "extend"
+        elif regime == "gamma_unmeasured":
+            mode = "extend" if abs(v_z) > breakout_z else "revert"
+        else:
+            mode = "none"
+
+        gamma_tag = "PosGEX" if regime == "positive_gamma" else "NegGEX" if regime == "negative_gamma" else "Kinematic"
+
+        if mode == "revert":
+            if c_wall is not None and p_wall is not None:
+                topography_quadrant = "forward_positive_ramp" if c_wall - s_t <= s_t - p_wall else "backward_positive_ramp"
+            else:
+                topography_quadrant = "kinematic_range"
 
             # Long Setup: Touch/penetrate lower band with momentum stabilizing
             if (s_t <= lower_band or s_prev <= prev_low_band) and (v_z >= -0.6 or v_z > v_prev_z):
                 action = "ENTER_LONG"
                 direction = "long"
-                setup_name = "PosGEX_LowerBand_Exhaustion"
+                setup_name = f"{gamma_tag}_LowerBand_Exhaustion"
                 conviction = min(0.95, 0.72 + max(0.0, lower_band - s_t) / max(1e-4, sigma_loc))
                 stop_loss = s_t - 1.2 * sigma_loc
                 take_profit = max(s_t + 1.5 * sigma_loc, k_mean + 0.2 * sigma_loc)
-                invalidation = f"Spot closing below Gamma Flip ${flip:.2f} with negative acceleration"
-                notes.append("Positive GEX mean-reversion long; dealer put hedging creates supportive floor")
+                invalidation = (
+                    f"Spot closing below Gamma Flip ${flip:.2f} with negative acceleration"
+                    if flip is not None
+                    else "Spot closing below the lower envelope with negative acceleration"
+                )
+                notes.append(
+                    "Positive GEX mean-reversion long; dealer put hedging creates supportive floor"
+                    if regime == "positive_gamma"
+                    else "Kinematic mean-reversion long at the lower envelope; no dealer-gamma read available"
+                )
                 if charm_melt_up_active:
                     take_profit += 0.8 * sigma_loc
                     notes.append("0DTE Charm melt-up active; extended take-profit target above standard VWAP")
@@ -306,37 +362,69 @@ def generate_microstructure_signals(
                 else:
                     action = "ENTER_SHORT"
                     direction = "short"
-                    setup_name = "PosGEX_UpperBand_Deceleration"
+                    setup_name = f"{gamma_tag}_UpperBand_Deceleration"
                     conviction = min(0.95, 0.72 + max(0.0, s_t - upper_band) / max(1e-4, sigma_loc))
                     stop_loss = s_t + 1.2 * sigma_loc
                     take_profit = min(s_t - 1.5 * sigma_loc, k_mean - 0.2 * sigma_loc)
-                    invalidation = f"Spot breaking above Call Wall ${c_wall:.2f} on accelerating volume"
-                    notes.append("Positive GEX mean-reversion short; dealer call hedging creates overhead resistance")
+                    invalidation = (
+                        f"Spot breaking above Call Wall ${c_wall:.2f} on accelerating volume"
+                        if c_wall is not None
+                        else "Spot breaking above the upper envelope on accelerating volume"
+                    )
+                    notes.append(
+                        "Positive GEX mean-reversion short; dealer call hedging creates overhead resistance"
+                        if regime == "positive_gamma"
+                        else "Kinematic mean-reversion short at the upper envelope; no dealer-gamma read available"
+                    )
 
-        elif regime == "negative_gamma":
-            topography_quadrant = "forward_negative_slide" if s_t - p_wall <= c_wall - s_t else "backward_negative_slide"
+        elif mode == "extend":
+            if c_wall is not None and p_wall is not None:
+                topography_quadrant = "forward_negative_slide" if s_t - p_wall <= c_wall - s_t else "backward_negative_slide"
+            else:
+                topography_quadrant = "kinematic_expansion"
 
-            # Short Breakdown: Breach below lower band with strong negative kinematic acceleration
-            if (s_t < lower_band or s_t <= p_wall) and v_z < -breakout_z:
+            # Short Breakdown: Breach below lower band (or the put wall, when
+            # one is measured) with strong negative kinematic acceleration.
+            breached_down = s_t < lower_band or (p_wall is not None and s_t <= p_wall)
+            breached_up = s_t > upper_band or (c_wall is not None and s_t >= c_wall)
+
+            if breached_down and v_z < -breakout_z:
                 action = "ENTER_SHORT"
                 direction = "short"
-                setup_name = "NegGEX_PutWall_Cascade"
+                setup_name = f"{gamma_tag}_PutWall_Cascade" if p_wall is not None else f"{gamma_tag}_LowerBreak_Cascade"
                 conviction = min(0.98, 0.75 + (abs(v_z) - breakout_z) * 0.1)
                 stop_loss = s_t + 1.5 * sigma_loc
                 take_profit = s_t - 3.0 * sigma_loc
-                invalidation = f"False breakdown: Spot re-crossing above Gamma Flip ${flip:.2f}"
-                notes.append("Negative GEX breakdown cascade; dealer short-delta hedging accelerates selling")
+                invalidation = (
+                    f"False breakdown: Spot re-crossing above Gamma Flip ${flip:.2f}"
+                    if flip is not None
+                    else "False breakdown: Spot re-crossing above the kernel mean"
+                )
+                notes.append(
+                    "Negative GEX breakdown cascade; dealer short-delta hedging accelerates selling"
+                    if regime == "negative_gamma"
+                    else "Kinematic breakdown on velocity expansion; no dealer-gamma read available"
+                )
 
-            # Long Short-Squeeze: Decisive breakout above Call Wall/upper band with positive velocity
-            elif (s_t > upper_band or s_t >= c_wall) and v_z > breakout_z:
+            # Long Short-Squeeze: Decisive breakout above the upper band (or the
+            # call wall, when measured) with positive velocity.
+            elif breached_up and v_z > breakout_z:
                 action = "ENTER_LONG"
                 direction = "long"
-                setup_name = "NegGEX_CallWall_ShortSqueeze"
+                setup_name = f"{gamma_tag}_CallWall_ShortSqueeze" if c_wall is not None else f"{gamma_tag}_UpperBreak_Expansion"
                 conviction = min(0.98, 0.75 + (v_z - breakout_z) * 0.1)
                 stop_loss = s_t - 1.5 * sigma_loc
                 take_profit = s_t + 3.0 * sigma_loc
-                invalidation = f"False breakout: Spot re-crossing below Call Wall ${c_wall:.2f}"
-                notes.append("Negative GEX short-squeeze; dealer short-covering and positive vanna kick accelerate rally")
+                invalidation = (
+                    f"False breakout: Spot re-crossing below Call Wall ${c_wall:.2f}"
+                    if c_wall is not None
+                    else "False breakout: Spot re-crossing below the kernel mean"
+                )
+                notes.append(
+                    "Negative GEX short-squeeze; dealer short-covering and positive vanna kick accelerate rally"
+                    if regime == "negative_gamma"
+                    else "Kinematic breakout on velocity expansion; no dealer-gamma read available"
+                )
         else:
             topography_quadrant = "transition_zone"
 
@@ -362,9 +450,9 @@ def generate_microstructure_signals(
             upper_envelope=round(upper_band, 2),
             lower_envelope=round(lower_band, 2),
             anchored_vwap=round(vwap_t, 2),
-            call_wall=round(c_wall, 2),
-            put_wall=round(p_wall, 2),
-            gamma_flip=round(flip, 2),
+            call_wall=round(c_wall, 2) if c_wall is not None else None,
+            put_wall=round(p_wall, 2) if p_wall is not None else None,
+            gamma_flip=round(flip, 2) if flip is not None else None,
             notes=notes,
         )
         signals.append(sig)
@@ -498,7 +586,13 @@ def run_microstructure_backtest(
             elif active_trade["direction"] == "short" and s_t >= active_trade["stop_loss"]:
                 exit_reason = "trailing_stop" if active_trade["stop_loss"] < active_trade["entry_price"] else "stop_loss"
             # Invalidation: Spot crossed gamma flip against direction
-            elif active_trade["regime"] == "positive_gamma" and active_trade["direction"] == "long" and s_t < sig.gamma_flip and sig.kalman_zscore < -1.4:
+            elif (
+                active_trade["regime"] == "positive_gamma"
+                and active_trade["direction"] == "long"
+                and sig.gamma_flip is not None
+                and s_t < sig.gamma_flip
+                and sig.kalman_zscore < -1.4
+            ):
                 exit_reason = "invalidation"
             # Time exit with profit locking after 20 bars
             elif holding_len >= 20 and ((active_trade["direction"] == "long" and s_t >= active_trade["entry_price"]) or (active_trade["direction"] == "short" and s_t <= active_trade["entry_price"])):

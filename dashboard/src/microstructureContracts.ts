@@ -33,6 +33,8 @@ export interface TopographyState {
     | 'forward_negative_slide'
     | 'backward_negative_slide'
     | 'transition_zone'
+    /** No flip level could be located, so no quadrant is defined. */
+    | 'unmeasurable'
   title: string
   description: string
   dealer_hedging_action: string
@@ -40,14 +42,32 @@ export interface TopographyState {
   gex_above_spot_m: number
   gex_below_spot_m: number
   gex_ratio: number
-  call_wall: number
-  put_wall: number
-  gamma_flip: number
-  volatility_trigger: number
-  absolute_gamma_peak: number
+  call_wall: number | null
+  put_wall: number | null
+  gamma_flip: number | null
+  volatility_trigger: number | null
+  absolute_gamma_peak: number | null
 }
 
-export interface SyntheticGexPoint {
+/**
+ * What the snapshot was measured from. Read this before rendering any
+ * directional claim: `measurable: false` means the server withheld the read
+ * rather than returning a neutral-looking one, and the UI must withhold too.
+ */
+export interface ChainQuality {
+  measurable: boolean
+  contracts: number
+  strikes: number
+  total_open_interest: number
+  /** Strike-sides priced off the default IV because no IV was quoted. */
+  iv_fallback_contracts: number
+  flip_located: boolean
+  dealer_convention: 'index' | 'equity'
+  reason: string | null
+}
+
+/** One point on the gamma map: net dealer GEX ($M) if spot were here. */
+export interface GexProfilePoint {
   spot: number
   net_gex_m: number
 }
@@ -56,23 +76,33 @@ export interface MicrostructureRegimeSnapshot {
   symbol: string
   spot: number
   asof: string
-  regime: 'positive_gamma' | 'negative_gamma' | 'neutral_transition'
-  regime_confidence: number
+  regime: 'positive_gamma' | 'negative_gamma' | 'neutral_transition' | 'unmeasurable'
+  /** Scale-free strength of the regime call in [0, 1]. NOT a probability. */
+  regime_strength: number
+  /** Per-strike sum at spot: `call_gex_m + put_gex_m` equals this exactly. */
   net_gex_m: number
   call_gex_m: number
   put_gex_m: number
+  /** The same quantity read off `gex_profile` at spot — the curve the flip and
+   *  the gamma map are drawn from. Reported alongside `net_gex_m`, not instead
+   *  of it, so the call/put split stays internally consistent; a material gap
+   *  between the two is called out in `notes`. */
+  net_gex_profile_m: number | null
   net_vex_m: number
   net_chex_m: number
-  hedging_flow_m: number
+  /** Null when the spot/IV velocities it needs were not measured. */
+  hedging_flow_m: number | null
   zero_dte_charm_drift_m: number
-  gamma_flip: number
-  call_wall: number
-  put_wall: number
-  volatility_trigger: number
-  absolute_gamma_peak: number
+  gamma_flip: number | null
+  call_wall: number | null
+  put_wall: number | null
+  volatility_trigger: number | null
+  absolute_gamma_peak: number | null
+  quality: ChainQuality
   topography: TopographyState
   strikes: StrikeExposure[]
-  synthetic_gex_profile: SyntheticGexPoint[]
+  /** The gamma map: net dealer GEX revalued across a grid of spots. */
+  gex_profile: GexProfilePoint[]
   notes: string[]
 }
 
@@ -138,7 +168,7 @@ export interface ExecutionSignal {
   action: 'ENTER_LONG' | 'ENTER_SHORT' | 'EXIT_LONG' | 'EXIT_SHORT' | 'HOLD' | 'NONE'
   direction: 'long' | 'short' | 'flat'
   price: number
-  regime: 'positive_gamma' | 'negative_gamma' | 'neutral_transition'
+  regime: 'positive_gamma' | 'negative_gamma' | 'neutral_transition' | 'gamma_unmeasured'
   topography_quadrant: string
   setup_name: string
   conviction: number
@@ -153,9 +183,11 @@ export interface ExecutionSignal {
   upper_envelope: number
   lower_envelope: number
   anchored_vwap: number
-  call_wall: number
-  put_wall: number
-  gamma_flip: number
+  /** Null when no dealer-gamma series backed this bar -- the engine no longer
+   *  substitutes fixed percentages of the bar's own close. */
+  call_wall: number | null
+  put_wall: number | null
+  gamma_flip: number | null
   notes: string[]
 }
 
@@ -166,6 +198,9 @@ export interface SystematicSignalsPayload {
   latest_signal: ExecutionSignal | null
   active_signals_count: number
   signals: ExecutionSignal[]
+  /** False when no historical dealer-gamma snapshots backed these signals. */
+  gamma_conditioned?: boolean
+  basis?: string
   generated_at: string
 }
 
@@ -242,4 +277,10 @@ export interface BacktestTearsheet {
   }>
   trades: SimulatedTrade[]
   regime_breakdown: Record<string, RegimeMetrics>
+  /** False when no historical dealer-gamma snapshots existed to condition on,
+   *  which is currently always -- this stack stores no chain history. The UI
+   *  must say so next to the Sharpe rather than implying the live model's
+   *  gamma logic was what produced these numbers. */
+  gamma_conditioned?: boolean
+  basis?: string
 }

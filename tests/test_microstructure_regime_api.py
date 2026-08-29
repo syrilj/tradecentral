@@ -13,17 +13,51 @@ from edge.tools.api_server import (
 
 
 def test_microstructure_regime_payload():
+    """Shape contract, and the withholding contract when there is no chain.
+
+    This used to assert `isinstance(payload["hedging_flow_m"], float)` and a
+    populated profile, which passed in a bare checkout only because the endpoint
+    invented a 31-strike option chain whenever the real one was missing. The
+    endpoint no longer does that, so in an environment with no market data the
+    correct payload is an explicitly unmeasurable one -- and the test now checks
+    for exactly that rather than for the fabrication.
+    """
     payload, status = _microstructure_regime_payload("SPY", {"rate": ["0.045"]})
     assert status == 200
     assert payload["symbol"] == "SPY"
-    assert "regime" in payload
-    assert "topography" in payload
-    assert "call_wall" in payload
-    assert "put_wall" in payload
-    assert "gamma_flip" in payload
-    assert "synthetic_gex_profile" in payload
-    assert "strikes" in payload
-    assert isinstance(payload["hedging_flow_m"], float)
+    for key in (
+        "regime",
+        "regime_strength",
+        "topography",
+        "call_wall",
+        "put_wall",
+        "gamma_flip",
+        "gex_profile",
+        "strikes",
+        "quality",
+        "hedging_flow_m",
+    ):
+        assert key in payload, key
+
+    quality = payload["quality"]
+    assert quality["dealer_convention"] == "index"
+
+    if quality["measurable"]:
+        assert payload["regime"] in {"positive_gamma", "negative_gamma", "neutral_transition"}
+        assert payload["gex_profile"]
+        assert payload["strikes"]
+    else:
+        # No chain -> no claim. Nothing numeric may survive, or the UI cannot
+        # tell a withheld read apart from a genuinely balanced one.
+        assert payload["regime"] == "unmeasurable"
+        assert payload["gamma_flip"] is None
+        assert payload["call_wall"] is None
+        assert payload["put_wall"] is None
+        assert payload["hedging_flow_m"] is None
+        assert payload["gex_profile"] == []
+        assert payload["strikes"] == []
+        assert payload["topography"]["quadrant"] == "unmeasurable"
+        assert quality["reason"]
 
 
 def test_state_estimation_payload():
