@@ -70,6 +70,11 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
       -> truth-preserving call/put activity, stock overlay, gamma-by-strike,
          risk-neutral range diagnostics, provenance, and filter accounting.
 
+  GET  /api/price-attractors?symbol=X[&force=1][&rate=0.045][&max_dte=60]
+      -> Real-time market regime classification, structural price magnet
+         levels (Call/Put Walls, Gamma Flip, Max Pain, Kinematic Drift, POC),
+         gravitational pull scores, and multi-lens confluence telemetry.
+
   GET|POST /api/options/backfill_oi?symbol=X[&max_dte=60]
       -> Live OI capture for one symbol (tools/backfill_option_oi.py, run
          in-process via yfinance). Writes
@@ -321,11 +326,9 @@ SERVER_START_TS = time.time()
 _DEFAULT_MAX_CONCURRENT_REQUESTS = 32
 _DEFAULT_SOCKET_TIMEOUT_S = 30.0
 _MIN_COMPRESS_BYTES = 1024
-# Cap on a request body we are willing to read off the wire. Nothing here
-# consumes a body, but it still has to be drained (see
-# `_drain_request_body`), and an unbounded read is a memory-exhaustion
-# lever on a threaded server. 64 KiB is far above any real request.
-_MAX_REQUEST_BODY_BYTES = 64 * 1024
+# Cap on a request body we are willing to read off the wire (up to 32 MiB to
+# accommodate high-res multimodal chart screenshots while guarding against DoS).
+_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 
 import types
 
@@ -396,6 +399,17 @@ from edge.daily_plays.pipeline import run_pipeline as _run_daily_plays_pipeline 
 from edge.daily_plays.options_intelligence import (  # noqa: E402
     OptionsFilters,
     build_options_intelligence,
+)
+from edge.daily_plays.regime_attractor_engine import (  # noqa: E402
+    ConfluenceCluster,
+    MarketRegimeState,
+    PriceMagnetLevel,
+    RegimeAttractorSnapshot,
+    build_price_draw_telemetry_payload,
+    calculate_market_regime,
+    compute_confluence_zones,
+    compute_price_attractors,
+    detect_price_magnets,
 )
 from edge.daily_plays.options_board import (  # noqa: E402
     BoardCandidate,
@@ -682,6 +696,42 @@ CHANGEPOINT_DIR = RUNS_DIR / "changepoints"
 FLOW_STATE_DIR = RUNS_DIR / "flow_state"
 
 
+# `_load_symbol_bars` used to parse up to three parquet files on every call,
+# and it is hit repeatedly per request: the regime view calls it from four
+# payloads for the same symbol and the adaptive board loops it over ~120
+# names. Bar files are immutable once written, so cache raw frames by
+# (path, mtime) the same way `_PARQUET_CACHE` does. Entries are evicted
+# oldest-first so nightly rewrites of every parquet do not leak.
+_SYMBOL_BARS_CACHE: dict[tuple[str, float], "_get_pd().DataFrame"] = {}
+_SYMBOL_BARS_CACHE_MAX = 2048
+_SYMBOL_BARS_CACHE_LOCK = threading.Lock()
+
+
+def _read_bars_cached(path: Path) -> "_get_pd().DataFrame | None":
+    pd = _get_pd()
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    key = (str(path), mtime)
+    with _SYMBOL_BARS_CACHE_LOCK:
+        cached = _SYMBOL_BARS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        frame = pd.read_parquet(path)
+    except Exception:
+        return None
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    with _SYMBOL_BARS_CACHE_LOCK:
+        while len(_SYMBOL_BARS_CACHE) >= _SYMBOL_BARS_CACHE_MAX:
+            oldest = next(iter(_SYMBOL_BARS_CACHE))
+            _SYMBOL_BARS_CACHE.pop(oldest, None)
+        _SYMBOL_BARS_CACHE[key] = frame
+    return frame
+
+
 def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> "_get_pd().DataFrame":
     """OHLCV for adaptive scoring and microstructure charts: load newest bars and augment with live spot."""
     pd = _get_pd()
@@ -697,19 +747,26 @@ def _load_symbol_bars(symbol: str, *, prefer_intraday: bool = True) -> "_get_pd(
 
     for base in bases:
         path = base / f"{symbol}.parquet"
-        if path.is_file():
-            try:
-                frame = pd.read_parquet(path)
-            except Exception:
-                continue
-            if frame is not None and not frame.empty and "close" in frame.columns:
-                last_dt = frame.index[-1]
-                if best_frame is None or (best_latest_dt is not None and str(last_dt) > str(best_latest_dt)):
-                    best_frame = frame
-                    best_latest_dt = last_dt
+        if not path.is_file():
+            continue
+        frame = _read_bars_cached(path)
+        if frame is not None and "close" in frame.columns:
+            last_dt = frame.index[-1]
+            if best_frame is None or (best_latest_dt is not None and str(last_dt) > str(best_latest_dt)):
+                best_frame = frame
+                best_latest_dt = last_dt
 
     if best_frame is None or best_frame.empty:
-        return pd.DataFrame()
+        df, _source = _load_symbol_df(symbol)
+        if df is not None and not df.empty and "close" in df.columns:
+            best_frame = df.copy()
+        else:
+            return pd.DataFrame()
+
+    # Cached parquet frames are shared across requests and the augmentation
+    # below mutates the frame in place (appends a live row / overwrites the
+    # last close), so hand out a private copy.
+    best_frame = best_frame.copy()
 
     # Augment with live session spot if local bars lag the session
     try:
@@ -3098,6 +3155,12 @@ _UNUSUAL_FLOW_LOCK = threading.Lock()
 _UNUSUAL_FLOW_BUILD_LOCKS: dict[tuple, threading.Lock] = {}
 _UNUSUAL_FLOW_TTL_S = 12.0
 
+# Price attractor telemetry cache: thread-safe TTL cache and single-flight builder locks.
+_PRICE_ATTRACTOR_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_PRICE_ATTRACTOR_LOCK = threading.Lock()
+_PRICE_ATTRACTOR_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_PRICE_ATTRACTOR_CACHE_TTL_S = 20.0
+
 
 def _symbol_path(symbol: str, tier: str) -> Path:
     d = DATA_WIDE_DIR if tier == "wide" else DATA_CORE_DIR
@@ -3935,6 +3998,72 @@ def _options_price_series(
     return series, _safe_round(frame["close"].iloc[-1], 4)
 
 
+# `_symbol_quote` used to open a ParquetFile and re-read the last row group on
+# every call, and `_quotes_payload` fans out to up to 40 of them per request.
+# The tail closes only change when the file is rewritten, so cache the result
+# by (path, mtime) the same way `_read_bars_cached` does. The cached value is
+# (last, prev, asof) of plain floats/str-or-None -- immutable, so callers get
+# the tuple itself safely.
+_SYMBOL_QUOTE_TAIL_CACHE: dict[tuple[str, float], tuple] = {}
+_SYMBOL_QUOTE_TAIL_CACHE_MAX = 512
+_SYMBOL_QUOTE_TAIL_CACHE_LOCK = threading.Lock()
+
+
+def _symbol_quote_tail_cached(path) -> tuple | None:
+    """(last, prev, asof) closes from the file's last row group, mtime-keyed.
+
+    Returns None when the file yields no usable closes; failures are not
+    cached, matching `_read_bars_cached`.
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    key = (str(path), mtime)
+    with _SYMBOL_QUOTE_TAIL_CACHE_LOCK:
+        cached = _SYMBOL_QUOTE_TAIL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    local_last = None
+    local_prev = None
+    local_asof = None
+    try:
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(path)
+        num_rgs = pf.metadata.num_row_groups
+        if num_rgs > 0:
+            last_rg = pf.read_row_group(
+                num_rgs - 1,
+                columns=[
+                    c for c in ["close", "Date", "date"] if c in pf.schema_arrow.names
+                ],
+            )
+            tail_df = _normalize_ohlcv_df(last_rg.to_pandas())
+            if (
+                tail_df is not None
+                and not getattr(tail_df, "empty", True)
+                and "close" in tail_df.columns
+            ):
+                closes = tail_df["close"].astype(float).dropna()
+                if len(closes):
+                    local_last = _safe_round(float(closes.iloc[-1]), 4)
+                    local_asof = _frame_asof_date(tail_df)
+                if len(closes) > 1:
+                    local_prev = _safe_round(float(closes.iloc[-2]), 4)
+    except Exception:
+        return None
+    if local_last is None:
+        return None
+    result = (local_last, local_prev, local_asof)
+    with _SYMBOL_QUOTE_TAIL_CACHE_LOCK:
+        while len(_SYMBOL_QUOTE_TAIL_CACHE) >= _SYMBOL_QUOTE_TAIL_CACHE_MAX:
+            oldest = next(iter(_SYMBOL_QUOTE_TAIL_CACHE))
+            _SYMBOL_QUOTE_TAIL_CACHE.pop(oldest, None)
+        _SYMBOL_QUOTE_TAIL_CACHE[key] = result
+    return result
+
+
 def _symbol_quote(symbol: str) -> dict:
     """One live mark for the desk boards. LSE last when available, else local close."""
     local_last = None
@@ -3957,32 +4086,9 @@ def _symbol_quote(symbol: str) -> dict:
                     break
 
         if frame is None and path.is_file():
-            try:
-                import pyarrow.parquet as pq
-
-                pf = pq.ParquetFile(path)
-                num_rgs = pf.metadata.num_row_groups
-                if num_rgs > 0:
-                    last_rg = pf.read_row_group(
-                        num_rgs - 1,
-                        columns=[
-                            c for c in ["close", "Date", "date"] if c in pf.schema_arrow.names
-                        ],
-                    )
-                    tail_df = _normalize_ohlcv_df(last_rg.to_pandas())
-                    if (
-                        tail_df is not None
-                        and not getattr(tail_df, "empty", True)
-                        and "close" in tail_df.columns
-                    ):
-                        closes = tail_df["close"].astype(float).dropna()
-                        if len(closes):
-                            local_last = _safe_round(float(closes.iloc[-1]), 4)
-                            local_asof = _frame_asof_date(tail_df)
-                        if len(closes) > 1:
-                            local_prev = _safe_round(float(closes.iloc[-2]), 4)
-            except Exception:
-                pass
+            tail = _symbol_quote_tail_cached(path)
+            if tail is not None:
+                local_last, local_prev, local_asof = tail
 
     if local_last is None:
         frame, tier = _load_symbol_df(symbol)
@@ -4019,6 +4125,43 @@ def _symbol_quote(symbol: str) -> dict:
         asof = None
 
     chg = _pct(prev, last) if prev is not None and last is not None else None
+
+    regime_badge = None
+    primary_magnet_target = None
+    magnet_distance_pct = None
+
+    sym_upper = symbol.upper()
+    with _PRICE_ATTRACTOR_LOCK:
+        cached_attractor = _PRICE_ATTRACTOR_CACHE.get(sym_upper)
+
+    if cached_attractor is not None:
+        attractor_data = cached_attractor[1]
+        regime_badge = attractor_data.get("regime_state")
+        pm = attractor_data.get("primary_magnet")
+        if isinstance(pm, dict):
+            primary_magnet_target = pm.get("price")
+            magnet_distance_pct = pm.get("distance_pct")
+    elif last is not None and last > 0:
+        chain_dates = _option_chain_dates(sym_upper)
+        if chain_dates:
+            try:
+                hist_rows, _, _ = _historical_option_rows(sym_upper, asof=chain_dates[-1])
+                if hist_rows:
+                    snap = compute_price_attractors(
+                        symbol=sym_upper,
+                        spot=float(last),
+                        chain_rows=hist_rows,
+                    )
+                    if snap.quality.get("measurable"):
+                        regime_badge = snap.regime_state
+                        if snap.primary_magnet:
+                            primary_magnet_target = snap.primary_magnet.price
+                            magnet_distance_pct = snap.primary_magnet.distance_pct
+                        with _PRICE_ATTRACTOR_LOCK:
+                            _PRICE_ATTRACTOR_CACHE[sym_upper] = (time.time(), snap.to_dict())
+            except Exception:
+                pass
+
     return {
         "symbol": symbol,
         "last": last,
@@ -4027,6 +4170,9 @@ def _symbol_quote(symbol: str) -> dict:
         "asof": asof,
         "source": source,
         "quality": quality,
+        "regime_badge": regime_badge,
+        "primary_magnet_target": primary_magnet_target,
+        "magnet_distance_pct": magnet_distance_pct,
     }
 
 
@@ -4350,8 +4496,32 @@ def _historical_option_rows(
 
 
 _SECRETISH = re.compile(
-    r"(?i)((?:api[_-]?key|apikey|token|secret|authorization|password)\s*[=:]\s*)\S+"
+    r"(?i)((?:api[_-]?key|apikey|x-api-key|token|secret|authorization|password)\s*[=:]\s*)\S+"
 )
+_ENV_KEYISH = re.compile(
+    r"(?i)\b(LSE_API_KEY|FINTEL_API_KEY)\s*=\s*\S+"
+)
+
+
+def _redact_secrets(text: str) -> str:
+    """Strip provider credentials from operator-visible strings and JSON."""
+    redacted = _SECRETISH.sub(r"\1***", str(text or ""))
+    redacted = _ENV_KEYISH.sub(lambda m: f"{m.group(1)}=***", redacted)
+    for env_name in ("LSE_API_KEY", "FINTEL_API_KEY"):
+        value = str(os.getenv(env_name) or "").strip()
+        if len(value) >= 6 and value in redacted:
+            redacted = redacted.replace(value, "***")
+    return redacted
+
+
+def _redact_payload(value):
+    if isinstance(value, str):
+        return _redact_secrets(value)
+    if isinstance(value, list):
+        return [_redact_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_payload(item) for key, item in value.items()}
+    return value
 
 
 def _provider_note(exc: BaseException, limit: int = 200) -> str:
@@ -4366,7 +4536,7 @@ def _provider_note(exc: BaseException, limit: int = 200) -> str:
     ``key=<value>`` shaped token in case a provider echoes a request back in
     its error text — warnings are rendered in the dashboard.
     """
-    msg = _SECRETISH.sub(r"\1***", " ".join(str(exc).split()))
+    msg = _redact_secrets(" ".join(str(exc).split()))
     if not msg:
         return type(exc).__name__
     if len(msg) > limit:
@@ -4611,11 +4781,13 @@ def _backfill_oi_payload(symbol: str, *, max_dte: int) -> tuple[dict, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(out_dir / f"{symbol}.parquet")
 
-    # The next /api/options fetch must see this snapshot immediately, not
-    # after the 20s options cache TTL expires.
+    # The next /api/options and /api/price-attractors fetch must see this snapshot immediately, not
+    # after the cache TTL expires.
     with _OPTIONS_LOCK:
         for key in [k for k in _OPTIONS_CACHE if k[0] == symbol]:
             _OPTIONS_CACHE.pop(key, None)
+    with _PRICE_ATTRACTOR_LOCK:
+        _PRICE_ATTRACTOR_CACHE.pop(symbol.upper(), None)
 
     return {
         "status": "ok",
@@ -4923,6 +5095,48 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
             payload["spot_source"] = live_spot_source
         elif mode_resolved != "live" and history_spot_source:
             payload["spot_source"] = history_spot_source
+
+        # Embed price attractor snapshot
+        extracted_prices = [
+            float(p.get("c") or p.get("close") or p.get("price") or 0.0)
+            for p in (price_series or [])
+            if isinstance(p, dict) and (p.get("c") or p.get("close") or p.get("price"))
+        ]
+        resolved_spot_for_attractor = (
+            live_spot if mode_resolved == "live"
+            else history_spot
+        )
+        try:
+            attractor_snapshot = compute_price_attractors(
+                symbol=symbol,
+                spot=float(resolved_spot_for_attractor) if (resolved_spot_for_attractor is not None and resolved_spot_for_attractor > 0) else 0.0,
+                chain_rows=chain_rows,
+                price_series=extracted_prices if extracted_prices else None,
+                rate=filters.risk_free_rate,
+            )
+            payload["price_attractor_snapshot"] = attractor_snapshot.to_dict()
+        except Exception as exc:
+            payload["price_attractor_snapshot"] = {
+                "symbol": symbol.upper(),
+                "spot": resolved_spot_for_attractor,
+                "asof_utc": datetime.now(timezone.utc).isoformat(),
+                "regime_state": "unmeasurable",
+                "regime_label": "Unmeasured Regime",
+                "regime_strength": None,
+                "dominant_direction": "unmeasured",
+                "primary_magnet": None,
+                "levels": [],
+                "price_ladder": [],
+                "confluence_clusters": [],
+                "quality": {
+                    "measurable": False,
+                    "open_interest_available": False,
+                    "iv_available": False,
+                    "volume_available": False,
+                    "reason": f"Attractor computation error: {exc}",
+                },
+                "warnings": [f"Attractor computation error: {exc}"],
+            }
     with _OPTIONS_LOCK:
         _OPTIONS_CACHE[cache_key] = (time.time(), payload)
         if len(_OPTIONS_CACHE) > 128:
@@ -4945,6 +5159,153 @@ def _options_payload(symbol: str, query: dict) -> tuple[dict, int]:
         build_lock = _OPTIONS_BUILD_LOCKS.setdefault(request_key, threading.Lock())
     with build_lock:
         return _options_payload_impl(symbol, query)
+
+
+def _price_attractors_payload_impl(
+    symbol: str,
+    query: dict | None = None,
+    *,
+    force: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """Computes price attractors, magnet levels, and market regime telemetry with zero spoofing."""
+    sym = symbol.strip().upper()
+    query = query or {}
+    now = time.time()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    rate_raw = query.get("rate", ["0.045"])
+    rate_val = rate_raw[0] if isinstance(rate_raw, list) and rate_raw else rate_raw
+    rate = _safe_float(rate_val, 0.045, lo=-0.05, hi=0.25)
+
+    dte_raw = query.get("max_dte", ["60"])
+    dte_val = dte_raw[0] if isinstance(dte_raw, list) and dte_raw else dte_raw
+    max_dte = _safe_int(dte_val, 60, lo=0, hi=730)
+
+    if not force:
+        with _PRICE_ATTRACTOR_LOCK:
+            cached = _PRICE_ATTRACTOR_CACHE.get(sym)
+            if cached is not None and (now - cached[0]) < _PRICE_ATTRACTOR_CACHE_TTL_S:
+                cached_time, cached_payload = cached
+                age = round(now - cached_time, 2)
+                res = dict(cached_payload)
+                res["cache"] = {
+                    "hit": True,
+                    "age_seconds": age,
+                    "ttl_seconds": _PRICE_ATTRACTOR_CACHE_TTL_S,
+                }
+                return res, 200
+
+    try:
+        opt_payload, status = _options_payload(
+            sym,
+            {"mode": ["live"], "max_dte": [str(max_dte)], "rate": [str(rate)]},
+        )
+    except Exception:
+        opt_payload, status = None, 500
+
+    chain_rows: list[dict[str, Any]] = []
+    spot: float | None = None
+    price_series: list[float] = []
+
+    if status == 200 and isinstance(opt_payload, dict):
+        embedded_snapshot = opt_payload.get("price_attractor_snapshot")
+        if (
+            isinstance(embedded_snapshot, dict)
+            and embedded_snapshot.get("quality", {}).get("measurable")
+        ):
+            with _PRICE_ATTRACTOR_LOCK:
+                _PRICE_ATTRACTOR_CACHE[sym] = (now, embedded_snapshot)
+            res = dict(embedded_snapshot)
+            res["cache"] = {
+                "hit": False,
+                "age_seconds": 0.0,
+                "ttl_seconds": _PRICE_ATTRACTOR_CACHE_TTL_S,
+            }
+            return res, 200
+
+        summary = opt_payload.get("summary") or {}
+        spot = summary.get("spot") or opt_payload.get("spot")
+        chain_rows = (
+            opt_payload.get("chain_by_strike")
+            or opt_payload.get("chain_rows")
+            or opt_payload.get("open_interest_profile")
+            or []
+        )
+        raw_price_series = opt_payload.get("price_series") or []
+        for p in raw_price_series:
+            if isinstance(p, dict):
+                c = p.get("c") or p.get("close") or p.get("price") or p.get("last")
+                if c is not None:
+                    try:
+                        price_series.append(float(c))
+                    except (ValueError, TypeError):
+                        pass
+
+    if spot is None or spot <= 0:
+        quote = _symbol_quote(sym)
+        spot_cand = _safe_float(quote.get("last"), 0.0, lo=0.0, hi=1e9)
+        if spot_cand > 0:
+            spot = spot_cand
+
+    if not price_series:
+        frame, _ = _load_symbol_df(sym)
+        if frame is not None and not getattr(frame, "empty", True) and "close" in frame.columns:
+            closes = frame["close"].astype(float).dropna()
+            price_series = [float(x) for x in closes.tolist()[-60:]]
+
+    snapshot = compute_price_attractors(
+        symbol=sym,
+        spot=float(spot) if (spot is not None and spot > 0) else 0.0,
+        chain_rows=chain_rows,
+        price_series=price_series if price_series else None,
+        asof_utc=now_iso,
+        rate=rate,
+    )
+    payload = snapshot.to_dict()
+
+    with _PRICE_ATTRACTOR_LOCK:
+        _PRICE_ATTRACTOR_CACHE[sym] = (now, payload)
+        if len(_PRICE_ATTRACTOR_CACHE) > 256:
+            oldest = min(_PRICE_ATTRACTOR_CACHE, key=lambda k: _PRICE_ATTRACTOR_CACHE[k][0])
+            _PRICE_ATTRACTOR_CACHE.pop(oldest, None)
+
+    res = dict(payload)
+    res["cache"] = {
+        "hit": False,
+        "age_seconds": 0.0,
+        "ttl_seconds": _PRICE_ATTRACTOR_CACHE_TTL_S,
+    }
+    return res, 200
+
+
+def _price_attractors_payload(
+    symbol: str,
+    query: dict | None = None,
+    *,
+    force: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """Single-flight mutex locking and TTL caching wrapper for price attractors."""
+    sym = symbol.strip().upper()
+    if not force:
+        now = time.time()
+        with _PRICE_ATTRACTOR_LOCK:
+            cached = _PRICE_ATTRACTOR_CACHE.get(sym)
+            if cached is not None and (now - cached[0]) < _PRICE_ATTRACTOR_CACHE_TTL_S:
+                cached_time, cached_payload = cached
+                age = round(now - cached_time, 2)
+                res = dict(cached_payload)
+                res["cache"] = {
+                    "hit": True,
+                    "age_seconds": age,
+                    "ttl_seconds": _PRICE_ATTRACTOR_CACHE_TTL_S,
+                }
+                return res, 200
+
+    with _PRICE_ATTRACTOR_LOCK:
+        build_lock = _PRICE_ATTRACTOR_BUILD_LOCKS.setdefault(sym, threading.Lock())
+
+    with build_lock:
+        return _price_attractors_payload_impl(sym, query, force=force)
 
 
 # ---------------------------------------------------------------------------
@@ -6564,10 +6925,21 @@ _MOMENTUM_SCAN_CACHE: dict | None = None
 _MOMENTUM_SCAN_CACHE_TS: float = 0.0
 _MOMENTUM_SCAN_CACHE_TTL_S = 300.0
 _MOMENTUM_SCAN_LOCK = threading.Lock()
+_MOMENTUM_SCAN_REBUILD_LOCK = threading.Lock()
+_MOMENTUM_SCAN_REBUILDING = False
+
+
+def _read_parquet_stem(path) -> tuple[str, "pd.DataFrame | None"]:
+    """Return (stem, frame-or-None) so a pool.map over files stays in order."""
+    try:
+        return path.stem, _get_pd().read_parquet(path)
+    except Exception:
+        return path.stem, None
 
 
 def _load_smallcap_price_data() -> dict[str, pd.DataFrame]:
-    out: dict[str, pd.DataFrame] = {}
+    paths: list = []
+    seen: set[str] = set()
     search_dirs = [
         DATA_SMALLCAP_DIR,
         RUNS_DIR.parent / "data" / "1d",
@@ -6578,17 +6950,68 @@ def _load_smallcap_price_data() -> dict[str, pd.DataFrame]:
             continue
         for path in d.glob("*.parquet"):
             sym = path.stem
-            if sym in out or "MANIFEST" in sym:
+            if sym in seen or "MANIFEST" in sym:
                 continue
-            try:
-                out[sym] = _get_pd().read_parquet(path)
-            except Exception:
-                continue
+            seen.add(sym)
+            paths.append(path)
+    # 558 files read sequentially is a multi-second cold path; parallelize the
+    # reads. Executor.map preserves input order, so `out` keeps the same
+    # precedence (earlier dirs win) as the sequential loop did.
+    if not paths:
+        return {}
+    out: dict[str, pd.DataFrame] = {}
+    cf = _get_concurrent_futures()
+    workers = min(8, len(paths))
+    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+        for sym, frame in pool.map(_read_parquet_stem, paths):
+            if frame is not None:
+                out[sym] = frame
     return out
 
 
-def _momentum_scan_payload(*, force: bool = False) -> dict:
+def _momentum_scan_rebuild_locked() -> dict:
+    """Cold path: read the universe and build the scan, then swap into the
+    cache. Caller must hold _MOMENTUM_SCAN_LOCK. Only a successful build
+    replaces the previous snapshot, so a failed rebuild keeps serving the
+    last good payload."""
     global _MOMENTUM_SCAN_CACHE, _MOMENTUM_SCAN_CACHE_TS
+    price_data = _load_smallcap_price_data()
+    float_data = load_float_data()
+    expected = len(price_data)
+    manifest_path = DATA_SMALLCAP_DIR / "FETCH_MANIFEST_SMALLCAP.json"
+    if manifest_path.exists():
+        try:
+            expected = json.loads(manifest_path.read_text()).get(
+                "expected_universe_size", expected
+            )
+        except Exception:
+            pass
+    payload = build_momentum_scan(price_data, float_data, expected_universe_size=expected)
+    _MOMENTUM_SCAN_CACHE = payload
+    _MOMENTUM_SCAN_CACHE_TS = time.time()
+    return payload
+
+
+def _momentum_scan_rebuild_thread() -> None:
+    global _MOMENTUM_SCAN_REBUILDING
+    try:
+        with _MOMENTUM_SCAN_LOCK:
+            now = time.time()
+            if (
+                _MOMENTUM_SCAN_CACHE is not None
+                and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S
+            ):
+                return  # another refresher already completed a build
+            _momentum_scan_rebuild_locked()
+    except Exception as exc:  # noqa: BLE001 - keep serving the stale snapshot
+        print(f"[momentum_scan] background rebuild failed: {exc}", flush=True)
+    finally:
+        with _MOMENTUM_SCAN_REBUILD_LOCK:
+            _MOMENTUM_SCAN_REBUILDING = False
+
+
+def _momentum_scan_payload(*, force: bool = False) -> dict:
+    global _MOMENTUM_SCAN_REBUILDING
     now = time.time()
     if (
         not force
@@ -6604,50 +7027,134 @@ def _momentum_scan_payload(*, force: bool = False) -> dict:
             and (now - _MOMENTUM_SCAN_CACHE_TS) < _MOMENTUM_SCAN_CACHE_TTL_S
         ):
             return _MOMENTUM_SCAN_CACHE
-        price_data = _load_smallcap_price_data()
-        float_data = load_float_data()
-        expected = len(price_data)
-        manifest_path = DATA_SMALLCAP_DIR / "FETCH_MANIFEST_SMALLCAP.json"
-        if manifest_path.exists():
-            try:
-                expected = json.loads(manifest_path.read_text()).get(
-                    "expected_universe_size", expected
-                )
-            except Exception:
-                pass
-        payload = build_momentum_scan(price_data, float_data, expected_universe_size=expected)
-        _MOMENTUM_SCAN_CACHE = payload
-        _MOMENTUM_SCAN_CACHE_TS = time.time()
-        return payload
+        if not force and _MOMENTUM_SCAN_CACHE is not None:
+            # Stale-but-present: serve the previous snapshot warm and refresh in
+            # the background (single-flight) instead of blocking every concurrent
+            # scan request behind a multi-second cold build.
+            with _MOMENTUM_SCAN_REBUILD_LOCK:
+                if not _MOMENTUM_SCAN_REBUILDING:
+                    _MOMENTUM_SCAN_REBUILDING = True
+                    threading.Thread(
+                        target=_momentum_scan_rebuild_thread,
+                        name="momentum-scan-rebuild",
+                        daemon=True,
+                    ).start()
+            return _MOMENTUM_SCAN_CACHE
+        return _momentum_scan_rebuild_locked()
 
 
 _ABSORPTION_SCAN_CACHE: dict | None = None
 _ABSORPTION_SCAN_CACHE_TS: float = 0.0
 _ABSORPTION_SCAN_CACHE_TTL_S = 300.0
 _ABSORPTION_SCAN_LOCK = threading.Lock()
+_ABSORPTION_SCAN_REBUILD_LOCK = threading.Lock()
+_ABSORPTION_SCAN_REBUILDING = False
 
 
 def _load_absorption_price_data() -> dict[str, pd.DataFrame]:
-    """OHLCV for the absorption scan: the hourly universe only (the closest
-    thing this repo has to intraday). The scan is a cheap cross-section; the
-    per-symbol endpoint does the heavy on-demand work. One malformed frame is
-    skipped."""
-    out: dict[str, pd.DataFrame] = {}
+    """OHLCV for the absorption scan. Hourly is preferred (the closest thing
+    this repo has to intraday), but each symbol keeps whichever of
+    1h / 1d_wide / 1d has the NEWEST last bar -- the hourly snapshot can go
+    stale while daily files keep updating, and a scan anchored to a dead
+    hourly file freezes the whole board weeks in the past. One malformed
+    frame is skipped. The scan is a cheap cross-section; the per-symbol
+    endpoint does the heavy on-demand work. Reads are parallelized over the
+    pool like the momentum loader."""
+    frames_by_symbol: dict[str, list[pd.DataFrame]] = {}
+    cf = _get_concurrent_futures()
+
+    def _pool_read(paths: list) -> None:
+        if not paths:
+            return
+        workers = min(8, len(paths))
+        with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+            for sym, frame in pool.map(_read_parquet_stem, paths):
+                if frame is not None and len(frame.index) > 0:
+                    frames_by_symbol.setdefault(sym, []).append(frame)
+
     if not DATA_1H_DIR.is_dir():
-        return out
-    for path in DATA_1H_DIR.glob("*.parquet"):
-        sym = path.stem
-        if "MANIFEST" in sym:
+        return {}
+    hourly_paths = [p for p in DATA_1H_DIR.glob("*.parquet") if "MANIFEST" not in p.stem]
+    if not hourly_paths:
+        return {}
+    _pool_read(hourly_paths)
+
+    # The scan universe is the hourly universe (the curated tradable set);
+    # daily dirs are freshness fallbacks for those same symbols, not a
+    # universe expansion. See memory: 1d_wide is a 558-symbol layout, order +
+    # fallback, never a replacement.
+    for base in (DATA_WIDE_DIR, DATA_CORE_DIR):
+        if not base.is_dir():
             continue
-        try:
-            out[sym] = _get_pd().read_parquet(path)
-        except Exception:
-            continue
+        fallback_paths = [
+            base / f"{sym}.parquet"
+            for sym in frames_by_symbol
+            if (base / f"{sym}.parquet").is_file()
+        ]
+        _pool_read(fallback_paths)
+
+    out: dict[str, pd.DataFrame] = {}
+    for sym, candidates in frames_by_symbol.items():
+        best = max(candidates, key=lambda frame: str(frame.index[-1]))
+        out[sym] = best
     return out
 
 
-def _absorption_scan_payload(*, force: bool = False) -> dict:
+def _absorption_scan_rebuild_locked() -> dict:
+    """Cold path build for the absorption scan; caller holds _ABSORPTION_SCAN_LOCK.
+    Only a successful build swaps the snapshot."""
     global _ABSORPTION_SCAN_CACHE, _ABSORPTION_SCAN_CACHE_TS
+    from edge.daily_plays.absorption import build_absorption_scan
+
+    price_data = _load_absorption_price_data()
+    scan = build_absorption_scan(price_data)
+    payload = {
+        "schema_version": "absorption-scan-v1",
+        "asof": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "universe_size": scan["universe_size"],
+        "evaluated": scan["evaluated"],
+        "rows": scan["rows"],
+        # Per-gate pass counts and the observed imbalance/vol_ratio
+        # distribution. Absorption fires on ~0.5% of mature readouts, so an
+        # empty board is the common case; without this the operator cannot
+        # tell "rare event, none right now" from "this surface is broken".
+        "gate_summary": scan.get("gate_summary"),
+        "decision_authorized": False,
+        "score_kind": "ordinal_absorption",
+        "caveats": [
+            "Absorption is detected from bar-level CLV x volume proxies, "
+            "not measured aggressor order flow -- this repo has no "
+            "trades/quotes/L2 data.",
+            "absorption_score is an ORDINAL ranking feature, not a "
+            "probability or expected value.",
+            "This surface never authorizes a trade.",
+        ],
+    }
+    _ABSORPTION_SCAN_CACHE = payload
+    _ABSORPTION_SCAN_CACHE_TS = time.time()
+    return payload
+
+
+def _absorption_scan_rebuild_thread() -> None:
+    global _ABSORPTION_SCAN_REBUILDING
+    try:
+        with _ABSORPTION_SCAN_LOCK:
+            now = time.time()
+            if (
+                _ABSORPTION_SCAN_CACHE is not None
+                and (now - _ABSORPTION_SCAN_CACHE_TS) < _ABSORPTION_SCAN_CACHE_TTL_S
+            ):
+                return  # another refresher already completed a build
+            _absorption_scan_rebuild_locked()
+    except Exception as exc:  # noqa: BLE001 - keep serving the stale snapshot
+        print(f"[absorption_scan] background rebuild failed: {exc}", flush=True)
+    finally:
+        with _ABSORPTION_SCAN_REBUILD_LOCK:
+            _ABSORPTION_SCAN_REBUILDING = False
+
+
+def _absorption_scan_payload(*, force: bool = False) -> dict:
+    global _ABSORPTION_SCAN_REBUILDING
     now = time.time()
     if (
         not force
@@ -6663,35 +7170,20 @@ def _absorption_scan_payload(*, force: bool = False) -> dict:
             and (now - _ABSORPTION_SCAN_CACHE_TS) < _ABSORPTION_SCAN_CACHE_TTL_S
         ):
             return _ABSORPTION_SCAN_CACHE
-        from edge.daily_plays.absorption import build_absorption_scan
-
-        price_data = _load_absorption_price_data()
-        scan = build_absorption_scan(price_data)
-        payload = {
-            "schema_version": "absorption-scan-v1",
-            "asof": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "universe_size": scan["universe_size"],
-            "evaluated": scan["evaluated"],
-            "rows": scan["rows"],
-            # Per-gate pass counts and the observed imbalance/vol_ratio
-            # distribution. Absorption fires on ~0.5% of mature readouts, so an
-            # empty board is the common case; without this the operator cannot
-            # tell "rare event, none right now" from "this surface is broken".
-            "gate_summary": scan.get("gate_summary"),
-            "decision_authorized": False,
-            "score_kind": "ordinal_absorption",
-            "caveats": [
-                "Absorption is detected from bar-level CLV x volume proxies, "
-                "not measured aggressor order flow -- this repo has no "
-                "trades/quotes/L2 data.",
-                "absorption_score is an ORDINAL ranking feature, not a "
-                "probability or expected value.",
-                "This surface never authorizes a trade.",
-            ],
-        }
-        _ABSORPTION_SCAN_CACHE = payload
-        _ABSORPTION_SCAN_CACHE_TS = time.time()
-        return payload
+        if not force and _ABSORPTION_SCAN_CACHE is not None:
+            # Stale-but-present: serve the previous snapshot warm and refresh in
+            # the background (single-flight) instead of blocking every concurrent
+            # scan request behind a full-universe rebuild.
+            with _ABSORPTION_SCAN_REBUILD_LOCK:
+                if not _ABSORPTION_SCAN_REBUILDING:
+                    _ABSORPTION_SCAN_REBUILDING = True
+                    threading.Thread(
+                        target=_absorption_scan_rebuild_thread,
+                        name="absorption-scan-rebuild",
+                        daemon=True,
+                    ).start()
+            return _ABSORPTION_SCAN_CACHE
+        return _absorption_scan_rebuild_locked()
 
 
 # The chart only needs a recent window to render usefully. An unbounded
@@ -6778,12 +7270,32 @@ def _absorption_symbol_payload(symbol: str, limit: int | None = None) -> dict:
                 "baseline_warming_total_count": 0,
                 "baseline_warming_window_count": 0,
                 "backtest": None,
+                "matrix": None,
                 "caveats": [],
             }
         observations = observations_from_bars(bars)
         backtest = backtest_absorption(bars, cfg=cfg)
 
     readouts = detect_absorption_series(observations, cfg)
+
+    # Order-flow absorption matrix: fixed-range price profile over the
+    # trailing bars window (liquidity profile, delta + absorption columns,
+    # strength zones, pressure score). Built from OHLCV even when the
+    # absorption series itself came from the options tape (the tape has no
+    # OHLC), so the profile always reflects the equity price/volume window.
+    # Readouts only align 1:1 with bars when the series came from those same
+    # bars, so they are passed through only on the bars path.
+    matrix = None
+    try:
+        from edge.daily_plays.absorption import build_orderflow_matrix
+
+        matrix_bars = bars if source == "bars" else _load_symbol_bars(symbol, prefer_intraday=True)
+        if matrix_bars is not None and len(matrix_bars) > 0:
+            matrix_readouts = readouts if source == "bars" else None
+            matrix = build_orderflow_matrix(matrix_bars, matrix_readouts)
+    except Exception as exc:  # noqa: BLE001 - the matrix is additive; never break the series payload
+        print(f"[absorption_matrix] build failed for {symbol}: {exc}", flush=True)
+        matrix = None
     series_total = len(readouts)
     # Return the MOST RECENT points -- this is a time series and the tail
     # (the latest market state) is what the chart and the operator care
@@ -6840,6 +7352,7 @@ def _absorption_symbol_payload(symbol: str, limit: int | None = None) -> dict:
         "baseline_warming_total_count": warming_total_count,
         "baseline_warming_window_count": warming_window_count,
         "backtest": backtest,
+        "matrix": matrix,
         "caveats": caveats,
     }
 
@@ -7266,6 +7779,7 @@ _MUTATING_API_PATHS = frozenset(
         "/api/trigger_scan",
         "/api/plays/run",
         "/api/options/backfill_oi",
+        "/api/vpa/analyze",
     }
 )
 
@@ -7462,7 +7976,8 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         """
         correlation_id = uuid.uuid4().hex[:12]
         print(
-            f"[api_server] ERROR on {endpoint} (id={correlation_id}): {type(exc).__name__}: {exc}",
+            f"[api_server] ERROR on {endpoint} (id={correlation_id}): "
+            f"{type(exc).__name__}: {_redact_secrets(str(exc))}",
             file=sys.stderr,
         )
         traceback.print_exc(file=sys.stderr)
@@ -7519,6 +8034,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
             )
             return False
 
+        self._body_bytes = b""
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             return True
@@ -7538,6 +8054,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # Read exactly `length` bytes and no more: over-reading would swallow
         # the next genuine request on a pipelined connection.
+        chunks = []
         remaining = length
         while remaining > 0:
             chunk = self.rfile.read(min(remaining, 65536))
@@ -7545,8 +8062,11 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 # Client vanished mid-body; the stream position is now
                 # unknowable, so the connection cannot be safely reused.
                 self.close_connection = True
+                self._body_bytes = b"".join(chunks)
                 return True
+            chunks.append(chunk)
             remaining -= len(chunk)
+        self._body_bytes = b"".join(chunks)
         return True
 
     def _route(self):
@@ -7693,6 +8213,15 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
                     return
                 payload, status = _options_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/price-attractors":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                payload, status = _price_attractors_payload(sym_or_err, query, force=force)
                 self._send_json(payload, status=status)
 
             elif path == "/api/options/board":
@@ -7860,9 +8389,51 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     min_premium = 25_000.0
                 min_premium = max(0.0, min(min_premium, 5_000_000.0))
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
-                self._send_json(
-                    _unusual_flow_payload(limit=limit, min_premium=min_premium, force=force)
-                )
+                try:
+                    payload = _unusual_flow_payload(
+                        limit=limit, min_premium=min_premium, force=force
+                    )
+                except Exception as exc:
+                    payload = {
+                        "schema_version": "unusual-options-flow-v1",
+                        "asof": None,
+                        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                        "rows": [],
+                        "tape": [],
+                        "feed_status": "unavailable",
+                        "feed_reason": _provider_note(exc),
+                        "coverage": {},
+                        "warnings": [_provider_note(exc)],
+                        "min_premium": min_premium,
+                        "decision_authorized": False,
+                        "score_kind": "ordinal_unusual_flow",
+                        "source_snapshot": "market_flow",
+                        "cache": {
+                            "hit": False,
+                            "age_seconds": 0.0,
+                            "ttl_seconds": _UNUSUAL_FLOW_TTL_S,
+                            "refresh_hint": "GET /api/unusual-flow?force=1 for a live refetch",
+                        },
+                        "caveats": [],
+                    }
+                payload = dict(payload)
+                payload["decision_authorized"] = False
+                payload["source_snapshot"] = payload.get("source_snapshot") or "market_flow"
+                if not payload.get("feed_status"):
+                    payload["feed_status"] = "unavailable"
+                if not isinstance(payload.get("cache"), dict):
+                    payload["cache"] = {
+                        "hit": False,
+                        "age_seconds": 0.0,
+                        "ttl_seconds": _UNUSUAL_FLOW_TTL_S,
+                    }
+                for row in payload.get("rows") or []:
+                    if isinstance(row, dict):
+                        row["decision_authorized"] = False
+                for row in payload.get("tape") or []:
+                    if isinstance(row, dict):
+                        row["decision_authorized"] = False
+                self._send_json(_redact_payload(payload))
 
             elif path in {"/api/options/opportunities", "/api/options/suggest"}:
                 limit = _safe_int(query.get("limit", [None])[0], default=0, lo=1, hi=500)
@@ -8260,6 +8831,84 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 except ImportError:
                     from edge.tools.supply_chain import get_available_themes
                 self._send_json({"themes": get_available_themes()})
+
+            elif path == "/api/vpa/analyze":
+                try:
+                    from research.vpa_engine import analyze_chart_vpa
+                except ImportError:
+                    from edge.research.vpa_engine import analyze_chart_vpa
+                body_data = {}
+                if getattr(self, "_body_bytes", None):
+                    try:
+                        body_data = json.loads(self._body_bytes.decode("utf-8"))
+                    except Exception:
+                        body_data = {}
+                image_b64 = body_data.get("image_base64") or query.get("image_base64", [None])[0]
+                mime_type = body_data.get("mime_type") or "image/png"
+                sym = body_data.get("symbol") or query.get("symbol", [None])[0]
+                tf = body_data.get("timeframe") or query.get("timeframe", [None])[0]
+                ac = body_data.get("asset_class") or query.get("asset_class", [None])[0]
+                notes = body_data.get("notes") or query.get("notes", [None])[0]
+                sample_id = body_data.get("sample_id") or query.get("sample_id", [None])[0]
+                ohlcv_series = body_data.get("ohlcv_series")
+                lookback = _safe_int(
+                    body_data.get("lookback") or query.get("lookback", [None])[0] or 0,
+                    default=0,
+                    lo=0,
+                    hi=5000,
+                ) or None
+
+                res = analyze_chart_vpa(
+                    image_base64=image_b64,
+                    mime_type=mime_type,
+                    symbol=sym,
+                    timeframe=tf,
+                    asset_class=ac,
+                    notes=notes,
+                    sample_id=sample_id,
+                    ohlcv_series=ohlcv_series,
+                    lookback=lookback,
+                )
+                self._send_json(res)
+
+            elif path == "/api/vpa/health":
+                # Vision availability + the per-timeframe support matrix. The
+                # frontend builds its timeframe dropdown from this rather than
+                # a hardcoded array, so an unbacked timeframe is disabled with
+                # its reason instead of silently served as daily bars.
+                try:
+                    from research.vpa_engine import vpa_health
+                except ImportError:
+                    from edge.research.vpa_engine import vpa_health
+                # Availability is per symbol, not global: a symbol with no
+                # hourly parquet must not be offered 1h in the dropdown.
+                self._send_json(vpa_health(query.get("symbol", [None])[0]))
+
+            elif path == "/api/vpa/codex":
+                try:
+                    from research.vpa_codex import get_full_vpa_codex
+                except ImportError:
+                    from edge.research.vpa_codex import get_full_vpa_codex
+                self._send_json(get_full_vpa_codex())
+
+            elif path == "/api/vpa/samples":
+                try:
+                    from research.vpa_engine import SAMPLE_CHARTS
+                except ImportError:
+                    from edge.research.vpa_engine import SAMPLE_CHARTS
+                samples_meta = [
+                    {
+                        "id": s["id"],
+                        "symbol": s["symbol"],
+                        "timeframe": s["timeframe"],
+                        "asset_class": s["asset_class"],
+                        "title": s["title"],
+                        "book_reference": s["book_reference"],
+                        "description": s["description"],
+                    }
+                    for s in SAMPLE_CHARTS
+                ]
+                self._send_json({"samples": samples_meta})
 
             else:
                 self._send_json({"error": "unknown endpoint", "endpoint": path}, status=404)

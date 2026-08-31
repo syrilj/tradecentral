@@ -121,6 +121,10 @@ artifacts/
 models/qlib_scan_lgb_backup_*/
 models/qlib_scan_lgb_challenger*/
 
+# --- os ---
+.DS_Store
+.gstack/
+
 # Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 

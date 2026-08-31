@@ -11,15 +11,126 @@ const BASE = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 const configuredTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000)
 const REQUEST_TIMEOUT_MS =
   Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 30_000
-import type { RegimeBreadthPayload } from './regimeContracts'
+import type { RegimeBreadthPayload, MarketRegimePayload } from './regimeContracts'
+
+export type {
+  MarketRegimePayload,
+  PrimaryRegimeType,
+  CalibratedConfidence,
+  TrendContext,
+  VolatilityContext,
+  StructureContext,
+  FlowContext,
+  TransitionRisk,
+  ModelAgreement,
+  DynamicExplanation,
+  RegimeStructuralLevels,
+  RegimeQuality,
+} from './regimeContracts'
 import type {
+  ExecutionGatePayload,
   MicrostructureRegimeSnapshot,
   StateEstimationPayload,
   AnchoredVwapPayload,
   SystematicSignalsPayload,
   BacktestTearsheet,
 } from './microstructureContracts'
+import type { PriceDrawTelemetryPayload } from './priceDrawContracts'
 
+export type {
+  PriceDrawTelemetryPayload,
+  PriceDrawLevel,
+  PriceDrawLevelType,
+  MarketRegimeType,
+  DominantDirectionType,
+} from './priceDrawContracts'
+import type {
+  VpaAnalysisResult,
+  VpaAnalyzeRequest,
+  VpaSampleMeta,
+  VpaCodexPayload,
+  VpaHealthPayload,
+} from './vpaContracts'
+import type { AmtAnalysisResult, AmtHealthPayload, AmtPlaybookPayload } from './amtContracts'
+import type {
+  LiquidityAnalysisResult,
+  LiquidityAnchors,
+  LiquidityThresholdsPayload,
+} from './liquidityContracts'
+
+export type {
+  VpaKeyCandle,
+  VpaStoppingTopping,
+  VpaTestCandles,
+  VpaSupportResistance,
+  VpaForensicBreakdown,
+  VpaPrimaryScenario,
+  VpaAlternativeScenario,
+  VpaTradeExecutionGuide,
+  VpaAnalysisResult,
+  VpaAnalyzeRequest,
+  VpaSampleMeta,
+  VpaCodexPayload,
+  VpaBarsMeta,
+  VpaLevel,
+  VpaLevelKind,
+  VpaVapBin,
+  VpaVolumeAtPrice,
+  VpaEvidenceItem,
+  VpaEvidenceDirection,
+  VpaProbabilityBasis,
+  VpaVisionStatus,
+  VpaEngineMode,
+  VpaTimeframeOption,
+  VpaHealthPayload,
+  VpaDynamicTrend,
+  VpaCongestionPattern,
+  VpaConfidenceBasis,
+  VpaThresholdsStatus,
+  VpaBar,
+} from './vpaContracts'
+
+export type {
+  VpaRead,
+  VpaStance,
+  VpaTone,
+  VpaSignalRead,
+  VpaStructureRead,
+  VpaTradePlanRead,
+  VpaRiskLadder,
+  VpaRiskRung,
+  VpaRiskRole,
+} from './vpaRead'
+export { readVpa, buildRiskLadder } from './vpaRead'
+
+export type {
+  AmtBarsMeta,
+  AmtAnalyzeFailure,
+  AmtProfileBin,
+  AmtCompositeProfile,
+  AmtContextProfile,
+  AmtBalanceWindow,
+  AmtSession,
+  AmtRegimeComponents,
+  AmtRegimeWeights,
+  AmtRegimeRaw,
+  AmtRegime,
+  AmtZone,
+  AmtLocation,
+  AmtActivity,
+  AmtRotationStats,
+  AmtEvidenceItem,
+  AmtEvidenceDirection,
+  AmtDirectionalLean,
+  AmtTradePlan,
+  AmtPlaybookRule,
+  AmtBar,
+  AmtAnalyzeSuccess,
+  AmtAnalysisResult,
+  AmtTimeframeOption,
+  AmtHealthPayload,
+  AmtPlaybookPayload,
+} from './amtContracts'
 
 type AuthTokenProvider = () => Promise<string | null>
 let authTokenProvider: AuthTokenProvider | null = null
@@ -57,15 +168,23 @@ export function clearApiCache(pathPrefix?: string): void {
   }
 }
 
-async function executeReq<T>(path: string, init?: RequestInit): Promise<T> {
+async function executeReq<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: { timeoutMs?: number },
+): Promise<T> {
   let res: Response
   const controller = new AbortController()
   const forwardAbort = () => controller.abort(init?.signal?.reason)
   if (init?.signal?.aborted) forwardAbort()
   else init?.signal?.addEventListener('abort', forwardAbort, { once: true })
+  const timeoutMs =
+    opts?.timeoutMs != null && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? opts.timeoutMs
+      : REQUEST_TIMEOUT_MS
   const timeout = setTimeout(
     () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
-    REQUEST_TIMEOUT_MS,
+    timeoutMs,
   )
   try {
     const headers = new Headers(init?.headers)
@@ -82,7 +201,7 @@ async function executeReq<T>(path: string, init?: RequestInit): Promise<T> {
     const timedOut = controller.signal.aborted && !init?.signal?.aborted
     throw new ApiError(
       timedOut
-        ? `API request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s: ${path}`
+        ? `API request timed out after ${Math.round(timeoutMs / 1000)}s: ${path}`
         : `backend unreachable — is api_server.py running on :8787?`,
       0,
       path,
@@ -115,7 +234,7 @@ async function executeReq<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+async function req<T>(path: string, init?: RequestInit, opts?: { timeoutMs?: number }): Promise<T> {
   const method = (init?.method || 'GET').toUpperCase()
   // Coalesce in-flight concurrent identical GET requests
   if (method === 'GET' && !init?.signal && !init?.body) {
@@ -123,13 +242,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     if (existing) {
       return existing as Promise<T>
     }
-    const promise = executeReq<T>(path, init).finally(() => {
+    const promise = executeReq<T>(path, init, opts).finally(() => {
       inFlightGetRequests.delete(path)
     })
     inFlightGetRequests.set(path, promise)
     return promise
   }
-  return executeReq<T>(path, init)
+  return executeReq<T>(path, init, opts)
 }
 
 /**
@@ -144,13 +263,18 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
  */
 const MAX_CACHE_ENTRIES = 200
 
-async function cachedReq<T>(path: string, ttlMs = 15_000, init?: RequestInit): Promise<T> {
+async function cachedReq<T>(
+  path: string,
+  ttlMs = 15_000,
+  init?: RequestInit,
+  opts?: { timeoutMs?: number },
+): Promise<T> {
   const now = Date.now()
   const hit = memoryCache.get(path)
   if (hit && now - hit.ts < ttlMs) {
     return Promise.resolve(hit.data as T)
   }
-  const result = await req<T>(path, init)
+  const result = await req<T>(path, init, opts)
   // Re-insert last so Map iteration order stays oldest-write-first, which is
   // what makes the eviction below drop the least recently written entry.
   memoryCache.delete(path)
@@ -371,6 +495,7 @@ export interface ActivityScan {
 export interface UnusualFlowRow extends Omit<ActivityFlagRow, 'score_kind'> {
   score_kind: 'ordinal_unusual_flow' | string
   unusual_score?: number
+  local_activity_score?: number | null
   call_put_imbalance?: number | null
   flagged_contracts?: number | null
   momentum_contracts?: number | null
@@ -393,6 +518,8 @@ export interface TopTickerRow {
   score: number
   bullish_share: number | null
   bearish_share: number | null
+  call_share?: number | null
+  put_share?: number | null
   share_basis?: string
   print_count?: number
 }
@@ -411,7 +538,7 @@ export interface OptionsTopTickers {
 
 export interface UnusualFlowPayload {
   schema_version: string
-  asof: string
+  asof: string | null
   generated_at?: string
   rows: UnusualFlowRow[]
   tape?: MarketFlowPrint[]
@@ -432,6 +559,8 @@ export interface UnusualFlowPayload {
     provider_requests_completed?: number
     provider_prints?: number
     observed_symbols?: number
+    /** 'iso' live window, or 'vault' when the adapter fell back off a blocked /iso. */
+    provider_route?: string
   }
   warnings: string[]
   notes?: string[]
@@ -817,6 +946,17 @@ export interface OptionsTapeRow {
   /** BUY / SELL / NO SIDE — always set for display. */
   aggressor_label?: string
   signed_premium: number | null
+  /**
+   * Which side of the market the print hit, from the vendor aggressor or the
+   * quote rule against the matched chain contract. Separate from `aggressor`
+   * / `signed_premium`, which stay vendor-only.
+   */
+  inferred_side?: 'buy' | 'sell' | null
+  side_source?: 'vendor' | 'quote_rule_live' | 'quote_rule_delayed' | 'tick_rule' | null
+  side_weight?: number
+  /** +1 buying the underlying (buy call / sell put), −1 selling, null unresolved. */
+  flow_direction?: 1 | -1 | null
+  flow_signed_premium?: number | null
   /** Directional lean when aggressor or vendor sentiment is known. */
   bias?: 'bullish' | 'bearish' | null
   bias_source?: 'aggressor' | 'vendor_sentiment' | 'none' | string
@@ -844,6 +984,20 @@ export interface OptionsTapeRow {
   heat?: number | null
   presets?: Array<'unusual' | 'sweeps' | 'momentum' | 'moonshot' | string>
   relative_volume?: number | null
+  /**
+   * When > 1, this row is a burst-aggregate row: multiple exchange fills of
+   * the same contract collapsed into one sweep order display row.
+   * Absent or 1 when the row is a single un-aggregated fill.
+   */
+  sweep_fill_count?: number
+  /** Individual fill details for the fills collapsed into this aggregate row. */
+  sweep_fills?: Array<{
+    timestamp: string
+    contracts: number
+    price: number | null
+    premium: number
+    anomaly_flags: string[]
+  }>
 }
 
 export interface OptionsExpiryContext {
@@ -925,9 +1079,77 @@ export interface CharmSummary {
   source: string
 }
 
+export type PressureDirection = 'buying' | 'selling' | 'balanced'
+export type PressureBand = 'high' | 'medium' | 'low' | 'unmeasurable'
+
+/** Buyer/seller imbalance measured on side-resolved option prints. */
+export interface PressureTapeChannel {
+  /** Side-weight adjusted Σ direction·premium (buy call / sell put = +). */
+  signed_premium: number
+  gross_premium: number
+  /** Unweighted premium that had a side, and the whole tape's premium. */
+  resolved_premium: number
+  total_premium: number
+  n_signed: number
+  n_total: number
+  source_mix: {
+    vendor: number
+    quote_rule_live: number
+    quote_rule_delayed: number
+    /** Tick test vs the previous print on the same contract (0.4 weight). */
+    tick_rule: number
+    unresolved: number
+  }
+  buy_premium: number
+  sell_premium: number
+  /** resolved_premium / total_premium. */
+  coverage: number
+  /** Mean side weight of the resolved prints (1 = all vendor-signed). */
+  quality: number
+  ratio: number | null
+  min_prints: number
+  min_coverage: number
+}
+
+/** Close-location × volume proxy on the underlying's own bars. */
+export interface PressureUnderlyingChannel {
+  ratio: number
+  rvol: number | null
+  bars_used: number
+  timeframe: '1h' | '1d' | null
+  close_change_pct: number | null
+  last_bar: string | null
+  stale: boolean
+  method: 'clv_volume_proxy'
+  note: string
+}
+
 export interface PressureGauge {
   imbalance: number
-  label: 'buying' | 'selling' | 'balanced'
+  /** Sign-only readout, kept for compatibility; identical to `direction`. */
+  label: PressureDirection
+  direction: PressureDirection
+  /**
+   * The one flag a live trader keys off: direction beyond the threshold,
+   * medium-or-better confidence, live data, and no full-weight channel
+   * reading the opposite way.
+   */
+  actionable: boolean
+  /** e.g. "SELLING PRESSURE · HIGH CONFIDENCE", "LEAN BUYING · UNCONFIRMED (LOW)". */
+  verdict: string
+  confidence: {
+    score: number
+    band: PressureBand
+    agreement: number
+    evidence: number
+    magnitude: number
+    freshness: number
+    channels_active: number
+  }
+  /** Channels that read against the headline (or against a balanced blend). */
+  conflicts: { channel: 'charm' | 'tape' | 'underlying'; ratio: number; note: string }[]
+  /** Plain-language reasons the read is (or is not) trustworthy. */
+  reasons: string[]
   components: {
     net_charm_flow: number
     delta_weighted_call_vol: number
@@ -935,16 +1157,30 @@ export interface PressureGauge {
     net_gex_m: number
   }
   /**
-   * Per-channel net/gross ratio in [-1, 1] that produced `imbalance`.
-   * `null` = that channel had no gross magnitude and abstained from the blend
-   * (it did NOT vote "balanced"). Render null as "no data", never as 0.
+   * Per-channel net/gross ratio in [-1, 1]. Only charm, tape and underlying
+   * vote; `null` = that channel abstained (no data or below its evidence
+   * floor) — it did NOT vote "balanced", so render null as "no data", never 0.
+   * `volume` and `gex` are always null now: call/put mix and the GEX sign are
+   * context (see `context`), not direction.
    */
   channels: {
     charm: number | null
-    volume: number | null
-    gex: number | null
+    tape: number | null
+    underlying: number | null
+    volume: null
+    gex: null
   }
-  weights: { alpha: number; beta: number }
+  weights: { charm: number; tape: number; underlying: number; alpha: number; beta: number }
+  context: {
+    /** (ΔW call vol − ΔW put vol) / total: contract mix, not aggressor side. */
+    call_put_mix: number | null
+    gex_ratio: number | null
+    gex_regime: 'amplifying' | 'dampening' | 'neutral'
+    follow_through: string
+  }
+  tape: PressureTapeChannel | null
+  underlying: PressureUnderlyingChannel | null
+  thresholds: { direction: number; neutral: number }
   convention_note: string
 }
 /**
@@ -980,6 +1216,109 @@ export interface VannaSummary {
   /** iv_up_supportive → rising IV lifts dealer delta; negative → vol-spiral fuel. */
   regime: 'iv_up_supportive' | 'iv_up_pressuring' | 'neutral' | null
   source: string
+}
+/**
+ * Dedicated vanna board (`/api/vanna`): delta–vol coupling by strike and by
+ * expiry with the FOMC event clock. Distinct from the stacked-signals
+ * `VannaSummary` above — that lens carries `regime`, this payload carries
+ * `direction` plus the skipped-contract audit count and event context.
+ */
+export interface VannaFlowSummary {
+  net_vanna_flow: number
+  call_vanna_flow: number
+  put_vanna_flow: number
+  /** iv_up_supportive → rising IV forces dealer buy/supportive hedging. */
+  direction: 'iv_up_supportive' | 'iv_up_pressuring' | 'neutral'
+  source: string
+  contracts_skipped: number
+}
+export interface VannaStrikeFlowRow {
+  strike: number
+  call_vanna_flow: number
+  put_vanna_flow: number
+  net_vanna_flow: number
+}
+export interface VannaExpiryFlowRow {
+  expiry: string
+  dte: number
+  call_vanna_flow: number
+  put_vanna_flow: number
+  net_vanna_flow: number
+}
+export type VannaFomcPhase = 'fomc_today' | 'pre_fomc' | 'post_fomc' | 'baseline'
+export interface VannaEventContext {
+  next_fomc: string | null
+  days_to_fomc: number | null
+  is_fomc_day: boolean
+  is_fomc_week: boolean
+  last_fomc: string | null
+  days_since_fomc: number | null
+  phase: VannaFomcPhase
+  note: string
+}
+export interface VannaPayload {
+  symbol: string
+  asof: string
+  spot: number
+  vanna_summary: VannaFlowSummary
+  by_strike: VannaStrikeFlowRow[]
+  by_expiry: VannaExpiryFlowRow[]
+  /** Strike where net vanna flow flips sign — the vol-coupling magnet. */
+  vanna_pivot: number | null
+  event_context: VannaEventContext | null
+}
+
+/** Badge text for the FOMC event strip: "PRE-FOMC 2D", "FOMC TODAY", ... */
+export function vannaPhaseLabel(ctx: VannaEventContext | null | undefined): string {
+  if (!ctx) return '—'
+  if (ctx.is_fomc_day || ctx.phase === 'fomc_today') return 'FOMC TODAY'
+  if (ctx.phase === 'pre_fomc') {
+    const d = ctx.days_to_fomc
+    return d != null && Number.isFinite(d) ? `PRE-FOMC ${d}D` : 'PRE-FOMC'
+  }
+  if (ctx.phase === 'post_fomc') return 'POST-FOMC'
+  return 'BASELINE'
+}
+
+/** Visual emphasis for the phase badge — hot phases get the accent border. */
+export function vannaPhaseTone(ctx: VannaEventContext | null | undefined): 'hot' | 'cool' {
+  return ctx && (ctx.phase === 'fomc_today' || ctx.phase === 'pre_fomc') ? 'hot' : 'cool'
+}
+
+export function vannaDirectionLabel(
+  direction: VannaFlowSummary['direction'] | null | undefined,
+): string {
+  if (direction === 'iv_up_supportive') return 'IV-UP SUPPORTIVE'
+  if (direction === 'iv_up_pressuring') return 'IV-UP PRESSURING'
+  if (direction === 'neutral') return 'NEUTRAL'
+  return '—'
+}
+
+/** One-line mechanical read of the direction chip — the teaching caption. */
+export function vannaDirectionCopy(
+  direction: VannaFlowSummary['direction'] | null | undefined,
+): string {
+  if (direction === 'iv_up_supportive') {
+    return 'Positive net vanna: a post-event vol crush lifts dealer call deltas, so hedges sell into strength and buy dips asymmetrically.'
+  }
+  if (direction === 'iv_up_pressuring') {
+    return 'Negative net vanna: if implied vol rises, dealer hedging sells weakness — vol-spiral fuel around the event.'
+  }
+  if (direction === 'neutral') {
+    return 'Call and put vanna cancel: no mechanical hedge impulse from a vol move in either direction.'
+  }
+  return ''
+}
+
+/** Expiry carrying the largest |net vanna| — the load the event reprices first. */
+export function vannaDominantExpiry(rows: VannaExpiryFlowRow[]): VannaExpiryFlowRow | null {
+  let best: VannaExpiryFlowRow | null = null
+  for (const row of rows) {
+    const net = Number(row.net_vanna_flow)
+    if (!Number.isFinite(net)) continue
+    if (!best || Math.abs(net) > Math.abs(best.net_vanna_flow)) best = row
+  }
+  return best
 }
 export interface IvStrikeRow {
   strike: number
@@ -1132,6 +1471,7 @@ export interface OptionsSqueeze {
   scored_components?: Record<string, number | boolean | null | undefined>
   theory?: {
     squeeze_risk?: number | null
+    fuel_ui?: number | null
     bullish_score_raw?: number | null
     bearish_score_raw?: number | null
     bullish_ui?: number | null
@@ -1139,11 +1479,43 @@ export interface OptionsSqueeze {
     adv_m?: number | null
     adv_available?: boolean
     measurable?: boolean
+    /** Null when the tape carried no aggressor side — unmeasured, not neutral. */
     directional_flow_imbalance?: number | null
+    /** False when signed flow was dropped from conviction (weight 0). */
+    flow_measured?: boolean
+    flow_weight?: number | null
+    imbalance_confidence?: number | null
     momentum?: number | null
     momentum_fresh?: boolean
     momentum_price_age_days?: number | null
+    /** |return| at which the momentum gate saturates (0.03 = 3%). */
+    mom_ref?: number | null
+    mom_up_gate?: number | null
+    mom_dn_gate?: number | null
+    conviction_bull?: number | null
+    conviction_bear?: number | null
+    /** |short-premium GEX| / ADV. */
+    liquidity_ratio?: number | null
+    /** e^{−c·T_urgency}. T is front-book DTE under the current calibration. */
+    urgency?: number | null
+    /** DTE actually used in fuel (front 40% of the book, or full-book fallback). */
+    urgency_dte?: number | null
+    /** `"front40"` (current) or `"full"` (legacy replay). */
+    urgency_dte_basis?: string | null
+    /** |GEX|-weighted DTE of the cheapest 40% of the book by expiry. */
+    front40_weighted_dte?: number | null
+    fuel_scale?: number | null
+    /** |signed score| at which the readout labels a lean. */
+    lean_threshold?: number | null
+    /** |signed score| at which the readout labels a squeeze. */
+    squeeze_threshold?: number | null
     label?: string
+    short_premium_gex_m?: {
+      total_gex_m?: number | null
+      atm_share?: number | null
+      weighted_dte?: number | null
+      front40_weighted_dte?: number | null
+    } | null
   }
   long_gamma_dampened?: boolean
   negative_fuel?: number
@@ -1584,6 +1956,9 @@ export interface OptionsIntelligence {
     call_premium: number
     put_premium: number
     call_put_ratio: number | null
+    /** Annualised close-to-close realised vol from the local daily history. */
+    hv_20d?: number | null
+    hv_30d?: number | null
     activity_imbalance: number | null
     activity_lean?: 'bullish' | 'bearish' | 'mixed' | 'neutral' | string
     activity_lean_source?: string
@@ -2173,6 +2548,154 @@ export interface KalmanQuery {
   bars?: 'daily' | '1h'
 }
 
+/* --------------------------------------------------- volatility-targeted trend */
+
+export interface VolTargetParams {
+  target_vol: number
+  lev_cap: number
+  fast_days: number
+  slow_days: number
+  vol_days: number
+  capital: number
+  fast_bars: number | null
+  slow_bars: number | null
+  vol_bars: number | null
+  bars_per_day: number | null
+}
+
+export interface VolTargetSeriesPoint {
+  d: string
+  close: number | null
+  ema_f: number | null
+  ema_s: number | null
+  ann_vol: number | null
+  leverage: number | null
+  pos: number
+  up: boolean
+}
+
+export interface VolTargetTrade {
+  entry_d: string
+  exit_d: string
+  dir: 'long' | 'short'
+  qty: number
+  entry_px: number | null
+  exit_px: number | null
+  ret_pct: number | null
+  pnl: number | null
+  notional: number | null
+  leverage: number | null
+  ann_vol: number | null
+  bars: number
+  forced_exit: boolean
+}
+
+export interface VolTargetStats {
+  n_trades: number
+  win_rate_pct: number | null
+  avg_ret_pct: number | null
+  median_ret_pct: number | null
+  best_ret_pct: number | null
+  worst_ret_pct: number | null
+  compounded_pct: number | null
+  total_pnl: number | null
+  profit_factor: number | null
+  avg_bars: number | null
+  max_drawdown_pct: number | null
+  sharpe_ratio: number | null
+  exposure_pct: number | null
+}
+
+export interface VolTargetNow {
+  date: string
+  signal?: 'BUY' | 'SELL'
+  position: 'long' | 'flat'
+  up_trend: boolean
+  signal_date?: string | null
+  signal_px?: number | null
+  signal_bars?: number
+  signal_pnl_pct?: number
+  ema_fast?: number | null
+  ema_slow?: number | null
+  ann_vol: number | null
+  target_vol: number
+  leverage: number | null
+  lev_cap: number
+  close: number | null
+  target_qty: number | null
+  target_notional: number | null
+  forced_exit: boolean
+  last_trade: VolTargetTrade | null
+}
+
+export interface VolTargetSignalItem {
+  symbol: string
+  available: boolean
+  reason?: string | null
+  signal: 'BUY' | 'SELL'
+  position: 'long' | 'flat'
+  up_trend: boolean
+  close: number | null
+  ema_fast: number | null
+  ema_slow: number | null
+  signal_date: string | null
+  signal_px: number | null
+  signal_bars: number
+  signal_pnl_pct: number
+  ann_vol: number | null
+  target_vol: number
+  leverage: number | null
+  target_qty: number | null
+  target_notional: number | null
+  win_rate_pct?: number | null
+  total_pnl?: number | null
+}
+
+export interface VolTargetSignalsPayload {
+  asof: string
+  target_vol: number
+  lev_cap: number
+  capital: number
+  count: number
+  signals: VolTargetSignalItem[]
+}
+
+export interface VolTargetTrendPayload {
+  available: boolean
+  reason: string | null
+  symbol: string
+  window: string
+  bars: 'daily' | '1h'
+  n_bars: number
+  n_bars_full: number
+  first_date: string | null
+  last_date: string | null
+  generated_at: string
+  params: VolTargetParams
+  series: VolTargetSeriesPoint[]
+  trades: VolTargetTrade[]
+  n_trades: number
+  stats: VolTargetStats | null
+  now: VolTargetNow | null
+  plots: {
+    'annualised vol'?: (number | null)[]
+    leverage?: (number | null)[]
+  }
+  decision_authorized: boolean
+  caveat: string
+}
+
+export interface VolTargetQuery {
+  window?: TrajWindow
+  target_vol?: number
+  lev_cap?: number
+  fast_days?: number
+  slow_days?: number
+  vol_days?: number
+  capital?: number
+  bars?: 'daily' | '1h'
+}
+
 /* ---------------------------------------------------------------- endpoints */
 
 export interface MomentumCandidate {
@@ -2329,6 +2852,73 @@ export interface AbsorptionBacktest {
   [k: string]: unknown
 }
 
+export interface AbsorptionMatrixBin {
+  index: number
+  low: number
+  high: number
+  mid: number
+  total: number
+  buy: number
+  sell: number
+  strong_buy: number
+  strong_sell: number
+  delta: number
+  delta_frac: number
+  absorption: number
+  touches: number
+  rejections: number
+  in_value_area: boolean
+  strength: number
+}
+
+export interface AbsorptionMatrixZone {
+  low: number
+  high: number
+  mid: number
+  strength: number
+  tier: string
+  side: 'support' | 'resistance' | string
+  volume: number
+  absorption: number
+  touches: number
+  rejections: number
+}
+
+export interface AbsorptionMatrix {
+  available: boolean
+  lookback: number
+  bins_used: number
+  window_bars: number
+  window_low: number | null
+  window_high: number | null
+  asof?: string
+  atr?: number
+  bins: AbsorptionMatrixBin[]
+  poc: number | null
+  vah: number | null
+  val: number | null
+  zones: AbsorptionMatrixZone[]
+  last_print: {
+    tier: 'WHALE' | 'MEDIUM' | 'SMALL' | null
+    tier_rank: number
+    side: 'BUY' | 'SELL' | 'MIXED' | null
+    bar_delta: number
+    bar_volume: number
+    vol_ratio: number
+  } | null
+  pressure: {
+    score: number
+    regime: 'ACCUM' | 'DISTRIB' | 'BALANCED' | string
+    imbalance: number
+    cvd_bias: number
+    absorption_bias: number
+    absorption_side: 'SUPPORT' | 'RESISTANCE' | 'BALANCED' | string
+    last_cluster_dir: number
+    buy_share: number
+    sell_share: number
+  } | null
+}
+
 export interface AbsorptionSymbolPayload {
   available: boolean
   symbol: string
@@ -2349,6 +2939,9 @@ export interface AbsorptionSymbolPayload {
   baseline_warming_window_count: number
   latest?: AbsorptionSeriesPoint | null
   backtest?: AbsorptionBacktest | null
+  /** Fixed-range order-flow profile over the trailing bars window — present
+      when the symbol has OHLCV coverage, otherwise explicit null. */
+  matrix?: AbsorptionMatrix | null
   config?: Record<string, unknown>
   caveats?: string[]
 }
@@ -2499,6 +3092,53 @@ export const MACRO_TAPE_SLEEVES: { sleeve: string; symbols: { sym: string; name:
 /** All macro tape tickers, flattened — feeds api.quotes(). */
 export const MACRO_TAPE_SYMBOLS = MACRO_TAPE_SLEEVES.flatMap((s) => s.symbols.map((row) => row.sym))
 
+/* ----------------------------------------------------------------- crypto ---
+   Crypto workspace. Same existing endpoints as Macro / Kalman — no new vendor:
+
+   · /api/quotes — Yahoo hyphenated coin marks (BTC-USD and peers). Tickers
+     outside the local parquet universe fall through to a short-TTL yfinance
+     pull. A missing last is missing, never a fabricated 0.
+   · /api/kalman-trend — constant-velocity slope / noise on the focus coin.
+     Scale-tested on ~$50k BTC; the statistic is unitless z, not dollars.
+   · /api/cot — CFTC Bitcoin futures spec lean, market id `BTC`. */
+
+export type CryptoVehicle = 'spot' | 'equity'
+
+export const CRYPTO_COT_ID = 'BTC'
+export const CRYPTO_FOCUS_DEFAULT = 'BTC-USD'
+
+/** Coin tape grouped by vehicle so equity proxies are never labeled as spot. */
+export const CRYPTO_TAPE_SLEEVES: {
+  sleeve: string
+  symbols: { sym: string; name: string; vehicle: CryptoVehicle }[]
+}[] = [
+  {
+    sleeve: 'Spot Coins',
+    symbols: [
+      { sym: 'BTC-USD', name: 'Bitcoin', vehicle: 'spot' },
+      { sym: 'ETH-USD', name: 'Ethereum', vehicle: 'spot' },
+      { sym: 'SOL-USD', name: 'Solana', vehicle: 'spot' },
+      { sym: 'XRP-USD', name: 'XRP', vehicle: 'spot' },
+      { sym: 'DOGE-USD', name: 'Dogecoin', vehicle: 'spot' },
+      { sym: 'ADA-USD', name: 'Cardano', vehicle: 'spot' },
+      { sym: 'AVAX-USD', name: 'Avalanche', vehicle: 'spot' },
+      { sym: 'LINK-USD', name: 'Chainlink', vehicle: 'spot' },
+    ],
+  },
+  {
+    sleeve: 'Equity Vehicles',
+    symbols: [
+      { sym: 'IBIT', name: 'iShares Bitcoin Trust', vehicle: 'equity' },
+      { sym: 'MSTR', name: 'MicroStrategy', vehicle: 'equity' },
+    ],
+  },
+]
+
+/** All crypto tape tickers, flattened — feeds api.quotes(). */
+export const CRYPTO_TAPE_SYMBOLS = CRYPTO_TAPE_SLEEVES.flatMap((s) =>
+  s.symbols.map((row) => row.sym),
+)
+
 /** COT market rows relevant to the macro read (subset of CotMarket). */
 export interface MacroCotRow {
   id: string
@@ -2521,6 +3161,598 @@ export interface MacroVolReadout {
   z_1y?: number | null
   pctile_1y?: number | null
   note?: string
+}
+
+/* ------------------------------------------------------------------ *
+ * Reversal timing — GET /api/reversal, GET /api/reversal/scan
+ *
+ * Mirrors research/reversal_engine.py leaf-for-leaf. Every measured number
+ * comes from the out-of-sample study artifact; `probability` is null unless
+ * that side's model passed its gate, and `probability_reason` says why.
+ * ------------------------------------------------------------------ */
+
+export type ReversalTf = '1d' | '1h'
+export type MeasuredEdge = 'helps' | 'hurts' | 'no_edge' | 'unmeasured'
+
+export interface ReversalBar {
+  t: string
+  o: number | null
+  h: number | null
+  l: number | null
+  c: number | null
+  v: number | null
+  rvol: number | null
+  svwap: number | null
+  dir: number
+  flip: boolean
+  poc: number | null
+  val: number | null
+  vah: number | null
+  m_o: number | null
+  m_h: number | null
+  m_l: number | null
+  m_c: number | null
+  m_sig: number | null
+  os: boolean
+  ob: boolean
+  reclaim: boolean
+  reject: boolean
+  bull_div: boolean
+  bear_div: boolean
+}
+
+export interface ReversalSignal {
+  key: string
+  label: string
+  on: boolean
+  test_rate: number | null
+  test_n: number | null
+  test_lift: number | null
+  test_lift_lo: number | null
+  test_lift_hi: number | null
+  measured_edge: MeasuredEdge
+}
+
+export interface ReversalTrigger {
+  trigger: string
+  label: string
+  fired: boolean
+  bars_ago: number | null
+  n: number | null
+  avg_r: number | null
+  win_rate: number | null
+  risk_atr_median: number | null
+  edge_r: number | null
+  edge_r_lo: number | null
+  edge_r_hi: number | null
+  edge_r_late: number | null
+  measured_edge: MeasuredEdge
+}
+
+export interface ReversalLag {
+  flips: number
+  flip_lag_bars_median: number
+  flip_move_atr_median: number
+  cue_share: number
+  cue_lag_bars_median: number | null
+  cue_move_atr_median: number | null
+  macd_share: number
+  macd_lag_bars_median: number | null
+  macd_move_atr_median: number | null
+  div_share: number
+  div_lag_bars_median: number | null
+  div_move_atr_median: number | null
+}
+
+export interface ReversalAuc {
+  auc: number
+  lo: number
+  hi: number
+}
+
+export interface ReversalRankTier {
+  rate: number | null
+  lift: number | null
+  lift_lo: number | null
+  lift_hi: number | null
+  n: number | null
+  edge: MeasuredEdge
+}
+
+export interface ReversalRank {
+  score: number | null
+  base_rate_test: number | null
+  test_auc: ReversalAuc | null
+  tiers: Record<string, ReversalRankTier>
+  tier: string | null
+  tier_rate: number | null
+  tier_lift?: number | null
+  tier_lift_lo: number | null
+  tier_lift_hi?: number | null
+  tier_edge: MeasuredEdge | 'below_top_tiers'
+}
+
+export interface ReversalSideRead {
+  candidate: boolean
+  rank: ReversalRank | null
+  signals: ReversalSignal[]
+  signals_on: number
+  signals_on_with_edge: number
+  triggers: ReversalTrigger[]
+  probability: number | null
+  probability_reason: string | null
+  base_rate_test: number | null
+  model_auc: ReversalAuc | null
+  model_chosen: string | null
+  drivers: { feature: string; weight: number }[] | null
+  lag: ReversalLag | null
+}
+
+export interface ReversalStudyMeta {
+  available: boolean
+  reason?: string
+  version?: number
+  generated_at?: string
+  symbols?: number
+  fit_period?: [string, string]
+  validation_period?: [string, string]
+  test_period?: [string, string]
+  trades_rule?: string
+  model_passes?: Record<string, boolean>
+}
+
+export interface ReversalPayload {
+  symbol: string
+  tf: ReversalTf
+  measurable: boolean
+  reason?: string
+  source?: string
+  asof?: string
+  setup?: 'bottom' | 'top' | 'none'
+  missing_context?: string[]
+  last?: {
+    close: number | null
+    atr: number | null
+    svwap: number | null
+    swing_dir: number
+    svwap_dist_atr: number | null
+    poc: number | null
+    val: number | null
+    vah: number | null
+    poc_dist_atr: number | null
+    rvol: number | null
+    macd: number | null
+    off_high_atr: number | null
+    off_low_atr: number | null
+    htf_macd: number | null
+    htf_range_pos: number | null
+    mkt_macd: number | null
+    breadth_below: number | null
+    breadth_above: number | null
+    vol_regime: number | null
+  }
+  reads?: { bottom: ReversalSideRead; top: ReversalSideRead }
+  chart?: ReversalBar[]
+  study?: ReversalStudyMeta
+  barrier?: { horizon_bars: number; win_atr: number; loss_atr: number; leg_atr: number }
+  generated_at?: string
+  error?: string
+}
+
+export interface ReversalScanRow {
+  symbol: string
+  setup: 'bottom' | 'top'
+  asof: string
+  close: number | null
+  leg_atr: number | null
+  svwap_dist_atr: number | null
+  poc_dist_atr: number | null
+  macd: number | null
+  rvol: number | null
+  signals_on: string[]
+  triggers_fired: { trigger: string; bars_ago: number | null; measured_edge: MeasuredEdge }[]
+  probability: number | null
+  rank_tier: string | null
+  rank_tier_rate: number | null
+  rank_tier_edge: MeasuredEdge | 'below_top_tiers' | null
+  rank_score: number | null
+}
+
+export interface ReversalScanPayload {
+  tf: ReversalTf
+  status: 'running' | 'ready' | 'error'
+  done: number | null
+  total: number | null
+  rows: ReversalScanRow[]
+  errors: number | null
+  error: string | null
+  universe: string | null
+  market_source: string | null
+  age_seconds: number | null
+  study: ReversalStudyMeta
+}
+
+/* ------------------------------------------------------------------ *
+ * 0DTE intraday tape — GET /api/zero-dte
+ *
+ * Field names here mirror the engine's payload leaf-for-leaf. They are not a
+ * convenience reshape: a type that quietly renames or drops a key is how real
+ * numbers end up discarded and the panel ends up captioned "not derivable".
+ * ------------------------------------------------------------------ */
+
+export interface ZeroDteBar {
+  ts: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface ZeroDteInteraction {
+  touches: number
+  rejections: number
+  closes_through: number
+  bars_inside_band: number
+  minutes_inside_band: number
+  accept_ratio: number
+  bars_since_touch: number | null
+  approach_rate_per_min: number | null
+  eta_minutes: number | null
+  band: number
+  verdict: 'accepted' | 'rejected' | 'converging' | 'diverging' | 'idle'
+}
+
+export interface ZeroDteLevel {
+  kind: string
+  label: string
+  price: number
+  distance_pts: number
+  distance_pct: number | null
+  direction: 'above' | 'below' | 'at_spot'
+  pull: number
+  components: Record<string, number>
+  gex_at_strike_m: number | null
+  rank: number
+  note: string
+  confluence: string[]
+  lens_count: number
+  interaction: ZeroDteInteraction | null
+}
+
+export interface ZeroDteStrikeRow {
+  strike: number
+  call_gex_m: number
+  put_gex_m: number
+  net_gex_m: number
+  call_contracts: number
+  put_contracts: number
+}
+
+export interface ZeroDteIntent {
+  state: string
+  headline: string
+  gamma_state: string
+  gamma_note: string
+  target: { price: number; label: string; gap: number } | null
+  evidence: string[]
+}
+
+export interface ZeroDteTapePayload {
+  symbol: string
+  measurable: boolean
+  endpoint?: string
+  reason?: string
+  timeframe?: '1m' | '5m' | '15m'
+  /** Which feed served the chain. Yahoo is the index fallback and is coarser. */
+  chain_source?: 'lse' | 'yahoo'
+  is_true_0dte?: boolean
+  days_to_expiry?: number
+  asof_utc?: string
+  expiry?: string | null
+  spot?: number
+  session?: {
+    bar_minutes: number
+    bars_shown: number
+    minutes_remaining: number
+    /** False when these bars are not the expiry session's — no live countdown. */
+    clock_is_live: boolean
+    years_remaining: number
+    open: number
+    high: number
+    low: number
+    vwap: number | null
+    volume: number
+  }
+  gamma?: {
+    weight_basis: 'volume' | 'open_interest'
+    flip: number | null
+    state: string
+    state_note: string
+    tilt: number
+    tilt_note: string
+    above_spot_share: number
+    atm_iv: number | null
+    expected_move: number | null
+    expected_move_note: string
+    convention: string
+  }
+  levels: ZeroDteLevel[]
+  strike_profile?: ZeroDteStrikeRow[]
+  intent?: ZeroDteIntent
+  quality?: {
+    strikes: number
+    open_interest_available: boolean
+    volume_available: boolean
+    total_open_interest: number
+    total_volume: number
+    atm_iv: number | null
+    gamma_derived_rows: number
+    gamma_provider_rows: number
+    /** Rows whose own IV was unusable and borrowed the expiry's ATM vol. */
+    iv_fallback_rows: number
+  }
+  warnings?: string[]
+  bars?: ZeroDteBar[]
+  cache?: { hit: boolean; age_seconds: number }
+}
+
+export type LiveDecisionAction = 'buy' | 'sell'
+
+export interface DecisionTreeMetrics {
+  observations: number
+  trades: number
+  coverage: number
+  accuracy: number | null
+  balanced_accuracy: number | null
+  mean_net_return_bps: number | null
+  cumulative_net_return_pct: number | null
+  brier_score: number
+}
+
+export interface DecisionTreeFocusRow {
+  symbol: string
+  signal_asof: string
+  session_date: string
+  action: 'buy' | 'sell'
+  confidence: number
+  active: boolean
+  entry_open: number
+  exit_close: number
+  actual_return_pct: number
+  correct: boolean
+  net_return_bps: number | null
+  tree_path: string[]
+  rebound_pressure: number
+  rsi_14: number
+}
+
+export interface DecisionTreeBacktestPayload {
+  schema_version: 'decision-tree-oos-v1'
+  generated_at: string
+  status: 'research_only' | 'error'
+  verdict: string
+  window: {
+    holdout_start: string
+    holdout_end: string
+    training_end: string
+    sessions: number
+  }
+  protocol: {
+    signal: string
+    execution: string
+    target: string
+    round_trip_cost_bps: number
+    selection: string
+    holdout_used_for_training: false
+    confidence_semantics: string
+    warning: string
+  }
+  universe: { symbols: number; training_rows: number; holdout_rows: number }
+  model: {
+    kind: 'causal_cart'
+    parameters: { max_depth: number; min_leaf: number }
+    confidence_threshold: number
+    feature_count: number
+    features: string[]
+    top_importance: Array<{ feature: string; importance: number }>
+  }
+  comparison: { baseline: DecisionTreeMetrics; improved: DecisionTreeMetrics }
+  daily: Array<{
+    date: string
+    observations: number
+    trades: number
+    accuracy: number | null
+    mean_net_return_bps: number | null
+  }>
+  focus: { symbol: 'SPCX'; rows: DecisionTreeFocusRow[] }
+  decision_authorized: false
+  cache?: { hit: boolean; age_seconds: number }
+  error?: string
+}
+
+export type KronosEvidenceStatus = 'ready' | 'missing' | 'stale' | 'error'
+
+export interface KronosEvidenceRecord {
+  source: string
+  symbol: string | null
+  asof_utc: string | null
+  direction: 'long' | 'short' | 'neutral' | string
+  forecast: {
+    horizon: string | null
+    point: number | null
+    point_pct: number | null
+    interval_80: number[] | null
+    point_tag: string | null
+  }
+  regime: string | null
+  gex: {
+    regime: string | null
+    call_wall: number | null
+    put_wall: number | null
+  }
+  research_confidence: {
+    kind: 'ordinal_score'
+    score: number | null
+    label: string | null
+    selective_actionable: boolean
+  }
+  provenance: Record<string, unknown>
+}
+
+export interface KronosEvidencePayload {
+  schema_version: 'kronos-evidence-v1'
+  symbol: string
+  asof_utc: string | null
+  status: KronosEvidenceStatus
+  evidence: KronosEvidenceRecord | null
+  reason: string | null
+  decision_authorized: false
+}
+
+/** Flat advisory fields accepted by POST /api/typesafe/live-decision. */
+export interface LiveDecisionForecastInput {
+  source: string | null
+  asof_utc: string | null
+  direction: string | null
+  horizon: string | null
+  point_pct: number | null
+  interval_80: number[] | null
+  confidence_kind: string | null
+  confidence_score: number | null
+  confidence_label: string | null
+  selective_actionable: boolean
+  provenance: Record<string, unknown>
+}
+
+/** Normalized advisory envelope returned with the live decision. */
+export interface LiveDecisionForecastEvidence {
+  status: string
+  available: boolean
+  reason: string | null
+  source: string | null
+  asof_utc: string | null
+  direction: 'long' | 'short' | 'neutral' | string | null
+  horizon: string | null
+  point_pct: number | null
+  interval_80: number[] | null
+  confidence_kind: string | null
+  confidence_score: number | null
+  confidence_label: string | null
+  selective_actionable: boolean
+  provenance: Record<string, unknown>
+  conflict_with_action: boolean
+}
+
+export interface LiveDecisionState {
+  symbol: string
+  observed_at: string
+  source_status: Record<string, 'ready' | 'missing' | 'error' | string>
+  options: Record<string, unknown>
+  regime: Record<string, unknown>
+  microstructure: Record<string, unknown>
+  vpa: Record<string, unknown>
+  execution_gate: Record<string, unknown>
+  forecast: LiveDecisionForecastInput
+  previous_decision?: {
+    action: LiveDecisionAction
+    consensus_score: number
+    decided_at: string
+  } | null
+}
+
+export interface LiveDecisionRiskAssessment {
+  score: number
+  label: string
+  reasons: string[]
+  keep_out: boolean
+}
+
+export interface LiveDecisionVpaJudgment {
+  direction: 'buy' | 'sell'
+  confidence: number
+  probabilities?: Partial<Record<'buy' | 'sell', number>>
+  claim_support: { score: number; confidence: number }
+}
+
+export interface LiveDecisionBrainModelVote {
+  signal: 'bullish' | 'bearish' | 'neutral'
+  score: number
+  weight: number
+  summary: string
+}
+
+export interface LiveDecisionBrain {
+  consensus_score: number
+  confluence: 'HIGH' | 'MODERATE' | 'CONTESTED' | 'BALANCED'
+  stabilized: boolean
+  agreeing_models: number
+  total_models: number
+  models: {
+    options_flow: LiveDecisionBrainModelVote
+    regime: LiveDecisionBrainModelVote
+    microstructure: LiveDecisionBrainModelVote
+    vpa: LiveDecisionBrainModelVote
+  }
+  rationale: string
+}
+
+export interface LiveDecisionPayload {
+  schema_version: 'typesafe-live-decision-v2' | string
+  symbol: string
+  asof_utc: string
+  observed_at: string
+  engine: {
+    provider: 'typesafe'
+    mode: 'typesafe' | 'deterministic_fallback'
+    model: string | null
+    configured: boolean
+    latency_ms: number
+    error: string | null
+  }
+  action: LiveDecisionAction
+  lean: 'bullish' | 'bearish' | 'neutral' | 'unknown'
+  lean_confidence: number
+  lean_probabilities: Partial<Record<string, number>>
+  raw_action: LiveDecisionAction
+  confidence: number
+  probabilities: Partial<Record<'buy' | 'sell', number>>
+  setup: string
+  setup_confidence: number
+  alignment: { score: number; confidence: number }
+  timing: { score: number; confidence: number }
+  risk: { score: number; confidence: number }
+  blockers: string[]
+  reasons: string[]
+  risk_assessment?: LiveDecisionRiskAssessment
+  vpa_judgment?: LiveDecisionVpaJudgment
+  forecast_evidence?: LiveDecisionForecastEvidence
+  stability?: {
+    previous_action: LiveDecisionAction | null
+    proposed_action: LiveDecisionAction
+    action_changed: boolean
+    flip_suppressed: boolean
+    session_locked: boolean
+    consensus_score: number
+    reversal_threshold: number
+    reason: string
+  }
+  brain?: LiveDecisionBrain
+  source_status: Record<string, string>
+  decision_authorized: false
+  order?: null
+  decision_model?: {
+    symbol: string | null
+    action: 'buy' | 'sell' | null
+    confidence: number | null
+    trade: boolean
+    abstain: boolean
+    reason: string | null
+    decision_authorized: false
+    order: null
+  }
+  notice: string
+  cache: { hit: boolean; ttl_seconds: number }
 }
 
 export const api = {
@@ -2625,6 +3857,37 @@ export const api = {
       if (value !== undefined && value !== '') params.set(key, String(value))
     }
     return req<OptionsIntelligence>(`/api/options?${params.toString()}`)
+  },
+
+  typeSafeLiveDecision: (state: LiveDecisionState) =>
+    req<LiveDecisionPayload>(
+      '/api/typesafe/live-decision',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state),
+      },
+      { timeoutMs: 25_000 },
+    ),
+
+  decisionTreeBacktest: (opts?: { force?: boolean }) =>
+    req<DecisionTreeBacktestPayload>(
+      `/api/decision-tree/backtest${opts?.force ? '?force=1' : ''}`,
+      undefined,
+      { timeoutMs: 30_000 },
+    ),
+
+  kronosEvidence: (symbol: string) =>
+    req<KronosEvidencePayload>(`/api/kronos/evidence?symbol=${encodeURIComponent(symbol)}`),
+
+  executionGate: (
+    symbol: string,
+    opts?: { direction?: 'long' | 'short'; sessionOnly?: boolean },
+  ) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts?.direction) q.set('direction', opts.direction)
+    if (opts?.sessionOnly) q.set('session_only', '1')
+    return req<ExecutionGatePayload>(`/api/execution-gate?${q.toString()}`)
   },
 
   microstructureRegime: (symbol: string, opts?: { rate?: number }) => {
@@ -2754,6 +4017,42 @@ export const api = {
     return req<RegimeBreadthPayload>(`/api/gamma/regime?${q.toString()}`)
   },
 
+  /**
+   * Vanna mechanics board (`/api/vanna`): Black-Scholes vanna flow by strike
+   * and expiry plus the FOMC event clock. A 404 from this route means the
+   * underlier has no chain snapshot — the view renders the explicit
+   * "chain unavailable" state, so do not swallow ApiError here.
+   */
+  vanna: (symbol: string) =>
+    req<VannaPayload>(`/api/vanna?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`),
+
+  /**
+   * Unified Layer 3 Market Regime, Calibrated Confidence, and Dynamic Explainability.
+   * Backed by GET /api/market-regime.
+   */
+  marketRegime: (
+    symbol: string,
+    force = false,
+    opts?: { rate?: number; maxDte?: number; bars?: 'daily' | '1h' },
+  ): Promise<MarketRegimePayload> => {
+    const sym = symbol.trim().toUpperCase()
+    const q = new URLSearchParams({ symbol: sym })
+    if (force) q.set('force', '1')
+    if (opts?.rate != null) q.set('rate', String(opts.rate))
+    if (opts?.maxDte != null) q.set('max_dte', String(opts.maxDte))
+    if (opts?.bars != null) q.set('bars', opts.bars)
+    const path = `/api/market-regime?${q.toString()}`
+    // The first compute after server start prices chains and builds the full
+    // model stack and can take 60-75s; the default 30s timeout would abort
+    // that first request and leave the regime panels showing "unmeasured"
+    // until the next poll.
+    const slowReqOpts = { timeoutMs: 90_000 }
+    if (force) {
+      return req<MarketRegimePayload>(path, undefined, slowReqOpts)
+    }
+    return cachedReq<MarketRegimePayload>(path, 15_000, undefined, slowReqOpts)
+  },
+
   /** Standalone market-wide options-flow window (one live LSE request). */
   optionsCalculator: (opts: {
     strategy?: 'long_call' | 'long_put' | 'long_straddle' | 'custom' | string
@@ -2816,11 +4115,17 @@ export const api = {
     }>(`/api/flow-tape?${q.toString()}`)
   },
 
-  unusualFlow: (opts?: { limit?: number; minPremium?: number; force?: boolean }) => {
+  unusualFlow: (opts?: {
+    limit?: number
+    minPremium?: number
+    force?: boolean
+    symbol?: string
+  }) => {
     const q = new URLSearchParams()
     if (opts?.limit != null) q.set('limit', String(opts.limit))
     if (opts?.minPremium != null) q.set('min_premium', String(opts.minPremium))
     if (opts?.force) q.set('force', '1')
+    if (opts?.symbol) q.set('symbol', opts.symbol)
     const qs = q.toString()
     return req<UnusualFlowPayload>(`/api/unusual-flow${qs ? `?${qs}` : ''}`)
   },
@@ -2839,7 +4144,11 @@ export const api = {
       clearApiCache('/api/options/opportunities')
     }
     const qs = q.toString()
-    return req<LiveOpportunities>(`/api/options/opportunities${qs ? `?${qs}` : ''}`)
+    // Cold recombination of board + vault flow can exceed the default 30s
+    // abort; a timeout leaves the Setups tab on 0 names until the next poll.
+    return req<LiveOpportunities>(`/api/options/opportunities${qs ? `?${qs}` : ''}`, undefined, {
+      timeoutMs: 90_000,
+    })
   },
 
   /**
@@ -2855,7 +4164,9 @@ export const api = {
     }
     if (opts?.symbol) q.set('symbol', opts.symbol.trim().toUpperCase())
     const qs = q.toString()
-    return req<LiveOpportunities>(`/api/options/suggest${qs ? `?${qs}` : ''}`)
+    return req<LiveOpportunities>(`/api/options/suggest${qs ? `?${qs}` : ''}`, undefined, {
+      timeoutMs: 90_000,
+    })
   },
 
   /** Genetic evolution lab (research-only artifacts under runs/ga/). */
@@ -2889,6 +4200,34 @@ export const api = {
     if (opts.allow_short != null) q.set('allow_short', opts.allow_short ? '1' : '0')
     if (opts.bars) q.set('bars', opts.bars)
     return req<KalmanTrendPayload>(`/api/kalman-trend?${q.toString()}`)
+  },
+
+  /** Volatility-targeted trend following for one symbol. */
+  volTargetTrend: (symbol: string, opts: VolTargetQuery = {}) => {
+    const q = new URLSearchParams({ symbol })
+    if (opts.window) q.set('window', opts.window)
+    if (opts.target_vol != null) q.set('target_vol', String(opts.target_vol))
+    if (opts.lev_cap != null) q.set('lev_cap', String(opts.lev_cap))
+    if (opts.fast_days != null) q.set('fast_days', String(opts.fast_days))
+    if (opts.slow_days != null) q.set('slow_days', String(opts.slow_days))
+    if (opts.vol_days != null) q.set('vol_days', String(opts.vol_days))
+    if (opts.capital != null) q.set('capital', String(opts.capital))
+    if (opts.bars) q.set('bars', opts.bars)
+    return req<VolTargetTrendPayload>(`/api/vol-target-trend?${q.toString()}`)
+  },
+
+  /** Volatility-targeted trend signals for a watchlist / multi-symbol list. */
+  volTargetSignals: (symbols: string[], opts: VolTargetQuery = {}) => {
+    const q = new URLSearchParams()
+    if (symbols.length > 0) q.set('symbols', symbols.join(','))
+    if (opts.target_vol != null) q.set('target_vol', String(opts.target_vol))
+    if (opts.lev_cap != null) q.set('lev_cap', String(opts.lev_cap))
+    if (opts.fast_days != null) q.set('fast_days', String(opts.fast_days))
+    if (opts.slow_days != null) q.set('slow_days', String(opts.slow_days))
+    if (opts.vol_days != null) q.set('vol_days', String(opts.vol_days))
+    if (opts.capital != null) q.set('capital', String(opts.capital))
+    if (opts.bars) q.set('bars', opts.bars)
+    return req<VolTargetSignalsPayload>(`/api/vol-target-trend/signals?${q.toString()}`)
   },
 
   /** Latent flow-state cross-section — offline artifact, tier-gated panels. */
@@ -3004,6 +4343,122 @@ export const api = {
 
   supplyChainThemes: () =>
     cachedReq<{ themes: SupplyChainThemeSummary[] }>('/api/supply-chain/themes', 60_000),
+
+  /**
+   * Price attractors and market regime telemetry endpoint (`/api/price-attractors`).
+   * Computes multi-factor price magnet levels, gravitational pull scores,
+   * and active volatility/flow market regime telemetry with in-flight request
+   * coalescing and LRU memory caching.
+   */
+  /**
+   * Same-day (or nearest) expiry magnets read against the real intraday bars.
+   * `tf` is the bar size; the engine reports which expiry it actually found
+   * and whether that expiry is genuinely today.
+   */
+  /** Reversal timing read: chart stack + measured signals for one symbol. */
+  reversal: (symbol: string, opts?: { tf?: ReversalTf; force?: boolean }) => {
+    const q = new URLSearchParams({ symbol: symbol.trim().toUpperCase(), tf: opts?.tf ?? '1d' })
+    if (opts?.force) q.set('force', '1')
+    return req<ReversalPayload>(`/api/reversal?${q.toString()}`, undefined, { timeoutMs: 60_000 })
+  },
+
+  /** Universe scan for symbols in a qualifying leg; runs as a background job. */
+  reversalScan: (opts?: { tf?: ReversalTf; force?: boolean }) => {
+    const q = new URLSearchParams({ tf: opts?.tf ?? '1d' })
+    if (opts?.force) q.set('force', '1')
+    return req<ReversalScanPayload>(`/api/reversal/scan?${q.toString()}`)
+  },
+
+  zeroDte: (symbol: string, opts?: { tf?: '1m' | '5m' | '15m'; force?: boolean }) => {
+    const q = new URLSearchParams({ symbol: symbol.trim().toUpperCase() })
+    if (opts?.tf) q.set('tf', opts.tf)
+    if (opts?.force) q.set('force', '1')
+    return req<ZeroDteTapePayload>(`/api/zero-dte?${q.toString()}`)
+  },
+
+  priceAttractors: (symbol: string, force?: boolean) => {
+    const sym = symbol.trim().toUpperCase()
+    const path = `/api/price-attractors?symbol=${encodeURIComponent(sym)}${force ? '&force=1' : ''}`
+    if (force) {
+      return req<PriceDrawTelemetryPayload>(path)
+    }
+    return cachedReq<PriceDrawTelemetryPayload>(path, 15_000)
+  },
+
+  /**
+   * Volume-price analysis endpoints
+   */
+  vpaAnalyze: (payload: VpaAnalyzeRequest) =>
+    req<VpaAnalysisResult>('/api/vpa/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  vpaCodex: () => cachedReq<VpaCodexPayload>('/api/vpa/codex', 300_000),
+  vpaSamples: () => cachedReq<{ samples: VpaSampleMeta[] }>('/api/vpa/samples', 300_000),
+  /**
+   * Capability report (contract §4): which timeframes are actually backed by
+   * bars on disk, and whether chart vision has credentials. The VPA view builds
+   * its timeframe dropdown from this instead of a hardcoded array, so an
+   * unbacked timeframe renders disabled with its reason rather than silently
+   * serving daily bars under a 15m label.
+   */
+  vpaHealth: (symbol?: string) =>
+    cachedReq<VpaHealthPayload>(
+      symbol
+        ? `/api/vpa/health?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`
+        : '/api/vpa/health',
+      120_000,
+    ),
+
+  /**
+   * Auction Market Theory (AMT) Endpoints
+   */
+  amtAnalyze: (symbol: string, timeframe?: string, lookback?: number) => {
+    const sym = symbol.trim().toUpperCase()
+    const q = new URLSearchParams({ symbol: sym })
+    if (timeframe) q.set('timeframe', timeframe)
+    if (lookback != null) q.set('lookback', String(lookback))
+    return cachedReq<AmtAnalysisResult>(`/api/amt/analyze?${q.toString()}`, 60_000)
+  },
+  /**
+   * Capability report: which timeframes are actually backed by bars on disk.
+   * The AMT view builds its timeframe dropdown from this instead of a
+   * hardcoded array, so an unbacked timeframe renders disabled with its
+   * reason rather than silently serving a different one.
+   */
+  amtHealth: (symbol?: string) =>
+    cachedReq<AmtHealthPayload>(
+      symbol
+        ? `/api/amt/health?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`
+        : '/api/amt/health',
+      120_000,
+    ),
+  amtPlaybook: () => cachedReq<AmtPlaybookPayload>('/api/amt/playbook', 300_000),
+
+  /**
+   * Liquidity map: inferred stop pools, sweeps, bias and stops beyond the pool
+   * (docs/LIQUIDITY_TAB_CONTRACT.md). 25s TTL sits under the tab's 30s GO LIVE
+   * poll so every live tick reaches the backend's own 30s cache.
+   * Anchors, when both are present, override `range` server-side.
+   */
+  liquidityAnalyze: (
+    symbol: string,
+    timeframe?: string,
+    range?: string,
+    anchors?: LiquidityAnchors | null,
+  ) => {
+    const q = new URLSearchParams({ symbol: symbol.trim().toUpperCase() })
+    if (timeframe) q.set('timeframe', timeframe)
+    if (range) q.set('range', range)
+    if (anchors?.anchor_start && anchors?.anchor_end) {
+      q.set('anchor_start', anchors.anchor_start)
+      q.set('anchor_end', anchors.anchor_end)
+    }
+    return cachedReq<LiquidityAnalysisResult>(`/api/liquidity/analyze?${q.toString()}`, 25_000)
+  },
+  liquidityThresholds: () =>
+    cachedReq<LiquidityThresholdsPayload>('/api/liquidity/thresholds', 300_000),
 }
 
 /* ---------------------------------------------------------------- fintel ----
@@ -3537,23 +4992,24 @@ export interface ChainEvidence {
   filing_date: string
   period: string
   speaker?: string
-  quote: string
+  /** Quoted text — null when the citation references a real filing but no quote is asserted. */
+  quote: string | null
   context: string
-  confidence: number
+  confidence: number | null
 }
 
 export interface BeneficiaryMetrics {
-  elasticity_score: number
-  capex_sensitivity: number
-  revenue_concentration_pct: number
-  operating_leverage: number
+  elasticity_score: number | null
+  capex_sensitivity: number | null
+  revenue_concentration_pct: number | null
+  operating_leverage: number | null
   forward_pe: number | null
   peg_ratio: number | null
-  gross_margin_trend: 'expanding' | 'stable' | 'contracting'
+  gross_margin_trend: 'expanding' | 'stable' | 'contracting' | null
   yoy_revenue_growth: number | null
   next_earnings_date: string | null
-  flow_sentiment_score: number
-  options_skew: string
+  flow_sentiment_score: number | null
+  options_skew: string | null
 }
 
 export interface SupplyChainNode {
@@ -3562,7 +5018,8 @@ export interface SupplyChainNode {
   sector: string
   sub_industry: string
   tier: SupplyTier
-  market_cap_billions: number
+  /** Null when no live or curated market cap exists for the symbol. */
+  market_cap_billions: number | null
   metrics: BeneficiaryMetrics
   evidence: ChainEvidence[]
   is_focus?: boolean
