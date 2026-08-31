@@ -11,10 +11,10 @@ Data reality on disk (verified, contract §2):
 ============  ================================================  ==============
 Timeframe     Source                                            Status
 ============  ================================================  ==============
-``1h``        ``data/1h/{SYM}.parquet`` native                   59 symbols
-``2h``/``4h`` resampled from 1h                                  59 symbols
-``1D``        ``data/1d/`` and ``data/1d_wide/``                 558 symbols
-``1W``        resampled from daily                               558 symbols
+``1h``        ``data/1h/{SYM}.parquet`` native                   588 symbols
+``2h``/``4h`` resampled from 1h                                  588 symbols
+``1D``        ``data/1d/`` and ``data/1d_wide/``                 589 symbols
+``1W``        resampled from daily                               589 symbols
 ``1m``..``30m``  no data exists                                  unavailable
 ============  ================================================  ==============
 
@@ -23,6 +23,9 @@ other** (project convention, see `research/squeeze_validation._load_price`):
 both are read when both hold the symbol and the fresher last bar wins, because
 `1d_wide` carries 558 symbols while `1d` carries a different 217 and neither is
 a superset of the other.
+
+Counts above are as of the 2026-08-31 backfill and move as data lands, which is
+why `/api/vpa/health` reports them per symbol rather than trusting a constant.
 
 Sub-hourly requests are never silently served as daily. They are downgraded to
 the finest real timeframe available for the symbol and the downgrade is
@@ -33,6 +36,7 @@ returns on every response as the user's proof the control did something.
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -380,17 +384,26 @@ def bars_meta_from_series(
 
 # ------------------------------------------------------------ availability --
 
-_COUNT_CACHE: Dict[str, int] = {}
+# Counting a 589-file directory on every health call is wasteful, but caching
+# it forever is worse: a backfill running alongside a live server left the API
+# reporting 218 hourly symbols while 588 sat on disk. Cache with a short TTL so
+# the number self-heals without re-globbing on every request.
+_COUNT_CACHE: Dict[str, Tuple[float, int]] = {}
+_COUNT_TTL_SECONDS = 60.0
 
 
 def _count_parquet(directory: Path) -> int:
     key = str(directory)
-    if key not in _COUNT_CACHE:
-        try:
-            _COUNT_CACHE[key] = sum(1 for _ in directory.glob("*.parquet"))
-        except OSError:
-            _COUNT_CACHE[key] = 0
-    return _COUNT_CACHE[key]
+    now = time.monotonic()
+    hit = _COUNT_CACHE.get(key)
+    if hit is not None and (now - hit[0]) < _COUNT_TTL_SECONDS:
+        return hit[1]
+    try:
+        count = sum(1 for _ in directory.glob("*.parquet"))
+    except OSError:
+        count = 0
+    _COUNT_CACHE[key] = (now, count)
+    return count
 
 
 def data_source_counts() -> Dict[str, int]:
