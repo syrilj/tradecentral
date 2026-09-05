@@ -77,7 +77,14 @@ export function relationshipLabel(rel: RelationshipType | string | undefined): s
   }
 }
 
-export function optionsSkewLabel(skew: string | undefined): { label: string; tone: string } {
+/**
+ * Skew chip label, or null when no skew data exists. A missing skew must not
+ * render as "Neutral" — that is indistinguishable from a measured neutral skew.
+ */
+export function optionsSkewLabel(
+  skew: string | null | undefined,
+): { label: string; tone: string } | null {
+  if (!skew) return null
   switch (skew) {
     case 'heavy_call_sweep':
       return { label: 'Call Sweep', tone: 'up' }
@@ -90,7 +97,7 @@ export function optionsSkewLabel(skew: string | undefined): { label: string; ton
     case 'bearish_put_skew':
       return { label: 'Put Skew', tone: 'down' }
     default:
-      return { label: skew || 'Neutral', tone: 'cool' }
+      return { label: skew, tone: 'cool' }
   }
 }
 

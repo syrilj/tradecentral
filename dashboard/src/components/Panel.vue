@@ -57,7 +57,7 @@ withDefaults(
   border-radius: var(--r-lg);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 36px), var(--panel);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
   transition:
     border-color var(--dur-fast) var(--ease-out),

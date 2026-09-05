@@ -39,6 +39,7 @@ import OptionsDirectionBrief from '@/components/OptionsDirectionBrief.vue'
 import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
 import { activityLeanRead, formatTapeDate, formatTapeTime, isDateOnlyStamp } from '@/optionsTape'
+import { classifyFlowOrder } from '@/flowDisplay'
 import { calculateFeaturedSetup } from '@/squeezeCalc'
 import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
@@ -110,11 +111,10 @@ const maxDte = ref(365)
 const tapeLimit = ref(200)
 const TAPE_RENDER_CAP = 80
 const tapeShowAll = ref(false)
-/** Default to near-dated signed flow so actionable prints show first.
- *  User can switch to 'all' to see the full tape without DTE restriction. */
-const tapeView = ref<TapeView>('near')
-/** Sort default: near-term signed first (most actionable), then newest. */
-const tapeSort = ref<TapeSort>('near-signed')
+/** Default to 'all' so full session institutional prints show across all expiries (like InsiderFinance). */
+const tapeView = ref<TapeView>('all')
+/** Sort default: newest prints first (chronological tape like InsiderFinance). */
+const tapeSort = ref<TapeSort>('newest')
 /** Upper DTE cutoff for the 'near' view — 0-30d means this calendar month. */
 const nearDteMax = ref(30)
 const tapeDisplayMode = ref<'table' | 'cards'>('table')
@@ -365,7 +365,7 @@ const searchHits = ref<SearchHit[]>([])
 const searching = ref(false)
 const searchOpen = ref(false)
 
-/* Real-time WebSocket-style Live Feed Stream Timer */
+/* HTTP provider-poll timer for the live options mode */
 let streamTimer: number | undefined
 
 const STREAM_INTERVALS: Record<LiveStreamSpeed, number> = {
@@ -446,7 +446,7 @@ const resource = useResource<OptionsIntelligence>(
       minDte: minDte.value,
       maxDte: maxDte.value,
       expiry: selectedExpiry.value,
-      tapeLimit: tapeLimit.value,
+      tapeLimit: Math.max(tapeLimit.value, 1500),
       dateFrom: dateFrom.value || undefined,
       // In history mode, `to` selects which dated chain day to load.
       dateTo: dateTo.value || undefined,
@@ -893,6 +893,21 @@ const deskHasChain = computed(() => Boolean(d.value))
 
 const unusualRows = computed<UnusualFlowRow[]>(() => unusual.data.value?.rows ?? [])
 const unusualLiveCount = computed(() => unusualRows.value.filter((r) => r.live).length)
+
+/**
+ * What a screen reader is told when the 15s poll rewrites the tables underneath
+ * it. Sighted operators watch the row count and the live badge move; without a
+ * status region nothing announced that anything had changed at all (WCAG 4.1.3).
+ * Deliberately a short summary, not the tape itself — announcing 500 rows on
+ * every poll would make the page unusable.
+ */
+const tapeStatusMessage = computed(() => {
+  if (unusual.loading.value) return 'Refreshing options flow.'
+  if (unusual.error.value) return 'Options flow unavailable.'
+  const total = d.value?.flow_tape.length ?? unusualRows.value.length
+  if (!total) return 'No options flow prints matched the current filters.'
+  return `${total} print${total === 1 ? '' : 's'} for ${symbol.value}.`
+})
 const deskActivityFallback = computed(() => {
   const rows = (status?.data.value?.activity_scan?.rows ?? []) as UnusualFlowRow[]
   return rows.filter((r) => r.live || (r.premium != null && r.premium > 0)).slice(0, 24)
@@ -903,12 +918,12 @@ const flowBoard = computed(() =>
 const flowBoardMeta = computed(() => {
   const cov = unusual.data.value?.coverage
   if (cov) {
-    return `${flowBoard.value.length} NAMES · ${unusualLiveCount.value} LIVE · ${cov.live_completed}/${cov.live_requested} CHECKED`
+    return `${flowBoard.value.length} NAMES · ${unusualLiveCount.value} PROVIDER · ${cov.live_completed}/${cov.live_requested} CHECKED`
   }
   if (deskActivityFallback.value.length) {
     return `${deskActivityFallback.value.length} FROM DESK SCAN · RUN UNUSUAL FLOW FOR FULL MARKET`
   }
-  return 'SCAN MARKET FOR LIVE TAPE'
+  return 'SCAN MARKET FOR PROVIDER TAPE'
 })
 
 const squeeze = computed(() => (payloadMatches.value ? s.value?.squeeze : null))
@@ -959,6 +974,22 @@ const wallPct = (side: 'call' | 'put') => {
   const calc = (wall - spot) / spot
   return Number.isFinite(calc) ? calc : null
 }
+
+function optWallDist(lvl: number | null | undefined): string {
+  const spot = s.value?.spot
+  if (spot == null || lvl == null || spot <= 0) return ''
+  const diff = ((lvl - spot) / spot) * 100
+  const sign = diff >= 0 ? '+' : ''
+  return `${sign}${num(diff, 1)}%`
+}
+
+const optExpectedMove = computed(() => {
+  const em = p.value?.expected_move
+  const spot = s.value?.spot
+  if (em == null || !Number.isFinite(em) || em <= 0) return null
+  const pct = spot != null && spot > 0 ? (em / spot) * 100 : null
+  return { dollars: em, pct }
+})
 
 function isItm(row: OptionsTapeRow): boolean {
   const spotPrice = row.underlying_price ?? d.value?.summary?.spot
@@ -1013,7 +1044,8 @@ function matchesDteBand(row: OptionsTapeRow): boolean {
 
 function matchesActiveFlag(row: OptionsTapeRow): boolean {
   if (activeFlagFilter.value === 'all') return true
-  if (activeFlagFilter.value === 'golden_sweep') return tradeClassLabel(row) === 'GOLDEN SWEEP'
+  if (activeFlagFilter.value === 'golden_sweep')
+    return classifyFlowOrder(row).type === 'golden_sweep'
   if (activeFlagFilter.value === 'mega_whales') return (row.premium ?? 0) >= 500_000
   if (activeFlagFilter.value === 'whales') return (row.premium ?? 0) >= 100_000
   if (activeFlagFilter.value === 'sweeps')
@@ -1197,7 +1229,7 @@ const flaggedPrints = computed<OptionsTapeRow[]>(() => {
     (r) =>
       (r.anomaly_flags && r.anomaly_flags.length > 0) ||
       (r.premium ?? 0) >= 100_000 ||
-      tradeClassLabel(r) === 'GOLDEN SWEEP' ||
+      classifyFlowOrder(r).type === 'golden_sweep' ||
       (volOiRatio(r) != null && volOiRatio(r)! >= 2) ||
       r.is_moonshot === true ||
       r.is_unusual === true,
@@ -1379,6 +1411,7 @@ function anomalyLabel(flag: string): string {
 
 /**
  * Lean chip: signed BULL/BEAR when aggressor/vendor says so;
+ * SWEEP on unsigned burst-aggregate rows (to distinguish from single fills);
  * otherwise CALL/PUT activity identity so the column is never empty/broken.
  */
 function tapeLean(row: OptionsTapeRow): { label: string; cls: string; title: string } {
@@ -1402,6 +1435,20 @@ function tapeLean(row: OptionsTapeRow): { label: string; cls: string; title: str
           : 'Bought put or sold call (aggressor-signed)',
     }
   }
+  // Burst-aggregate sweeps: show SWEEP to match order-level display conventions
+  // (e.g. InsiderFinance "ASWEEP"). Direction not available from this provider.
+  if (
+    (row.is_sweep || row.trade_class_source === 'burst_aggregate') &&
+    !row.aggressor &&
+    (row.sweep_fill_count ?? 0) > 1
+  ) {
+    const right = row.right === 'call' ? 'CALL' : row.right === 'put' ? 'PUT' : ''
+    return {
+      label: right ? `${right} SWEEP` : 'SWEEP',
+      cls: row.right === 'call' ? 'call' : row.right === 'put' ? 'put' : 'unsigned',
+      title: `Sweep order (${row.sweep_fill_count} fills) — buy/sell direction not available from this feed`,
+    }
+  }
   if (row.right === 'call' || row.activity_side === 'call' || row.edge_label === 'CALL') {
     return {
       label: 'CALL',
@@ -1420,20 +1467,13 @@ function tapeLean(row: OptionsTapeRow): { label: string; cls: string; title: str
 }
 
 function tradeClassLabel(row: OptionsTapeRow): string {
-  const raw = (row.trade_class || 'single').toLowerCase()
-  if (raw === 'sweep' || (row.anomaly_flags ?? []).includes('sweep_burst')) {
-    // Golden sweep: premium ≥ $500k with sweep classification = institutional conviction
-    return row.premium >= 500_000 ? 'GOLDEN SWEEP' : 'SWEEP'
-  }
-  if (raw === 'block') return 'BLOCK'
-  if (raw === 'split') return 'SPLIT'
-  if (raw === 'multileg') return 'MULTILEG'
-  return 'SINGLE'
+  return classifyFlowOrder(row).label
 }
 
 /** Maps a trade class label to its global token CSS class from tokens.css */
 function tradeClassTokenCls(label: string): string {
-  if (label === 'GOLDEN SWEEP') return 'flow-badge badge-golden-sweep'
+  if (label === 'VENDOR GOLDEN FLAG' || label === 'GOLDEN SWEEP')
+    return 'flow-badge badge-golden-sweep'
   if (label === 'SWEEP') return 'flow-badge badge-sweep'
   if (label === 'BLOCK') return 'flow-badge badge-block'
   if (label === 'SPLIT') return 'flow-badge badge-split'
@@ -1492,6 +1532,28 @@ function pricePaid(row: OptionsTapeRow): number | null {
   const n = contractsOf(row)
   if (n > 0 && row.premium > 0) return row.premium / (n * 100)
   return null
+}
+
+const expandedSweepFills = ref<Set<string>>(new Set())
+function toggleSweepFills(k: string): void {
+  if (expandedSweepFills.value.has(k)) {
+    expandedSweepFills.value.delete(k)
+  } else {
+    expandedSweepFills.value.add(k)
+  }
+}
+function isSweepFillsExpanded(k: string): boolean {
+  return expandedSweepFills.value.has(k)
+}
+function tapeRowKey(row: OptionsTapeRow): string {
+  return `${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`
+}
+function heatScoreCls(heat: number | null | undefined): string {
+  if (heat == null || !Number.isFinite(heat)) return 'heat-low'
+  if (heat >= 75) return 'heat-extreme'
+  if (heat >= 60) return 'heat-high'
+  if (heat >= 40) return 'heat-med'
+  return 'heat-low'
 }
 
 const signedFlowAvailable = computed(() => Boolean(d.value?.provider?.signed_flow_available))
@@ -1607,11 +1669,11 @@ const tapeHealth = computed(() => {
       lamp: live ? 'live' : soft ? 'stale' : 'stale',
       title:
         live && expiryRelaxed
-          ? 'LIVE TAPE · ALL EXP'
+          ? 'PROVIDER TAPE · ALL EXP'
           : live
             ? qualifiedStale
               ? 'LIVE FEED · THIN WHALES'
-              : 'LIVE TAPE'
+              : 'PROVIDER TAPE'
             : soft
               ? 'TAPE WARM'
               : 'TAPE STALE',
@@ -1620,7 +1682,7 @@ const tapeHealth = computed(() => {
         : live
           ? qualifiedStale
             ? `Feed live · qualified ≥$${compact(minPremium.value)} prints lag ${tapeLag}${rejectedBelow > 0 ? ` · ${rejectedBelow} below min $` : ''}`
-            : `Streaming prints for ${d.value.symbol}`
+            : `Provider prints for ${d.value.symbol}`
           : soft
             ? `Last feed lag ${lag} — still usable`
             : `Last observation lag ${lag} — not fresh`,
@@ -1633,7 +1695,7 @@ const tapeHealth = computed(() => {
     return {
       status: 'proxy' as const,
       lamp: 'stale',
-      title: 'NO LIVE TAPE',
+      title: 'NO PROVIDER TAPE',
       sub: `Chain volume proxy only — not trade prints for ${d.value.symbol}`,
       lag,
       detail: `${printsRaw} raw · filter rejected or feed empty`,
@@ -1703,6 +1765,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 
 <template>
   <div class="options-view">
+    <!--
+      The visible page identity is the symbol lockup below — a composed row of
+      ticker, view label and two pin buttons — which cannot itself be a heading
+      without dragging "★ BOOK INSIDERS" into the accessible name. So the
+      document's h1 is stated here instead. Regime and Flow both render a real
+      h1; without this one, the densest surface in the product was the only
+      route with no top-level heading and no document outline at all.
+    -->
+    <h1 class="sr-only">{{ symbol }} — options flow and dealer positioning</h1>
+    <p class="sr-only" role="status" aria-live="polite">{{ tapeStatusMessage }}</p>
+
     <!-- Command strip: identity + search on row 1, workspace controls on row 2 -->
     <section class="command ticked rise">
       <div class="command-row command-primary">
@@ -1800,14 +1873,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </button>
         </div>
 
-        <!-- Live Streaming Status / Interval indicator -->
+        <!-- Live provider poll interval indicator (HTTP, not a websocket) -->
         <div
           v-if="mode === 'live'"
           class="stream-status-pill label"
-          :title="`WebSocket-style stream updating every ${liveStreamSpeed}`"
+          :title="`HTTP provider poll every ${liveStreamSpeed} — not a websocket`"
         >
           <span class="stream-pulse-dot" :class="{ active: liveStreamSpeed !== 'pause' }" />
-          <span class="stream-label">STREAM: {{ liveStreamSpeed.toUpperCase() }}</span>
+          <span class="stream-label">POLL: {{ liveStreamSpeed.toUpperCase() }}</span>
           <span v-if="liveStreamSpeed !== 'pause'" class="stream-sec fig"
             >({{ streamCountdown }}s)</span
           >
@@ -1879,7 +1952,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           LAST GOOD ({{ shortDate(historyMeta.last_good_asof) }})
         </button>
         <button type="button" class="label return-live-btn" @click="returnToLive">
-          ▶ SWITCH TO LIVE STREAM
+          ▶ SWITCH TO PROVIDER POLL
         </button>
       </div>
     </section>
@@ -2062,6 +2135,43 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       </section>
 
       <template v-if="deskHasChain">
+        <!-- InsiderFinance Institutional Key Gamma Levels HUD -->
+        <section
+          v-if="s?.call_wall != null || s?.put_wall != null || s?.gamma_flip != null || s?.pin_strike != null"
+          class="options-gamma-hud rise"
+          aria-label="Key gamma levels summary"
+        >
+          <span class="hud-tag label">KEY GAMMA LEVELS</span>
+          <div v-if="s?.call_wall != null" class="hud-chip chip-call" title="Major Call Wall (Dealer Resistance)">
+            <span class="hud-name label">CALL WALL</span>
+            <span class="hud-val fig">${{ num(s.call_wall, 0) }}</span>
+            <span v-if="optWallDist(s.call_wall)" class="hud-dist fig">({{ optWallDist(s.call_wall) }})</span>
+          </div>
+          <div v-if="s?.put_wall != null" class="hud-chip chip-put" title="Major Put Wall (Dealer Support)">
+            <span class="hud-name label">PUT WALL</span>
+            <span class="hud-val fig">${{ num(s.put_wall, 0) }}</span>
+            <span v-if="optWallDist(s.put_wall)" class="hud-dist fig">({{ optWallDist(s.put_wall) }}</span>
+          </div>
+          <div v-if="s?.gamma_flip != null" class="hud-chip chip-flip" title="Zero-Gamma Inflection Level">
+            <span class="hud-name label">0-GAMMA</span>
+            <span class="hud-val fig">${{ num(s.gamma_flip, 0) }}</span>
+            <span v-if="optWallDist(s.gamma_flip)" class="hud-dist fig">({{ optWallDist(s.gamma_flip) }})</span>
+          </div>
+          <div v-if="s?.pin_strike != null" class="hud-chip chip-pin" title="Max Pain / Expected Pin Strike">
+            <span class="hud-name label">MAX PAIN</span>
+            <span class="hud-val fig">${{ num(s.pin_strike, 0) }}</span>
+            <span v-if="optWallDist(s.pin_strike)" class="hud-dist fig">({{ optWallDist(s.pin_strike) }})</span>
+          </div>
+          <div v-if="s?.total_gex_m != null" class="hud-chip chip-gex" :class="tone(s.total_gex_m)" title="Total Net Gamma Exposure">
+            <span class="hud-name label">NET GEX</span>
+            <span class="hud-val fig">{{ optSignedGex(s.total_gex_m, 1) }}</span>
+          </div>
+          <div v-if="optExpectedMove != null" class="hud-chip chip-em" title="1-Day Expected Move">
+            <span class="hud-name label">1D MOVE</span>
+            <span class="hud-val fig">&plusmn;${{ num(optExpectedMove.dollars, 2) }}{{ optExpectedMove.pct != null ? ` (${num(optExpectedMove.pct, 1)}%)` : '' }}</span>
+          </div>
+        </section>
+
         <Panel label="POSITIONING" index="01" flush class="positioning-panel rise">
           <template #action>
             <div class="panel-action-group">
@@ -2303,11 +2413,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         >
           <template #action>
             <div class="tape-action-bar">
-              <!-- Live Stream speed controls -->
+              <!-- Provider poll interval controls -->
               <div
                 v-if="mode === 'live'"
                 class="mini-segment stream-rate-seg"
-                title="Real-time WebSocket-style stream refresh rate"
+                title="HTTP provider poll interval — not a websocket"
               >
                 <span class="stream-pulse-lamp" :class="{ running: liveStreamSpeed !== 'pause' }" />
                 <button
@@ -2323,7 +2433,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 <button
                   type="button"
                   class="label tick-btn"
-                  title="Force instant stream tick"
+                  title="Force an immediate provider poll"
                   :disabled="resource.loading.value"
                   @click="tickStreamNow"
                 >
@@ -2390,10 +2500,10 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <div class="flagged-title-group">
                 <span class="flagged-pulse-icon" aria-hidden="true">⚡</span>
                 <strong class="flagged-title label"
-                  >HIGH-CONVICTION & FLAG ALERTS ({{ flaggedPrints.length }})</strong
+                  >DESCRIPTIVE FLAG ALERTS ({{ flaggedPrints.length }})</strong
                 >
                 <span class="flagged-sub label"
-                  >Golden Sweeps · Whales ($100k+) · Clusters · Vol/OI Surges</span
+                  >Vendor golden flag · Whales ($100k+) · Clusters · Vol/OI surges — not ENTER</span
                 >
               </div>
               <div class="flagged-quick-filters">
@@ -2413,7 +2523,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     activeFlagFilter = activeFlagFilter === 'golden_sweep' ? 'all' : 'golden_sweep'
                   "
                 >
-                  GOLDEN SWEEP
+                  VENDOR GOLDEN FLAG
                 </button>
                 <button
                   type="button"
@@ -2485,65 +2595,137 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <div class="flagged-prints-grid">
               <div
                 v-for="row in displayedFlaggedPrints"
-                :key="`flagged-${row.timestamp ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
-                class="tape-stalker-card flagged-card"
+                :key="`flagged-${tapeRowKey(row)}`"
+                class="tape-stalker-card flagged-card if-card"
                 :class="{
                   anomalous: (row.anomaly_flags ?? []).length > 0,
                   isWhale: (row.premium ?? 0) >= 100_000,
                   isMegaWhale: (row.premium ?? 0) >= 500_000,
-                  isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
-                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                  isGoldenSweep: classifyFlowOrder(row).type === 'golden_sweep',
+                  isSweep: tradeClassLabel(row) === 'SWEEP' || row.is_sweep === true,
                   'just-arrived': isNewPrint(row),
                   [tapeLean(row).cls]: true,
                 }"
               >
+                <!-- Card Header: Time · Symbol · Order Type -->
                 <div class="card-head-row">
-                  <span class="lean-pill label" :class="tapeLean(row).cls">
-                    {{ tapeLean(row).label }}
-                    <span v-if="premiumTierLabel(row.premium) !== 'STD'" class="card-tier-tag">{{
-                      premiumTierLabel(row.premium)
-                    }}</span>
-                  </span>
-                  <span class="ts-time fig"
-                    ><em v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
-                      formatTapeDate(row.timestamp)
-                    }}</em
-                    >{{
-                      isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
-                    }}</span
-                  >
-                  <span
-                    v-if="tradeClassLabel(row) !== 'SINGLE'"
-                    :class="tradeClassTokenCls(tradeClassLabel(row))"
-                    style="margin-left: auto"
-                    >{{ tradeClassLabel(row) }}</span
-                  >
-                </div>
-                <div class="card-body-row">
-                  <div class="strike-box">
-                    <span class="strike-label label">CONTRACT</span>
-                    <strong class="strike-val fig"
-                      >{{ symbol }} {{ optUsd(row.strike)
-                      }}{{ row.right === 'call' ? 'C' : 'P' }}</strong
+                  <div class="card-head-left">
+                    <span class="card-sym fig">{{ symbol }}</span>
+                    <span class="ts-time fig">
+                      <em v-if="formatTapeDate(row.timestamp)" class="ts-date"
+                        >{{ formatTapeDate(row.timestamp) }}
+                      </em>
+                      {{ isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp) }}
+                    </span>
+                  </div>
+                  <div class="card-head-right">
+                    <span
+                      v-if="premiumTierLabel(row.premium) !== 'STD'"
+                      :class="premiumTierCls(row.premium)"
                     >
-                    <span class="exp-tag label"
-                      >{{
-                        row.expiry
-                          ? `${shortDate(row.expiry)}${row.dte != null ? ` · ${row.dte}D` : ''}`
-                          : ''
+                      {{ premiumTierLabel(row.premium) }}
+                    </span>
+                    <span
+                      v-if="tradeClassLabel(row) !== 'SINGLE'"
+                      :class="tradeClassTokenCls(tradeClassLabel(row))"
+                    >
+                      {{ tradeClassLabel(row) }}
+                    </span>
+                    <span
+                      v-if="row.sweep_fill_count && row.sweep_fill_count > 1"
+                      class="flow-badge badge-fills"
+                    >
+                      {{ row.sweep_fill_count }} FILLS
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Hero Row: Premium & Contracts + Lean & Heat Score -->
+                <div class="card-hero-row">
+                  <div class="hero-left">
+                    <div class="hero-prem-lockup" :class="row.right">
+                      <span class="prem-label label">PREMIUM</span>
+                      <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
+                      <small
+                        v-if="row.premium_estimated && row.premium > 0"
+                        class="est"
+                        title="Estimated"
+                        >≈</small
+                      >
+                    </div>
+                    <span class="fill-sub label">
+                      {{ num(contractsOf(row), 0) }} contracts @
+                      {{
+                        pricePaid(row) == null
+                          ? '—'
+                          : `${row.price_estimated ? '~' : ''}$${num(pricePaid(row)!, 2)}`
                       }}
-                      {{ moneynessInfo(row)?.text ?? '' }}</span
-                    >
+                    </span>
                   </div>
-                  <div class="prem-box" :class="row.right">
-                    <span class="prem-label label">PREMIUM</span>
-                    <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
-                    <span class="fill-sub label"
-                      >{{ num(contractsOf(row), 0) }} contracts @
-                      {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row), 2)}` }}</span
-                    >
+                  <div class="hero-right">
+                    <div class="hero-tags">
+                      <span class="lean-pill label" :class="tapeLean(row).cls">
+                        {{ row.right === 'call' ? 'CALL' : 'PUT' }}
+                      </span>
+                      <div
+                        v-if="row.heat != null"
+                        class="heat-pill label"
+                        :class="heatScoreCls(row.heat)"
+                      >
+                        <span class="heat-lbl">HEAT</span>
+                        <span>{{ Math.round(row.heat) }}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
+
+                <!-- InsiderFinance 6-Cell Matrix: Expiry, Strike, Spot, OTM, OI, IV -->
+                <div class="card-specs-matrix">
+                  <div class="spec-cell">
+                    <span class="spec-label label">EXPIRATION</span>
+                    <span class="spec-val fig">
+                      {{ row.expiry ? shortDate(row.expiry) : '—' }}
+                      <small v-if="row.dte != null" class="dte-sub"> · {{ row.dte }}d</small>
+                    </span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">STRIKE</span>
+                    <span class="spec-val fig strike-val">{{ optUsd(row.strike) }}</span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">SPOT</span>
+                    <span class="spec-val fig">{{
+                      (row.underlying_price ?? s?.spot) == null
+                        ? '—'
+                        : optUsd(row.underlying_price ?? s?.spot)
+                    }}</span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">OTM / ITM</span>
+                    <span class="spec-val fig" :class="moneynessInfo(row)?.cls ?? ''">
+                      {{
+                        moneynessInfo(row)?.text ??
+                        (row.otm_pct != null ? `${Math.round(row.otm_pct * 100)}% OTM` : '—')
+                      }}
+                    </span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">OPEN INT</span>
+                    <span class="spec-val fig">{{
+                      row.open_interest != null ? num(row.open_interest, 0) : '—'
+                    }}</span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">IMPLIED VOL</span>
+                    <span class="spec-val fig">{{
+                      row.implied_volatility != null
+                        ? `${Math.round(row.implied_volatility * 100)}%`
+                        : '—'
+                    }}</span>
+                  </div>
+                </div>
+
+                <!-- Card Footer: Vol/OI, Anomaly Flags, Fills Accordion -->
                 <div class="card-foot-row">
                   <span
                     v-if="volOiRatio(row) != null"
@@ -2560,6 +2742,46 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   >
                     {{ anomalyLabel(flag) }}
                   </span>
+                  <button
+                    v-if="row.sweep_fills && row.sweep_fills.length > 1"
+                    type="button"
+                    class="fills-toggle-btn label"
+                    @click="toggleSweepFills(tapeRowKey(row))"
+                  >
+                    {{
+                      isSweepFillsExpanded(tapeRowKey(row))
+                        ? '▲ HIDE FILLS'
+                        : `▼ ${row.sweep_fills.length} FILLS`
+                    }}
+                  </button>
+                </div>
+
+                <!-- Expandable Fills Drawer for Aggregated Sweeps -->
+                <div
+                  v-if="
+                    row.sweep_fills &&
+                    row.sweep_fills.length > 1 &&
+                    isSweepFillsExpanded(tapeRowKey(row))
+                  "
+                  class="card-fills-drawer"
+                >
+                  <div class="fills-drawer-head label">
+                    AGGREGATED EXCHANGE FILLS ({{ row.sweep_fills.length }})
+                  </div>
+                  <div class="fills-drawer-list">
+                    <div
+                      v-for="(fill, fIdx) in row.sweep_fills"
+                      :key="fIdx"
+                      class="fill-drawer-item fig"
+                    >
+                      <span class="fill-item-time">{{ formatTapeTime(fill.timestamp) }}</span>
+                      <span class="fill-item-contracts"
+                        >{{ num(fill.contracts, 0) }} contracts</span
+                      >
+                      <span class="fill-item-price">@ ${{ num(fill.price ?? 0, 2) }}</span>
+                      <span class="fill-item-prem">${{ compact(fill.premium) }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2832,83 +3054,193 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <div class="tape-cards-grid">
               <div
                 v-for="row in renderedTape"
-                :key="`card-${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
-                class="tape-stalker-card"
+                :key="`card-${tapeRowKey(row)}`"
+                class="tape-stalker-card if-card"
                 :class="{
                   anomalous: (row.anomaly_flags ?? []).length > 0,
                   isWhale: (row.premium ?? 0) >= 100_000,
                   isMegaWhale: (row.premium ?? 0) >= 500_000,
-                  isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
-                  isSweep: tradeClassLabel(row) === 'SWEEP',
+                  isGoldenSweep: classifyFlowOrder(row).type === 'golden_sweep',
+                  isSweep: tradeClassLabel(row) === 'SWEEP' || row.is_sweep === true,
                   'just-arrived': isNewPrint(row),
                   [tapeLean(row).cls]: true,
                 }"
               >
+                <!-- Card Header: Time · Symbol · Order Type -->
                 <div class="card-head-row">
-                  <span class="lean-pill label" :class="tapeLean(row).cls">{{
-                    tapeLean(row).label
-                  }}</span>
-                  <span class="ts-time fig"
-                    ><em v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
-                      formatTapeDate(row.timestamp)
-                    }}</em
-                    >{{
-                      isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
-                    }}</span
-                  >
-                  <span
-                    v-if="premiumTierLabel(row.premium) !== 'STD'"
-                    :class="premiumTierCls(row.premium)"
-                    >{{ premiumTierLabel(row.premium) }}</span
-                  >
-                  <span
-                    v-if="tradeClassLabel(row) !== 'SINGLE'"
-                    :class="tradeClassTokenCls(tradeClassLabel(row))"
-                    style="margin-left: auto"
-                    >{{ tradeClassLabel(row) }}</span
-                  >
-                </div>
-
-                <div class="card-body-row">
-                  <div class="strike-box">
-                    <span class="strike-label label">STRIKE</span>
-                    <strong class="strike-val fig">{{ optUsd(row.strike) }}</strong>
+                  <div class="card-head-left">
+                    <span class="card-sym fig">{{ symbol }}</span>
+                    <span class="ts-time fig">
+                      <em v-if="formatTapeDate(row.timestamp)" class="ts-date"
+                        >{{ formatTapeDate(row.timestamp) }}
+                      </em>
+                      {{ isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp) }}
+                    </span>
+                  </div>
+                  <div class="card-head-right">
                     <span
-                      v-if="moneynessInfo(row)"
-                      class="moneyness-tag label"
-                      :class="moneynessInfo(row)!.cls"
-                      >{{ moneynessInfo(row)!.text }}</span
+                      v-if="premiumTierLabel(row.premium) !== 'STD'"
+                      :class="premiumTierCls(row.premium)"
                     >
-                  </div>
-                  <div class="prem-box" :class="row.right">
-                    <span class="prem-label label">PREMIUM</span>
-                    <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
-                    <span class="fill-sub label"
-                      >{{ num(contractsOf(row), 0) }} contracts @
-                      {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row), 2)}` }}</span
+                      {{ premiumTierLabel(row.premium) }}
+                    </span>
+                    <span
+                      v-if="tradeClassLabel(row) !== 'SINGLE'"
+                      :class="tradeClassTokenCls(tradeClassLabel(row))"
                     >
+                      {{ tradeClassLabel(row) }}
+                    </span>
+                    <span
+                      v-if="row.sweep_fill_count && row.sweep_fill_count > 1"
+                      class="flow-badge badge-fills"
+                    >
+                      {{ row.sweep_fill_count }} FILLS
+                    </span>
                   </div>
                 </div>
 
+                <!-- Hero Row: Premium & Contracts + Lean & Heat Score -->
+                <div class="card-hero-row">
+                  <div class="hero-left">
+                    <div class="hero-prem-lockup" :class="row.right">
+                      <span class="prem-label label">PREMIUM</span>
+                      <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
+                      <small
+                        v-if="row.premium_estimated && row.premium > 0"
+                        class="est"
+                        title="Estimated"
+                        >≈</small
+                      >
+                    </div>
+                    <span class="fill-sub label">
+                      {{ num(contractsOf(row), 0) }} contracts @
+                      {{
+                        pricePaid(row) == null
+                          ? '—'
+                          : `${row.price_estimated ? '~' : ''}$${num(pricePaid(row)!, 2)}`
+                      }}
+                    </span>
+                  </div>
+                  <div class="hero-right">
+                    <div class="hero-tags">
+                      <span class="lean-pill label" :class="tapeLean(row).cls">
+                        {{ row.right === 'call' ? 'CALL' : 'PUT' }}
+                      </span>
+                      <div
+                        v-if="row.heat != null"
+                        class="heat-pill label"
+                        :class="heatScoreCls(row.heat)"
+                      >
+                        <span class="heat-lbl">HEAT</span>
+                        <span>{{ Math.round(row.heat) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- InsiderFinance 6-Cell Matrix: Expiry, Strike, Spot, OTM, OI, IV -->
+                <div class="card-specs-matrix">
+                  <div class="spec-cell">
+                    <span class="spec-label label">EXPIRATION</span>
+                    <span class="spec-val fig">
+                      {{ row.expiry ? shortDate(row.expiry) : '—' }}
+                      <small v-if="row.dte != null" class="dte-sub"> · {{ row.dte }}d</small>
+                    </span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">STRIKE</span>
+                    <span class="spec-val fig strike-val">{{ optUsd(row.strike) }}</span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">SPOT</span>
+                    <span class="spec-val fig">{{
+                      (row.underlying_price ?? s?.spot) == null
+                        ? '—'
+                        : optUsd(row.underlying_price ?? s?.spot)
+                    }}</span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">OTM / ITM</span>
+                    <span class="spec-val fig" :class="moneynessInfo(row)?.cls ?? ''">
+                      {{
+                        moneynessInfo(row)?.text ??
+                        (row.otm_pct != null ? `${Math.round(row.otm_pct * 100)}% OTM` : '—')
+                      }}
+                    </span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">OPEN INT</span>
+                    <span class="spec-val fig">{{
+                      row.open_interest != null ? num(row.open_interest, 0) : '—'
+                    }}</span>
+                  </div>
+                  <div class="spec-cell">
+                    <span class="spec-label label">IMPLIED VOL</span>
+                    <span class="spec-val fig">{{
+                      row.implied_volatility != null
+                        ? `${Math.round(row.implied_volatility * 100)}%`
+                        : '—'
+                    }}</span>
+                  </div>
+                </div>
+
+                <!-- Card Footer: Vol/OI, Anomaly Flags, Fills Accordion -->
                 <div class="card-foot-row">
-                  <span class="exp-tag label">{{
-                    row.expiry
-                      ? `${shortDate(row.expiry)}${row.dte != null ? ` · ${row.dte}D` : ''}`
-                      : 'N/A'
-                  }}</span>
                   <span
                     v-if="volOiRatio(row) != null"
                     :class="volOiPillCls(volOiRatio(row))"
-                    style="font-size: var(--t-micro); padding: 1px 4px"
-                    >{{ volOiLabel(volOiRatio(row)) }} VOL/OI</span
+                    style="font-size: var(--t-micro); padding: 1px 5px"
                   >
+                    {{ volOiLabel(volOiRatio(row)) }} VOL/OI
+                  </span>
                   <span
                     v-for="flag in row.anomaly_flags ?? []"
                     :key="flag"
                     class="flag-chip label"
                     :class="flag"
-                    >{{ anomalyLabel(flag) }}</span
                   >
+                    {{ anomalyLabel(flag) }}
+                  </span>
+                  <button
+                    v-if="row.sweep_fills && row.sweep_fills.length > 1"
+                    type="button"
+                    class="fills-toggle-btn label"
+                    @click="toggleSweepFills(tapeRowKey(row))"
+                  >
+                    {{
+                      isSweepFillsExpanded(tapeRowKey(row))
+                        ? '▲ HIDE FILLS'
+                        : `▼ ${row.sweep_fills.length} FILLS`
+                    }}
+                  </button>
+                </div>
+
+                <!-- Expandable Fills Drawer for Aggregated Sweeps -->
+                <div
+                  v-if="
+                    row.sweep_fills &&
+                    row.sweep_fills.length > 1 &&
+                    isSweepFillsExpanded(tapeRowKey(row))
+                  "
+                  class="card-fills-drawer"
+                >
+                  <div class="fills-drawer-head label">
+                    AGGREGATED EXCHANGE FILLS ({{ row.sweep_fills.length }})
+                  </div>
+                  <div class="fills-drawer-list">
+                    <div
+                      v-for="(fill, fIdx) in row.sweep_fills"
+                      :key="fIdx"
+                      class="fill-drawer-item fig"
+                    >
+                      <span class="fill-item-time">{{ formatTapeTime(fill.timestamp) }}</span>
+                      <span class="fill-item-contracts"
+                        >{{ num(fill.contracts, 0) }} contracts</span
+                      >
+                      <span class="fill-item-price">@ ${{ num(fill.price ?? 0, 2) }}</span>
+                      <span class="fill-item-prem">${{ compact(fill.premium) }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2928,113 +3260,185 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <th class="label num-col tape-col-group">Fill</th>
                   <th class="label num-col">Contracts</th>
                   <th class="label num-col vol-oi-head">Vol/OI</th>
+                  <th class="label num-col heat-col-head">Heat</th>
                   <th class="label num-col tape-premium-head">Premium</th>
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  v-for="row in renderedTape"
-                  :key="`${row.timestamp ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${contractsOf(row)}`"
-                  :class="{
-                    anomalous: (row.anomaly_flags ?? []).length > 0,
-                    isWhale: (row.premium ?? 0) >= 100_000,
-                    isMegaWhale: (row.premium ?? 0) >= 500_000,
-                    isGoldenSweep: tradeClassLabel(row) === 'GOLDEN SWEEP',
-                    isSweep: tradeClassLabel(row) === 'SWEEP',
-                    'just-arrived': isNewPrint(row),
-                    [tapeLean(row).cls]: true,
-                  }"
-                >
-                  <td class="fig dim ts-cell">
-                    <span v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
-                      formatTapeDate(row.timestamp)
-                    }}</span>
-                    <span
-                      class="ts-clock"
-                      :class="{ 'ts-eod': isDateOnlyStamp(row.timestamp) }"
-                      :title="
-                        isDateOnlyStamp(row.timestamp)
-                          ? 'End-of-day roll-up — the provider gave no intraday timestamp'
-                          : String(row.timestamp ?? '')
-                      "
-                      >{{
-                        isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
-                      }}</span
-                    >
-                  </td>
-                  <td class="tape-col-group">
-                    <span
-                      class="bias-chip label"
-                      :class="tapeLean(row).cls"
-                      :title="tapeLean(row).title"
-                    >
-                      {{ tapeLean(row).label }}
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      v-if="tradeClassLabel(row) !== 'SINGLE'"
-                      :class="tradeClassTokenCls(tradeClassLabel(row))"
-                    >
-                      {{ tradeClassLabel(row) }}
-                    </span>
-                  </td>
-                  <td class="fig dim tape-col-group expiry-cell">
-                    {{ row.expiry ? shortDate(row.expiry) : 'N/A' }}
-                  </td>
-                  <td class="fig num-col strike-cell">{{ optUsd(row.strike) }}</td>
-                  <td class="fig num-col tape-col-group stock-cell">
-                    <div class="stock-lockup">
+                <template v-for="row in renderedTape" :key="tapeRowKey(row)">
+                  <tr
+                    :class="{
+                      anomalous: (row.anomaly_flags ?? []).length > 0,
+                      isWhale: (row.premium ?? 0) >= 100_000,
+                      isMegaWhale: (row.premium ?? 0) >= 500_000,
+                      isGoldenSweep: classifyFlowOrder(row).type === 'golden_sweep',
+                      isSweep: tradeClassLabel(row) === 'SWEEP' || row.is_sweep === true,
+                      'just-arrived': isNewPrint(row),
+                      [tapeLean(row).cls]: true,
+                    }"
+                  >
+                    <td class="fig dim ts-cell">
+                      <span v-if="formatTapeDate(row.timestamp)" class="ts-date">{{
+                        formatTapeDate(row.timestamp)
+                      }}</span>
                       <span
-                        class="stock-val"
-                        :class="{ 'cell-na': (row.underlying_price ?? s?.spot) == null }"
+                        class="ts-clock"
+                        :class="{ 'ts-eod': isDateOnlyStamp(row.timestamp) }"
+                        :title="
+                          isDateOnlyStamp(row.timestamp)
+                            ? 'End-of-day roll-up — the provider gave no intraday timestamp'
+                            : String(row.timestamp ?? '')
+                        "
                         >{{
-                          (row.underlying_price ?? s?.spot) == null
-                            ? '—'
-                            : optUsd(row.underlying_price ?? s?.spot)
+                          isDateOnlyStamp(row.timestamp) ? 'EOD' : formatTapeTime(row.timestamp)
                         }}</span
                       >
+                    </td>
+                    <td class="tape-col-group">
                       <span
-                        v-if="moneynessInfo(row)"
-                        class="moneyness-tag label"
-                        :class="moneynessInfo(row)!.cls"
-                        >{{ moneynessInfo(row)!.text }}</span
+                        class="bias-chip label"
+                        :class="tapeLean(row).cls"
+                        :title="tapeLean(row).title"
                       >
-                    </div>
-                  </td>
-                  <td
-                    class="fig num-col tape-col-group"
-                    :class="{ 'cell-na': pricePaid(row) == null }"
-                    :title="
-                      row.premium_estimated ? 'Back-solved from notional' : 'Per-contract fill'
-                    "
-                  >
-                    {{ pricePaid(row) == null ? '—' : `$${num(pricePaid(row)!, 2)}` }}
-                  </td>
-                  <td class="fig num-col">{{ num(contractsOf(row), 0) }}</td>
-                  <td class="num-col">
-                    <span
-                      :class="volOiPillCls(volOiRatio(row))"
+                        {{ tapeLean(row).label }}
+                      </span>
+                    </td>
+                    <td>
+                      <div class="class-cell-lockup">
+                        <span
+                          v-if="tradeClassLabel(row) !== 'SINGLE'"
+                          :class="tradeClassTokenCls(tradeClassLabel(row))"
+                        >
+                          {{ tradeClassLabel(row) }}
+                        </span>
+                        <button
+                          v-if="row.sweep_fill_count && row.sweep_fill_count > 1"
+                          type="button"
+                          class="table-fills-btn label"
+                          :class="{ open: isSweepFillsExpanded(tapeRowKey(row)) }"
+                          :title="`Click to view all ${row.sweep_fill_count} individual fills`"
+                          @click="toggleSweepFills(tapeRowKey(row))"
+                        >
+                          {{ row.sweep_fill_count }} FILLS
+                          {{ isSweepFillsExpanded(tapeRowKey(row)) ? '▲' : '▼' }}
+                        </button>
+                      </div>
+                    </td>
+                    <td class="fig dim tape-col-group expiry-cell">
+                      {{ row.expiry ? shortDate(row.expiry) : 'N/A' }}
+                      <small v-if="row.dte != null" class="dte-sub"> {{ row.dte }}d</small>
+                    </td>
+                    <td class="fig num-col strike-cell">{{ optUsd(row.strike) }}</td>
+                    <td class="fig num-col tape-col-group stock-cell">
+                      <div class="stock-lockup">
+                        <span
+                          class="stock-val"
+                          :class="{ 'cell-na': (row.underlying_price ?? s?.spot) == null }"
+                          >{{
+                            (row.underlying_price ?? s?.spot) == null
+                              ? '—'
+                              : optUsd(row.underlying_price ?? s?.spot)
+                          }}</span
+                        >
+                        <span
+                          v-if="moneynessInfo(row)"
+                          class="moneyness-tag label"
+                          :class="moneynessInfo(row)!.cls"
+                          >{{ moneynessInfo(row)!.text }}</span
+                        >
+                      </div>
+                    </td>
+                    <td
+                      class="fig num-col tape-col-group"
+                      :class="{ 'cell-na': pricePaid(row) == null }"
                       :title="
-                        row.open_interest != null
-                          ? `OI: ${num(row.open_interest, 0)}`
-                          : 'OI unavailable'
+                        row.price_estimated
+                          ? `Weighted avg across ${row.sweep_fill_count || 1} fills`
+                          : 'Per-contract fill'
                       "
                     >
-                      {{ volOiLabel(volOiRatio(row)) }}
-                    </span>
-                  </td>
-                  <td
-                    class="fig num-col premium-cell"
-                    :class="[
-                      row.right,
-                      { 'whale-prem': row.premium >= 100_000, 'cell-na': !(row.premium > 0) },
-                    ]"
+                      {{
+                        pricePaid(row) == null
+                          ? '—'
+                          : `${row.price_estimated ? '~' : ''}$${num(pricePaid(row)!, 2)}`
+                      }}
+                    </td>
+                    <td class="fig num-col contracts-cell">
+                      {{ num(contractsOf(row), 0) }}
+                    </td>
+                    <td class="num-col">
+                      <div class="vol-oi-lockup">
+                        <span
+                          :class="volOiPillCls(volOiRatio(row))"
+                          :title="
+                            row.open_interest != null
+                              ? `OI: ${num(row.open_interest, 0)}`
+                              : 'OI unavailable'
+                          "
+                        >
+                          {{ volOiLabel(volOiRatio(row)) }}
+                        </span>
+                        <small v-if="row.open_interest != null" class="oi-faint-sub label">
+                          OI: {{ compact(row.open_interest) }}
+                        </small>
+                      </div>
+                    </td>
+                    <td class="num-col heat-cell">
+                      <span
+                        v-if="row.heat != null"
+                        class="heat-tag label"
+                        :class="heatScoreCls(row.heat)"
+                      >
+                        {{ Math.round(row.heat) }}
+                      </span>
+                      <span v-else class="cell-na">—</span>
+                    </td>
+                    <td
+                      class="fig num-col premium-cell"
+                      :class="[
+                        row.right,
+                        { 'whale-prem': row.premium >= 100_000, 'cell-na': !(row.premium > 0) },
+                      ]"
+                    >
+                      {{ row.premium > 0 ? `$${compact(row.premium)}` : '—' }}
+                      <small v-if="row.premium_estimated && row.premium > 0" class="est">≈</small>
+                    </td>
+                  </tr>
+
+                  <!-- Sub-row for expanded fills -->
+                  <tr
+                    v-if="
+                      row.sweep_fills &&
+                      row.sweep_fills.length > 1 &&
+                      isSweepFillsExpanded(tapeRowKey(row))
+                    "
+                    class="table-fills-subrow"
                   >
-                    {{ row.premium > 0 ? `$${compact(row.premium)}` : '—' }}
-                    <small v-if="row.premium_estimated && row.premium > 0" class="est">≈</small>
-                  </td>
-                </tr>
+                    <td colspan="11" class="fills-subrow-cell">
+                      <div class="fills-subrow-content">
+                        <div class="subrow-title label">
+                          INDIVIDUAL EXCHANGE FILLS IN THIS SWEEP ORDER ({{
+                            row.sweep_fills.length
+                          }}):
+                        </div>
+                        <div class="subrow-fills-grid">
+                          <div
+                            v-for="(fill, fIdx) in row.sweep_fills"
+                            :key="fIdx"
+                            class="subrow-fill-chip fig"
+                          >
+                            <span class="subfill-time">{{ formatTapeTime(fill.timestamp) }}</span>
+                            <strong class="subfill-contracts"
+                              >{{ num(fill.contracts, 0) }} contracts</strong
+                            >
+                            <span class="subfill-price">@ ${{ num(fill.price ?? 0, 2) }}</span>
+                            <span class="subfill-prem">${{ compact(fill.premium) }}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
               </tbody>
             </table>
             <div v-if="tapeTruncated" class="tape-cap-bar">
@@ -3261,9 +3665,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 </button>
               </div>
               <div class="history-search-box">
+                <!-- Placeholder text is not an accessible name and vanishes on
+                     first keystroke, so the field carries its own label. -->
                 <input
                   v-model="historySearchQuery"
                   type="text"
+                  aria-label="Search contract history by strike, expiry, class or OCC symbol"
                   placeholder="Search strike, expiry, class, OCC…"
                   class="history-search-input label"
                 />
@@ -3433,10 +3840,23 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   @click="loadSymbol(row.symbol)"
                 >
                   <td>
-                    <span class="rank-idx fig">{{
-                      String(row.activity_rank).padStart(2, '0')
-                    }}</span>
-                    <span class="fig sym">{{ row.symbol }}</span>
+                    <!-- The row stays clickable for the mouse, but the action
+                         also lives on a real button so it is reachable by
+                         keyboard and announced by a screen reader. A bare
+                         `<tr @click>` left symbol selection — the whole point
+                         of this board — mouse-only. -->
+                    <button
+                      type="button"
+                      class="row-select-btn"
+                      :aria-pressed="row.symbol === symbol"
+                      @click.stop="loadSymbol(row.symbol)"
+                    >
+                      <span class="rank-idx fig">{{
+                        String(row.activity_rank).padStart(2, '0')
+                      }}</span>
+                      <span class="fig sym">{{ row.symbol }}</span>
+                      <span class="sr-only">Load {{ row.symbol }}</span>
+                    </button>
                   </td>
                   <td class="num">
                     <div class="activity-score">
@@ -3464,7 +3884,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                       <strong class="live-value">{{ usd(row.premium) }}</strong>
                       <small class="flow-count">{{ row.print_count }} alerts</small>
                     </template>
-                    <span v-else class="dim">NO LIVE TAPE</span>
+                    <span v-else class="dim">NO PROVIDER TAPE</span>
                   </td>
                   <td class="fig num">
                     <span class="call">C{{ row.call_print_count }}</span>
@@ -3472,7 +3892,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     <span class="put">P{{ row.put_print_count }}</span>
                   </td>
                   <td class="fig num" :class="tone((row.ret_1d ?? 0) * 100)">
-                    {{ row.ret_1d == null ? '+0.0%' : signedPct((row.ret_1d ?? 0) * 100, 1) }}
+                    {{
+                      row.ret_1d == null ? 'MOVE MISSING' : signedPct((row.ret_1d ?? 0) * 100, 1)
+                    }}
                   </td>
                   <td>
                     <span
@@ -3580,8 +4002,18 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   @click="loadSymbol(row.symbol)"
                 >
                   <td>
-                    <span class="rank-idx fig">{{ String(idx + 1).padStart(2, '0') }}</span>
-                    <span class="fig sym">{{ row.symbol }}</span>
+                    <!-- Same reasoning as the flow board above: the action is
+                         carried by a real button so the keyboard can reach it. -->
+                    <button
+                      type="button"
+                      class="row-select-btn"
+                      :aria-pressed="row.symbol === symbol"
+                      @click.stop="loadSymbol(row.symbol)"
+                    >
+                      <span class="rank-idx fig">{{ String(idx + 1).padStart(2, '0') }}</span>
+                      <span class="fig sym">{{ row.symbol }}</span>
+                      <span class="sr-only">Load {{ row.symbol }}</span>
+                    </button>
                   </td>
                   <td class="num">
                     <div class="composite-meter">
@@ -3612,7 +4044,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     }}</span>
                   </td>
                   <td class="fig num" :class="tone((row.ret_1d ?? 0) * 100)">
-                    {{ row.ret_1d == null ? '+0.0%' : signedPct((row.ret_1d ?? 0) * 100, 1) }}
+                    {{
+                      row.ret_1d == null ? 'MOVE MISSING' : signedPct((row.ret_1d ?? 0) * 100, 1)
+                    }}
                   </td>
                   <td class="fig num">{{ pctFrac(row.spread_pct ?? 0, 1) }}</td>
                   <td class="fig num">{{ num(row.open_interest ?? 0, 0) }}</td>
@@ -3761,7 +4195,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   backdrop-filter: var(--glass-blur-sm);
   -webkit-backdrop-filter: var(--glass-blur-sm);
   color: var(--ink-dim);
-  font: 700 9.5px var(--font-data);
+  font: 700 var(--t-nano) var(--font-data);
   letter-spacing: 0.04em;
   cursor: pointer;
   border-radius: 9999px;
@@ -3940,7 +4374,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-dim);
 }
 .observed {
-  color: var(--ink-ghost);
+  color: var(--meta-provenance);
   font-size: var(--t-micro);
   white-space: nowrap;
 }
@@ -4071,7 +4505,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink);
 }
 .search-hits .tier {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
 }
 .search-hits .bars {
@@ -4128,7 +4562,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-size: var(--t-micro);
 }
 .unusual-meta {
-  color: var(--ink-ghost);
+  color: var(--meta-provenance);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4196,8 +4630,29 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--phosphor-wash);
   box-shadow: inset 2px 0 0 var(--phosphor);
 }
+/* The keyboard-reachable action inside the first cell of the symbol boards.
+   Painted to look like the plain cell content it replaced — the row is still
+   the visual click target — but it is a real button, so it takes focus, takes
+   Enter/Space, and announces its state. */
+.row-select-btn {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+}
+.row-select-btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--r-xs);
+}
+
 .rank-idx {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   margin-right: 8px;
   font-size: var(--t-micro);
 }
@@ -4243,11 +4698,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .flow-count {
   display: block;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
 }
 .sep {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   margin: 0 2px;
 }
 .side-pill {
@@ -4270,7 +4725,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
 }
 .side-pill.neutral {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 /* ---- Live Opportunities: composite board+flow ranking ------------------ */
@@ -4390,7 +4845,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: var(--s3) var(--s4);
 }
 .cov {
-  color: var(--ink-ghost);
+  color: var(--meta-provenance);
 }
 .segment {
   display: inline-flex;
@@ -4549,7 +5004,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .live-pulse.pending {
   background: transparent;
-  border-color: var(--ink-ghost);
+  border-color: var(--ink-faint);
 }
 .live-text {
   display: flex;
@@ -4599,7 +5054,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-weight: 700;
 }
 .live-meta {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   flex: 1 1 120px;
   min-width: 0;
@@ -4872,7 +5327,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   }
 }
 .kpi .dim {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   margin: 0 2px;
 }
 .kpi {
@@ -4981,7 +5436,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--void-lift);
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 600;
   border-radius: 2px;
   white-space: nowrap;
@@ -5291,7 +5746,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid var(--glass-border);
   background: var(--glass-base);
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   border-radius: 9999px;
   cursor: pointer;
@@ -5324,7 +5779,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--glass-surface-hi);
   border: var(--hair) solid var(--glass-border-hi);
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 750;
   border-radius: var(--r-xs);
   cursor: pointer;
@@ -5379,7 +5834,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: 3px;
 }
 .band-label {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 750;
   color: var(--ink-faint);
   letter-spacing: 0.05em;
@@ -5391,7 +5846,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid var(--glass-border);
   background: transparent;
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   border-radius: var(--r-xs);
   cursor: pointer;
@@ -5415,7 +5870,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   margin-left: auto;
 }
 .active-badge {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 750;
   color: var(--phosphor);
   background: var(--phosphor-wash);
@@ -5424,7 +5879,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border-radius: 9999px;
 }
 .reset-filter-btn {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 750;
   color: var(--warn);
   background: var(--warn-wash);
@@ -5453,7 +5908,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border-radius: var(--r-xs);
   background: var(--glass-base);
   border: var(--hair) solid var(--glass-border);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
 }
 .remaining-tape-header {
@@ -5462,7 +5917,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 6px var(--s4);
   background: var(--void-lift);
   border-bottom: var(--hair) solid var(--rule);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -5733,7 +6188,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
     inset 0 -2px var(--phosphor);
 }
 .tape-tabs button:disabled {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   opacity: 0.4;
   cursor: not-allowed;
   background: transparent;
@@ -5753,8 +6208,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 0 5px;
   background: var(--glass-base);
   border: var(--hair) solid var(--glass-border);
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   font-weight: 750;
   border-radius: 9999px;
 }
@@ -6025,7 +6480,7 @@ tr.isGoldenSweep td {
   color: var(--ink-dim);
 }
 .cell-na {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-weight: 400;
 }
 /* Quiet column-group dividers */
@@ -6119,7 +6574,7 @@ td.put {
 }
 .bias-chip.unsigned,
 .edge-chip.unsigned {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   background: var(--panel-hi);
   border-color: var(--rule);
 }
@@ -6407,7 +6862,7 @@ td.put {
   border: var(--hair) solid color-mix(in srgb, var(--long) 30%, var(--rule));
 }
 .moneyness-tag.otm {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   background: transparent;
 }
 .moneyness-tag.atm {
@@ -6510,7 +6965,7 @@ tr.isMegaWhale:hover {
   border: var(--hair) solid color-mix(in srgb, var(--put) 40%, var(--rule));
 }
 .lean-pill {
-  font: 700 9px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   padding: 2px 6px;
   border-radius: var(--r-xs);
   letter-spacing: 0.04em;
@@ -6559,7 +7014,7 @@ tr.isMegaWhale:hover {
 }
 .strike-box .strike-label,
 .prem-box .prem-label {
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   color: var(--ink-dim);
   letter-spacing: 0.05em;
 }
@@ -6588,7 +7043,7 @@ tr.isMegaWhale:hover {
   color: var(--put-hi, var(--put));
 }
 .fill-sub {
-  font: 500 9px var(--font-data);
+  font: 500 var(--t-nano) var(--font-data);
   color: var(--ink-faint);
 }
 .card-foot-row {
@@ -6598,7 +7053,7 @@ tr.isMegaWhale:hover {
   flex-wrap: wrap;
 }
 .exp-tag {
-  font: 500 9px var(--font-data);
+  font: 500 var(--t-nano) var(--font-data);
   color: var(--ink-dim);
 }
 .tape-cap-bar {
@@ -6607,7 +7062,7 @@ tr.isMegaWhale:hover {
   justify-content: space-between;
   gap: var(--s3);
   padding: var(--s2) var(--s3);
-  background: var(--surface-subtle, rgba(255, 255, 255, 0.02));
+  background: var(--surface-subtle, var(--wash-1));
   border-top: var(--hair) solid var(--glass-border);
   margin-top: var(--s2);
 }
@@ -6666,5 +7121,471 @@ tr.isMegaWhale:hover {
   background: var(--phosphor);
   font-weight: 750;
   box-shadow: var(--glass-specular);
+}
+
+/* ==========================================================================
+   INSIDERFINANCE FLOW CARDS & TAPE ENHANCEMENTS
+   ========================================================================== */
+
+.tape-stalker-card.if-card {
+  gap: var(--s2);
+  padding: 12px 14px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  position: relative;
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.tape-stalker-card.if-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--glass-border-hi);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular);
+}
+
+.card-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-sym {
+  font: 900 12.5px var(--font-display);
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  background: var(--void);
+  padding: 2px 7px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--rule-hi);
+}
+
+.card-head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flow-badge.badge-fills,
+.sweep-fill-count-badge {
+  font: 700 9px var(--font-display);
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  letter-spacing: 0.04em;
+  color: var(--phosphor);
+  background: color-mix(in srgb, var(--phosphor) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--phosphor) 35%, transparent);
+}
+
+.card-hero-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: var(--hair) solid var(--glass-border-subtle);
+  border-bottom: var(--hair) solid var(--glass-border-subtle);
+}
+
+.hero-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hero-prem-lockup {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.hero-prem-lockup .prem-label {
+  font: 800 8.5px var(--font-display);
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero-prem-lockup .prem-val {
+  font: 900 22px var(--font-data);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.hero-prem-lockup.call .prem-val {
+  color: var(--call-hi, var(--call));
+}
+
+.hero-prem-lockup.put .prem-val {
+  color: var(--put-hi, var(--put));
+}
+
+.hero-sub {
+  font: 500 11px var(--font-data);
+  color: var(--ink-dim);
+}
+
+.hero-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.hero-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Heat Score Badges */
+.heat-pill,
+.heat-score-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: 750 10px var(--font-display);
+  padding: 2px 7px;
+  border-radius: var(--r-xs);
+  letter-spacing: 0.04em;
+}
+
+.heat-flame {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.heat-tag {
+  font: 800 11px var(--font-data);
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  display: inline-block;
+}
+
+.heat-extreme {
+  color: var(--short);
+  background: var(--short-wash);
+  border: 1px solid color-mix(in srgb, var(--short) 40%, transparent);
+}
+
+.heat-high {
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.heat-med {
+  color: var(--phosphor);
+  background: color-mix(in srgb, var(--phosphor) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--phosphor) 30%, transparent);
+}
+
+.heat-low {
+  color: var(--ink-dim);
+  background: var(--wash-1);
+  border: 1px solid var(--glass-border);
+}
+
+/* 6-Cell Metric Matrix */
+.card-specs-matrix {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 4px 0;
+}
+
+@media (max-width: 640px) {
+  .card-specs-matrix {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.spec-cell {
+  background: var(--void);
+  border: 1px solid var(--rule-faint);
+  border-radius: var(--r-xs);
+  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2px;
+  min-width: 0;
+}
+
+.spec-label {
+  font: 800 8.5px var(--font-display);
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.spec-val {
+  font: 700 12px var(--font-data);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spec-val.strike-val {
+  font-weight: 850;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.dte-sub {
+  font: 500 10px var(--font-data);
+  color: var(--ink-faint);
+}
+
+/* Fills Accordion Drawer */
+.fills-toggle-btn {
+  background: var(--wash-1);
+  border: 1px solid var(--glass-border);
+  color: var(--phosphor);
+  font: 700 9px var(--font-display);
+  padding: 2px 7px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  margin-left: auto;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.fills-toggle-btn:hover {
+  background: var(--glass-surface-hi);
+  border-color: var(--phosphor-dim);
+}
+
+.card-fills-drawer {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--void);
+  border: 1px dashed var(--glass-border);
+  border-radius: var(--r-xs);
+}
+
+.fills-drawer-head {
+  font: 700 8.5px var(--font-display);
+  color: var(--phosphor);
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.fills-drawer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fill-drawer-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 500 11px var(--font-data);
+  color: var(--ink-dim);
+  padding: 2px 4px;
+  border-radius: 2px;
+  background: var(--wash-1);
+}
+
+.fill-drawer-item .fill-item-contracts {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.fill-drawer-item .fill-item-prem {
+  color: var(--call-hi, var(--call));
+}
+
+/* Table Enhancements */
+.class-cell-lockup {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.table-fills-btn {
+  background: color-mix(in srgb, var(--phosphor) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--phosphor) 35%, transparent);
+  color: var(--phosphor);
+  font: 700 8.5px var(--font-display);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.table-fills-btn:hover,
+.table-fills-btn.open {
+  background: var(--phosphor);
+  color: var(--void);
+}
+
+.vol-oi-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.oi-faint-sub {
+  font: 500 9px var(--font-data);
+  color: var(--ink-faint);
+  letter-spacing: 0.02em;
+}
+
+.heat-col-head,
+.heat-cell {
+  text-align: right;
+}
+
+.table-fills-subrow td.fills-subrow-cell {
+  padding: 0;
+  background: var(--void);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.fills-subrow-content {
+  padding: 8px 16px;
+}
+
+.subrow-title {
+  font: 700 9px var(--font-display);
+  color: var(--phosphor);
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.subrow-fills-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.subrow-fill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: var(--glass-base);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xs);
+  font: 500 11px var(--font-data);
+}
+
+.subfill-time {
+  color: var(--ink-faint);
+}
+
+.subfill-contracts {
+  color: var(--ink);
+}
+
+.subfill-price {
+  color: var(--ink-dim);
+}
+
+.subfill-prem {
+  color: var(--phosphor);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   INSIDERFINANCE KEY GAMMA LEVELS HUD FOR OPTIONS
+   ========================================================================== */
+
+.options-gamma-hud {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: 0.35rem 0.625rem;
+  border-radius: var(--r-md);
+  background: var(--surface-base);
+  border: var(--hair) solid var(--rule);
+  margin-bottom: var(--s2);
+}
+
+.options-gamma-hud .hud-tag {
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+  margin-right: 0.25rem;
+}
+
+.options-gamma-hud .hud-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--r-xs);
+  border: var(--hair) solid var(--rule);
+  background: var(--surface-subtle, var(--wash-1));
+}
+
+.options-gamma-hud .chip-call {
+  border-color: color-mix(in srgb, var(--call) 45%, var(--rule));
+  color: var(--call-hi, var(--call));
+  background: var(--call-wash);
+}
+
+.options-gamma-hud .chip-put {
+  border-color: color-mix(in srgb, var(--put) 45%, var(--rule));
+  color: var(--put-hi, var(--put));
+  background: var(--put-wash);
+}
+
+.options-gamma-hud .chip-flip {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
+  color: var(--warn);
+  background: var(--warn-wash);
+}
+
+.options-gamma-hud .chip-pin {
+  border-color: var(--rule-hi);
+  color: var(--ink);
+  background: var(--wash-1);
+}
+
+.options-gamma-hud .chip-gex {
+  border-color: var(--rule);
+}
+
+.options-gamma-hud .chip-em {
+  border-color: color-mix(in srgb, var(--phosphor) 40%, var(--rule));
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+}
+
+.options-gamma-hud .hud-name {
+  font-size: var(--t-nano);
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+
+.options-gamma-hud .hud-val {
+  font-size: var(--t-micro);
+  font-weight: 700;
+}
+
+.options-gamma-hud .hud-dist {
+  font-size: var(--t-nano);
+  opacity: 0.85;
 }
 </style>

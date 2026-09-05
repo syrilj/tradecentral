@@ -17,10 +17,7 @@ import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import DealerGreeksFlowCard from '../components/DealerGreeksFlowCard.vue'
 import MicrostructureTopographyCard from '../components/MicrostructureTopographyCard.vue'
-import type {
-  MicrostructureRegimeSnapshot,
-  TopographyState,
-} from '@/microstructureContracts'
+import type { MicrostructureRegimeSnapshot, TopographyState } from '@/microstructureContracts'
 
 const measurableTopo: TopographyState = {
   quadrant: 'forward_positive_ramp',

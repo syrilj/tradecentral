@@ -30,7 +30,12 @@ import {
   type PnlPoint,
 } from '@/optionsCalculator'
 
-import { flowLeanTokenClass, flowPriorityTokenClass } from '@/flowDisplay'
+import {
+  classifyFlowOrder,
+  computeVolOiRatio,
+  flowLeanTokenClass,
+  flowPriorityTokenClass,
+} from '@/flowDisplay'
 
 import { collectWatchlistAlerts } from '@/flowAlerts'
 
@@ -325,40 +330,20 @@ describe('Tier 3: Pairwise Combinations Test Suite', () => {
   // =========================================================================
   // Pair 07: High Vol/OI Ratio (>=1.0) + Golden Sweep Badge + Premium Tier
   // =========================================================================
-  it('Pair 07: verifies combined Golden Sweep classification with Vol/OI >= 1.0 and $500k+ tier', () => {
-    const evaluatePrint = (print: {
-      trade_class?: string
-      aggressor?: string
-      premium?: number
-      volume?: number
-      open_interest?: number
-    }) => {
-      const isSweep = print.trade_class?.toLowerCase() === 'sweep'
-      const isAskSide =
-        print.aggressor?.toLowerCase() === 'ask' || print.aggressor?.toLowerCase() === 'above_ask'
-      const isWhale = (print.premium ?? 0) >= 500_000
-      const isGoldenSweep = isSweep && isAskSide && isWhale
-
-      const ratio =
-        print.volume != null && print.open_interest != null && print.open_interest > 0
-          ? print.volume / print.open_interest
-          : 0
-      const isHighVolOi = ratio >= 1.0
-
-      return { isGoldenSweep, isHighVolOi, ratio }
-    }
-
-    const res = evaluatePrint({
+  it('Pair 07: large ask-side sweep stays a sweep; Vol/OI uses shipped helper', () => {
+    const print = {
       trade_class: 'sweep',
       aggressor: 'ask',
       premium: 750_000,
       volume: 8_000,
       open_interest: 4_000,
-    })
-
-    expect(res.isGoldenSweep).toBe(true)
-    expect(res.isHighVolOi).toBe(true)
-    expect(res.ratio).toBe(2.0)
+    }
+    const classified = classifyFlowOrder(print)
+    const volOi = computeVolOiRatio(print.volume, print.open_interest)
+    expect(classified.type).toBe('sweep')
+    expect(classified.label).not.toBe('GOLDEN SWEEP')
+    expect(volOi.isHigh).toBe(true)
+    expect(volOi.ratio).toBe(2)
   })
 
   // =========================================================================

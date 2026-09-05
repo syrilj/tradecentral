@@ -252,7 +252,9 @@ describe('PressureDriftChart missing-data detection (shipped SFC)', () => {
 
   it('suppresses the net-trace flat line and hover probe when noData', () => {
     const s = src()
-    expect(s).toMatch(/const netPath = computed\(\(\) => noData\.value \? '' : linePath\(/)
+    expect(s).toMatch(
+      /const netPath = computed\(\(\) =>\s*noData\.value\s*\?\s*''\s*:\s*linePath\(/,
+    )
     expect(s).toMatch(/if \(!el \|\| n === 0 \|\| noData\.value\)/)
   })
 

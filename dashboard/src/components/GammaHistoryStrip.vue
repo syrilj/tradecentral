@@ -298,7 +298,7 @@ const barW = computed(() => {
   background: var(--panel-raise);
   border: var(--hair) solid var(--rule-hi);
   color: var(--phosphor);
-  font: 700 9px var(--font-data);
+  font: 700 var(--t-nano) var(--font-data);
   transition:
     transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
     opacity 0.15s ease;

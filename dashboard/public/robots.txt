@@ -1,0 +1,13 @@
+# TradeCentral — public marketing surface only. The operator desk lives behind
+# /auth and is not useful to crawlers.
+User-agent: *
+Allow: /$
+Allow: /about
+Disallow: /auth
+Disallow: /desk
+Disallow: /flow
+Disallow: /options
+Disallow: /market
+Disallow: /research
+Disallow: /gates
+Disallow: /cloud

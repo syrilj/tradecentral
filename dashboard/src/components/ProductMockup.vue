@@ -94,7 +94,7 @@ const queue = [
               ><b>{{ g.sym }}</b
               ><small>{{ g.label }}</small></span
             >
-            <svg viewBox="0 0 48 20" preserveAspectRatio="none"><path :d="g.d" /></svg>
+            <svg aria-hidden="true" viewBox="0 0 48 20" preserveAspectRatio="none"><path :d="g.d" /></svg>
           </span>
         </header>
 
@@ -176,7 +176,7 @@ const queue = [
   padding: 6px 10px;
   color: var(--ink-soft);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -247,7 +247,7 @@ const queue = [
   flex: 1 1 auto;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.12em;
   text-align: center;
@@ -258,7 +258,7 @@ const queue = [
   gap: 6px;
   color: var(--phosphor);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.12em;
 }
@@ -311,7 +311,7 @@ const queue = [
 }
 .rail-item small {
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -350,14 +350,14 @@ const queue = [
 .g-head b {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.04em;
 }
 .g-head small {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -401,7 +401,7 @@ const queue = [
 .p-head .idx {
   color: var(--phosphor);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.06em;
   padding: 1px 5px;
@@ -413,7 +413,7 @@ const queue = [
   flex: 1 1 auto;
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -422,9 +422,9 @@ const queue = [
   text-overflow: ellipsis;
 }
 .p-meta {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
 }
 
@@ -465,7 +465,7 @@ const queue = [
   left: 5px;
   color: var(--warn);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   font-style: normal;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -528,7 +528,7 @@ const queue = [
   gap: 6px;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -573,8 +573,8 @@ const queue = [
 }
 .q-idx {
   flex: 0 0 auto;
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   font-weight: 600;
 }
 .q-body {
@@ -586,7 +586,7 @@ const queue = [
 .q-note {
   color: var(--ink-dim);
   font-family: var(--font-ui);
-  font-size: 9px;
+  font-size: var(--t-nano);
   line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
@@ -606,14 +606,14 @@ const queue = [
 }
 .q-chevron {
   flex: 0 0 auto;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .q-foot {
   margin-top: auto;
   padding: 10px 12px;
   color: var(--ink-faint);
   font-family: var(--font-ui);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-style: italic;
 }
 
@@ -624,7 +624,7 @@ figcaption {
   margin-top: 12px;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }

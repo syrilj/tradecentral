@@ -16,7 +16,6 @@ and quant-fundamental beneficiary elasticity scoring.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import math
 import time
@@ -3673,26 +3672,43 @@ def calculate_beneficiary_elasticity(
     node: Dict[str, Any],
     driver_symbol: str,
     flow_override: Optional[float] = None,
-) -> float:
-    """Calculate normalized Elasticity Score (0-100) using quant-fundamental formula."""
-    metrics = node.get("metrics", {})
-    capex_sens = _safe_float(metrics.get("capex_sensitivity"), 2.0)
-    rev_conc = _safe_float(metrics.get("revenue_concentration_pct"), 25.0)
-    op_lev = _safe_float(metrics.get("operating_leverage"), 2.5)
-    flow_score = flow_override if flow_override is not None else _safe_float(metrics.get("flow_sentiment_score"), 0.5)
+) -> Optional[float]:
+    """Weighted Elasticity Score (0-100) over the node's *present* inputs.
 
-    base_sens_norm = min(100.0, max(0.0, (capex_sens / 4.5) * 100.0))
-    rev_conc_norm = min(100.0, max(0.0, (rev_conc / 60.0) * 100.0))
-    op_lev_norm = min(100.0, max(0.0, (op_lev / 5.0) * 100.0))
-    flow_norm = min(100.0, max(0.0, ((flow_score + 1.0) / 2.0) * 100.0))
+    Components: capex sensitivity (35%), revenue concentration (25%),
+    operating leverage (20%), options-flow sentiment (20%), each min-max
+    normalised. Weights renormalise over whatever the node actually carries.
 
-    composite = (
-        0.35 * base_sens_norm
-        + 0.25 * rev_conc_norm
-        + 0.20 * op_lev_norm
-        + 0.20 * flow_norm
-    )
-    return _safe_round(min(99.9, max(10.0, composite)), 1) or 75.0
+    Returns None when the node has no usable inputs at all: an unscored node
+    must stay unscored. The old version silently substituted mid-range
+    defaults (2.0 / 25.0 / 2.5 / 0.5) for missing metrics, so companies with
+    zero data earned a plausible-looking ~70 and entered the beneficiary
+    ranking on invented inputs.
+    """
+    metrics = node.get("metrics") or {}
+    components: List[Tuple[float, float]] = []
+
+    capex_sens = _safe_float(metrics.get("capex_sensitivity"))
+    if capex_sens is not None:
+        components.append((min(100.0, max(0.0, (capex_sens / 4.5) * 100.0)), 0.35))
+
+    rev_conc = _safe_float(metrics.get("revenue_concentration_pct"))
+    if rev_conc is not None:
+        components.append((min(100.0, max(0.0, (rev_conc / 60.0) * 100.0)), 0.25))
+
+    op_lev = _safe_float(metrics.get("operating_leverage"))
+    if op_lev is not None:
+        components.append((min(100.0, max(0.0, (op_lev / 5.0) * 100.0)), 0.20))
+
+    flow_score = flow_override if flow_override is not None else _safe_float(metrics.get("flow_sentiment_score"))
+    if flow_score is not None:
+        components.append((min(100.0, max(0.0, ((flow_score + 1.0) / 2.0) * 100.0)), 0.20))
+
+    if not components:
+        return None
+    total_weight = sum(w for _, w in components)
+    composite = sum(score * w for score, w in components) / total_weight
+    return round(min(100.0, max(0.0, composite)), 1)
 
 
 _SECTOR_BUCKET_MAP = {
@@ -3713,16 +3729,6 @@ _SECTOR_BUCKET_MAP = {
     "communication services": "communications",
     "communications": "communications",
 }
-
-
-def _seeded_float(symbol: str, salt: str, lo: float, hi: float) -> float:
-    """Deterministic pseudo-random float in [lo, hi] derived from a symbol.
-
-    Used only for model-derived peer metrics so repeated ingests are stable;
-    never used to fabricate a real-world fact.
-    """
-    h = int(hashlib.md5(f"{symbol}:{salt}".encode("utf-8")).hexdigest()[:8], 16)
-    return round(lo + (h / 0xFFFFFFFF) * (hi - lo), 2)
 
 
 def _sector_peers(symbol: str, sector: str, limit: int = 8) -> List[str]:
@@ -4241,12 +4247,23 @@ COMPANY_RELATIONSHIPS_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 
 def _peer_node(symbol: str, target_tier: Optional[str] = None, rel_type: Optional[str] = None) -> Dict[str, Any]:
-    """Build a lightweight, honest sector-peer or ecosystem node with model-derived metrics."""
+    """Build a lightweight, honest sector-peer/ecosystem node.
+
+    Identity fields (name, sector, industry, market cap) plus forward P/E and
+    YoY revenue growth come from the live company profile. Every scoring
+    input that a sector lookup cannot support stays None: this used to fill
+    all of them with MD5-seeded pseudo-random numbers, attach a fabricated
+    sec_10q citation dated today, and hardcode "bullish_call_drift" /
+    "expanding" for every company on earth. Missing metrics render as "—" in
+    the UI; they are never replaced with plausible literals.
+    """
     sym = symbol.strip().upper()
-    name = f"{sym} Inc."
-    sector = "Technology"
+    name = sym
+    sector = ""
     industry = "Sector Peer"
-    market_cap_b = 15.0
+    market_cap_b: Optional[float] = None
+    fwd_pe: Optional[float] = None
+    yoy_growth: Optional[float] = None
 
     try:
         from tools.financial_data import get_company_profile_payload
@@ -4258,16 +4275,18 @@ def _peer_node(symbol: str, target_tier: Optional[str] = None, rel_type: Optiona
         raw_mc = _safe_float(about.get("market_cap"))
         if raw_mc and raw_mc > 0:
             market_cap_b = round(raw_mc / 1_000_000_000, 2)
+        fwd_pe = _safe_float(about.get("forward_pe"))
+        yoy_growth = _safe_float(about.get("revenue_growth_yoy"))
     except Exception as e:
         logger.debug("Peer profile lookup error for %s: %s", sym, e)
 
     if target_tier:
         tier = target_tier
-    elif market_cap_b >= 500:
+    elif market_cap_b is not None and market_cap_b >= 500:
         tier = "mega_driver"
-    elif market_cap_b >= 100:
+    elif market_cap_b is not None and market_cap_b >= 100:
         tier = "horizontal_enabler"
-    elif market_cap_b < 10:
+    elif market_cap_b is not None and market_cap_b < 10:
         tier = "tier2_supplier"
     else:
         tier = "tier1_supplier"
@@ -4275,33 +4294,25 @@ def _peer_node(symbol: str, target_tier: Optional[str] = None, rel_type: Optiona
     return {
         "symbol": sym,
         "name": name,
-        "sector": sector,
+        "sector": sector or "Unknown",
         "sub_industry": industry,
         "tier": tier,
         "market_cap_billions": market_cap_b,
         "metrics": {
-            "elasticity_score": 80.0,
-            "capex_sensitivity": _seeded_float(sym, "capex", 2.0, 3.5),
-            "revenue_concentration_pct": _seeded_float(sym, "conc", 20.0, 45.0),
-            "operating_leverage": _seeded_float(sym, "oplev", 2.5, 3.8),
-            "forward_pe": _seeded_float(sym, "pe", 15.0, 45.0) if market_cap_b >= 10 else None,
-            "peg_ratio": _seeded_float(sym, "peg", 0.8, 1.6),
-            "gross_margin_trend": "expanding",
-            "yoy_revenue_growth": _seeded_float(sym, "yoy", 8.0, 40.0),
+            "elasticity_score": None,
+            "capex_sensitivity": None,
+            "revenue_concentration_pct": None,
+            "operating_leverage": None,
+            "forward_pe": fwd_pe,
+            "peg_ratio": None,
+            "gross_margin_trend": None,
+            "yoy_revenue_growth": yoy_growth,
             "next_earnings_date": None,
-            "flow_sentiment_score": _seeded_float(sym, "flow", 0.6, 0.9),
-            "options_skew": "bullish_call_drift",
+            "flow_sentiment_score": None,
+            "options_skew": None,
         },
-        "evidence": [
-            {
-                "source_type": "sec_10q",
-                "filing_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                "period": "Q1 2026",
-                "quote": f"{sym} operating disclosures confirm ongoing commercial supply alignment and multi-tier technology integration.",
-                "context": f"Commercial segment disclosures for {name}",
-                "confidence": 0.88,
-            }
-        ],
+        # A citation only exists when a real underlying record exists.
+        "evidence": [],
         "is_focus": False,
     }
 
@@ -4316,13 +4327,12 @@ def _discover_company_graph(symbol: str) -> Dict[str, Any]:
     sym = symbol.strip().upper()
 
     # --- Focal node: live profile + financials + SEC filings ---
-    profile_about = {}
-    market_cap_b = 15.0
-    sub_industry = "Specialized Component & Systems Provider"
-    sector = "Technology"
-    fwd_pe = 22.0
-    peg = 1.1
-    yoy_growth = 28.0
+    profile_about: Dict[str, Any] = {}
+    market_cap_b: Optional[float] = None
+    sub_industry = ""
+    sector = ""
+    fwd_pe: Optional[float] = None
+    yoy_growth: Optional[float] = None
 
     try:
         from tools.financial_data import get_company_profile_payload, get_financials_payload
@@ -4333,80 +4343,105 @@ def _discover_company_graph(symbol: str) -> Dict[str, Any]:
             sector = str(about.get("sector"))
         if about.get("industry"):
             sub_industry = str(about.get("industry"))
+        fwd_pe = _safe_float(about.get("forward_pe"))
+        yoy_growth = _safe_float(about.get("revenue_growth_yoy"))
+        prof_mc = _safe_float(about.get("market_cap"))
+        if prof_mc and prof_mc > 0:
+            market_cap_b = round(prof_mc / 1_000_000_000, 2)
 
         fin = get_financials_payload(sym, period="annual")
         ratios = fin.get("ratios", {})
-        raw_mc = _safe_float(ratios.get("market_cap"))
-        if raw_mc and raw_mc > 0:
-            market_cap_b = round(raw_mc / 1_000_000_000, 2)
-        fwd_pe = _safe_float(ratios.get("forward_pe"), 22.0)
-        peg = _safe_float(ratios.get("peg_ratio"), 1.1)
-
-        inc_rows = fin.get("income_statement", {}).get("rows", [])
-        for row in inc_rows:
-            if row.get("key") == "total_revenue" and len(row.get("values", [])) >= 2:
-                v1 = _safe_float(row["values"][0])
-                v2 = _safe_float(row["values"][1])
-                if v1 and v2 and v2 > 0:
-                    yoy_growth = round(((v1 - v2) / v2) * 100, 1)
+        if market_cap_b is None:
+            raw_mc = _safe_float(ratios.get("market_cap"))
+            if raw_mc and raw_mc > 0:
+                market_cap_b = round(raw_mc / 1_000_000_000, 2)
+        # Real ratio keys are `pe_forward` / `revenue_growth_yoy`. The old code
+        # read `forward_pe` / `peg_ratio`, which `_extract_ratios` never emits,
+        # so every arbitrary-ticker focal silently served P/E 22.0 and PEG 1.1.
+        if fwd_pe is None:
+            fwd_pe = _safe_float(ratios.get("pe_forward"))
+        if yoy_growth is None:
+            yoy_growth = _safe_float(ratios.get("revenue_growth_yoy"))
+        if yoy_growth is None:
+            inc_rows = fin.get("income_statement", {}).get("rows", [])
+            for row in inc_rows:
+                if row.get("key") == "total_revenue" and len(row.get("values", [])) >= 2:
+                    v1 = _safe_float(row["values"][0])
+                    v2 = _safe_float(row["values"][1])
+                    if v1 is not None and v2 and v2 > 0:
+                        yoy_growth = round(((v1 - v2) / v2) * 100, 1)
+                    break
     except Exception as e:
         logger.debug("Financial data lookup error for %s: %s", sym, e)
 
-    filing_citations = []
+    # Citations reference REAL filings only: real form + real filing date + the
+    # EDGAR description. No quotation text is invented, and there is no
+    # fabricated fallback citation when EDGAR has nothing for the symbol.
+    filing_citations: List[Dict[str, Any]] = []
     try:
         from tools.sentiment_anomalies import sec_filings_for_symbol
         sec_res = sec_filings_for_symbol(sym)
         recent_filings = sec_res.get("filings", [])
         for f in recent_filings[:3]:
-            form = f.get("form", "10-Q")
-            filing_date = f.get("filing_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-            desc = f.get("description") or f"SEC Form {form} Periodic Registration & Supply Disclosures"
+            form = str(f.get("form") or "10-Q")
+            filing_date = f.get("filing_date")
+            if not filing_date:
+                continue
+            desc = f.get("description") or f"SEC Form {form} filing"
             filing_citations.append({
                 "source_type": "sec_10k" if "10-K" in form else "sec_10q",
                 "filing_date": filing_date,
-                "period": f"FY2026 {form}",
-                "quote": f"{sym} disclosures confirm ongoing capacity buildouts, customer purchase commitments, and key component vendor agreements across primary commercial segments.",
-                "context": f"Item {form} - {desc}",
-                "confidence": 0.92,
+                "period": form,
+                "quote": None,
+                "context": desc,
+                "confidence": None,
             })
     except Exception as e:
         logger.debug("SEC filings lookup error for %s: %s", sym, e)
 
-    if not filing_citations:
-        filing_citations.append({
-            "source_type": "sec_10q",
-            "filing_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "period": "Q1 2026",
-            "quote": f"{sym} operations scale in alignment with enterprise cloud computing, aerospace infrastructure, and specialized commercial supply demand.",
-            "context": "Commercial segment supply chain disclosures",
-            "confidence": 0.88,
-        })
-
-    tier = "mega_driver" if market_cap_b >= 100 else ("horizontal_enabler" if market_cap_b >= 40 else ("tier2_supplier" if market_cap_b < 10 else "tier1_supplier"))
+    if market_cap_b is not None and market_cap_b >= 100:
+        tier = "mega_driver"
+    elif market_cap_b is not None and market_cap_b >= 40:
+        tier = "horizontal_enabler"
+    elif market_cap_b is not None and market_cap_b < 10:
+        tier = "tier2_supplier"
+    else:
+        tier = "tier1_supplier"
 
     focal = {
         "symbol": sym,
-        "name": profile_about.get("name") or f"{sym} Inc.",
-        "sector": sector,
-        "sub_industry": sub_industry,
+        "name": profile_about.get("name") or sym,
+        "sector": sector or "Unknown",
+        "sub_industry": sub_industry or "Unclassified",
         "tier": tier,
         "market_cap_billions": market_cap_b,
         "metrics": {
-            "elasticity_score": 88.5,
-            "capex_sensitivity": 3.0,
-            "revenue_concentration_pct": 32.0,
-            "operating_leverage": 3.2,
+            "elasticity_score": None,
+            "capex_sensitivity": None,
+            "revenue_concentration_pct": None,
+            "operating_leverage": None,
             "forward_pe": fwd_pe,
-            "peg_ratio": peg,
-            "gross_margin_trend": "expanding",
+            "peg_ratio": None,
+            "gross_margin_trend": None,
             "yoy_revenue_growth": yoy_growth,
             "next_earnings_date": None,
-            "flow_sentiment_score": 0.78,
-            "options_skew": "bullish_call_drift",
+            "flow_sentiment_score": None,
+            "options_skew": None,
         },
         "evidence": filing_citations,
         "is_focus": True,
     }
+
+    # When the symbol belongs to a curated thematic ecosystem, its
+    # analyst-curated metrics and citations legitimately belong to the focal.
+    curated = _find_symbol_in_ecosystems(sym)
+    if curated:
+        _, curated_node = curated
+        curated_metrics = {k: v for k, v in (curated_node.get("metrics") or {}).items() if v is not None}
+        if curated_metrics:
+            focal["metrics"] = {**focal["metrics"], **curated_metrics}
+        if curated_node.get("evidence"):
+            focal["evidence"] = list(curated_node["evidence"]) + filing_citations
 
     # --- Peer discovery: real same-sector companies ---
     peer_symbols = _sector_peers(sym, sector)
@@ -4451,13 +4486,26 @@ def _build_dedicated_company_ecosystem(symbol: str) -> Dict[str, Any]:
         focal["sector"] = reg["sector"]
         focal["sub_industry"] = reg["sub_industry"]
 
-    # 2. Extract or synthesize Tier 2, Tier 1, Downstream, Partners, and Peers
-    t2_specs = []
-    t1_specs = []
-    partner_specs = []
-    down_specs = []
-    peer_syms = []
-    bridges = []
+    # 2. Extract Tier 2, Tier 1, Downstream, Partners, and Peers.
+    # Curated multi-tier structure exists ONLY for symbols in the institutional
+    # registry. For anything else we fail closed: the graph is the focal node
+    # plus its real same-sector peers (from `_discover_company_graph`), with no
+    # invented supplier/customer claims. The previous implementation matched
+    # sector keywords against 7 archetype templates and asserted named
+    # companies as the queried firm's suppliers/customers with invented edge
+    # strengths and quotes — fabricated relationships rendered as research.
+    t2_specs: List[Any] = []
+    t1_specs: List[Any] = []
+    partner_specs: List[Any] = []
+    down_specs: List[Any] = []
+    peer_syms: List[str] = []
+    bridges: List[Dict[str, Any]] = []
+    honest_peer_graph = False
+    curated_graph = False
+    curated_nodes: List[Dict[str, Any]] = []
+    curated_edges: List[Dict[str, Any]] = []
+    discovered_peer_nodes: List[Dict[str, Any]] = []
+    discovered_peer_edges: List[Dict[str, Any]] = []
 
     if reg:
         t2_specs = reg.get("tier2_suppliers", [])
@@ -4467,161 +4515,47 @@ def _build_dedicated_company_ecosystem(symbol: str) -> Dict[str, Any]:
         peer_syms = reg.get("competitors_peers", [])
         bridges = reg.get("bridges", [])
     else:
-        # Comprehensive Domain & Sub-Industry Archetype Taxonomy
-        sector = (focal.get("sector") or "Technology").lower()
-        sub_ind = (focal.get("sub_industry") or "").lower()
-        name = (focal.get("name") or "").lower()
-        text = f"{sym.lower()} {sector} {sub_ind} {name}"
-
-        # Branch 1: Aerospace, Defense, Space & Satellite
-        if any(w in text for w in ["space", "aero", "defen", "satellit", "rocket", "avionics", "spcx", "spce", "flight", "drone", "missile"]):
-            t2_specs = [
-                ("HEI", "FAA Flight Component Replacements & Subsystems", "supplies_to", 0.92, "FAA PMA aerospace components and flight-critical hardware."),
-                ("KTOS", "Target Avionics, Unmanned Drones & Microwave Electronics", "supplies_to", 0.90, "Unmanned flight avionics and specialized command hardware."),
-                ("TDY", "Digital Imaging Sensors & Infrared Payloads", "supplies_to", 0.88, "Optical sensors and radiation-hardened electronics."),
-            ]
-            t1_specs = [
-                ("RKLB", "Electron/Neutron Launch Propulsion & Satellite Buses", "supplies_to", 0.94, "Launch services and in-orbit satellite bus manufacturing."),
-                ("RDW", "In-Space Manufacturing & Roll-Out Solar Arrays (ROSA)", "supplies_to", 0.91, "Deployable solar power arrays and space structures."),
-                ("PL", "High-Resolution Earth Observation & Optical Payloads", "technology_partner", 0.89, "Earth observation constellation integration."),
-            ]
-            down_specs = [
-                ("LMT", "Lockheed Martin Prime Defense Programs & JADC2 Command", "supplies_to", 0.96, "Prime defense system integrator for aerospace missions."),
-                ("NOC", "Northrop Grumman Space Systems & Tactical Defense", "supplies_to", 0.94, "Space payload integration and satellite command."),
-                ("T", "AT&T Commercial Direct-to-Cell Spectrum Integration", "supplies_to", 0.93, "Commercial cellular spectrum integration for space broadband."),
-            ]
-            peer_syms = [p["symbol"] for p in discovered.get("nodes", [])[:4]] or ["RKLB", "LUNR", "RDW", "LMT", "KTOS"]
-            bridges = [{"id": "space_defense", "theme_name": "Space Economy, Direct-to-Cell & Defense", "role": "Aerospace Subsystem & Mission Partner"}]
-
-        # Branch 2: Financial Services, Banking, Fintech, Payments, Crypto & ETFs
-        elif any(w in text for w in ["financial", "bank", "fintech", "payment", "credit", "asset", "broker", "crypto", "spac", "fund", "invest", "etf", "insurance", "capital"]):
-            t2_specs = [
-                ("V", "Visa Global Real-Time Payment & Authorization Rails", "supplies_to", 0.96, "Global authorization and settlement infrastructure."),
-                ("MA", "Mastercard Global Settlement & Cross-Border Clearing", "supplies_to", 0.94, "International transaction clearing and currency settlement."),
-                ("ICE", "Intercontinental Exchange & Real-Time Market Data Feeds", "supplies_to", 0.92, "Exchange execution, mortgage technology, and data feeds."),
-                ("CME", "CME Group Derivatives Clearing & Treasury Settlement", "supplies_to", 0.90, "Futures, options, and interest rate benchmark clearing."),
-            ]
-            t1_specs = [
-                ("SQ", "Square / Block Point-of-Sale & Cash App Financial Infrastructure", "supplies_to", 0.93, "Merchant point-of-sale terminals and peer-to-peer payment rails."),
-                ("PYPL", "PayPal Braintree Digital Checkout & Payment Gateway", "supplies_to", 0.91, "Digital checkout integration and fraud prevention APIs."),
-                ("COIN", "Coinbase Institutional Custody & Prime Brokerage Gateway", "technology_partner", 0.92, "Institutional digital asset safekeeping and liquidity rails."),
-            ]
-            down_specs = [
-                ("JPM", "JPMorgan Chase Global Corporate Banking & Treasury Clients", "supplies_to", 0.96, "Enterprise commercial treasury and investment banking distribution."),
-                ("BAC", "Bank of America Commercial Credit & Treasury Services", "supplies_to", 0.94, "Commercial banking distribution and institutional syndication."),
-                ("BLK", "BlackRock Global Asset Allocation & iShares ETF Channels", "supplies_to", 0.95, "Institutional asset management allocation and custody channels."),
-            ]
-            peer_syms = [p["symbol"] for p in discovered.get("nodes", [])[:4]] or ["JPM", "BAC", "GS", "MS", "V", "MA"]
-            bridges = [{"id": "agentic_software", "theme_name": "Enterprise AI & Agentic Infrastructure", "role": "Financial Ledger & Payment Rails"}]
-
-        # Branch 3: Healthcare, Pharmaceuticals, Biotechnology & Medical Devices
-        elif any(w in text for w in ["health", "pharma", "bio", "therap", "med", "glp", "drug", "clinic", "surgical"]):
-            t2_specs = [
-                ("CTLT", "Catalent Sterile Fill-Finish CDMO & Biologics Manufacturing", "supplies_to", 0.94, "Aseptic fill-finish drug manufacturing and packaging."),
-                ("WST", "West Pharma Elastomeric Vials, Cartridges & Delivery Seals", "supplies_to", 0.92, "Primary container closure components and autoinjector glass."),
-                ("TMO", "Thermo Fisher Chromatography Resins & Bioprocess Consumables", "supplies_to", 0.90, "Bioproduction reagents and analytical instrumentation."),
-            ]
-            t1_specs = [
-                ("DHR", "Danaher Pall Filtration, Bioseparation & Purification Columns", "supplies_to", 0.92, "High-efficiency bioprocess filtration equipment."),
-                ("STE", "STERIS Terminal Electron-Beam & Gamma Sterilization", "supplies_to", 0.90, "Contract medical device and biologic sterilization."),
-                ("VKTX", "Viking Therapeutics Dual GLP-1/GIP Research Co-Development", "technology_partner", 0.88, "Collaborative clinical development programs."),
-            ]
-            down_specs = [
-                ("UNH", "UnitedHealth Group OptumRx Commercial Formulary Coverage", "supplies_to", 0.96, "PBM commercial formulary inclusion and patient access."),
-                ("CVS", "CVS Caremark Retail Pharmacy & Specialty Distribution", "supplies_to", 0.94, "Nationwide pharmacy dispensing network."),
-                ("MCK", "McKesson Global Pharmaceutical Wholesale Distribution Rail", "supplies_to", 0.93, "Wholesale pharmaceutical supply logistics."),
-            ]
-            peer_syms = [p["symbol"] for p in discovered.get("nodes", [])[:4]] or ["LLY", "NVO", "PFE", "MRK", "AMGN"]
-            bridges = [{"id": "glp1_cdmo", "theme_name": "GLP-1 Metabolic Therapeutics & CDMO Supply Chain", "role": "Therapeutics Developer & CDMO Partner"}]
-
-        # Branch 4: Energy, Nuclear, Power Generation & Grid Infrastructure
-        elif any(w in text for w in ["energy", "utilit", "nuclear", "power", "grid", "oil", "gas", "uranium", "solar", "wind"]):
-            t2_specs = [
-                ("CCJ", "Cameco Nuclear Uranium Fuel & UF6 Conversion Supply", "supplies_to", 0.95, "Long-term nuclear fuel supply and UF6 conversion."),
-                ("BWXT", "BWX Technologies Naval Reactor Components & SMR Pressure Vessels", "supplies_to", 0.93, "Nuclear reactor core fabrication and specialized forgings."),
-                ("UEC", "Uranium Energy Corp In-Situ Uranium Extraction Reserves", "supplies_to", 0.89, "Domestic North American uranium extraction."),
-            ]
-            t1_specs = [
-                ("ETN", "Eaton High-Voltage Switchgear, Transformers & Circuit Breakers", "supplies_to", 0.94, "Substation power distribution and electrical safety systems."),
-                ("PWR", "Quanta Services High-Voltage Transmission Line EPC", "supplies_to", 0.92, "Grid transmission line construction and substation engineering."),
-                ("GEV", "GE Vernova Gas Turbines & Advanced Grid Automation Software", "supplies_to", 0.91, "Turbine hardware and grid balancing automation."),
-            ]
-            down_specs = [
-                ("MSFT", "Microsoft 20-Year 24/7 Clean Energy PPA for Azure Data Centers", "supplies_to", 0.97, "Dedicated clean power purchase agreement for AI campuses."),
-                ("AMZN", "Amazon AWS Hyperscale Nuclear Power Offtake Agreement", "supplies_to", 0.96, "Direct nuclear power campus interconnection."),
-                ("META", "Meta Platforms Renewable Energy & Clean Power Infrastructure", "supplies_to", 0.93, "Clean power procurement for hyperscale data clusters."),
-            ]
-            peer_syms = [p["symbol"] for p in discovered.get("nodes", [])[:4]] or ["CEG", "VST", "TLN", "NEE", "DUK"]
-            bridges = [{"id": "energy_grid", "theme_name": "Grid Modernization, Nuclear & SMR Infrastructure", "role": "Clean Energy Generation & Grid Anchor"}]
-
-        # Branch 5: Automotive, EV, Mobility & Industrial Robotics
-        elif any(w in text for w in ["auto", "vehicle", "car", "ev", "robot", "truck", "motor", "mobility"]):
-            t2_specs = [
-                ("ALB", "Albemarle Battery-Grade Lithium Hydroxide Supply Agreement", "supplies_to", 0.94, "Raw lithium chemical refining for high-density battery cells."),
-                ("ON", "ON Semiconductor Silicon Carbide (SiC) Inverter MOSFETs", "supplies_to", 0.93, "High-voltage power semiconductors maximizing drive efficiency."),
-                ("MGA", "Magna International Chassis Architecture & Aluminum Castings", "supplies_to", 0.90, "Automotive body structures and specialized stamping subsystems."),
-            ]
-            t1_specs = [
-                ("SYM", "Symbotic Warehouse Robotics & Palletizing Automation", "supplies_to", 0.92, "Automated supply chain logistics within vehicle parts hubs."),
-                ("ROK", "Rockwell Automation Programmable Logic Controllers (PLCs)", "supplies_to", 0.91, "Industrial assembly line robotics and automated tooling."),
-                ("CGNX", "Cognex Machine Vision Quality & Optical Inspection Cameras", "supplies_to", 0.89, "High-precision vision inspection on manufacturing lines."),
-            ]
-            down_specs = [
-                ("UBER", "Uber Global Autonomous Mobility & Robotaxi Fleet Network", "supplies_to", 0.95, "Fleet deployment for autonomous passenger and delivery rides."),
-                ("HTZ", "Hertz Global Commercial Fleet Electrification & Rental Supply", "supplies_to", 0.91, "Commercial rental fleet sales and maintenance contracts."),
-                ("AMZN", "Amazon Logistics Custom Delivery Fleet Operations", "supplies_to", 0.93, "Commercial delivery van fleet operations and charging hubs."),
-            ]
-            peer_syms = [p["symbol"] for p in discovered.get("nodes", [])[:4]] or ["TSLA", "RIVN", "LCID", "GM", "F"]
-            bridges = [{"id": "robotics_ai", "theme_name": "Physical AI, Humanoid Robotics & Automation", "role": "Automated Mobility & Physical AI Platform"}]
-
-        # Branch 6: Enterprise Software, Cloud SaaS, Cybersecurity & AI
-        elif any(w in text for w in ["software", "cloud", "saas", "cyber", "security", "data", "ontology", "database"]):
-            t2_specs = [
-                ("NVDA", "NVIDIA Accelerated GPU Compute & AI Microservices Inference", "supplies_to", 0.96, "Hardware acceleration for neural networks and LLM training."),
-                ("EQIX", "Equinix Global IBX Interconnection & Multi-Cloud Ingress", "supplies_to", 0.92, "Carrier-neutral colocation and low-latency cloud interconnection."),
-                ("SNOW", "Snowflake Data Lakehouse Storage Fabric & Zero-Copy Sharing", "supplies_to", 0.91, "Enterprise cloud data warehousing and real-time query compute."),
-            ]
-            t1_specs = [
-                ("CRWD", "CrowdStrike Falcon Endpoint Security & Threat Telemetry", "supplies_to", 0.94, "Zero-trust cybersecurity protecting distributed cloud workloads."),
-                ("PANW", "Palo Alto Networks Prisma Next-Gen SASE & Cloud Defense", "supplies_to", 0.92, "Cloud perimeter defense and automated firewall inspection."),
-                ("DDOG", "Datadog Real-Time Observability, APM & Infrastructure Metrics", "supplies_to", 0.90, "Real-time telemetry and server performance monitoring."),
-            ]
-            down_specs = [
-                ("MSFT", "Microsoft Enterprise Azure Cloud & Copilot AI Ecosystem", "supplies_to", 0.96, "Enterprise cloud marketplace and joint commercial deployment."),
-                ("AMZN", "Amazon Web Services (AWS) Global Enterprise Marketplace", "supplies_to", 0.95, "AWS Marketplace enterprise channel distribution."),
-                ("NOW", "ServiceNow Automated ITSM & Enterprise Workflow Engine", "supplies_to", 0.92, "Automated enterprise service workflow integrations."),
-            ]
-            peer_syms = [p["symbol"] for p in discovered.get("nodes", [])[:4]] or ["MSFT", "PLTR", "CRM", "SNOW", "MDB"]
-            bridges = [{"id": "agentic_software", "theme_name": "Enterprise AI & Agentic Infrastructure", "role": "Enterprise Software & Cloud Platform"}]
-
-        # Branch 7: Semiconductors, Capital Equipment, Optical & Hardware Infrastructure (Default)
+        # Not in the registry. If the symbol is a curated node inside a
+        # thematic ecosystem, its dedicated view is honestly built from that
+        # curated analyst dataset (nodes/edges/metrics are all curated).
+        # Otherwise fail closed to focal + real same-sector peers.
+        curated_hit = _find_symbol_in_ecosystems(sym)
+        if curated_hit:
+            theme_id, _ = curated_hit
+            eco = THEMATIC_ECOSYSTEMS[theme_id]
+            curated_graph = True
+            curated_nodes = []
+            for n in eco.get("nodes", []):
+                if str(n.get("symbol", "")).upper() == sym:
+                    continue
+                node_copy = dict(n)
+                node_copy["is_focus"] = False
+                curated_nodes.append(node_copy)
+            curated_edges = [dict(e) for e in eco.get("edges", [])]
+            bridges = [{
+                "id": theme_id,
+                "theme_name": eco.get("theme_name", theme_id),
+                "role": "Curated Thematic Ecosystem",
+            }]
         else:
-            t2_specs = [
-                ("TSM", "TSMC Advanced Packaging (CoWoS) & Sub-3nm Wafer Foundry", "supplies_to", 0.97, "Wafer manufacturing and advanced multi-die packaging."),
-                ("ASML", "ASML Twinscan High-NA Extreme Ultraviolet (EUV) Lithography", "supplies_to", 0.95, "Photolithography scanner systems enabling sub-2nm node printing."),
-                ("AMAT", "Applied Materials Precision Deposition, Etch & Planarization", "supplies_to", 0.92, "Materials engineering equipment across wafer fab lines."),
-                ("LRCX", "Lam Research High-Aspect-Ratio Dielectric & Conductor Etch", "supplies_to", 0.91, "High-aspect-ratio etch tools for 3D NAND and logic gates."),
-            ]
-            t1_specs = [
-                ("AAOI", "Applied Optoelectronics 800G/1.6T Optical Transceivers", "supplies_to", 0.94, "High-speed optical interconnects for AI cluster fabrics."),
-                ("MU", "Micron Technology HBM3e/HBM4 High-Bandwidth Memory Stacks", "supplies_to", 0.93, "High-bandwidth stacked DRAM modules powering compute processors."),
-                ("VRT", "Vertiv High-Density Liquid Cooling Distribution Units (CDUs)", "supplies_to", 0.92, "Direct liquid cooling manifolds managing multi-hundred kW racks."),
-                ("ALAB", "Astera Labs PCIe Gen 5/6 CXL Retimers & High-Speed Silicon", "supplies_to", 0.90, "Signal integrity connectivity hardware for AI servers."),
-            ]
-            down_specs = [
-                ("NVDA", "NVIDIA Accelerated AI GPU Accelerators & DGX Superclusters", "supplies_to", 0.98, "Hyperscale AI GPU server platforms and networking switches."),
-                ("MSFT", "Microsoft Azure Cloud Hyperscale AI Compute Infrastructure", "supplies_to", 0.96, "Global hyperscale cloud infrastructure and data center zones."),
-                ("AMZN", "Amazon Web Services (AWS) Global AI Infrastructure & Clusters", "supplies_to", 0.95, "AWS cloud computing instances and enterprise services."),
-            ]
-            peer_syms = [p["symbol"] for p in discovered.get("nodes", [])[:4]] or ["NVDA", "AMD", "AVGO", "QCOM", "INTC"]
-            bridges = [{"id": "ai_datacenter", "theme_name": "AI Data Center & Hyperscale Compute", "role": "Accelerated Compute & Silicon Supplier"}]
+            honest_peer_graph = True
+            discovered_peer_nodes = [n for n in discovered.get("nodes", []) if n.get("symbol") != sym]
+            discovered_peer_edges = list(discovered.get("edges", []))
 
     # 3. Instantiate Node objects
     t2_nodes = [_peer_node(s, target_tier="tier2_supplier") for s, *_ in t2_specs if s != sym]
     t1_nodes = [_peer_node(s, target_tier="tier1_supplier") for s, *_ in t1_specs if s != sym]
     partner_nodes = [_peer_node(s, target_tier="horizontal_enabler") for s, *_ in partner_specs if s != sym]
     down_nodes = [_peer_node(s, target_tier="downstream_customer") for s, *_ in down_specs if s != sym]
-    peer_nodes = [_peer_node(s, target_tier="tier1_supplier") for s in peer_syms if s != sym and s not in {n["symbol"] for n in (t2_nodes + t1_nodes + partner_nodes + down_nodes)}]
+    if honest_peer_graph:
+        # Discovered nodes are already fully-formed peer nodes carrying only
+        # real profile data; do not re-derive or re-tier them.
+        peer_nodes = discovered_peer_nodes
+    elif curated_graph:
+        # Curated ecosystem nodes carry their own curated tiers/metrics.
+        peer_nodes = curated_nodes
+    else:
+        peer_nodes = [_peer_node(s, target_tier="tier1_supplier") for s in peer_syms if s != sym and s not in {n["symbol"] for n in (t2_nodes + t1_nodes + partner_nodes + down_nodes)}]
 
     all_nodes = [focal] + t2_nodes + t1_nodes + partner_nodes + down_nodes + peer_nodes
 
@@ -4690,23 +4624,48 @@ def _build_dedicated_company_ecosystem(symbol: str) -> Dict[str, Any]:
         })
 
     # Peer Benchmarks
-    for p_node in peer_nodes[:3]:
-        edges.append({
-            "id": f"{sym}-{p_node['symbol']}",
-            "source": sym,
-            "target": p_node["symbol"],
-            "relationship": "peer",
-            "strength": 0.70,
-            "supply_category": f"{focal.get('sector', 'Industry')} Peer",
-            "evidence_count": 0,
-        })
+    if honest_peer_graph:
+        # Peer links only — benchmark relationships, not supply claims.
+        edges.extend(discovered_peer_edges)
+    elif curated_graph:
+        # Curated ecosystem edges reference only curated nodes + focal.
+        edges.extend(curated_edges)
+    else:
+        for p_node in peer_nodes[:3]:
+            edges.append({
+                "id": f"{sym}-{p_node['symbol']}",
+                "source": sym,
+                "target": p_node["symbol"],
+                "relationship": "peer",
+                "strength": 0.70,
+                "supply_category": f"{focal.get('sector', 'Industry')} Peer",
+                "evidence_count": 0,
+            })
+
+    if honest_peer_graph:
+        narrative = (
+            f"Dedicated view for {focal['name']} ({sym}). This symbol is not in the curated "
+            f"relationship registry, so no supplier, partner, or customer relationships are "
+            f"asserted. The graph shows the focal company alongside real same-sector peers from "
+            f"the tracked universe; quantitative metrics are limited to live profile and "
+            f"financial data. Curated multi-tier chains are available for registry symbols."
+        )
+    elif curated_graph:
+        narrative = (
+            f"Dedicated view for {focal['name']} ({sym}) within its curated thematic ecosystem. "
+            f"Multi-tier structure, relationship edges, and scoring inputs shown here come from "
+            f"the curated analyst dataset for that theme; live profile valuation fields are "
+            f"overlaid where available."
+        )
+    else:
+        narrative = f"Dedicated multi-tier value chain ecosystem for {focal['name']} ({sym}). Demonstrates verifiable upstream Tier 2 foundational materials/foundry infrastructure, Tier 1 component modules, strategic co-engineering partners, and downstream enterprise revenue channels across {focal.get('sector', 'Industry')} ({focal.get('sub_industry', 'Specialized Systems')})."
 
     return {
         "focal": focal,
         "nodes": all_nodes,
         "edges": edges,
         "bridges": bridges,
-        "thematic_narrative": f"Dedicated multi-tier value chain ecosystem for {focal['name']} ({sym}). Demonstrates verifiable upstream Tier 2 foundational materials/foundry infrastructure, Tier 1 component modules, strategic co-engineering partners, and downstream enterprise revenue channels across {focal.get('sector', 'Industry')} ({focal.get('sub_industry', 'Specialized Systems')}).",
+        "thematic_narrative": narrative,
     }
 
 
@@ -4756,18 +4715,28 @@ def build_supply_chain_payload(
         valid_edges = [e for e in edges if e["source"] in node_symbols and e["target"] in node_symbols]
         all_nodes, valid_edges = _filter_by_depth(all_nodes, valid_edges, focus_sym, depth)
 
-        # Calculate Elasticity Scores
+        # Calculate Elasticity Scores — nodes with no real inputs stay unscored
         top_beneficiaries = []
         for n in all_nodes:
             if not n.get("is_focus"):
                 elasticity = calculate_beneficiary_elasticity(n, focus_sym)
-                if "metrics" in n:
-                    n["metrics"]["elasticity_score"] = elasticity
-                top_beneficiaries.append((n["symbol"], elasticity))
+                n.setdefault("metrics", {})["elasticity_score"] = elasticity
+                if elasticity is not None:
+                    top_beneficiaries.append((n["symbol"], elasticity))
 
         top_beneficiaries.sort(key=lambda x: x[1], reverse=True)
         top_syms = [b[0] for b in top_beneficiaries[:6]]
         tot_mc = round(sum(_safe_float(n.get("market_cap_billions"), 0.0) or 0.0 for n in all_nodes), 1)
+
+        # Catalyst timeline: real curated events only. A symbol belonging to a
+        # curated thematic ecosystem inherits that ecosystem's timeline;
+        # anything else gets an empty timeline — events are not invented.
+        focal_curated = _find_symbol_in_ecosystems(focus_sym)
+        curated_timeline = (
+            THEMATIC_ECOSYSTEMS[focal_curated[0]].get("catalyst_timeline", [])
+            if focal_curated
+            else []
+        )
 
         payload: Dict[str, Any] = {
             "asof": datetime.now(timezone.utc).isoformat(),
@@ -4786,18 +4755,7 @@ def build_supply_chain_payload(
                 "capex_catalyst_narrative": dedicated["thematic_narrative"],
                 "total_ecosystem_market_cap_b": tot_mc,
                 "top_beneficiaries": top_syms,
-                "catalyst_timeline": [
-                    {
-                        "date": "2026-08-28",
-                        "event": f"{focus_sym} Periodic SEC 10-Q Filing & Component Procurement Disclosure",
-                        "impacted_tickers": [focus_sym] + top_syms[:3],
-                    },
-                    {
-                        "date": "2026-09-18",
-                        "event": f"{focal_node.get('sector', 'Industry')} Strategic Supplier & Partner Summit",
-                        "impacted_tickers": top_syms[:4],
-                    },
-                ],
+                "catalyst_timeline": curated_timeline,
                 "related_themes": [
                     {"id": b["id"], "theme_name": b["theme_name"], "shared_tickers": [focus_sym]}
                     for b in bridges
@@ -4860,9 +4818,9 @@ def build_supply_chain_payload(
         for n in all_nodes:
             if not n.get("is_focus"):
                 elasticity = calculate_beneficiary_elasticity(n, target_focus)
-                if "metrics" in n:
-                    n["metrics"]["elasticity_score"] = elasticity
-                top_beneficiaries.append((n["symbol"], elasticity))
+                n.setdefault("metrics", {})["elasticity_score"] = elasticity
+                if elasticity is not None:
+                    top_beneficiaries.append((n["symbol"], elasticity))
 
         top_beneficiaries.sort(key=lambda x: x[1], reverse=True)
         top_syms = [b[0] for b in top_beneficiaries[:6]]
@@ -4910,13 +4868,21 @@ def build_supply_chain_payload(
     for n in all_nodes:
         if not n.get("is_focus"):
             elasticity = calculate_beneficiary_elasticity(n, target_sym)
-            if "metrics" in n:
-                n["metrics"]["elasticity_score"] = elasticity
-            top_beneficiaries.append((n["symbol"], elasticity))
+            n.setdefault("metrics", {})["elasticity_score"] = elasticity
+            if elasticity is not None:
+                top_beneficiaries.append((n["symbol"], elasticity))
 
     top_beneficiaries.sort(key=lambda x: x[1], reverse=True)
     top_syms = [b[0] for b in top_beneficiaries[:6]]
     tot_mc = round(sum(_safe_float(n.get("market_cap_billions"), 0.0) or 0.0 for n in all_nodes), 1)
+
+    # Curated events only; invented timelines are not emitted for arbitrary symbols.
+    target_curated = _find_symbol_in_ecosystems(target_sym)
+    fallback_timeline = (
+        THEMATIC_ECOSYSTEMS[target_curated[0]].get("catalyst_timeline", [])
+        if target_curated
+        else []
+    )
 
     payload = {
         "asof": datetime.now(timezone.utc).isoformat(),
@@ -4935,18 +4901,7 @@ def build_supply_chain_payload(
             "capex_catalyst_narrative": dedicated.get("thematic_narrative", ""),
             "total_ecosystem_market_cap_b": tot_mc,
             "top_beneficiaries": top_syms,
-            "catalyst_timeline": [
-                {
-                    "date": "2026-08-28",
-                    "event": f"{target_sym} Periodic SEC Filing & Supply Disclosures",
-                    "impacted_tickers": [target_sym] + top_syms[:3],
-                },
-                {
-                    "date": "2026-09-18",
-                    "event": f"{focal_node.get('sector', 'Industry')} Strategic Supplier & Enterprise Forum",
-                    "impacted_tickers": top_syms[:4],
-                },
-            ],
+            "catalyst_timeline": fallback_timeline,
             "related_themes": [
                 {"id": t_id, "theme_name": t_val["theme_name"], "shared_tickers": [target_sym]}
                 for t_id, t_val in list(THEMATIC_ECOSYSTEMS.items())[:3]

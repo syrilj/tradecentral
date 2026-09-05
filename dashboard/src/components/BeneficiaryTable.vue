@@ -226,11 +226,13 @@ function navMarket(symbol: string) {
 
             <td class="col-skew">
               <span
+                v-if="optionsSkewLabel(n.metrics?.options_skew)"
                 class="skew-tag"
-                :class="`skew-${optionsSkewLabel(n.metrics?.options_skew).tone}`"
+                :class="`skew-${optionsSkewLabel(n.metrics?.options_skew)!.tone}`"
               >
-                {{ optionsSkewLabel(n.metrics?.options_skew).label }}
+                {{ optionsSkewLabel(n.metrics?.options_skew)!.label }}
               </span>
+              <span v-else class="skew-na">—</span>
             </td>
 
             <td class="col-evidence">
@@ -418,7 +420,7 @@ td {
 }
 
 .tier-pill {
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   padding: 0.15rem 0.35rem;
   background: var(--void-lift);
   border: 1px solid var(--rule);
@@ -516,6 +518,11 @@ td {
   padding: 0.15rem 0.35rem;
 }
 
+.skew-na {
+  color: var(--ink-faint);
+  font-size: 0.65rem;
+}
+
 .skew-up {
   background: var(--long-wash);
   color: var(--long);
@@ -555,7 +562,7 @@ td {
   border: 1px solid var(--rule);
   color: var(--ink-dim);
   font-family: var(--font-mono, monospace);
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   padding: 0.15rem 0.35rem;
   cursor: pointer;
 }

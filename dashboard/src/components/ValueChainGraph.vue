@@ -42,11 +42,13 @@ function tierToColumn(tier: SupplyTier): number {
   }
 }
 
+// Theme-neutral column headers — the graph serves every ecosystem (GLP-1,
+// space, energy, financials…), so labels name tiers, not one theme's sectors.
 const columnLabels = [
-  'Tier 2: Materials & Metrology',
-  'Tier 1: Optics, Memory, Cooling',
-  'Core Driver & Infrastructure',
-  'Downstream Cloud & Enterprise',
+  'Tier 2 Suppliers',
+  'Tier 1 Suppliers',
+  'Core Driver & Partners',
+  'Downstream & Customers',
 ]
 
 interface LayoutNode extends SupplyChainNode {
@@ -299,17 +301,33 @@ function isNodeConnected(symbol: string): boolean {
           <button
             type="button"
             class="tier-filter-btn"
+            :class="{ active: tierFilter === 'tier2' }"
+            @click="tierFilter = 'tier2'"
+          >
+            Tier 2
+          </button>
+          <button
+            type="button"
+            class="tier-filter-btn"
             :class="{ active: tierFilter === 'driver' }"
             @click="tierFilter = 'driver'"
           >
             Drivers
+          </button>
+          <button
+            type="button"
+            class="tier-filter-btn"
+            :class="{ active: tierFilter === 'customer' }"
+            @click="tierFilter = 'customer'"
+          >
+            Customers
           </button>
         </div>
       </div>
     </div>
 
     <div class="graph-scroll-surface">
-      <svg
+      <svg role="img" aria-label="Value chain graph: suppliers, the company, and its customers as linked nodes."
         class="graph-svg"
         :style="{ height: `${totalHeight}px` }"
         :viewBox="`0 0 1020 ${totalHeight}`"
@@ -664,7 +682,7 @@ function isNodeConnected(symbol: string): boolean {
 
 .pill-desc {
   color: var(--ink-dim);
-  font-size: 0.6rem;
+  font-size: var(--t-nano);
 }
 
 .nodes-overlay {
@@ -725,7 +743,7 @@ function isNodeConnected(symbol: string): boolean {
 }
 
 .node-tier {
-  font-size: 0.6rem;
+  font-size: var(--t-nano);
   padding: 0.1rem 0.3rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;

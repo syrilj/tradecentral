@@ -413,3 +413,82 @@ class TestFlowSuggestionCacheLifecycle:
 
         assert "AAPL" not in api_server._FLOW_SUGGESTION_CACHE
         assert "MSFT" in api_server._FLOW_SUGGESTION_CACHE
+
+
+class TestLiveOpportunitiesLockReentrancy:
+    """`_live_opportunities_payload` builds flow while holding its own lock.
+
+    The flow builder then invalidates the live-opportunities cache. If that
+    invalidation re-acquires the same non-reentrant lock, the Setups thread
+    self-deadlocks *while still holding it*, and every later
+    /api/unusual-flow request -- any limit, any threshold -- wedges behind it
+    until the process is restarted. The tab shows SOURCE UNAVAILABLE with a
+    30s client timeout and the server sits at 0% CPU.
+    """
+
+    def _stub_sources(self, monkeypatch):
+        monkeypatch.setattr(
+            api_server,
+            "_options_board_payload",
+            lambda **_: {"rows": [], "cache": {"age_seconds": 0.0}},
+        )
+        monkeypatch.setattr(
+            api_server,
+            "build_unusual_options_flow",
+            lambda **_: {"rows": [{"symbol": "AAPL"}], "tape": [], "coverage": {}},
+        )
+        _reset_cache()
+        api_server._UNUSUAL_FLOW_CACHE.clear()
+
+    def test_setups_build_does_not_wedge_on_its_own_lock(self, monkeypatch):
+        self._stub_sources(monkeypatch)
+
+        done: dict[str, float] = {}
+
+        def build() -> None:
+            started = time.time()
+            api_server._live_opportunities_payload(force=True)
+            done["elapsed"] = time.time() - started
+
+        worker = threading.Thread(target=build, daemon=True)
+        worker.start()
+        worker.join(timeout=20.0)
+
+        assert "elapsed" in done, (
+            "_live_opportunities_payload deadlocked: the nested unusual-flow build "
+            "re-acquired _LIVE_OPPORTUNITIES_LOCK on the same thread"
+        )
+
+    def test_wedged_setups_thread_does_not_block_later_flow_requests(self, monkeypatch):
+        self._stub_sources(monkeypatch)
+
+        setups = threading.Thread(
+            target=lambda: api_server._live_opportunities_payload(force=True), daemon=True
+        )
+        setups.start()
+        setups.join(timeout=20.0)
+
+        done: dict[str, float] = {}
+
+        def flow() -> None:
+            started = time.time()
+            api_server._unusual_flow_payload(limit=100, min_premium=25_000.0, force=True)
+            done["elapsed"] = time.time() - started
+
+        worker = threading.Thread(target=flow, daemon=True)
+        worker.start()
+        worker.join(timeout=20.0)
+
+        assert "elapsed" in done, (
+            "/api/unusual-flow wedged behind a lock the Setups thread never released"
+        )
+
+    def test_fresh_flow_actually_invalidates_the_live_opportunities_cache(self, monkeypatch):
+        """The invalidation must rebind the module global, not a local name."""
+        self._stub_sources(monkeypatch)
+        api_server._LIVE_OPPORTUNITIES_CACHE = {"stale": True}
+        api_server._LIVE_OPPORTUNITIES_CACHE_TS = time.time()
+
+        api_server._unusual_flow_payload_impl(limit=40, min_premium=25_000.0, force=True)
+
+        assert api_server._LIVE_OPPORTUNITIES_CACHE is None

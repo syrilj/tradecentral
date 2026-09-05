@@ -179,7 +179,7 @@ const extras = computed(() => {
 .grid th {
   text-align: left;
   padding: var(--s2) var(--s4);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   border-bottom: var(--hair) solid var(--rule);
   font-weight: 600;
 }

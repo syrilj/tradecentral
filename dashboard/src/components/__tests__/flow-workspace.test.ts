@@ -15,13 +15,15 @@ describe('Standalone Flow workspace contract', () => {
 
   it('contains only the new market-wide Flow workspace', () => {
     // Verify institutional scope chips are present (content may be reworded for institutional clarity)
-    expect(flow).toContain('LIVE TAPE')
-    // Institutional version replaces 'MY BOOK' chip with equivalent watchlist concept
+    expect(flow).toContain('PROVIDER TAPE')
     expect(flow).toContain('SWEEPS')
     expect(flow).toContain('BLOCKS')
-    expect(flow).toContain('GOLDEN SWEEPS')
+    expect(flow).toContain('HEURISTIC FLAGS')
     expect(flow).toContain('POWER ALERTS')
     expect(flow).toContain('WATCHLIST ALERTS')
+    expect(flow).not.toContain('LIVE TAPE')
+    expect(flow).not.toContain('GOLDEN SWEEPS')
+    expect(flow).not.toContain('Real-time institutional')
     expect(flow).not.toContain('FlowStateView')
     expect(flow).not.toContain('OptionsConvictionBoard')
     expect(flow).not.toContain('Opportunities')

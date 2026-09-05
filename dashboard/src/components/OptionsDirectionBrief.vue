@@ -653,8 +653,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 }
 
 .score-block .eyebrow {
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   letter-spacing: 0.06em;
 }
 
@@ -675,7 +675,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   color: var(--ink-dim);
 }
 .score-max {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
   font-size: 10px;
   font-weight: 600;
@@ -689,7 +689,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   min-width: 0;
 }
 .sq-end {
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--ink-faint);
@@ -809,8 +809,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 }
 .dir-subhead {
   overflow: hidden;
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -822,7 +822,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   border: var(--hair) solid var(--warn);
   color: var(--warn);
   background: var(--warn-wash);
-  font-size: 9px;
+  font-size: var(--t-nano);
   border-radius: var(--r-xs);
   white-space: nowrap;
 }
@@ -980,7 +980,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 }
 .evidence-cell > span {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
@@ -995,8 +995,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   text-overflow: ellipsis;
 }
 .evidence-cell small {
-  color: var(--ink-ghost);
-  font-size: 8px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1056,8 +1056,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 }
 .meter-title {
   font-weight: 700;
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
 }
 
@@ -1100,7 +1100,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   border: 0;
 }
 .zone-label {
-  font: 800 9px var(--font-display);
+  font: 800 var(--t-nano) var(--font-display);
   letter-spacing: 0.06em;
   white-space: nowrap;
   padding: 0 10px;
@@ -1252,7 +1252,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 
 .you-are-here {
   display: block;
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   color: var(--phosphor);
   font-weight: 700;
   letter-spacing: 0.04em;

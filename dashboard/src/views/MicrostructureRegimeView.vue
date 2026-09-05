@@ -107,16 +107,15 @@ const effectiveSpot = computed<number | null>(() => {
 /** Rule of 16 Expected Move Metrics (1D, 1W, 1M) */
 const expectedMove = computed<ExpectedMoveMetrics | null>(() => {
   const spot = effectiveSpot.value
-  return computeRuleOf16ExpectedMove(spot, null, vixQuote.value ?? 18.0)
+  return computeRuleOf16ExpectedMove(spot, null, vixQuote.value)
 })
 
 const moveExcursion = computed(() => {
   if (!expectedMove.value) return null
-  const chg =
-    symbolQuoteRow.value?.last != null && symbolQuoteRow.value?.prev_close != null
-      ? symbolQuoteRow.value.last - symbolQuoteRow.value.prev_close
-      : 0
-  return assessMoveExcursion(chg, expectedMove.value.em1dDollars)
+  const last = symbolQuoteRow.value?.last
+  const prev = symbolQuoteRow.value?.prev_close
+  if (last == null || prev == null) return null
+  return assessMoveExcursion(last - prev, expectedMove.value.em1dDollars)
 })
 
 const wallSpatial = computed(() => {
@@ -344,10 +343,7 @@ const pivotLadder = computed(() => {
           :key="sym"
           class="ticker-chip font-mono"
           :class="{ active: symbol === sym }"
-          @click="
-            symbolInput = sym;
-            updateSymbol();
-          "
+          @click="selectPairSymbol(sym)"
         >
           {{ sym }}
         </button>
@@ -524,7 +520,7 @@ const pivotLadder = computed(() => {
           <div class="em-item">
             <span class="em-label font-mono">VOL COMPLEX BENCHMARK</span>
             <span class="em-val font-mono text-phosphor font-semibold">
-              VIX {{ vixQuote ? num(vixQuote, 1) : '18.0' }} &middot; ATM IV
+              VIX {{ vixQuote ? num(vixQuote, 1) : '—' }} &middot; ATM IV
               {{ num(expectedMove.ivAnnualPct, 1) }}%
             </span>
             <span class="em-sub font-mono text-ink-faint">EM = S &times; (IV / 16)</span>
@@ -751,7 +747,7 @@ const pivotLadder = computed(() => {
   padding: 0.75rem 1rem;
   background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .symbol-search-group {
@@ -761,7 +757,7 @@ const pivotLadder = computed(() => {
 }
 
 .input-label {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-family: var(--font-mono, monospace);
   color: var(--ink-faint);
 }
@@ -775,7 +771,7 @@ const pivotLadder = computed(() => {
 .symbol-input {
   background: var(--void-lift);
   border: 1px solid var(--rule-hi);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   color: var(--ink);
   padding: 0.375rem 0.625rem;
   font-size: 0.875rem;
@@ -798,10 +794,10 @@ const pivotLadder = computed(() => {
 .win-chip {
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   color: var(--ink-dim);
   padding: 0.25rem 0.5rem;
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   cursor: pointer;
   transition: all var(--dur-fast) ease;
 }
@@ -819,7 +815,7 @@ const pivotLadder = computed(() => {
   padding: 1rem 1.25rem;
   background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -849,7 +845,7 @@ const pivotLadder = computed(() => {
 }
 
 .tactical-eyebrow {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   letter-spacing: 0.06em;
   color: var(--ink-faint);
 }
@@ -862,10 +858,10 @@ const pivotLadder = computed(() => {
 }
 
 .tactical-bias-badge {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-weight: 700;
   padding: 0.25rem 0.625rem;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .tactical-bias-badge.bullish {
@@ -906,7 +902,7 @@ const pivotLadder = computed(() => {
 }
 
 .col-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   letter-spacing: 0.04em;
 }
@@ -926,7 +922,7 @@ const pivotLadder = computed(() => {
   padding: 0.625rem 0.875rem;
   background: var(--void-lift);
   border: 1px solid var(--call-dim);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .active-ticket-row.ENTER_SHORT {
@@ -934,7 +930,7 @@ const pivotLadder = computed(() => {
 }
 
 .ticket-status-pill {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-weight: 700;
   color: var(--call-hi);
 }
@@ -967,7 +963,7 @@ const pivotLadder = computed(() => {
   padding: 0.625rem 0.875rem;
   background: var(--void-lift);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .em-item {
@@ -977,7 +973,7 @@ const pivotLadder = computed(() => {
 }
 
 .em-label {
-  font-size: 0.5625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   letter-spacing: 0.04em;
 }
@@ -988,12 +984,12 @@ const pivotLadder = computed(() => {
 }
 
 .em-sub {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   line-height: 1.25;
 }
 
 .ladder-title {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
 }
 
@@ -1011,7 +1007,7 @@ const pivotLadder = computed(() => {
   border-radius: 3px;
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
 }
 
 .ladder-pill.spot {
@@ -1034,7 +1030,7 @@ const pivotLadder = computed(() => {
 }
 
 .p-name {
-  font-size: 0.5625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
 }
 
@@ -1090,14 +1086,14 @@ const pivotLadder = computed(() => {
 .regime-perf-table th {
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
 }
 
 .action-pill {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-weight: 700;
   padding: 0.15rem 0.35rem;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   font-family: var(--font-mono, monospace);
 }
 
@@ -1121,7 +1117,7 @@ const pivotLadder = computed(() => {
 .kpi-box {
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 0.625rem;
   display: flex;
   flex-direction: column;
@@ -1129,7 +1125,7 @@ const pivotLadder = computed(() => {
 }
 
 .kpi-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
 }
@@ -1151,7 +1147,7 @@ const pivotLadder = computed(() => {
   border: 1px solid var(--rule-hi);
   color: var(--ink);
   padding: 0.375rem 0.75rem;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   font-size: 0.75rem;
   cursor: pointer;
   font-weight: 600;
@@ -1165,7 +1161,7 @@ const pivotLadder = computed(() => {
 
 .btn-sm {
   padding: 0.25rem 0.5rem;
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
 }
 
 .text-emerald {

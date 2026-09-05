@@ -251,6 +251,7 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
       expect(primaryMatch).toBeTruthy()
       const primaryNames = [...primaryMatch![1].matchAll(/name:\s*'([^']+)'/g)].map((m) => m[1])
       expect(primaryNames).toEqual([
+        'brief',
         'flow',
         'options',
         'regime',

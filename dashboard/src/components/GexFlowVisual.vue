@@ -168,7 +168,7 @@ const strikeColumns = [
   color: var(--ink-dim);
   border-bottom: 1px solid var(--rule);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -189,7 +189,7 @@ const strikeColumns = [
 .visual-title span {
   color: var(--orange);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -225,7 +225,7 @@ const strikeColumns = [
   border: 1px solid var(--rule-hi);
   background: var(--panel-hi);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -246,7 +246,7 @@ const strikeColumns = [
   background: var(--panel);
   border: 1px solid var(--rule);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -288,7 +288,7 @@ const strikeColumns = [
   background: var(--panel-hi);
   border: 1px solid var(--rule);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -331,7 +331,7 @@ const strikeColumns = [
   transform: translateX(-50%);
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -353,7 +353,7 @@ const strikeColumns = [
   border: 1px solid;
   background: var(--panel-hi);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -442,7 +442,7 @@ const strikeColumns = [
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -468,14 +468,14 @@ const strikeColumns = [
 }
 .flow-tag-detail strong {
   color: var(--ink);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .flow-tag-detail span {
   color: var(--ink-dim);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -483,7 +483,9 @@ const strikeColumns = [
 
 .flow-tag-call {
   right: 28px;
-  top: 92px;
+  /* Clears the interpret card below it — at 92px the two boxes overlapped by
+     ~10px and the tag's last line was hidden behind the card. */
+  top: 56px;
   border-left: 3px solid var(--blue);
 }
 .flow-tag-put {
@@ -517,7 +519,7 @@ const strikeColumns = [
 .seq-label {
   color: var(--put-hi);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -525,7 +527,7 @@ const strikeColumns = [
 .seq-count {
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -554,7 +556,7 @@ const strikeColumns = [
   border: 1px solid var(--rule);
   color: var(--ink-soft);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -567,14 +569,14 @@ const strikeColumns = [
   height: 10px;
   color: var(--ink);
   background: var(--rule-hi);
-  font-size: 6.5px;
+  font-size: var(--t-nano);
   font-weight: 800;
 }
 .interpret-card p {
   margin-top: 7px;
   color: var(--ink-dim);
   font-family: var(--font-ui);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   line-height: 1.35;
 }
 
@@ -588,7 +590,7 @@ const strikeColumns = [
   margin-top: 14px;
   color: var(--ink-soft);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -621,7 +623,7 @@ const strikeColumns = [
 }
 .visual-footer strong {
   color: var(--ink-dim);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 500;
 }
 
@@ -642,7 +644,7 @@ const strikeColumns = [
   }
   .axis-copy {
     left: 12px;
-    font-size: 6px;
+    font-size: var(--t-nano);
   }
   .positive {
     top: 57px;
@@ -672,7 +674,7 @@ const strikeColumns = [
     font-size: 12px;
   }
   .interpret-card p {
-    font-size: 8px;
+    font-size: var(--t-nano);
   }
   .visual-footer strong {
     width: 100%;

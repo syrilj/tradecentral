@@ -205,6 +205,46 @@ watch(
    `windowCoverageNote` below. */
 const rawSeries = computed<AbsorptionSeriesPoint[]>(() => detailData.value?.series ?? [])
 
+/* ---- order-flow absorption matrix --------------------------------------
+   Fixed-range profile over the trailing bars window: liquidity profile
+   (buy/sell split, strong-volume shade), delta + absorption columns,
+   strength zones and the pressure score. Absent (null) is an explicit
+   state — the panel renders nothing, never a fabricated profile. */
+const matrix = computed(() => {
+  const m = detailData.value?.matrix
+  return m && m.available && m.bins?.length ? m : null
+})
+
+/** Display order: highest price first. */
+const matrixRows = computed(() => (matrix.value ? [...matrix.value.bins].reverse() : []))
+
+const matrixMaxVol = computed(() => Math.max(0, ...matrixRows.value.map((b) => b.total)))
+const matrixMaxAbs = computed(() => Math.max(0, ...matrixRows.value.map((b) => b.absorption)))
+
+function widthPct(part: number, whole: number): string {
+  if (whole <= 0 || part <= 0) return '0%'
+  return `${Math.min(100, (part / whole) * 100).toFixed(1)}%`
+}
+
+function fmtCompact(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return DASH
+  const av = Math.abs(v)
+  const sg = v < 0 ? '-' : ''
+  if (av >= 1e9) return `${sg}${(av / 1e9).toFixed(2)}B`
+  if (av >= 1e6) return `${sg}${(av / 1e6).toFixed(2)}M`
+  if (av >= 1e3) return `${sg}${(av / 1e3).toFixed(1)}K`
+  return `${sg}${Math.round(av)}`
+}
+
+function zoneStars(strength: number): string {
+  if (strength >= 8) return '★★★★★'
+  if (strength >= 6.5) return '★★★★'
+  if (strength >= 5) return '★★★'
+  if (strength >= 3.5) return '★★'
+  if (strength >= 2) return '★'
+  return '·'
+}
+
 function windowCoverageNote(windowCount: number, totalCount: number, noun: string): string {
   if (windowCount === 0 && totalCount > 0)
     return `0 shown — ${num(totalCount, 0)} ${noun} outside this window`
@@ -309,7 +349,50 @@ const chart = computed(() => {
     label: num(t, t >= 100 ? 0 : 2),
   }))
 
-  return { linePath: linePath(linePts), area, signals, priceTicks, warmingRect }
+  /* Order-flow matrix overlays: strength-zone bands and POC/VAH/VAL levels
+     projected through the price scale. Zones/levels outside the chart's
+     price domain are dropped rather than drawn off-canvas. These levels are
+     computed over the matrix's trailing window (default 220 bars), which is
+     a different slice than the chart's series window — full-width bands, not
+     claimed per-bar alignment. */
+  const zoneBands: { y: number; height: number; cls: string; label: string }[] = []
+  const levelLines: { y: number; cls: string; label: string }[] = []
+  const mx = matrix.value
+  if (mx) {
+    for (const z of mx.zones) {
+      const yTop = priceScale(z.high)
+      const yBot = priceScale(z.low)
+      if (!Number.isFinite(yTop) || !Number.isFinite(yBot)) continue
+      if (yBot < padTop || yTop > chartH.value - padBottom) continue
+      zoneBands.push({
+        y: Math.max(padTop, yTop),
+        height: Math.min(yBot, chartH.value - padBottom) - Math.max(padTop, yTop),
+        cls: z.side === 'support' ? 'zone-sup' : 'zone-res',
+        label: `★${z.strength} ${z.side === 'support' ? 'S' : 'R'}`,
+      })
+    }
+    const levels: { price: number | null; cls: string; label: string }[] = [
+      { price: mx.poc, cls: 'lv-poc', label: `POC ${num(mx.poc ?? 0, 2)}` },
+      { price: mx.vah, cls: 'lv-va', label: 'VAH' },
+      { price: mx.val, cls: 'lv-va', label: 'VAL' },
+    ]
+    for (const lv of levels) {
+      if (lv.price == null) continue
+      const y = priceScale(lv.price)
+      if (!Number.isFinite(y) || y < padTop || y > chartH.value - padBottom) continue
+      levelLines.push({ y, cls: lv.cls, label: lv.label })
+    }
+  }
+
+  return {
+    linePath: linePath(linePts),
+    area,
+    signals,
+    priceTicks,
+    warmingRect,
+    zoneBands,
+    levelLines,
+  }
 })
 
 /* ---- backtest read --------------------------------------------------- */
@@ -420,7 +503,11 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
                   <th class="label num sortable" @click="setSort('vol_ratio')">
                     Vol ratio {{ sortArrow('vol_ratio') }}
                   </th>
-                  <th class="label num sortable" @click="setSort('imbalance')">
+                  <th
+                    class="label num sortable"
+                    title="Net signed-volume proxy (close-location-value × volume) as a share of gross flow — a bar-geometry proxy, not measured order-book imbalance. There is no trades/quotes/L2 data behind this repo."
+                    @click="setSort('imbalance')"
+                  >
                     Imbalance {{ sortArrow('imbalance') }}
                   </th>
                   <th class="label num" title="Price move over the flow window, in ATR fractions">
@@ -598,8 +685,21 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
               :height="chart.warmingRect.height"
               class="warming-band"
             />
+            <rect
+              v-for="(z, i) in chart.zoneBands"
+              :key="`z${i}`"
+              :x="48"
+              :y="z.y"
+              :width="chartW - 60"
+              :height="Math.max(1.5, z.height)"
+              :class="z.cls"
+            />
             <path :d="chart.area" class="area" />
             <path :d="chart.linePath" class="line" />
+            <g v-for="(lv, i) in chart.levelLines" :key="`lv${i}`">
+              <line :x1="48" :x2="chartW" :y1="lv.y" :y2="lv.y" :class="lv.cls" />
+              <text :x="chartW - 2" :y="lv.y - 2" class="tick label lv-label">{{ lv.label }}</text>
+            </g>
             <circle
               v-for="(s, i) in chart.signals"
               :key="i"
@@ -624,6 +724,175 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
               : ''
           }}
         </p>
+
+        <div v-if="matrix" class="matrix-block" aria-label="Order-flow absorption matrix">
+          <div class="matrix-head">
+            <span class="label">ORDERFLOW MATRIX</span>
+            <span class="label dim">
+              {{ num(matrix.window_bars, 0) }} bars · {{ num(matrix.window_low, 2) }} –
+              {{ num(matrix.window_high, 2)
+              }}<template v-if="matrix.atr"> · ATR {{ num(matrix.atr, 2) }}</template>
+            </span>
+          </div>
+
+          <div class="matrix-layout">
+            <!-- Liquidity profile + delta + absorption columns -->
+            <div
+              class="matrix-profile"
+              role="img"
+              aria-label="Volume profile with delta and absorption columns"
+            >
+              <div class="mx-cols label dim">
+                <span>LIQUIDITY</span>
+                <span>Δ</span>
+                <span>ABSORB</span>
+              </div>
+              <div
+                v-for="b in matrixRows"
+                :key="b.index"
+                class="mx-row"
+                :class="{
+                  'mx-va': b.in_value_area,
+                  'mx-poc': matrix.poc != null && b.low <= matrix.poc && matrix.poc < b.high,
+                }"
+                :title="`${num(b.low, 2)}–${num(b.high, 2)} · vol ${fmtCompact(b.total)} · buy ${fmtCompact(b.buy)} / sell ${fmtCompact(b.sell)} · Δ ${fmtCompact(b.delta)} · absorb ${fmtCompact(b.absorption)} · touches ${b.touches} · rejections ${b.rejections} · strength ${num(b.strength, 1)}`"
+              >
+                <div class="mx-liq">
+                  <div class="mx-seg mx-sell" :style="{ width: widthPct(b.sell, matrixMaxVol) }">
+                    <div
+                      class="mx-seg-strong"
+                      :style="{ width: widthPct(b.strong_sell, Math.max(b.sell, 1)) }"
+                    />
+                  </div>
+                  <div class="mx-seg mx-buy" :style="{ width: widthPct(b.buy, matrixMaxVol) }">
+                    <div
+                      class="mx-seg-strong"
+                      :style="{ width: widthPct(b.strong_buy, Math.max(b.buy, 1)) }"
+                    />
+                  </div>
+                </div>
+                <div class="mx-delta label" :class="tone(b.delta)">
+                  <div
+                    class="mx-delta-fill"
+                    :class="tone(b.delta)"
+                    :style="{ opacity: 0.08 + b.delta_frac * 0.3 }"
+                  />
+                  <span>{{ b.delta === 0 ? '·' : fmtCompact(b.delta) }}</span>
+                </div>
+                <div class="mx-abs">
+                  <div
+                    class="mx-abs-bar"
+                    :style="{ width: widthPct(b.absorption, matrixMaxAbs) }"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- Right rail: pressure, last print, zones -->
+            <div class="matrix-rail">
+              <div v-if="matrix.pressure" class="rail-block">
+                <p
+                  class="rail-title label"
+                  title="Score, Buy/Sell, CVD bias and Absorption side are all derived from the CLV × volume signed-flow proxy on OHLCV bars — descriptive proxies, not measured order flow."
+                >
+                  FLOW PRESSURE
+                </p>
+                <div class="rail-grid">
+                  <Readout
+                    label="Score"
+                    :value="`${signed(matrix.pressure.score, 0)} ${matrix.pressure.regime}`"
+                    :tone="
+                      btTone(matrix.pressure.score > 20 ? 1 : matrix.pressure.score < -20 ? -1 : 0)
+                    "
+                  />
+                  <Readout
+                    label="Buy / Sell"
+                    :value="`${pctFrac(matrix.pressure.buy_share, 0)} / ${pctFrac(matrix.pressure.sell_share, 0)}`"
+                    :tone="btTone(matrix.pressure.imbalance)"
+                  />
+                  <Readout
+                    label="CVD bias"
+                    :value="signedPct(matrix.pressure.cvd_bias * 100, 0)"
+                    :tone="btTone(matrix.pressure.cvd_bias)"
+                  />
+                  <Readout
+                    label="Absorption side"
+                    :value="matrix.pressure.absorption_side"
+                    :tone="
+                      matrix.pressure.absorption_side === 'SUPPORT'
+                        ? 'pos'
+                        : matrix.pressure.absorption_side === 'RESISTANCE'
+                          ? 'neg'
+                          : 'flat'
+                    "
+                  />
+                </div>
+              </div>
+
+              <div v-if="matrix.last_print && matrix.last_print.tier" class="rail-block">
+                <p
+                  class="rail-title label"
+                  title="BUY/SELL is the sign of the CLV × volume proxy for this bar, not a measured aggressor side — there is no trade tape behind this repo's equity bars."
+                >
+                  LAST PRINT
+                </p>
+                <p
+                  class="rail-big label"
+                  :class="
+                    matrix.last_print.side === 'BUY'
+                      ? 'pos'
+                      : matrix.last_print.side === 'SELL'
+                        ? 'neg'
+                        : ''
+                  "
+                >
+                  {{ matrix.last_print.tier }} · {{ matrix.last_print.side }}
+                </p>
+                <p class="rail-sub label dim">
+                  Δ {{ fmtCompact(matrix.last_print.bar_delta) }} · vol
+                  {{ fmtCompact(matrix.last_print.bar_volume) }} ({{
+                    num(matrix.last_print.vol_ratio, 2)
+                  }}×)
+                </p>
+              </div>
+
+              <div class="rail-block">
+                <p class="rail-title label">
+                  STRENGTH ZONES ·
+                  <template v-if="matrix.poc != null"
+                    >POC {{ num(matrix.poc, 2) }} · VA {{ num(matrix.val, 2) }}–{{
+                      num(matrix.vah, 2)
+                    }}</template
+                  >
+                  <template v-else>—</template>
+                </p>
+                <p v-if="!matrix.zones.length" class="rail-sub label dim">
+                  No zone clears the minimum strength bar in this window.
+                </p>
+                <ul v-else class="zone-list">
+                  <li v-for="(z, i) in matrix.zones" :key="i" class="zone-item">
+                    <span class="zone-stars">{{ zoneStars(z.strength) }}</span>
+                    <span class="zone-px label">{{ num(z.mid, 2) }}</span>
+                    <span class="zone-side label" :class="z.side === 'support' ? 'pos' : 'neg'">
+                      {{ z.side === 'support' ? 'SUP' : 'RES' }} · {{ z.tier }}
+                    </span>
+                    <span class="zone-stats label dim">
+                      V {{ fmtCompact(z.volume) }} · A {{ fmtCompact(z.absorption) }} · T
+                      {{ z.touches }} · R {{ z.rejections }}
+                    </span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <p class="chart-caption label">
+            Order-flow matrix over the trailing {{ num(matrix.window_bars, 0) }} bars: LIQUIDITY is
+            candle-direction volume by price bin (bright = strong-volume bars), Δ is net signed flow
+            (CLV × volume proxy), ABSORB is wick-defended volume. Zones are scored on volume,
+            absorption, touches, rejections and recency. Descriptive proxies — no trades/quotes/L2
+            data; never a trade authorization.
+          </p>
+        </div>
 
         <div v-if="bt" class="bt-grid">
           <Readout label="Signals" :value="num(bt.n_signals, 0)" sub="in sample" />
@@ -823,7 +1092,7 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
   background: color-mix(in srgb, var(--short) 12%, transparent);
 }
 .signal-chip.no-read {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   background: transparent;
 }
 
@@ -838,7 +1107,7 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
   font-weight: 700;
 }
 .dir-sep {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 .caveats-list {
@@ -941,5 +1210,216 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: var(--s3);
   padding: var(--s3);
+}
+
+/* ---- order-flow matrix -------------------------------------------------- */
+.zone-sup {
+  fill: var(--long);
+  opacity: 0.07;
+}
+.zone-res {
+  fill: var(--short);
+  opacity: 0.07;
+}
+.lv-poc {
+  stroke: var(--phosphor);
+  stroke-width: 1.5;
+}
+.lv-va {
+  stroke: var(--ink-ghost);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.lv-label {
+  text-anchor: end;
+  fill: var(--ink-dim);
+}
+
+.matrix-block {
+  border-top: var(--hair) solid var(--rule);
+}
+.matrix-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s3);
+}
+.matrix-head .label:first-child {
+  color: var(--phosphor);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.matrix-layout {
+  display: flex;
+  gap: var(--s4);
+  padding: 0 var(--s3) var(--s3);
+  align-items: flex-start;
+}
+@media (max-width: 900px) {
+  .matrix-layout {
+    flex-direction: column;
+  }
+}
+
+.matrix-profile {
+  flex: 1 1 58%;
+  min-width: 0;
+}
+.mx-cols {
+  display: grid;
+  grid-template-columns: 1fr 72px 72px;
+  gap: 6px;
+  padding-bottom: 3px;
+  letter-spacing: 0.08em;
+}
+.mx-cols span:nth-child(2),
+.mx-cols span:nth-child(3) {
+  text-align: right;
+}
+.mx-row {
+  display: grid;
+  grid-template-columns: 1fr 72px 72px;
+  gap: 6px;
+  align-items: stretch;
+  height: 14px;
+  border-left: 2px solid transparent;
+}
+.mx-va {
+  border-left-color: var(--phosphor-dim);
+}
+.mx-poc {
+  outline: 1px solid var(--phosphor);
+  outline-offset: -1px;
+}
+.mx-liq {
+  position: relative;
+  background: color-mix(in srgb, var(--void-lift) 55%, transparent);
+  overflow: hidden;
+}
+.mx-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  opacity: 0.85;
+}
+.mx-buy {
+  right: 50%;
+  background: var(--long);
+  opacity: 0.32;
+}
+.mx-sell {
+  left: 50%;
+  background: var(--short);
+  opacity: 0.32;
+}
+/* Strong-volume segment: a brighter token rather than a CSS brightness
+   filter, which the design guard forbids. The parent's opacity applies to
+   the whole subtree, so the lift has to come from the colour itself. */
+.mx-seg-strong {
+  height: 100%;
+  background: inherit;
+}
+.mx-buy .mx-seg-strong {
+  margin-left: auto;
+  background: var(--call-hi);
+}
+.mx-sell .mx-seg-strong {
+  background: var(--put-hi);
+}
+.mx-delta {
+  position: relative;
+  overflow: hidden;
+  text-align: right;
+  font-size: var(--t-micro);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 3px;
+}
+.mx-delta-fill {
+  position: absolute;
+  inset: 0;
+}
+.mx-delta-fill.pos {
+  background: var(--long);
+}
+.mx-delta-fill.neg {
+  background: var(--short);
+}
+.mx-delta span {
+  position: relative;
+}
+.mx-abs {
+  position: relative;
+  background: color-mix(in srgb, var(--void-lift) 40%, transparent);
+  overflow: hidden;
+}
+.mx-abs-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: var(--warn);
+  opacity: 0.45;
+  border-left: 1px solid var(--warn);
+}
+
+.matrix-rail {
+  flex: 1 1 42%;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+.rail-title {
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  margin: 0 0 var(--s2);
+}
+.rail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--s2);
+}
+.rail-big {
+  margin: 0;
+  font-weight: 700;
+  font-size: var(--t-small);
+}
+.rail-sub {
+  margin: 2px 0 0;
+}
+
+.zone-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.zone-item {
+  display: grid;
+  grid-template-columns: 52px 72px 110px 1fr;
+  gap: var(--s2);
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: var(--hair) solid var(--rule-faint);
+}
+.zone-stars {
+  color: var(--phosphor);
+  font-size: var(--t-micro);
+  letter-spacing: 1px;
+}
+.zone-px {
+  font-weight: 700;
+}
+.zone-side {
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+}
+.zone-stats {
+  font-size: var(--t-micro);
 }
 </style>

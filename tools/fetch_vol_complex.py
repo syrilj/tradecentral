@@ -23,8 +23,20 @@ Usage:
   python3 edge/tools/fetch_vol_complex.py
 """
 import argparse
+from datetime import date, timedelta
 from pathlib import Path
 import pandas as pd
+
+
+def _default_end() -> str:
+    """Tomorrow, so today's close is inside yfinance's half-open window.
+
+    This used to be the literal "2026-07-30". Every later run re-truncated the
+    volatility complex back to that date, so the regime read's VIX, term slope
+    and tail risk silently froze in July while the header still labelled the
+    row as the current vol regime -- and a "refresh" moved the data backwards.
+    """
+    return (date.today() + timedelta(days=1)).isoformat()
 import numpy as np
 import yfinance as yf
 
@@ -41,7 +53,8 @@ VOL_TICKERS = {
     "QQQ": "QQQ",
 }
 
-def fetch_vol_data(start_date: str = "2010-01-01", end_date: str = "2026-07-30") -> pd.DataFrame:
+def fetch_vol_data(start_date: str = "2010-01-01", end_date: str | None = None) -> pd.DataFrame:
+    end_date = end_date or _default_end()
     print(f"Fetching volatility complex from yfinance ({start_date} to {end_date})...")
     data_frames = {}
     
@@ -89,7 +102,12 @@ def fetch_vol_data(start_date: str = "2010-01-01", end_date: str = "2026-07-30")
 def main():
     parser = argparse.ArgumentParser(description="Fetch Volatility Complex Dataset")
     parser.add_argument("--start", type=str, default="2010-01-01", help="Start date YYYY-MM-DD")
-    parser.add_argument("--end", type=str, default="2026-07-30", help="End date YYYY-MM-DD")
+    parser.add_argument(
+        "--end",
+        type=str,
+        default=None,
+        help="End date YYYY-MM-DD (default: tomorrow, so today's close is included)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print summary without writing CSV")
     args = parser.parse_args()
 

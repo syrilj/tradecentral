@@ -14,6 +14,8 @@ function evaluateDriftStrategies(params: {
   /** Gross charm magnitude (sum of per-strike |flow|). Defaults to |net|. */
   absCharmFlow?: number | null
   pressureImbalance: number
+  /** Server-side confirmation flag; only a confirmed read arms a pressure strategy. */
+  actionable?: boolean
   expectedMove?: number
 }) {
   const spotVal = params.spot
@@ -28,6 +30,7 @@ function evaluateDriftStrategies(params: {
   const charmRatio = grossCharm > 0 ? charm / grossCharm : 0
   const CHARM_ONE_SIDED = 0.2
   const imb = params.pressureImbalance
+  const actionable = params.actionable === true
 
   // Structural breakdown takes precedence (mirrors microstructureAssessment ordering)
   const structuralBreakdown =
@@ -41,20 +44,36 @@ function evaluateDriftStrategies(params: {
     cw != null &&
     spotVal >= pw &&
     spotVal <= cw &&
-    Math.abs(imb) <= 0.25
+    (Math.abs(imb) <= 0.25 || !actionable)
 
+  // Charm one-sidedness alone no longer arms the long: a positioning proxy
+  // cannot corroborate itself, so the server must have confirmed the read.
   const s2Active =
     !structuralBreakdown &&
     ((cw != null && spotVal != null && spotVal >= cw) ||
-      (imb > 0.25 && (cw == null || (spotVal != null && spotVal < cw))) ||
-      (charmRatio <= -CHARM_ONE_SIDED && gex >= 0))
+      (actionable && imb > 0.25 && (cw == null || (spotVal != null && spotVal < cw))))
 
-  const s3Active = structuralBreakdown || imb < -0.25
+  const s3Active = structuralBreakdown || (actionable && imb < -0.25)
 
   const strategies = [
-    { id: 'strat-1', title: 'Strategy 1: Mean-Reversion Channeling', isActive: s1Active, directionType: 'range' },
-    { id: 'strat-2', title: 'Strategy 2: Breakout Expansion & Charm Inflow', isActive: s2Active, directionType: 'buying' },
-    { id: 'strat-3', title: 'Strategy 3: Breakdown Expansion Below Key Support', isActive: s3Active, directionType: 'selling' },
+    {
+      id: 'strat-1',
+      title: 'Strategy 1: Mean-Reversion Channeling',
+      isActive: s1Active,
+      directionType: 'range',
+    },
+    {
+      id: 'strat-2',
+      title: 'Strategy 2: Breakout Expansion & Charm Inflow',
+      isActive: s2Active,
+      directionType: 'buying',
+    },
+    {
+      id: 'strat-3',
+      title: 'Strategy 3: Breakdown Expansion Below Key Support',
+      isActive: s3Active,
+      directionType: 'selling',
+    },
   ]
 
   let primary = strategies[0]
@@ -63,6 +82,7 @@ function evaluateDriftStrategies(params: {
   else if (strategies[1].isActive) primary = strategies[1]
 
   return {
+    charmOneSided: Math.abs(charmRatio) >= CHARM_ONE_SIDED,
     structuralBreakdown,
     s1Active,
     s2Active,
@@ -75,18 +95,18 @@ describe('Drift Strategy and Microstructure Alignment', () => {
   it('CBRS scenario: spot < flip in negative GEX resolves to Strategy 3 (SHORT BIAS) despite positive gauge imbalance', () => {
     // Exact parameters from CBRS prompt
     const res = evaluateDriftStrategies({
-      spot: 210.40,
+      spot: 210.4,
       putWall: 200.0,
       callWall: 220.0,
       gammaFlip: 227.0, // spot (210.40) < flip (227.0)
-      netGex: -7.0,     // negative GEX
+      netGex: -7.0, // negative GEX
       netCharmFlow: -26682,
       pressureImbalance: 0.86, // buying pressure gauge
     })
 
     expect(res.structuralBreakdown).toBe(true)
     expect(res.s2Active).toBe(false) // s2 LONG must be suppressed
-    expect(res.s3Active).toBe(true)  // s3 SHORT is triggered
+    expect(res.s3Active).toBe(true) // s3 SHORT is triggered
     expect(res.primaryStrategy.id).toBe('strat-3')
     expect(res.primaryStrategy.directionType).toBe('selling')
   })
@@ -185,10 +205,81 @@ describe('Drift Strategy and Microstructure Alignment', () => {
       pressureImbalance: 0.05,
     })
 
-    // s2's charm branch is what this pins. (Primary selection still prefers the
-    // range strategy here, since spot is inside the walls in positive gamma —
-    // that ordering is asserted separately above.)
+    // The book IS one-sided — but a positioning proxy cannot confirm itself,
+    // so without a server-confirmed read it is a watch item, not a long.
+    expect(res.charmOneSided).toBe(true)
+    expect(res.s2Active).toBe(false)
+    expect(res.s1Active).toBe(true)
+    expect(res.primaryStrategy.id).toBe('strat-1')
+  })
+
+  it('an unconfirmed buying gauge (no corroboration) does not arm the long', () => {
+    const res = evaluateDriftStrategies({
+      spot: 210.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 205.0,
+      netGex: 12.0,
+      netCharmFlow: -900,
+      absCharmFlow: 1_000,
+      pressureImbalance: 0.86,
+      actionable: false,
+    })
+    expect(res.s2Active).toBe(false)
+    expect(res.s3Active).toBe(false)
+    // The range regime stands while the directional read is unconfirmed.
+    expect(res.s1Active).toBe(true)
+    expect(res.primaryStrategy.id).toBe('strat-1')
+  })
+
+  it('a confirmed buying read (tape + underlying agree) arms Strategy 2', () => {
+    const res = evaluateDriftStrategies({
+      spot: 210.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 205.0,
+      netGex: 12.0,
+      netCharmFlow: -900,
+      absCharmFlow: 1_000,
+      pressureImbalance: 0.66,
+      actionable: true,
+    })
     expect(res.s2Active).toBe(true)
+    expect(res.s1Active).toBe(false)
+    expect(res.primaryStrategy.id).toBe('strat-2')
+  })
+
+  it('a confirmed selling read arms Strategy 3 without a structural break', () => {
+    const res = evaluateDriftStrategies({
+      spot: 210.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 205.0,
+      netGex: 12.0,
+      netCharmFlow: 900,
+      absCharmFlow: 1_000,
+      pressureImbalance: -0.66,
+      actionable: true,
+    })
+    expect(res.structuralBreakdown).toBe(false)
+    expect(res.s3Active).toBe(true)
+    expect(res.primaryStrategy.id).toBe('strat-3')
+  })
+
+  it('an unconfirmed selling gauge does not arm Strategy 3', () => {
+    const res = evaluateDriftStrategies({
+      spot: 210.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 205.0,
+      netGex: 12.0,
+      netCharmFlow: 900,
+      absCharmFlow: 1_000,
+      pressureImbalance: -0.66,
+      actionable: false,
+    })
+    expect(res.s3Active).toBe(false)
+    expect(res.s1Active).toBe(true)
   })
 
   it('treats a chain with no measurable charm as neutral, not as a signal', () => {

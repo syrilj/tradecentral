@@ -35,6 +35,20 @@ def lse_circuit_is_open() -> bool:
     return bool(_LSE_CIRCUIT_OPEN) or bool(os.getenv("EDGE_SKIP_LSE_FLOW"))
 
 
+def _note_lse_timeout() -> None:
+    """Trip the process-local LSE circuit after consecutive timeouts."""
+    global _LSE_TIMEOUT_STREAK, _LSE_CIRCUIT_OPEN
+    _LSE_TIMEOUT_STREAK += 1
+    if _LSE_TIMEOUT_STREAK >= _LSE_CIRCUIT_THRESHOLD:
+        _LSE_CIRCUIT_OPEN = True
+
+
+def _clear_lse_timeout_streak() -> None:
+    global _LSE_TIMEOUT_STREAK, _LSE_CIRCUIT_OPEN
+    _LSE_TIMEOUT_STREAK = 0
+    _LSE_CIRCUIT_OPEN = False
+
+
 def _canonical_symbol(value: Any) -> str:
     symbol = str(value or "").strip().upper()
     if symbol.startswith("EQ."):
@@ -93,8 +107,6 @@ def load_live_forward_flow(symbol: str, *, timeout_seconds: float = FLOW_TIMEOUT
                            min_premium: float = 50_000.0,
                            fetcher: Callable[..., Any] | None = None, **_: Any) -> Mapping[str, Any]:
     """Use TradingWork's live flow seam only; this does not fetch a chain."""
-    global _LSE_TIMEOUT_STREAK, _LSE_CIRCUIT_OPEN
-
     if not os.getenv("LSE_API_KEY") and fetcher is None:
         return {"_evidence_warning": "flow_lse_credential_missing"}
     if lse_circuit_is_open():
@@ -120,25 +132,20 @@ def load_live_forward_flow(symbol: str, *, timeout_seconds: float = FLOW_TIMEOUT
             timeout_seconds=timeout_seconds,
         )
     except TimeoutError:
-        _LSE_TIMEOUT_STREAK += 1
-        if _LSE_TIMEOUT_STREAK >= _LSE_CIRCUIT_THRESHOLD:
-            _LSE_CIRCUIT_OPEN = True
+        _note_lse_timeout()
         return {"_evidence_warning": "flow_timeout"}
     except Exception as exc:
         # Provider read-timeouts often arrive as requests exceptions, not our
         # TimeoutError wrapper — still trip the circuit on timeout-like errors.
         msg = f"{type(exc).__name__}: {exc}".lower()
         if "timeout" in msg or "timed out" in msg:
-            _LSE_TIMEOUT_STREAK += 1
-            if _LSE_TIMEOUT_STREAK >= _LSE_CIRCUIT_THRESHOLD:
-                _LSE_CIRCUIT_OPEN = True
+            _note_lse_timeout()
             return {"_evidence_warning": "flow_timeout"}
         return {"_evidence_warning": f"flow_unavailable:{type(exc).__name__}"}
     if rows is None:
         return {"_evidence_warning": "flow_no_live_prints_or_unavailable"}
     # Success resets the timeout streak so a flaky window can recover.
-    _LSE_TIMEOUT_STREAK = 0
-    _LSE_CIRCUIT_OPEN = False
+    _clear_lse_timeout_streak()
     raw_rows = list(rows) if isinstance(rows, list) else []
     matched = _matching_alerts(raw_rows, symbol)
     if raw_rows and not matched:
@@ -512,18 +519,21 @@ def load_market_flow_activity(
     This is the standalone Flow feed. It intentionally does not inherit the
     Deep scan's routed-symbol coverage or fan out one request per symbol.
     """
+    empty = {
+        "schema_version": "market-options-flow-v1",
+        "rows": [],
+        "coverage": {
+            "request_completed": 0,
+            "provider_prints": 0,
+            "observed_symbols": 0,
+            "with_activity": 0,
+        },
+        "warnings": [],
+    }
+    if lse_circuit_is_open() and fetcher is None:
+        return {**empty, "warnings": ["flow_lse_circuit_open"]}
     if not os.getenv("LSE_API_KEY") and fetcher is None:
-        return {
-            "schema_version": "market-options-flow-v1",
-            "rows": [],
-            "coverage": {
-                "request_completed": 0,
-                "provider_prints": 0,
-                "observed_symbols": 0,
-                "with_activity": 0,
-            },
-            "warnings": ["flow_lse_credential_missing"],
-        }
+        return {**empty, "warnings": ["flow_lse_credential_missing"]}
 
     try:
         if fetcher is None:
@@ -535,17 +545,20 @@ def load_market_flow_activity(
 
             api_key = get_api_key()
             if not api_key:
-                raise RuntimeError("flow_lse_credential_missing")
+                return {**empty, "warnings": ["flow_lse_credential_missing"]}
 
             def fetcher(*, min_premium: float, limit: int, timeout: float) -> Any:
+                params: dict[str, str] = {
+                    "premium": f"gte.{max(0.0, float(min_premium))}",
+                    "order": "ts.desc",
+                    "limit": str(max(1, min(int(limit), 2_000))),
+                }
+                if allowed_symbols and len(allowed_symbols) == 1:
+                    params["underlying"] = f"eq.{next(iter(allowed_symbols))}"
                 response = requests.get(
                     f"{LSE_ISO_BASE}/x_options_flow",
                     headers={"x-api-key": api_key, "Accept": "application/json"},
-                    params={
-                        "premium": f"gte.{max(0.0, float(min_premium))}",
-                        "order": "ts.desc",
-                        "limit": str(max(1, min(int(limit), 2_000))),
-                    },
+                    params=params,
                     timeout=max(1.0, float(timeout)),
                 )
                 response.raise_for_status()
@@ -563,30 +576,18 @@ def load_market_flow_activity(
             timeout_seconds=timeout_seconds,
         )
     except TimeoutError:
-        return {
-            "schema_version": "market-options-flow-v1",
-            "rows": [],
-            "coverage": {
-                "request_completed": 0,
-                "provider_prints": 0,
-                "observed_symbols": 0,
-                "with_activity": 0,
-            },
-            "warnings": ["flow_market_timeout"],
-        }
+        _note_lse_timeout()
+        return {**empty, "warnings": ["flow_market_timeout"]}
     except Exception as exc:
-        return {
-            "schema_version": "market-options-flow-v1",
-            "rows": [],
-            "coverage": {
-                "request_completed": 0,
-                "provider_prints": 0,
-                "observed_symbols": 0,
-                "with_activity": 0,
-            },
-            "warnings": [f"flow_market_unavailable:{type(exc).__name__}"],
-        }
+        msg = f"{type(exc).__name__}: {exc}".lower()
+        if "timeout" in msg or "timed out" in msg:
+            _note_lse_timeout()
+            return {**empty, "warnings": ["flow_market_timeout"]}
+        if "credential" in msg or "lse_api_key" in msg:
+            return {**empty, "warnings": ["flow_lse_credential_missing"]}
+        return {**empty, "warnings": [f"flow_market_unavailable:{type(exc).__name__}"]}
 
+    _clear_lse_timeout_streak()
     raw_rows = [dict(row) for row in fetched or [] if isinstance(row, Mapping)]
     allowed = {_canonical_symbol(symbol) for symbol in allowed_symbols or set()}
     grouped: dict[str, list[dict[str, Any]]] = {}

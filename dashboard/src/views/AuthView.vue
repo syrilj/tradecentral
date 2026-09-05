@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/vue'
 import { useRoute, useRouter } from 'vue-router'
 import { isAllowedOperatorEmail, safeRedirect } from '@/auth'
@@ -20,15 +20,18 @@ const mode = computed(() => (route.query.mode === 'setup' ? 'setup' : 'signin'))
 const redirectTarget = computed(() => safeRedirect(route.query.redirect, '/flow'))
 const email = computed(() => user.value?.primaryEmailAddress?.emailAddress ?? '')
 const denied = computed(() => Boolean(isSignedIn.value && !isAllowedOperatorEmail(email.value)))
+const unauthorizedAttempt = ref(false)
 
 watch(
   [isLoaded, isSignedIn, denied, redirectTarget],
   async () => {
     if (!isLoaded.value || !isSignedIn.value) return
     if (denied.value) {
+      unauthorizedAttempt.value = true
       await clerk.value?.signOut()
       return
     }
+    unauthorizedAttempt.value = false
     await router.replace(redirectTarget.value)
   },
   { immediate: true },
@@ -108,7 +111,7 @@ watch(
         </div>
 
         <div v-if="!isLoaded" class="clerk-wait" role="status">Loading Clerk…</div>
-        <p v-else-if="denied" class="form-error" role="alert">
+        <p v-else-if="denied || unauthorizedAttempt" class="form-error" role="alert">
           <AppIcon name="alert" :size="15" />
           Access is limited to the configured operator allowlist. This is not a public signup.
         </p>
@@ -238,7 +241,7 @@ watch(
   margin-top: 5px;
   color: var(--auth-muted);
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -308,7 +311,7 @@ watch(
   margin: 24px 0 28px;
   color: #6f6f78;
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -358,7 +361,7 @@ watch(
   right: 0;
   color: #6f6f78;
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.1em;
 }
 .auth-mode-switch {
@@ -375,7 +378,7 @@ watch(
   place-items: center;
   color: #565660;
   font-family: var(--font-display);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -525,7 +528,7 @@ watch(
   color: #6f6f78;
   border-top: 1px solid var(--auth-rule);
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }

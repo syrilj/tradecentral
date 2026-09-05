@@ -1,12 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { TopographyState } from '@/microstructureContracts'
+import type { GammaRegime } from '@/regimeContracts'
 import { num } from '@/format'
 
-const props = defineProps<{
-  topography: TopographyState | null
-  spot: number | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    topography: TopographyState | null
+    spot: number | null
+    /**
+     * The page's canonical regime call. Every quadrant here is defined
+     * relative to the zero-gamma flip, so when the page reads spot as sitting
+     * *on* that boundary the quadrant is a knife-edge classification, not a
+     * settled one. Saying so is the difference between this card informing the
+     * verdict above it and contradicting it.
+     */
+    regime?: GammaRegime | null
+  }>(),
+  { regime: null },
+)
 
 /**
  * The four quadrants are all defined relative to the zero-gamma flip. When the
@@ -107,6 +119,15 @@ function level(v: number | null | undefined): string {
       </div>
     </div>
 
+    <!-- Knife-edge caveat: the quadrant is measured off a flip the page reads
+         as straddled, so its cascade/squeeze language is conditional on a
+         break that has not happened yet. -->
+    <p v-if="quadrantInfo && regime === 'flip'" class="provisional-note">
+      Spot is inside the neutral band around the flip, so this quadrant is provisional: it describes
+      what dealer inventory implies <em>if</em> the boundary breaks in that direction, not a regime
+      the surface has confirmed.
+    </p>
+
     <!-- Active Quadrant Tactical Briefing -->
     <div v-if="quadrantInfo" class="tactical-guidance">
       <div class="guidance-col">
@@ -150,6 +171,15 @@ function level(v: number | null | undefined): string {
 </template>
 
 <style scoped>
+.provisional-note {
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid var(--rule);
+  border-left: 2px solid var(--warn, var(--rule));
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.5;
+}
+
 .withheld-note {
   padding: var(--s3);
   border-top: var(--hair) solid var(--rule);
@@ -161,7 +191,7 @@ function level(v: number | null | undefined): string {
 .topography-card {
   background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 1rem;
   display: flex;
   flex-direction: column;
@@ -175,7 +205,7 @@ function level(v: number | null | undefined): string {
 }
 
 .eyebrow {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
@@ -189,10 +219,10 @@ function level(v: number | null | undefined): string {
 }
 
 .quadrant-badge {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-weight: 700;
   padding: 0.25rem 0.625rem;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   font-family: var(--font-mono, monospace);
   background: var(--panel-hi);
   color: var(--ink-dim);
@@ -222,7 +252,7 @@ function level(v: number | null | undefined): string {
 .quad-cell {
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 0.625rem 0.75rem;
   transition: all var(--dur-fast) ease;
 }
@@ -240,7 +270,7 @@ function level(v: number | null | undefined): string {
 }
 
 .quad-tag {
-  font-size: 0.5625rem;
+  font-size: var(--t-nano);
   font-family: var(--font-mono, monospace);
   font-weight: 700;
   padding: 0.1rem 0.3rem;
@@ -261,14 +291,14 @@ function level(v: number | null | undefined): string {
 }
 
 .quad-desc {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   line-height: 1.25;
 }
 
 .quad-flow {
   margin-top: 0.25rem;
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-family: var(--font-mono, monospace);
 }
 
@@ -279,7 +309,7 @@ function level(v: number | null | undefined): string {
   padding: 0.625rem 0.75rem;
   background: var(--void-lift);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .guidance-col {
@@ -289,7 +319,7 @@ function level(v: number | null | undefined): string {
 }
 
 .guidance-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
 }
@@ -315,7 +345,7 @@ function level(v: number | null | undefined): string {
 }
 
 .m-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
 }

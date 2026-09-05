@@ -116,7 +116,7 @@ footer {
   gap: 20px;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -187,9 +187,9 @@ figcaption {
 }
 .map-node small {
   grid-column: 1 / -1;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
 }
 .map-node > span {
   grid-row: 2 / 4;
@@ -209,7 +209,7 @@ figcaption {
 .map-node em {
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   font-style: normal;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -249,7 +249,7 @@ figcaption {
   margin-bottom: 4px;
   color: var(--put);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
 }
@@ -269,7 +269,7 @@ figcaption {
   left: 23%;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-align: center;
 }

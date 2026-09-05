@@ -125,9 +125,20 @@ def build_government_payload(symbol: str) -> dict[str, Any]:
             if now - ts < CACHE_TTL_S:
                 return data
 
-    # Check local persistent cache
+    # Check local persistent cache.
+    #
+    # Provenance is mandatory. Nothing in this deployment writes this cache --
+    # `_save_disk_cache` has no callers -- so any entry on disk predates the
+    # removal of the fabricated congressional-trade generator. Those records
+    # named real, living members of Congress against invented trades, dates and
+    # dollar brackets, and this branch re-stamped them `available: true`,
+    # `source: regulatory_disclosures_...` with today's asof. An entry without
+    # a `fetched_utc` and `source_feed` written by a real disclosure fetcher is
+    # not evidence of anything and must not be served.
     cache = _load_disk_cache()
     entry = cache.get(sym)
+    if isinstance(entry, dict) and not (entry.get("fetched_utc") and entry.get("source_feed")):
+        entry = None
 
     if entry and (entry.get("congress") or entry.get("lobbying") or entry.get("contracts") or entry.get("patents")):
         congress = list(entry.get("congress", []))

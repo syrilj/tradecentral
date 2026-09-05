@@ -609,8 +609,14 @@ function setInstitutionSort(field: InstitutionSortField): void {
     institutionSortAsc.value = false
   }
 }
+
 const institutionPage = ref(1)
 const institutionPageSize = ref<number | 'all'>('all')
+
+function setInstitutionPageSize(size: number | 'all'): void {
+  institutionPageSize.value = size
+  institutionPage.value = 1
+}
 
 const filteredInstitutions = computed(() =>
   filterSortInstitutions(
@@ -3064,10 +3070,7 @@ const finChartData = computed(() => {
                 :key="size"
                 class="seg-b label"
                 :class="{ on: institutionPageSize === size }"
-                @click="
-                  institutionPageSize = size;
-                  institutionPage = 1;
-                "
+                @click="setInstitutionPageSize(size)"
               >
                 {{ size === 'all' ? 'All' : size }}
               </button>
@@ -4442,7 +4445,7 @@ const finChartData = computed(() => {
 
 .tab-index {
   font-size: 10px;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   letter-spacing: 0.04em;
 }
 
@@ -5481,7 +5484,7 @@ const finChartData = computed(() => {
   background: var(--panel);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xs);
-  font-size: 9px;
+  font-size: var(--t-nano);
   color: var(--ink-dim);
   letter-spacing: 0.06em;
 }
@@ -5552,7 +5555,7 @@ const finChartData = computed(() => {
 .state {
   padding: 1px 5px;
   border-radius: var(--r-xs);
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 
 .state.enter {
@@ -5915,7 +5918,7 @@ const finChartData = computed(() => {
   color: var(--call);
 }
 .kind-unknown {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 /* Institutions Toolbar, Sorting & Pagination */
@@ -6026,7 +6029,7 @@ th.sortable:hover {
 }
 
 .ratio-desc {
-  font-size: 9px;
+  font-size: var(--t-nano);
   color: var(--ink-dim);
   letter-spacing: 0.02em;
 }

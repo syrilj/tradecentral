@@ -637,3 +637,425 @@ def build_absorption_scan(
         "rows": rows,
         "gate_summary": gate_summary,
     }
+
+
+# ---------------------------------------------------------------------------
+# Order-flow absorption matrix -- fixed-range profile over the recent window
+#
+# This is the per-symbol companion to the scan: given the same OHLCV frame the
+# detector consumes, it bins the trailing lookback window by price and answers
+# the questions a Bookmap-style operator asks -- where did volume stack up
+# (liquidity profile), which side was aggressive (delta column), where was
+# aggression absorbed into a wick (absorption column), which price levels
+# carry the strongest defended interest (strength zones), and what is the net
+# flow-pressure read right now (pressure score).
+#
+# Everything here is built from the same descriptive proxies the detector
+# uses (candle direction, CLV x volume, wick fractions) -- this repo has no
+# trades/quotes/L2 data, so "buy"/"sell" are candle-direction buckets and
+# "absorption" is wick-defended volume, never measured order-book depth.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OrderflowMatrixConfig:
+    """Thresholds and weights for the order-flow absorption matrix."""
+
+    # Trailing bars the profile, delta/absorption columns and zone scores
+    # are built from.
+    lookback: int = 220
+    # Vertical price bins across the window's high-low range.
+    bins: int = 30
+    # Bars above this volume percentile are "strong" (shaded brighter).
+    strong_volume_pct: float = 85.0
+    # Value-area target coverage as a percent of total window volume.
+    value_area_pct: float = 70.0
+    # Cluster (print-size) tiers: a bar is a print when it beats this
+    # percentile of recent volume / |delta| in a majority of windows.
+    small_pct: float = 75.0
+    medium_pct: float = 90.0
+    big_pct: float = 97.0
+    short_len: int = 20
+    mid_len: int = 50
+    long_len: int = 100
+    # Zone scoring: minimum 0-10 strength to draw, cap on drawn zones, and
+    # the touch count that earns the full touch component.
+    zone_min_strength: float = 4.0
+    zone_max: int = 6
+    zone_touch_norm: float = 14.0
+    # Zone score weights (normalized by their sum).
+    w_vol: float = 0.28
+    w_abs: float = 0.24
+    w_touch: float = 0.22
+    w_rej: float = 0.14
+    w_rec: float = 0.12
+    # Pressure score weights: net imbalance / CVD bias / absorption side /
+    # latest print direction.
+    pw_imbalance: float = 0.32
+    pw_cvd: float = 0.30
+    pw_absorption: float = 0.23
+    pw_cluster: float = 0.15
+
+
+def _wick_absorption_split(
+    open_: float, high: float, low: float, close: float, volume: float
+) -> tuple[float, float]:
+    """Wick-fraction absorption proxy for one bar.
+
+    A long upper wick means aggressive buyers pushed into the high and were
+    absorbed by passive sellers; a long lower wick is the mirror. The bar's
+    volume is attributed to the wick side in proportion to the wick's share
+    of the range, but only when the wick is dominant (>50% of the range) so
+    ordinary bars contribute nothing.
+
+    Returns ``(absorbed_at_highs, absorbed_at_lows)``.
+    """
+    rng = high - low
+    if rng <= 0 or volume <= 0:
+        return 0.0, 0.0
+    upper = high - max(open_, close)
+    lower = min(open_, close) - low
+    at_highs = volume * (upper / rng) if upper > 0.5 * rng else 0.0
+    at_lows = volume * (lower / rng) if lower > 0.5 * rng else 0.0
+    return at_highs, at_lows
+
+
+def build_orderflow_matrix(
+    bars: pd.DataFrame,
+    readouts: Sequence[AbsorptionReadout] | None = None,
+    cfg: OrderflowMatrixConfig | None = None,
+) -> dict[str, Any]:
+    """Fixed-range order-flow profile over the trailing window of ``bars``.
+
+    ``bars`` is an OHLCV frame (open/high/low/close/volume, ascending,
+    most-recent-last) -- the same frame the caller fed the detector. When
+    ``readouts`` are supplied and positionally aligned 1:1 with ``bars``
+    (true whenever they came from ``detect_absorption_series`` over
+    ``observations_from_bars(bars)``), per-bar delta uses the detector's
+    ``net_flow`` so the matrix and the series agree; otherwise delta falls
+    back to the CLV x volume proxy computed here.
+
+    The returned dict always carries the same keys; when the frame is empty
+    or degenerate (no price range), bins/zones are empty and ``poc`` /
+    ``vah`` / ``val`` are None rather than fabricated. Every number is
+    rounded for the wire.
+    """
+    resolved = cfg if cfg is not None else OrderflowMatrixConfig()
+    window = bars.tail(resolved.lookback)
+    n = len(window)
+
+    def _empty() -> dict[str, Any]:
+        return {
+            "available": False,
+            "lookback": resolved.lookback,
+            "bins_used": 0,
+            "window_bars": n,
+            "window_low": None,
+            "window_high": None,
+            "bins": [],
+            "poc": None,
+            "vah": None,
+            "val": None,
+            "zones": [],
+            "pressure": None,
+            "last_print": None,
+        }
+
+    if n < 5:
+        return _empty()
+
+    highs = window["high"].to_numpy(dtype=float)
+    lows = window["low"].to_numpy(dtype=float)
+    opens = window["open"].to_numpy(dtype=float)
+    closes = window["close"].to_numpy(dtype=float)
+    volumes = window["volume"].to_numpy(dtype=float)
+
+    hi_win = float(highs.max())
+    lo_win = float(lows.min())
+    rng_win = hi_win - lo_win
+    if rng_win <= 0:
+        return _empty()
+
+    n_bins = resolved.bins
+    bin_sz = rng_win / n_bins
+
+    # Per-bar delta: detector readouts when aligned, else the CLV proxy.
+    net_by_bar: list[float] = []
+    if readouts is not None and len(readouts) == len(bars):
+        tail = readouts[-n:]
+        net_by_bar = [float(r.net_flow) for r in tail]
+    else:
+        for o, h, l, c, v in zip(opens, highs, lows, closes, volumes):
+            rng = h - l
+            clv = ((c - l) - (h - c)) / rng if rng > 0 else 0.0
+            net_by_bar.append(clv * v)
+
+    vol_sorted = sorted(float(v) for v in volumes)
+    strong_thr = _percentile(vol_sorted, resolved.strong_volume_pct / 100.0)
+
+    total_bin = [0.0] * n_bins
+    buy_bin = [0.0] * n_bins
+    sell_bin = [0.0] * n_bins
+    strong_buy_bin = [0.0] * n_bins
+    strong_sell_bin = [0.0] * n_bins
+    delta_bin = [0.0] * n_bins
+    absorb_bin = [0.0] * n_bins
+    touch_bin = [0.0] * n_bins
+    rej_bin = [0.0] * n_bins
+    # Offset (bars ago) of the most recent touch per bin; starts "never".
+    rec_bin = [float(n)] * n_bins
+
+    def _bin_of(price: float) -> int:
+        return max(0, min(n_bins - 1, int((price - lo_win) / bin_sz)))
+
+    for off, (o, h, l, c, v) in enumerate(zip(opens, highs, lows, closes, volumes)):
+        if v <= 0:
+            continue
+        buy = c >= o
+        strong = v >= strong_thr
+        bi = _bin_of((h + l + c) / 3.0)
+        total_bin[bi] += v
+        if buy:
+            buy_bin[bi] += v
+            if strong:
+                strong_buy_bin[bi] += v
+        else:
+            sell_bin[bi] += v
+            if strong:
+                strong_sell_bin[bi] += v
+        delta_bin[bi] += net_by_bar[off]
+
+        # Wick-defended volume lands in the extreme bin it was absorbed at.
+        at_hi, at_lo = _wick_absorption_split(o, h, l, c, v)
+        if at_hi > 0:
+            absorb_bin[_bin_of(h)] += at_hi
+        if at_lo > 0:
+            absorb_bin[_bin_of(l)] += at_lo
+
+        lo_i = _bin_of(l)
+        hi_i = _bin_of(h)
+        rng = h - l
+        for b in range(lo_i, hi_i + 1):
+            touch_bin[b] += 1.0
+            if off < rec_bin[b]:
+                rec_bin[b] = off
+        if rng > 0:
+            if (h - max(o, c)) > 0.5 * rng:
+                rej_bin[hi_i] += 1.0
+            if (min(o, c) - l) > 0.5 * rng:
+                rej_bin[lo_i] += 1.0
+
+    tot_vol = sum(total_bin)
+    if tot_vol <= 0:
+        return _empty()
+
+    max_bin_vol = max(total_bin)
+    max_abs = max(absorb_bin)
+    max_rej = max(rej_bin)
+    max_abs_delta = max(abs(d) for d in delta_bin)
+    tot_buy = sum(buy_bin)
+    tot_sell = sum(sell_bin)
+
+    # POC + value area (expand from POC to target coverage).
+    poc_idx = total_bin.index(max_bin_vol)
+    poc_px = lo_win + bin_sz * poc_idx + bin_sz * 0.5
+    va_flag = [False] * n_bins
+    va_flag[poc_idx] = True
+    target = tot_vol * resolved.value_area_pct / 100.0
+    acc = total_bin[poc_idx]
+    lo_ix = hi_ix = poc_idx
+    while acc < target and (lo_ix > 0 or hi_ix < n_bins - 1):
+        up_c = total_bin[hi_ix + 1] if hi_ix < n_bins - 1 else -1.0
+        dn_c = total_bin[lo_ix - 1] if lo_ix > 0 else -1.0
+        if up_c >= dn_c:
+            hi_ix += 1
+            acc += up_c
+            va_flag[hi_ix] = True
+        else:
+            lo_ix -= 1
+            acc += dn_c
+            va_flag[lo_ix] = True
+    vah_px = lo_win + bin_sz * (hi_ix + 1)
+    val_px = lo_win + bin_sz * lo_ix
+
+    # Zone scoring: local peaks of the volume/absorption blend, scored by the
+    # weighted mix of volume share, absorption share, touches, rejections and
+    # recency, on a 0-10 scale.
+    w_sum = max(resolved.w_vol + resolved.w_abs + resolved.w_touch + resolved.w_rej + resolved.w_rec, 1e-9)
+    sig = [0.0] * n_bins
+    strength = [0.0] * n_bins
+    for i in range(n_bins):
+        vol_f = total_bin[i] / max_bin_vol if max_bin_vol > 0 else 0.0
+        abs_f = absorb_bin[i] / max_abs if max_abs > 0 else 0.0
+        touch_f = min(touch_bin[i] / max(resolved.zone_touch_norm, 1.0), 1.0)
+        rej_f = rej_bin[i] / max_rej if max_rej > 0 else 0.0
+        rec_f = 1.0 - min(rec_bin[i] / max(n - 1, 1), 1.0)
+        strength[i] = (
+            (vol_f * resolved.w_vol + abs_f * resolved.w_abs + touch_f * resolved.w_touch
+             + rej_f * resolved.w_rej + rec_f * resolved.w_rec)
+            / w_sum * 10.0
+        )
+        sig[i] = vol_f * 0.5 + abs_f * 0.5
+
+    peaks: list[int] = []
+    for i in range(1, n_bins - 1):
+        if sig[i] > sig[i - 1] and sig[i] >= sig[i + 1] and sig[i] > 0 and strength[i] >= resolved.zone_min_strength:
+            peaks.append(i)
+    peaks.sort(key=lambda i: strength[i], reverse=True)
+    peaks = peaks[: resolved.zone_max]
+
+    last_close = float(closes[-1])
+    zones: list[dict[str, Any]] = []
+    for i in sorted(peaks):
+        z_lo = lo_win + bin_sz * i
+        z_hi = z_lo + bin_sz
+        support = (z_lo + z_hi) / 2.0 < last_close
+        sc = round(strength[i], 1)
+        zones.append(
+            {
+                "low": round(z_lo, 4),
+                "high": round(z_hi, 4),
+                "mid": round((z_lo + z_hi) / 2.0, 4),
+                "strength": sc,
+                "tier": (
+                    "ELITE" if sc >= 8
+                    else "STRONG" if sc >= 6.5
+                    else "MODERATE" if sc >= 5
+                    else "WEAK" if sc >= 3.5
+                    else "FORMING"
+                ),
+                "side": "support" if support else "resistance",
+                "volume": round(total_bin[i], 2),
+                "absorption": round(absorb_bin[i], 2),
+                "touches": int(touch_bin[i]),
+                "rejections": int(rej_bin[i]),
+            }
+        )
+    zones.sort(key=lambda z: z["strength"], reverse=True)
+
+    # Cluster (print) tiers: a bar is a print when its volume or |delta|
+    # beats the tier percentile in a majority of the three windows. The last
+    # print drives the pressure score's cluster term.
+    def _print_tiers(series_abs: list[float], raw: list[float]) -> tuple[list[int], bool]:
+        m = len(series_abs)
+        tiers = [0] * m
+        for i in range(m):
+            def _hits(pct_num: float) -> int:
+                count = 0
+                for win in (resolved.short_len, resolved.mid_len, resolved.long_len):
+                    lo = max(0, i - win + 1)
+                    hist = sorted(series_abs[lo : i + 1])
+                    if raw[i] >= _percentile(hist, pct_num / 100.0):
+                        count += 1
+                return count
+
+            if _hits(resolved.big_pct) >= 2:
+                tiers[i] = 3
+            elif _hits(resolved.medium_pct) >= 2:
+                tiers[i] = 2
+            elif _hits(resolved.small_pct) >= 2:
+                tiers[i] = 1
+        return tiers, True
+
+    vol_list = [float(v) for v in volumes]
+    abs_delta_list = [abs(d) for d in net_by_bar]
+    vol_tiers, _ = _print_tiers(vol_list, vol_list)
+    delta_tiers, _ = _print_tiers(abs_delta_list, abs_delta_list)
+    tiers = [max(a, b) for a, b in zip(vol_tiers, delta_tiers)]
+
+    last_cluster_dir = 0.0
+    for i in range(n - 1, -1, -1):
+        if tiers[i] > 0:
+            d = net_by_bar[i]
+            c, o = closes[i], opens[i]
+            last_cluster_dir = (
+                1.0 if (d > 0 or (d == 0 and c >= o)) else -1.0
+            )
+            break
+    last_tier = tiers[-1]
+    last_delta = net_by_bar[-1]
+    last_print = {
+        "tier": "WHALE" if last_tier == 3 else "MEDIUM" if last_tier == 2 else "SMALL" if last_tier == 1 else None,
+        "tier_rank": last_tier,
+        "side": ("BUY" if last_delta > 0 else "SELL" if last_delta < 0 else "MIXED") if last_tier > 0 else None,
+        "bar_delta": round(last_delta, 2),
+        "bar_volume": round(vol_list[-1], 2),
+        "vol_ratio": round(vol_list[-1] / (sum(vol_list) / n), 3) if n else 0.0,
+    }
+
+    # Pressure score: net buy/sell share + cumulative-delta bias + which side
+    # of price absorption stacks on + direction of the latest print.
+    imbalance = (tot_buy - tot_sell) / tot_vol
+    sum_delta = sum(net_by_bar)
+    sum_abs_delta = sum(abs_delta_list)
+    cd_bias = sum_delta / max(sum_abs_delta, 1.0)
+    abs_above = sum(absorb_bin[i] for i in range(n_bins) if lo_win + bin_sz * (i + 0.5) >= last_close)
+    abs_below = tot_abs - abs_above if (tot_abs := sum(absorb_bin)) else 0.0
+    abs_bias = (abs_below - abs_above) / max(abs_below + abs_above, 1.0)
+    pressure_score = (
+        imbalance * resolved.pw_imbalance
+        + max(-1.0, min(1.0, cd_bias)) * resolved.pw_cvd
+        + abs_bias * resolved.pw_absorption
+        + last_cluster_dir * resolved.pw_cluster
+    ) * 100.0
+
+    bins_out = []
+    for i in range(n_bins):
+        z_lo = lo_win + bin_sz * i
+        bins_out.append(
+            {
+                "index": i,
+                "low": round(z_lo, 4),
+                "high": round(z_lo + bin_sz, 4),
+                "mid": round(z_lo + bin_sz * 0.5, 4),
+                "total": round(total_bin[i], 2),
+                "buy": round(buy_bin[i], 2),
+                "sell": round(sell_bin[i], 2),
+                "strong_buy": round(strong_buy_bin[i], 2),
+                "strong_sell": round(strong_sell_bin[i], 2),
+                "delta": round(delta_bin[i], 2),
+                "delta_frac": round(abs(delta_bin[i]) / max_abs_delta, 4) if max_abs_delta > 0 else 0.0,
+                "absorption": round(absorb_bin[i], 2),
+                "touches": int(touch_bin[i]),
+                "rejections": int(rej_bin[i]),
+                "in_value_area": va_flag[i],
+                "strength": round(strength[i], 2),
+            }
+        )
+
+    return {
+        "available": True,
+        "lookback": resolved.lookback,
+        "bins_used": n_bins,
+        "window_bars": n,
+        "window_low": round(lo_win, 4),
+        "window_high": round(hi_win, 4),
+        "asof": window.index[-1].isoformat(),
+        "atr": round(_last_atr(readouts, n), 4),
+        "bins": bins_out,
+        "poc": round(poc_px, 4),
+        "vah": round(vah_px, 4),
+        "val": round(val_px, 4),
+        "zones": zones,
+        "last_print": last_print,
+        "pressure": {
+            "score": round(pressure_score, 1),
+            "regime": "ACCUM" if pressure_score > 20 else "DISTRIB" if pressure_score < -20 else "BALANCED",
+            "imbalance": round(imbalance, 4),
+            "cvd_bias": round(cd_bias, 4),
+            "absorption_bias": round(abs_bias, 4),
+            "absorption_side": (
+                "SUPPORT" if abs_bias > 0.1 else "RESISTANCE" if abs_bias < -0.1 else "BALANCED"
+            ),
+            "last_cluster_dir": int(last_cluster_dir),
+            "buy_share": round(tot_buy / tot_vol, 4),
+            "sell_share": round(tot_sell / tot_vol, 4),
+        },
+    }
+
+
+def _last_atr(readouts: Sequence[AbsorptionReadout] | None, n: int) -> float:
+    """Most recent ATR of the window for price-vs-level context."""
+    if readouts:
+        return float(readouts[-1].atr)
+    return 0.0

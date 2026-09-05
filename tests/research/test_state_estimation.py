@@ -92,3 +92,68 @@ def test_compute_anchored_vwap():
     assert np.isnan(vwap_res[1].vwap[2])
     assert not np.isnan(vwap_res[1].vwap[3])
     assert vwap_res[1].vwap[3] == prices[3]
+
+
+def test_velocity_zscore_is_centered_not_a_signal_to_noise_ratio():
+    """A steady drift is not a 16-sigma event.
+
+    `velocity_zscore` was `v_hat / rolling_sd`, which never subtracted the
+    rolling mean. On a trending series the filtered velocity is both
+    persistently positive and very smooth, so the numerator stayed large while
+    the denominator collapsed: an ordinary uptrend printed z = +16 and fired
+    the |z| >= breakout_z gate on 98% of bars, which is why the page showed a
+    "+15.94 sigma" velocity next to a flat tape.
+    """
+    rng = np.random.default_rng(0)
+    n = 260
+    prices = 600 + np.cumsum(np.full(n, 0.65) + rng.normal(0.0, 0.9, n))
+
+    res = kinematic_kalman_filter(prices)
+    z = res.velocity_zscore
+
+    # Velocity itself is genuinely and persistently positive -- the drift is
+    # real, and the filter is right about it.
+    assert np.mean(res.velocity[20:]) > 0.0
+
+    # But a standardized departure from its own recent norm stays in the range
+    # a z-score is supposed to occupy.
+    assert np.max(np.abs(z)) < 6.0
+
+    # And the breakout gate is a gate, not an always-on light.
+    assert np.mean(np.abs(z) >= 2.0) < 0.5
+
+
+def test_velocity_zscore_is_scale_free():
+    """The same shape at two price levels standardizes the same way.
+
+    The dispersion floor was a fixed 1e-3 in price units, so it dominated the
+    denominator for a low-priced name and was negligible for an index -- the
+    identical path produced different z-scores purely from the price level.
+    With the filter's own price-unit parameters (`sigma_r`, `base_sigma_q`)
+    scaled alongside the series, the standardized velocity is now invariant
+    once the filter's startup transient has decayed. The transient itself is a
+    separate, pre-existing scale dependence -- the initial state covariance is
+    a fixed constant in price units -- so the comparison starts past it.
+    """
+    rng = np.random.default_rng(7)
+    steps = rng.normal(0.0, 1.0, 200)
+    scale = 100.0
+    cheap = 20 + np.cumsum(steps * 0.02)
+    rich = 2000 + np.cumsum(steps * 0.02 * scale)
+
+    z_cheap = kinematic_kalman_filter(cheap, sigma_r=0.02, base_sigma_q=1e-5).velocity_zscore
+    z_rich = kinematic_kalman_filter(
+        rich, sigma_r=0.02 * scale, base_sigma_q=1e-5 * scale
+    ).velocity_zscore
+
+    assert np.allclose(z_cheap[80:], z_rich[80:], atol=1e-3)
+
+
+def test_velocity_zscore_is_zero_before_the_window_fills():
+    """No norm yet means no measured departure, not a spike."""
+    prices = np.linspace(100.0, 130.0, 60)
+    z = kinematic_kalman_filter(prices).velocity_zscore
+    # min_periods=3, so the first two bars have no rolling statistics at all.
+    assert z[0] == 0.0
+    assert z[1] == 0.0
+    assert np.all(np.isfinite(z))

@@ -766,7 +766,7 @@ function onMove(e: MouseEvent): void {
   color: var(--ink);
 }
 .struct {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.04em;
   padding: 1px 4px;
@@ -854,7 +854,7 @@ function onMove(e: MouseEvent): void {
 }
 .pane-cap {
   fill: var(--ink-faint);
-  font: 600 9px var(--font-display);
+  font: 600 var(--t-nano) var(--font-display);
   letter-spacing: 0.1em;
 }
 .pane-div {
@@ -889,7 +889,7 @@ function onMove(e: MouseEvent): void {
 }
 .axis-cap.flow-y {
   fill: var(--ink-faint);
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 .time-axis line {
   stroke: var(--rule-hi);
@@ -978,7 +978,7 @@ function onMove(e: MouseEvent): void {
 .opex-label,
 .selected-exp-label {
   fill: var(--phosphor-dim);
-  font: 600 9px var(--font-display);
+  font: 600 var(--t-nano) var(--font-display);
   letter-spacing: 0.05em;
   paint-order: stroke;
   stroke: var(--void);
@@ -1079,7 +1079,7 @@ function onMove(e: MouseEvent): void {
 }
 .crosshair-pill-text {
   fill: var(--phosphor);
-  font: 700 9px var(--font-data);
+  font: 700 var(--t-nano) var(--font-data);
 }
 
 .empty {
@@ -1088,7 +1088,7 @@ function onMove(e: MouseEvent): void {
   letter-spacing: 0.1em;
 }
 .empty-soft {
-  fill: var(--ink-ghost);
+  fill: var(--ink-faint);
   font: 10px var(--font-display);
   letter-spacing: 0.08em;
 }

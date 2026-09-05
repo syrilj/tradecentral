@@ -293,8 +293,8 @@ describe('unmeasurable regime — withheld, never a zero or a neutral dial', () 
   })
 
   it('withholds the probabilities panel entirely when unmeasurable, rather than rendering zeroed figures', () => {
-    expect(view).toContain(
-      `v-if="regimeState && regimeState.regime !== 'unmeasurable'" label="Probabilities"`,
+    expect(view).toMatch(
+      /v-if="regimeState && regimeState\.regime !== 'unmeasurable'"[\s\S]*?label="Probabilities"/,
     )
   })
 
@@ -442,9 +442,7 @@ describe('tilt constants are on screen, not hidden behind the probability', () =
     // Three tiers, and only one may speak: this soft advisory is for a
     // usable-but-noisy density, and it defers once either hard gate (unusable
     // density, or a blended smile) has already withheld the figures outright.
-    expect(view).toContain(
-      'v-if="clippedMassMaterial && !densityUnreliable && !smileBlended"',
-    )
+    expect(view).toContain('v-if="clippedMassMaterial && !densityUnreliable && !smileBlended"')
   })
 })
 
@@ -510,7 +508,7 @@ describe('accessibility', () => {
 
 describe('symbol query sync', () => {
   it('defaults to SPY and reads the initial symbol from ?symbol=', () => {
-    expect(view).toContain("? route.query.symbol : 'SPY').toUpperCase()")
+    expect(view).toMatch(/\?\s*route\.query\.symbol\s*:\s*'SPY'\s*\)\.toUpperCase\(\)/)
   })
 
   it('writes the symbol back to the route on apply', () => {
@@ -519,5 +517,203 @@ describe('symbol query sync', () => {
 
   it('watches route.query.symbol for external navigation (e.g. global search)', () => {
     expect(view).toContain('() => route.query.symbol')
+  })
+})
+
+/**
+ * The level map: probabilities, order flow, and the mean.
+ *
+ * These lock the wiring that answers the three things the page could not:
+ * how likely a level is to be REACHED, what the tape did at that price, and
+ * where price is being pulled back to. Source-text assertions, per the
+ * methodology note at the top of this file.
+ */
+describe('/regime level map — probability, order flow and the mean', () => {
+  it('reads the order-flow matrix the absorption endpoint has always shipped', () => {
+    // The matrix (volume-at-price split buy/sell, per-bin delta, wick
+    // absorption, touch/rejection counts, scored zones) was computed on every
+    // /api/absorption call and never read by this page.
+    expect(view).toMatch(/api\.absorptionSymbol\(symbol\.value/)
+    expect(view).toMatch(/const flowMatrix = computed\(\(\) =>[\s\S]*?\.matrix \?\? null\)/)
+  })
+
+  it('keeps the order-flow poll behind the same activation gate as every other clock', () => {
+    // Lazy activation is the page's whole contract; a new resource that
+    // fetches on mount would break it silently.
+    const block = view.slice(view.indexOf('const absorptionRes'))
+    const decl = block.slice(0, block.indexOf('\n)'))
+    expect(decl).toMatch(/immediate:\s*false/)
+    expect(decl).toMatch(/enabled:\s*\(\)\s*=>\s*activated\.value/)
+    expect(view).toMatch(/void absorptionRes\.refresh\(\)/)
+  })
+
+  it('polls order flow slowly — it is a trailing-window statistic, not a tick', () => {
+    const block = view.slice(view.indexOf('const absorptionRes'))
+    expect(block.slice(0, block.indexOf('\n)'))).toMatch(/intervalMs:\s*120_000/)
+  })
+
+  it('refetches order flow when the symbol changes, like every other resource', () => {
+    const clears = view.match(/void absorptionRes\.refresh\(\{ clear: true \}\)/g) ?? []
+    // applySymbol() and the ?symbol= route watcher.
+    expect(clears.length).toBe(2)
+  })
+
+  it('builds one ladder from gamma, volume, order flow, the kernel and the vol surface', () => {
+    expect(view).toMatch(/buildLevelLadder\(\{/)
+    const call = view.slice(view.indexOf('return buildLevelLadder({'))
+    expect(call).toMatch(/matrix: flowMatrix\.value/)
+    expect(call).toMatch(/callWall: regimeRead\.value\.callWall/)
+    expect(call).toMatch(/mean: pt\?\.nw_mean/)
+    expect(call).toMatch(/vwap: latestVwap\.value/)
+  })
+
+  it('withholds touch probabilities rather than assuming a volatility', () => {
+    // levelHorizon returns null without an ATM IV, and LevelMap hides the
+    // whole probability lane when its horizon label is null — an unlabelled
+    // probability is worse than none.
+    expect(view).toMatch(
+      /if \(sigma == null \|\| !Number\.isFinite\(sigma\) \|\| sigma <= 0\) return null/,
+    )
+    expect(view).toMatch(/:horizon-label="levelHorizon\?\.label \?\? null"/)
+  })
+
+  it('states every probability over an explicit horizon', () => {
+    // A 0DTE read uses the remaining session on the trading clock; anything
+    // longer converts calendar DTE to trading days rather than mixing clocks.
+    expect(view).toMatch(/sessionYears\(sessionFractionRemaining\.value\)/)
+    expect(view).toMatch(/TRADING_DAYS_PER_CALENDAR_DAY = 252 \/ 365/)
+    expect(view).toMatch(/label: 'rest of session'/)
+  })
+
+  it('derives the mean target from three independent anchors, not from spot', () => {
+    const call = view.slice(view.indexOf('return fairValueTarget({'))
+    expect(call).toMatch(/poc: m\?\.poc/)
+    expect(call).toMatch(/vwap: latestVwap\.value/)
+    expect(call).toMatch(/kernelMean: latestStatePoint\.value\?\.nw_mean/)
+    expect(call).toMatch(/halfLifeBars: latestStatePoint\.value\?\.ou_half_life/)
+  })
+
+  it('anchors VWAP on the most recent anchor, not the window-wide one', () => {
+    // A VWAP still carrying months of pre-event volume is not the mean
+    // today's tape reverts to.
+    expect(view).toMatch(
+      /anchors\.reduce\(\(a, b\) => \(b\.anchor_index > a\.anchor_index \? b : a\)\)/,
+    )
+  })
+
+  it('names the missing lens instead of scoring a level as if it were confirmed', () => {
+    expect(view).toMatch(/ORDER FLOW UNAVAILABLE/)
+    expect(view).toMatch(/No mean target/)
+    expect(view).toMatch(/Touch probabilities are withheld/)
+  })
+
+  it('renders the map above the analytics grid, where the read is acted on', () => {
+    const mapIdx = view.indexOf('<LevelMap')
+    const heroIdx = view.indexOf('<!-- 2. Hero 2-Column Analytics Grid')
+    expect(mapIdx).toBeGreaterThan(-1)
+    expect(heroIdx).toBeGreaterThan(-1)
+    expect(mapIdx).toBeLessThan(heroIdx)
+  })
+
+  it('never prints the conviction composite as a percentage', () => {
+    // It is a ranking aid built from confluence + zone strength + touches +
+    // volume share. A % sign would read as a probability, which it is not.
+    const map = source('components/LevelMap.vue')
+    expect(map).toMatch(/conviction \$\{l\.conviction\}/)
+    expect(map).toMatch(/It ranks levels; it is not a probability\./)
+  })
+})
+
+describe('LevelMap component', () => {
+  const map = source('components/LevelMap.vue')
+
+  it('renders through ECharts rather than a hand-rolled axis and collision pass', () => {
+    // The hand-rolled versions of these were what read as broken: occluding
+    // labels, no zoom, no tooltip, no hit-testing.
+    expect(map).toMatch(/from 'echarts\/core'/)
+    expect(map).toMatch(/echarts\.use\(\[/)
+    expect(map).toMatch(/echarts\.init\(host/)
+  })
+
+  it('imports only the ECharts pieces it draws, not the full bundle', () => {
+    expect(map).toMatch(/from 'echarts\/charts'/)
+    expect(map).toMatch(/from 'echarts\/renderers'/)
+    expect(map).not.toMatch(/from 'echarts'\s*$/m)
+  })
+
+  it('lets ECharts resolve label occlusion instead of nudging text by hand', () => {
+    expect(map).toMatch(/labelLayout: \{ moveOverlap: 'shiftY'/)
+  })
+
+  it('puts the price on every label so a shifted one cannot be misread', () => {
+    // This is what makes moveOverlap safe: the label states its own price,
+    // so it stays unambiguous even when drawn off its rule.
+    expect(map).toMatch(/\$\{l\.label\}\s+\$\{num\(l\.price, 2\)\}/)
+  })
+
+  it('reads colours from design tokens at runtime rather than hardcoding them', () => {
+    expect(map).toMatch(/getComputedStyle\(el\)/)
+    expect(map).toMatch(/cs\.getPropertyValue\(`--\$\{key\}`\)/)
+  })
+
+  it('shares one price axis across the volume and level grids', () => {
+    expect(map).toMatch(/grid: \[/)
+    expect(map).toMatch(/gridIndex: 0/)
+    expect(map).toMatch(/gridIndex: 1/)
+    expect(map).toMatch(/min: yLo/)
+    expect(map).toMatch(/max: yHi/)
+  })
+
+  it('frames on the median level distance so one far zone cannot squash the cluster', () => {
+    // The readability bug this default exists to prevent: a swing zone 11%
+    // away pushed the call wall, both expected-move bands, the put wall and
+    // spot into the top eighth of the frame.
+    expect(map).toMatch(/const med = dists\.length \? median\(dists\) : 0/)
+    expect(map).toMatch(/Math\.max\(med \* 1\.6, 3 \* emHalf, spot \* 0\.008\)/)
+  })
+
+  it('lets the operator widen the frame rather than deciding for them', () => {
+    expect(map).toMatch(/type ZoomMode = 'near' \| 'auto' \| 'wide'/)
+    expect(map).toMatch(/const zoom = ref<ZoomMode>\('auto'\)/)
+    expect(map).toMatch(/class="lm-zoom-chip font-mono"/)
+    expect(map).toMatch(/dataZoom: \[\{ type: 'inside'/)
+  })
+
+  it('splits the volume histogram into buy and sell rather than one bar', () => {
+    expect(map).toMatch(/fill: t\.call/)
+    expect(map).toMatch(/fill: t\.put/)
+    expect(map).toMatch(/buy \+ sell/)
+  })
+
+  it('shows touch and terminal probability together so rejection is visible', () => {
+    expect(map).toMatch(/api\.coord\(\[touch, price\]\)/)
+    expect(map).toMatch(/api\.coord\(\[terminal, price\]\)/)
+  })
+
+  it('names the levels the frame dropped, not just how many', () => {
+    // A bare count says a level exists somewhere and nothing about whether
+    // it matters; the nearest one each way is what changes a decision.
+    expect(map).toMatch(/const offFrame = computed/)
+    expect(map).toMatch(/offFrame\.above\[0\]\.label/)
+    expect(map).toMatch(/offFrame\.below\[0\]\.label/)
+    expect(map).toMatch(/Press WIDE to include them/)
+  })
+
+  it('draws nothing at all rather than a partial map without spot or levels', () => {
+    expect(map).toMatch(
+      /const empty = computed\(\(\) => !props\.levels\.length \|\| !\(props\.spot && props\.spot > 0\)\)/,
+    )
+  })
+
+  it('disposes the chart and its observer on unmount', () => {
+    // A leaked ECharts instance keeps a canvas and a ResizeObserver alive on
+    // every symbol change.
+    expect(map).toMatch(/onBeforeUnmount\(\(\) => \{[\s\S]*?chart\?\.dispose\(\)/)
+    expect(map).toMatch(/ro\?\.disconnect\(\)/)
+  })
+
+  it('carries no em dash in any rendered copy', () => {
+    const tmpl = map.slice(map.indexOf('<template>'), map.indexOf('<style scoped>'))
+    expect(tmpl).not.toContain('\u2014')
   })
 })

@@ -505,7 +505,7 @@ const flip = computed(() => curX.value > W * 0.62)
   opacity: 0.85;
 }
 .level text {
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
 }
 .level.neg line,
@@ -549,7 +549,7 @@ const flip = computed(() => curX.value > W * 0.62)
 
 text {
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   fill: var(--ink-faint);
   user-select: none;
 }
@@ -559,14 +559,14 @@ text {
 }
 .xlab text {
   text-anchor: middle;
-  fill: var(--ink-ghost);
+  fill: var(--ink-faint);
 }
 
 .pane-lab {
   font-family: var(--font-display);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.14em;
-  fill: var(--ink-ghost);
+  fill: var(--ink-faint);
 }
 .pane-lab.dim {
   fill: var(--short);
@@ -602,7 +602,7 @@ text {
 }
 
 .r-date {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .r-px {
   font-size: var(--t-body);

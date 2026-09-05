@@ -290,7 +290,7 @@ const rows = computed<Row[]>(() =>
 }
 
 .lvn-tag {
-  fill: var(--ink-ghost);
+  fill: var(--ink-faint);
 }
 
 .poc-label {
@@ -329,7 +329,7 @@ const rows = computed<Row[]>(() =>
 
 .method-note {
   margin: 0;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.02em;
 }

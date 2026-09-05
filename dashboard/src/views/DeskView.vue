@@ -17,6 +17,13 @@ import { sparkline } from '@/charts'
 import { loadWatchlist, toggleWatchlistSymbol } from '@/watchlist'
 import Panel from '@/components/Panel.vue'
 import VerdictChip from '@/components/VerdictChip.vue'
+import RegimeStateBadge from '@/components/RegimeStateBadge.vue'
+import {
+  isRegimeMeasurable,
+  formatDistancePercent,
+  type PriceDrawTelemetryPayload,
+  type PriceDrawLevel,
+} from '@/priceDrawContracts'
 
 /**
  * The Desk View.
@@ -55,6 +62,7 @@ const probeErr = ref<string | null>(null)
 const customWatchlist = ref<string[]>(loadWatchlist())
 const probeResults = ref<Record<string, Trajectory | null>>({})
 const liveMarks = ref<Record<string, QuoteMark>>({})
+const regimeTelemetryMap = ref<Record<string, PriceDrawTelemetryPayload>>({})
 
 let watchlistTimer: number | undefined
 let marksTimer: number | undefined
@@ -193,6 +201,38 @@ async function refreshBoardMarks(): Promise<void> {
   } catch {
     /* keep last marks; the next tick retries */
   }
+
+  // Fetch price attractors / regime telemetry for board and activity symbols
+  const allSymbols = new Set<string>(symbols)
+  for (const row of activity.value) {
+    if (row.symbol) allSymbols.add(row.symbol.toUpperCase())
+  }
+
+  try {
+    await Promise.allSettled(
+      Array.from(allSymbols).map(async (sym) => {
+        try {
+          const data = await api.priceAttractors(sym)
+          if (data) {
+            regimeTelemetryMap.value[sym.toUpperCase()] = data
+          }
+        } catch {
+          /* keep last or unmeasured */
+        }
+      }),
+    )
+  } catch {
+    /* keep last marks */
+  }
+}
+
+function regimeFor(sym: string | undefined): PriceDrawTelemetryPayload | null {
+  if (!sym) return null
+  return regimeTelemetryMap.value[sym.toUpperCase()] ?? null
+}
+
+function primaryMagnetFor(sym: string | undefined): PriceDrawLevel | null {
+  return regimeFor(sym)?.primary_magnet ?? null
 }
 
 function markFor(sym: string): QuoteMark | null {
@@ -324,7 +364,9 @@ const reconciliation = computed(() => d.value?.signal_reconciliation)
 const reconciledBySymbol = computed(
   () => new Map((reconciliation.value?.rows ?? []).map((row) => [row.symbol.toUpperCase(), row])),
 )
+// prettier-ignore
 const signalsBySymbol = computed(() => new Map(signals.value.map((s) => [s.symbol?.toUpperCase() ?? '', s])))
+// prettier-ignore
 const peadBySymbol = computed(() => new Map(pead.value.map((p) => [p.symbol?.toUpperCase() ?? '', p])))
 
 watch(
@@ -343,6 +385,55 @@ watch(
 )
 
 /* Filtering + confidence ranking */
+const marketRegimeBreadth = computed(() => {
+  let dampening = 0
+  let amplification = 0
+  let other = 0
+  let unmeasured = 0
+  let bullishPulls = 0
+  let bearishPulls = 0
+
+  const symbols = boardSymbols()
+  for (const sym of symbols) {
+    const tel = regimeTelemetryMap.value[sym.toUpperCase()]
+    if (!tel || !tel.quality?.measurable || tel.regime_state === 'unmeasurable') {
+      unmeasured++
+      continue
+    }
+    if (tel.regime_state === 'volatility_dampening') {
+      dampening++
+    } else if (tel.regime_state === 'volatility_amplification') {
+      amplification++
+    } else {
+      other++
+    }
+
+    if (tel.dominant_direction === 'bullish_pull') {
+      bullishPulls++
+    } else if (tel.dominant_direction === 'bearish_pull') {
+      bearishPulls++
+    }
+  }
+
+  const measured = dampening + amplification + other
+  const dominantBias =
+    bullishPulls > bearishPulls
+      ? 'BULL PULL'
+      : bearishPulls > bullishPulls
+        ? 'BEAR PULL'
+        : 'PIN / FLAT'
+
+  return {
+    dampening,
+    amplification,
+    other,
+    unmeasured,
+    measured,
+    dominantBias,
+    total: symbols.length,
+  }
+})
+
 const peadFlagged = computed(
   () => pead.value.filter((p) => p.setup_ok || p.model?.state === 'FLAG').length,
 )
@@ -739,6 +830,44 @@ function navTo(name: string): void {
         </span>
       </div>
 
+      <!-- 04 Regime & Magnet Breadth Card -->
+      <button
+        class="kpi-card ticked kpi-breadth-card kpi-regime-card"
+        type="button"
+        aria-label="Open Live Stack for market regime telemetry"
+        @click="navTo('livestack')"
+      >
+        <div class="kpi-head-row">
+          <span class="label kpi-label">Regime & Magnet Breadth</span>
+          <span
+            class="kpi-badge"
+            :class="
+              marketRegimeBreadth.dampening >= marketRegimeBreadth.amplification
+                ? 'pos'
+                : 'warn-text'
+            "
+          >
+            {{
+              marketRegimeBreadth.dampening >= marketRegimeBreadth.amplification
+                ? 'LONG Γ'
+                : 'SHORT Γ'
+            }}
+          </span>
+        </div>
+        <div class="kpi-val-row">
+          <span class="kpi-val fig"
+            >{{ marketRegimeBreadth.dampening }}:{{ marketRegimeBreadth.amplification }}</span
+          >
+          <span class="kpi-sub-count label">DAMP/AMP</span>
+        </div>
+        <span class="kpi-sub">
+          {{ marketRegimeBreadth.dampening }} Dampening ·
+          {{ marketRegimeBreadth.amplification }} Amplification ({{
+            marketRegimeBreadth.dominantBias
+          }})
+        </span>
+      </button>
+
       <!-- Zone 3: Macro & Strategy Navigation -->
       <!-- 04 Top Sector Flow (Interactive Navigation Button) -->
       <button
@@ -987,6 +1116,7 @@ function navTo(name: string): void {
               <th class="label col-lean">Lean</th>
               <th class="label num col-act">Activity Score</th>
               <th class="label num col-qlib">Qlib XS Rank</th>
+              <th class="label col-regime">Regime / Magnet</th>
               <th class="label col-flags">Observed Flags</th>
               <th class="label num col-flow">Live Flow</th>
               <th class="label num col-price">Price / Vol</th>
@@ -1000,7 +1130,8 @@ function navTo(name: string): void {
               class="activity-row"
               @click="open(row.symbol)"
             >
-              <td class="col-rank">
+              <td class="row-select-cell col-rank">
+  <button type="button" class="row-select-btn" @click.stop="open(row.symbol)"><span class="sr-only">Select row</span></button>
                 <span class="rank-idx fig">{{ String(row.activity_rank).padStart(2, '0') }}</span>
                 <span class="fig sym">{{ row.symbol }}</span>
               </td>
@@ -1031,6 +1162,35 @@ function navTo(name: string): void {
                   <small class="dim"
                     >XS {{ row.qlib_score != null ? num(row.qlib_score, 2) : DASH }} · RSCH</small
                   >
+                </div>
+                <span v-else class="dim">—</span>
+              </td>
+              <td class="col-regime">
+                <div
+                  v-if="
+                    regimeFor(row.symbol) && isRegimeMeasurable(regimeFor(row.symbol)!.regime_state)
+                  "
+                  class="regime-cell"
+                >
+                  <RegimeStateBadge
+                    :payload="regimeFor(row.symbol)"
+                    :compact="true"
+                    :show-strength="false"
+                    :show-vector="false"
+                  />
+                  <div
+                    v-if="primaryMagnetFor(row.symbol)"
+                    class="magnet-sub label"
+                    :title="primaryMagnetFor(row.symbol)!.regime_role"
+                  >
+                    ★ {{ primaryMagnetFor(row.symbol)!.label }}
+                    {{ usd(primaryMagnetFor(row.symbol)!.price) }}
+                    <span class="mono-dist"
+                      >({{
+                        formatDistancePercent(primaryMagnetFor(row.symbol)!.distance_pct)
+                      }})</span
+                    >
+                  </div>
                 </div>
                 <span v-else class="dim">—</span>
               </td>
@@ -1229,7 +1389,11 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table v-if="filteredPead.length" class="grid table-pead" :class="{ 'is-split': dualViewMode === 'split' }">
+        <table
+          v-if="filteredPead.length"
+          class="grid table-pead"
+          :class="{ 'is-split': dualViewMode === 'split' }"
+        >
           <thead>
             <tr>
               <th class="label col-sym">Symbol</th>
@@ -1261,7 +1425,11 @@ function navTo(name: string): void {
               <td class="fig num col-score" :class="tone(c.evidence?.pead_score)">
                 {{ num(Math.abs(c.evidence?.pead_score ?? 0), 2) }}
               </td>
-              <td v-if="dualViewMode !== 'split'" class="fig num col-gap" :class="tone(c.evidence?.gap_std)">
+              <td
+                v-if="dualViewMode !== 'split'"
+                class="fig num col-gap"
+                :class="tone(c.evidence?.gap_std)"
+              >
                 {{ num(c.evidence?.gap_std, 2) }}
               </td>
               <td v-if="dualViewMode !== 'split'" class="fig num col-vol">
@@ -1345,7 +1513,11 @@ function navTo(name: string): void {
       </template>
 
       <div class="table-container">
-        <table v-if="filteredSignals.length" class="grid table-directional" :class="{ 'is-split': dualViewMode === 'split' }">
+        <table
+          v-if="filteredSignals.length"
+          class="grid table-directional"
+          :class="{ 'is-split': dualViewMode === 'split' }"
+        >
           <thead>
             <tr>
               <th class="label col-sym">Symbol</th>
@@ -1353,11 +1525,11 @@ function navTo(name: string): void {
               <th class="label num col-chg">1D</th>
               <th class="label col-side">Side</th>
               <th class="label num col-edge">Edge</th>
+              <th class="label col-regime">Regime / Magnet</th>
               <th class="label num col-mom">Momentum</th>
               <th v-if="dualViewMode !== 'split'" class="label num col-hz">Hz</th>
               <th class="label col-gap-event">Gap Event</th>
               <th class="label col-state">State</th>
-              <th class="label col-chain">Options</th>
             </tr>
           </thead>
           <tbody>
@@ -1417,6 +1589,33 @@ function navTo(name: string): void {
                 </template>
                 <span v-else class="dim" title="Uncalibrated — not an edge readout">—</span>
               </td>
+              <td class="col-regime">
+                <div
+                  v-if="
+                    regimeFor(s.symbol) && isRegimeMeasurable(regimeFor(s.symbol)!.regime_state)
+                  "
+                  class="regime-cell"
+                >
+                  <RegimeStateBadge
+                    :payload="regimeFor(s.symbol)"
+                    :compact="true"
+                    :show-strength="false"
+                    :show-vector="false"
+                  />
+                  <div
+                    v-if="primaryMagnetFor(s.symbol)"
+                    class="magnet-sub label"
+                    :title="primaryMagnetFor(s.symbol)!.regime_role"
+                  >
+                    ★ {{ primaryMagnetFor(s.symbol)!.label }}
+                    {{ usd(primaryMagnetFor(s.symbol)!.price) }}
+                    <span class="mono-dist"
+                      >({{ formatDistancePercent(primaryMagnetFor(s.symbol)!.distance_pct) }})</span
+                    >
+                  </div>
+                </div>
+                <span v-else class="dim">—</span>
+              </td>
               <td
                 class="fig num mom-cell col-mom"
                 :class="tone(s.momentum)"
@@ -1447,19 +1646,19 @@ function navTo(name: string): void {
                 <span v-else class="coverage-chip label">NO GAP EVENT</span>
               </td>
               <td class="col-state">
-                <span class="state label" :class="s.state === 'ENTER' ? 'enter' : 'watch'">{{
-                  s.state
-                }}</span>
-              </td>
-              <td class="col-chain">
-                <button
-                  class="chain-btn label"
-                  type="button"
-                  title="Fetch this name's option chain and gamma structure"
-                  @click.stop="openOptions(s.symbol)"
-                >
-                  CHAIN
-                </button>
+                <div class="state-cell">
+                  <span class="state label" :class="s.state === 'ENTER' ? 'enter' : 'watch'">{{
+                    s.state
+                  }}</span>
+                  <button
+                    class="chain-btn label"
+                    type="button"
+                    title="Fetch this name's option chain and gamma structure"
+                    @click.stop="openOptions(s.symbol)"
+                  >
+                    CHAIN
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -1527,6 +1726,7 @@ function navTo(name: string): void {
               <th class="label num col-ret1">1D Chg</th>
               <th class="label num col-ret5">5D Chg</th>
               <th class="label num col-edge">Model Edge</th>
+              <th class="label col-regime">Regime / Magnet</th>
               <th class="label num col-mom">Momentum</th>
               <th class="label col-act">Actions</th>
             </tr>
@@ -1576,6 +1776,30 @@ function navTo(name: string): void {
                     >
                   </span>
                 </template>
+                <span v-else class="dim">—</span>
+              </td>
+              <td class="col-regime">
+                <div
+                  v-if="regimeFor(sym) && isRegimeMeasurable(regimeFor(sym)!.regime_state)"
+                  class="regime-cell"
+                >
+                  <RegimeStateBadge
+                    :payload="regimeFor(sym)"
+                    :compact="true"
+                    :show-strength="false"
+                    :show-vector="false"
+                  />
+                  <div
+                    v-if="primaryMagnetFor(sym)"
+                    class="magnet-sub label"
+                    :title="primaryMagnetFor(sym)!.regime_role"
+                  >
+                    ★ {{ primaryMagnetFor(sym)!.label }} {{ usd(primaryMagnetFor(sym)!.price) }}
+                    <span class="mono-dist"
+                      >({{ formatDistancePercent(primaryMagnetFor(sym)!.distance_pct) }})</span
+                    >
+                  </div>
+                </div>
                 <span v-else class="dim">—</span>
               </td>
               <td
@@ -1728,7 +1952,7 @@ function navTo(name: string): void {
   white-space: nowrap;
 }
 .scope-tag {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-weight: 600;
 }
 .scope-chip.session-chip {
@@ -1776,7 +2000,7 @@ function navTo(name: string): void {
 .desk-summary {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: var(--s3);
 }
 
@@ -1813,6 +2037,15 @@ function navTo(name: string): void {
 }
 .kpi-breadth-card {
   border-left: 2px solid var(--phosphor-dim);
+}
+.kpi-regime-card {
+  border-left: 2px solid var(--cat-2);
+  cursor: pointer;
+  text-align: left;
+}
+.kpi-regime-card:hover {
+  border-color: var(--rule-hi);
+  border-left-color: var(--cat-2);
 }
 
 /* Macro/Strategy Navigation Cards */
@@ -2076,7 +2309,7 @@ function navTo(name: string): void {
   flex-shrink: 0;
 }
 .empty-indicator {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
   font-size: var(--t-lead);
 }
@@ -2131,7 +2364,7 @@ function navTo(name: string): void {
 }
 .last-scan {
   overflow: visible;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   font-weight: 600;
   line-height: 1.3;
@@ -2163,7 +2396,7 @@ function navTo(name: string): void {
   font-weight: 500;
 }
 .scan-readout > .fig i {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   font-style: normal;
   font-weight: 500;
@@ -2201,7 +2434,7 @@ function navTo(name: string): void {
   border-right: 0;
 }
 .depth-option span {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   margin-left: var(--s1);
   font-weight: 600;
 }
@@ -2375,7 +2608,7 @@ function navTo(name: string): void {
   display: inline-block;
   width: 3ch;
   margin-right: var(--s2);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-weight: 700;
 }
 .activity-row:hover {
@@ -2442,7 +2675,7 @@ function navTo(name: string): void {
 .ordinal-tag {
   grid-column: 1 / -1;
   text-align: right;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.06em;
 }
@@ -2630,7 +2863,7 @@ function navTo(name: string): void {
   border-right: 0;
 }
 .stat-box .label {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   font-weight: 700;
   margin-bottom: 2px;
@@ -2949,7 +3182,7 @@ function navTo(name: string): void {
 }
 .confidence-low,
 .confidence-unavailable {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .row-high td {
   background: color-mix(in srgb, var(--long) 7%, transparent);
@@ -3086,26 +3319,56 @@ function navTo(name: string): void {
   border-bottom: var(--hair) solid var(--rule);
 }
 .table-watchlist .col-sym {
-  width: 10%;
+  width: 9%;
 }
 .table-watchlist .col-spark {
-  width: 16%;
+  width: 13%;
 }
 .table-watchlist .col-price {
-  width: 11%;
+  width: 10%;
 }
 .table-watchlist .col-ret1,
 .table-watchlist .col-ret5 {
-  width: 9%;
+  width: 8%;
 }
 .table-watchlist .col-edge {
-  width: 13%;
+  width: 11%;
+}
+.table-watchlist .col-regime {
+  width: 18%;
 }
 .table-watchlist .col-mom {
-  width: 10%;
+  width: 8%;
 }
 .table-watchlist .col-act {
-  width: 22%;
+  width: 15%;
+}
+
+.col-regime {
+  min-width: 145px;
+}
+.regime-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.magnet-sub {
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  color: var(--phosphor-dim);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mono-dist {
+  font-family: var(--font-data);
+  color: var(--ink-dim);
+}
+.state-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
 }
 .table-watchlist .spark-cell {
   width: 16%;
@@ -3157,7 +3420,7 @@ function navTo(name: string): void {
 .remove-btn {
   background: transparent;
   border: var(--hair) solid var(--rule-hi);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   font-weight: 750;
   padding: var(--s1) var(--s2);
@@ -3173,7 +3436,7 @@ function navTo(name: string): void {
 
 /* ── Shared Utilities & Responsive Breakpoints ───────────────────────────── */
 .dim {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .pos {
   color: var(--long);
@@ -3215,7 +3478,7 @@ function navTo(name: string): void {
     grid-column: span 1;
   }
   .kpi-nav-card:nth-child(5) {
-    grid-column: span 2;
+    grid-column: span 1;
   }
   .desk {
     grid-template-columns: repeat(2, minmax(0, 1fr));

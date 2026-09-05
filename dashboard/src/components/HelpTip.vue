@@ -49,7 +49,7 @@ withDefaults(
   border-radius: 50%;
   border: var(--hair) solid var(--glass-border-hi);
   color: var(--ink-faint);
-  font: 700 9px/14px var(--font-display);
+  font: 700 var(--t-nano)/14px var(--font-display);
   text-align: center;
   background: var(--glass-surface);
   backdrop-filter: var(--glass-blur-sm);

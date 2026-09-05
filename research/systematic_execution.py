@@ -231,8 +231,18 @@ def generate_microstructure_signals(
             flip = gamma_flip_series[t]
             if (prev_s < flip <= curr_s) or (prev_s > flip >= curr_s):
                 flip_crossings.append(t)
-    flip_crossings = sorted(set(flip_crossings))[:5]  # Limit to 5 major anchor segments
-    anchor_names = ["Session_Open"] + [f"Flip_Cross_{i}" for i in range(1, len(flip_crossings))]
+    # Keep bar 0 (the window anchor) plus the four MOST RECENT flip crossings,
+    # not the oldest. `sorted(set(...))[:5]` kept the five oldest crossings
+    # and silently dropped every recent one -- on any window with more than
+    # five crossings the anchors shown were stale by construction, discarding
+    # exactly the regime changes closest to the current bar that a trader
+    # would care about.
+    flip_crossings = sorted(set(flip_crossings))
+    recent_crossings = [c for c in flip_crossings if c != 0][-4:]
+    flip_crossings = sorted({0, *recent_crossings})
+    anchor_names = [
+        "Session_Open" if c == 0 else f"Flip_Cross_Bar_{c}" for c in flip_crossings
+    ]
 
     vwap_results = compute_anchored_vwap(p, v, flip_crossings, anchor_names)
     primary_vwap = vwap_results[0].vwap if vwap_results else p

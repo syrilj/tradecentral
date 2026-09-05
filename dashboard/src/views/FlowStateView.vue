@@ -479,7 +479,7 @@ const staleReason = computed(() =>
           </div>
 
           <div v-if="ciChart" ref="ciHostRef" class="ci-chart-host">
-            <svg :width="ciW" :height="ciH" class="ci-svg">
+            <svg role="img" aria-label="Flow state chart." :width="ciW" :height="ciH" class="ci-svg">
               <line :x1="0" :x2="ciW" :y1="ciChart.midY" :y2="ciChart.midY" class="ci-axis" />
               <line :x1="ciChart.zeroX" :x2="ciChart.zeroX" :y1="6" :y2="ciH - 6" class="ci-zero" />
               <line
@@ -569,6 +569,10 @@ const staleReason = computed(() =>
                 <th class="label">Dir</th>
                 <th class="num sortable" @click="setSort('flow_z')">
                   Flow z {{ sortArrow('flow_z') }}
+                  <HelpTip
+                    label="Flow z"
+                    text="Robust z-score of the CLV × volume signed-flow proxy on daily bars — a descriptive proxy, not measured order flow. No true order-flow imbalance/L2 data exists in this repo."
+                  />
                 </th>
                 <th class="num sortable" @click="setSort('impact_beta_z')">
                   Impact z {{ sortArrow('impact_beta_z') }}
@@ -690,7 +694,7 @@ const staleReason = computed(() =>
       >
         <template v-if="barrierChart">
           <div ref="barrierHostRef" class="barrier-chart-host">
-            <svg :width="barW" :height="barH" class="barrier-svg">
+            <svg role="img" aria-label="Flow state chart." :width="barW" :height="barH" class="barrier-svg">
               <g v-for="t in barrierChart.priceTicks" :key="t.y">
                 <line :x1="52" :x2="barW" :y1="t.y" :y2="t.y" class="barrier-gridline" />
                 <text :x="0" :y="t.y + 3" class="barrier-tick label">{{ t.label }}</text>
@@ -823,7 +827,7 @@ const staleReason = computed(() =>
       >
         <template v-if="impactChart">
           <div ref="impactHostRef" class="impact-chart-host">
-            <svg :width="impW" :height="impH" class="impact-svg">
+            <svg role="img" aria-label="Flow state chart." :width="impW" :height="impH" class="impact-svg">
               <g v-for="t in impactChart.yTicks" :key="t.y">
                 <line :x1="44" :x2="impW" :y1="t.y" :y2="t.y" class="barrier-gridline" />
                 <text :x="0" :y="t.y + 3" class="barrier-tick label">{{ t.label }}</text>
@@ -985,7 +989,7 @@ const staleReason = computed(() =>
 }
 .subnote {
   margin-top: var(--s2);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-small);
 }
 
@@ -1071,12 +1075,12 @@ const staleReason = computed(() =>
   gap: var(--s2);
 }
 .check .c-mark {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   width: 14px;
   text-align: center;
 }
 .check.pending .c-mark {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .check .c-k {
   color: var(--ink-dim);

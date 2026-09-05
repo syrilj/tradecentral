@@ -12,6 +12,7 @@ import {
 } from '@/api'
 import { age, compact, DASH, num, pctFrac, pick, shortDate, signedPct, tone, usd } from '@/format'
 import AppIcon from '@/components/AppIcon.vue'
+import FlowExpiryConcentration from '@/components/FlowExpiryConcentration.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import LoadingState from '@/components/LoadingState.vue'
 import Panel from '@/components/Panel.vue'
@@ -31,14 +32,22 @@ import {
   classifyPremiumTier,
   computeVolOiRatio,
   concentrationLabel,
+  feedStatusCopy,
+  quoteStats,
+  flowCacheCopy,
   flowLeanTokenClass,
   flowPriorityTokenClass,
+  flowTransportCopy,
   formatDteBadge,
   formatMoneyness,
   mixShareLabel,
+  printPremium,
+  printSide,
   pulseWindowCopy,
   signedPrintTokenClass,
+  tradeClassSourceLabel,
 } from '@/flowDisplay'
+import { computeFlowConcentration, type FlowConcentration } from '@/flowConcentration'
 import { tickerCompanyName, tickerSector, tickerSectorCode } from '@/tickerIdentity'
 import {
   loadWatchlist,
@@ -126,7 +135,7 @@ type TapeSortKey =
 
 const TAPE_PRESETS: Array<{ id: TapePreset; label: string }> = [
   { id: 'all', label: 'All' },
-  { id: 'golden_sweeps', label: 'Golden Sweeps' },
+  { id: 'golden_sweeps', label: 'Vendor golden flag' },
   { id: 'sweeps', label: 'Sweeps' },
   { id: 'whales', label: 'Whales ($500k+)' },
   { id: 'vol_oi', label: 'Vol > OI' },
@@ -293,6 +302,29 @@ const selectedPrintKey = ref<string | null>(null)
 const copyFeedback = ref<string | null>(null)
 let copyFeedbackTimeout: number | undefined
 
+const tapeDisplayMode = ref<'table' | 'cards'>('table')
+const expandedSweepFills = ref<Set<string>>(new Set())
+function toggleSweepFills(k: string): void {
+  if (expandedSweepFills.value.has(k)) {
+    expandedSweepFills.value.delete(k)
+  } else {
+    expandedSweepFills.value.add(k)
+  }
+}
+function isSweepFillsExpanded(k: string): boolean {
+  return expandedSweepFills.value.has(k)
+}
+function tapeRowKey(row: MarketFlowPrint): string {
+  return `${row.timestamp ?? ''}-${row.symbol ?? ''}-${row.right ?? ''}-${row.strike ?? ''}-${row.premium ?? ''}-${row.contracts ?? row.volume ?? ''}`
+}
+function heatScoreCls(heat: number | null | undefined): string {
+  if (heat == null || !Number.isFinite(heat)) return 'heat-low'
+  if (heat >= 75) return 'heat-extreme'
+  if (heat >= 60) return 'heat-high'
+  if (heat >= 40) return 'heat-med'
+  return 'heat-low'
+}
+
 type OverviewTab = 'leaders' | 'sectors' | 'majors' | 'alerts' | 'triage'
 const overviewTab = ref<OverviewTab>('leaders')
 
@@ -311,21 +343,46 @@ const activeSymbol = computed(() => {
   return 'TSLA'
 })
 
+const isFilteredBySymbol = computed(() => Boolean(symbolQuery.value.trim() || props.focusSymbol))
+const tapeTitle = computed(() =>
+  isFilteredBySymbol.value ? `${activeSymbol.value} provider tape` : 'Market-wide provider tape',
+)
+
 const activeTickerStats = computed(() => {
   const sym = activeSymbol.value
-  const row = qualifiedRows.value.find((r) => r.symbol === sym) ?? qualifiedRows.value[0] ?? null
+  const row = qualifiedRows.value.find((r) => r.symbol === sym) ?? null
   const stats = tapeStats(sym)
   const compName = tickerCompanyName(sym) || sym
   const spot = stats?.spot ?? row?.spot ?? null
   const move = row?.ret_1d ?? stats?.windowMove ?? null
+  const quote = quoteStats({ spot, move, contractCount: row?.contract_count })
   const lean = directionRead(sym)
-  const callP = row
-    ? (finite(row.call_premium) ??
-      (finite(row.premium) ?? 0) * (1 - (finite(row.put_flow_pct) ?? 0.5)))
-    : projectedSummary.value.callPremium
-  const putP = row
-    ? (finite(row.put_premium) ?? (finite(row.premium) ?? 0) * (finite(row.put_flow_pct) ?? 0.5))
-    : projectedSummary.value.putPremium
+
+  if (!row) {
+    return {
+      symbol: sym,
+      companyName: compName,
+      spot: quote.spot,
+      move: quote.move,
+      moveTone: quote.moveTone,
+      dayRange: quote.dayRange,
+      vol: quote.volume,
+      callPremium: 0,
+      putPremium: 0,
+      callPct: 0,
+      putPct: 0,
+      dominantState: 'neutral' as const,
+      dominantLabel: 'NO FLOW IN SAMPLE',
+      splitLabel: 'NO FLOW IN SAMPLE',
+      hasFlow: false,
+    }
+  }
+
+  const callP =
+    finite(row.call_premium) ??
+    (finite(row.premium) ?? 0) * (1 - (finite(row.put_flow_pct) ?? 0.5))
+  const putP =
+    finite(row.put_premium) ?? (finite(row.premium) ?? 0) * (finite(row.put_flow_pct) ?? 0.5)
   const tot = callP + putP
   const callPct = tot > 0 ? Math.round((callP / tot) * 100) : 50
   const putPct = 100 - callPct
@@ -341,26 +398,60 @@ const activeTickerStats = computed(() => {
     lean.label ||
     (dominantState === 'bullish' ? 'BULLISH' : dominantState === 'bearish' ? 'BEARISH' : 'NEUTRAL')
 
+  // Headline for THIS ticker's split. The card used to print the market-wide
+  // `marketFlowSentiment.label` above per-ticker premiums and a per-ticker bar,
+  // so META could read "PUT FLOW 70%" while its own bar underneath said 97% --
+  // two different populations (whole tape vs one symbol) stacked under one
+  // ticker heading. Same dominance thresholds as the market card, own numbers.
+  const splitLabel =
+    tot === 0
+      ? 'NO FLOW IN SAMPLE'
+      : callPct >= 55
+        ? `CALL FLOW ${callPct}%`
+        : putPct >= 55
+          ? `PUT FLOW ${putPct}%`
+          : 'BALANCED FLOW 50/50'
+
   return {
     symbol: sym,
     companyName: compName,
-    spot: spot != null ? usd(spot, 2) : DASH,
-    move:
-      move != null
-        ? move >= 0
-          ? `+$${(Math.abs(move) * (spot ?? 100) * 0.1).toFixed(2)} (${returnPercent(move)})`
-          : `−$${(Math.abs(move) * (spot ?? 100) * 0.1).toFixed(2)} (${returnPercent(move)})`
-        : DASH,
-    moveTone: move != null ? tone(move) : 'neutral',
-    dayLow: spot != null ? usd(spot * 0.9825, 2) : DASH,
-    dayHigh: spot != null ? usd(spot * 1.0293, 2) : DASH,
-    vol: row?.contract_count != null ? compact(row.contract_count) : DASH,
+    spot: quote.spot,
+    move: quote.move,
+    moveTone: quote.moveTone,
+    dayRange: quote.dayRange,
+    vol: quote.volume,
     callPremium: callP,
     putPremium: putP,
     callPct,
     putPct,
     dominantState,
     dominantLabel,
+    splitLabel,
+    hasFlow: tot > 0,
+  }
+})
+
+const distributionStats = computed(() => {
+  if (isFilteredBySymbol.value) {
+    return {
+      callPct: activeTickerStats.value.callPct,
+      putPct: activeTickerStats.value.putPct,
+      callPremium: activeTickerStats.value.callPremium,
+      putPremium: activeTickerStats.value.putPremium,
+      hasFlow: activeTickerStats.value.hasFlow,
+    }
+  }
+  const callP = projectedSummary.value.callPremium
+  const putP = projectedSummary.value.putPremium
+  const tot = callP + putP
+  const callPct = tot > 0 ? Math.round((callP / tot) * 100) : 50
+  const putPct = 100 - callPct
+  return {
+    callPct,
+    putPct,
+    callPremium: callP,
+    putPremium: putP,
+    hasFlow: tot > 0,
   }
 })
 
@@ -470,8 +561,23 @@ const flowTrendPoints = computed(() => {
   const step = 240 / Math.max(1, reversed.length - 1)
   const values: number[] = []
   for (const r of reversed) {
-    const prem = finite(r.premium) ?? 0
-    cum += r.right === 'call' ? prem : -prem
+    const prem = printPremium(r) ?? finite(r.premium) ?? 0
+    let delta = 0
+    if (r.flow_signed_premium != null) {
+      delta = r.flow_signed_premium
+    } else if (r.signed_premium != null) {
+      delta = r.signed_premium
+    } else {
+      const side = printSide(r)
+      if (side === 'Bullish') {
+        delta = prem
+      } else if (side === 'Bearish') {
+        delta = -prem
+      } else {
+        delta = r.right === 'call' ? prem : -prem
+      }
+    }
+    cum += delta
     values.push(cum)
   }
   const min = Math.min(0, ...values)
@@ -503,7 +609,9 @@ const netFlowTotal = computed(() => {
   const pts = flowTrendPoints.value
   return pts.length
     ? pts[pts.length - 1].val
-    : projectedSummary.value.callPremium - projectedSummary.value.putPremium
+    : isFilteredBySymbol.value
+      ? activeTickerStats.value.callPremium - activeTickerStats.value.putPremium
+      : projectedSummary.value.callPremium - projectedSummary.value.putPremium
 })
 
 const topFlowContracts = computed(() => {
@@ -913,10 +1021,34 @@ const qualifiedTapeRows = computed<MarketFlowPrint[]>(() => {
   )
 })
 
+/**
+ * Premium by expiration across the provider window.
+ *
+ * Deliberately scoped by symbol only, and NOT off `qualifiedTapeRows`: that
+ * set is already filtered by the DTE band, so feeding it here would make the
+ * horizon tiles self-referential — narrow the tape to 0DTE and the panel would
+ * report 100% 0DTE, which measures the filter rather than the flow.
+ */
+const flowConcentration = computed<FlowConcentration>(() =>
+  computeFlowConcentration(
+    (props.payload?.tape ?? []).filter((row) => row.symbol != null && symbolInScope(row.symbol)),
+  ),
+)
+
 const sortedTapeRows = computed<MarketFlowPrint[]>(() => {
   const rows = [...qualifiedTapeRows.value]
   const dir = tapeSortDir.value === 'asc' ? 1 : -1
   const key = tapeSortKey.value
+
+  const volOiMap =
+    key === 'vol_oi'
+      ? new Map(
+          rows.map((r) => [
+            r,
+            computeVolOiRatio(r.contracts ?? r.volume, r.open_interest).ratio ?? -Infinity,
+          ]),
+        )
+      : null
 
   rows.sort((a, b) => {
     let av: number | string = -Infinity
@@ -941,8 +1073,8 @@ const sortedTapeRows = computed<MarketFlowPrint[]>(() => {
       av = a.trade_class || ''
       bv = b.trade_class || ''
     } else if (key === 'vol_oi') {
-      av = computeVolOiRatio(a.contracts ?? a.volume, a.open_interest).ratio ?? -Infinity
-      bv = computeVolOiRatio(b.contracts ?? b.volume, b.open_interest).ratio ?? -Infinity
+      av = volOiMap?.get(a) ?? -Infinity
+      bv = volOiMap?.get(b) ?? -Infinity
     } else if (key === 'premium') {
       av = finite(a.premium) ?? -Infinity
       bv = finite(b.premium) ?? -Infinity
@@ -988,58 +1120,6 @@ const projectedSummary = computed<ProjectedSummary>(() => {
     anomalyContracts: hasAnomalyDetail ? sum((row) => row.unusual_contracts) : null,
     sweepContracts: sum((row) => row.sweep_contracts),
     sweepPremium: sum((row) => row.sweep_premium),
-  }
-})
-
-const marketFlowSentiment = computed(() => {
-  const putPct =
-    projectedSummary.value.putFlowPct != null
-      ? Math.round(projectedSummary.value.putFlowPct * 100)
-      : 50
-  const callPct = 100 - putPct
-  const dominantPct = Math.max(callPct, putPct)
-
-  // Derive dominantState from aggregate signed lean across all qualified rows —
-  // NOT from raw call/put contract identity percentage. This ensures the macro
-  // sentiment card agrees with the per-ticker activeTickerStats.dominantState,
-  // both of which use signed flow / directional lean rather than identity.
-  let bullishLean = 0
-  let bearishLean = 0
-  for (const row of qualifiedRows.value) {
-    const lean = String(row.activity_lean || '').toLowerCase()
-    if (lean === 'bullish') bullishLean++
-    else if (lean === 'bearish') bearishLean++
-  }
-  const hasAggregateLean = bullishLean + bearishLean > 0
-  let dominantState: 'bullish' | 'bearish' | 'neutral'
-  if (hasAggregateLean) {
-    const leanBias = (bullishLean - bearishLean) / (bullishLean + bearishLean)
-    dominantState = leanBias >= 0.1 ? 'bullish' : leanBias <= -0.1 ? 'bearish' : 'neutral'
-  } else {
-    // No signed lean available — stay neutral; never invent direction from identity.
-    dominantState = 'neutral'
-  }
-
-  const callDominant = callPct >= 55
-  const putDominant = putPct >= 55
-  const label = callDominant
-    ? `CALL FLOW ${callPct}%`
-    : putDominant
-      ? `PUT FLOW ${putPct}%`
-      : `BALANCED FLOW 50/50`
-  const premiumLabel = callDominant
-    ? `${moneyCompact(projectedSummary.value.callPremium)} Call Premium`
-    : putDominant
-      ? `${moneyCompact(projectedSummary.value.putPremium)} Put Premium`
-      : `${moneyCompact(projectedSummary.value.totalPremium)} Total Premium`
-
-  return {
-    callPct,
-    putPct,
-    dominantState,
-    dominantPct,
-    label,
-    premiumLabel,
   }
 })
 
@@ -1162,11 +1242,11 @@ const providerFreshnessState = computed(() => {
 const feedStatusLabel = computed(() => {
   if (!props.payload) return 'WAITING'
   if (providerFreshnessState.value === 'stale') return 'STALE SAMPLE'
-  if (providerFreshnessState.value === 'live') return 'LIVE SAMPLE'
-  return String(props.payload.feed_status ?? 'unknown')
-    .replaceAll('_', ' ')
-    .toUpperCase()
+  return feedStatusCopy(props.payload.feed_status)
 })
+
+const cacheCopy = computed(() => flowCacheCopy(props.payload?.cache))
+const transportCopy = computed(() => flowTransportCopy(props.pollMs))
 
 const feedWindowLabel = computed(() => {
   const coverage = props.payload?.coverage
@@ -1341,7 +1421,62 @@ function strongModelContext(context: ModelContext | null): boolean {
   )
 }
 
+/**
+ * Per-payload memo for the three expensive row reads.
+ *
+ * `directionRead`, `priceRead` and `actionInsight` are pure functions of the
+ * current payload, but they were being called straight from template
+ * interpolations — `directionRead(major.symbol)` appears six times in a single
+ * block — so every one of them re-ran on every render, and the 15s poll turned
+ * that into a ~200ms long task while the operator was trying to click.
+ *
+ * The cache lives inside a computed that reads each reactive source the three
+ * functions derive from, so it is discarded and rebuilt whenever the payload
+ * changes and can never serve a stale read.
+ */
+const rowReadCache = computed(() => {
+  void tapeStatsBySymbol.value
+  void signalBySymbol.value
+  void rowBySymbol.value
+  void providerFreshnessState.value
+  return {
+    direction: new Map<string, DirectionRead>(),
+    price: new Map<string, PriceRead>(),
+    action: new Map<string, ActionInsight>(),
+  }
+})
+
 function directionRead(symbol: string): DirectionRead {
+  const cache = rowReadCache.value.direction
+  let hit = cache.get(symbol)
+  if (hit === undefined) {
+    hit = directionReadUncached(symbol)
+    cache.set(symbol, hit)
+  }
+  return hit
+}
+
+function priceRead(row: UnusualFlowRow): PriceRead {
+  const cache = rowReadCache.value.price
+  let hit = cache.get(row.symbol)
+  if (hit === undefined) {
+    hit = priceReadUncached(row)
+    cache.set(row.symbol, hit)
+  }
+  return hit
+}
+
+function actionInsight(row: UnusualFlowRow): ActionInsight {
+  const cache = rowReadCache.value.action
+  let hit = cache.get(row.symbol)
+  if (hit === undefined) {
+    hit = actionInsightUncached(row)
+    cache.set(row.symbol, hit)
+  }
+  return hit
+}
+
+function directionReadUncached(symbol: string): DirectionRead {
   const stats = tapeStats(symbol)
   const context = signalBySymbol.value.get(symbol) ?? null
   const hasSignedFlow = !!stats && stats.signedPrints > 0 && stats.signedGross > 0
@@ -1425,7 +1560,7 @@ function directionRead(symbol: string): DirectionRead {
   }
 }
 
-function priceRead(row: UnusualFlowRow): PriceRead {
+function priceReadUncached(row: UnusualFlowRow): PriceRead {
   const dayReturn = finite(row.ret_1d)
   const stats = tapeStats(row.symbol)
   const spot = stats?.spot
@@ -1507,7 +1642,7 @@ function primaryReadout(row: UnusualFlowRow): string {
   return `${moneyCompact(row.premium)} across ${exactCount(row.contract_count)} contracts`
 }
 
-function actionInsight(row: UnusualFlowRow): ActionInsight {
+function actionInsightUncached(row: UnusualFlowRow): ActionInsight {
   const direction = directionRead(row.symbol)
   const stats = tapeStats(row.symbol)
   const pulseRow = symbolPulse(row.symbol)
@@ -2167,7 +2302,7 @@ function downloadHistoryTapeCsv(): void {
         <div>
           <span class="label">Latest provider sample</span>
           <strong class="fig">{{ sourceLabel }}</strong>
-          <small>Returned contracts in one provider poll · not total market volume</small>
+          <small>{{ transportCopy }} · not total market volume</small>
         </div>
       </div>
 
@@ -2194,7 +2329,9 @@ function downloadHistoryTapeCsv(): void {
           }}
         </span>
         <span>{{
-          payload ? `PROVIDER ${providerFreshness} · SNAPSHOT ${snapshotFreshness}` : 'NO SNAPSHOT'
+          payload
+            ? `PROVIDER ${providerFreshness} · SNAPSHOT ${snapshotFreshness} · ${cacheCopy}`
+            : 'NO SNAPSHOT'
         }}</span>
       </div>
 
@@ -2286,8 +2423,7 @@ function downloadHistoryTapeCsv(): void {
                     activeTickerStats.move
                   }}</span>
                   <span class="ticker-quote-range label"
-                    >Day Low {{ activeTickerStats.dayLow }} · Day High
-                    {{ activeTickerStats.dayHigh }} · Vol: {{ activeTickerStats.vol }}</span
+                    >{{ activeTickerStats.dayRange }} · Vol: {{ activeTickerStats.vol }}</span
                   >
                 </div>
               </div>
@@ -2300,7 +2436,7 @@ function downloadHistoryTapeCsv(): void {
           </div>
 
           <div class="sentiment-headline">
-            <strong class="sentiment-title fig">{{ marketFlowSentiment.label }}</strong>
+            <strong class="sentiment-title fig">{{ activeTickerStats.splitLabel }}</strong>
             <span class="sentiment-premium fig">
               <b class="call-text"
                 >{{ moneyCompact(activeTickerStats.callPremium) }} Call Premium</b
@@ -2388,7 +2524,7 @@ function downloadHistoryTapeCsv(): void {
                   Top Tickers
                   <HelpTip
                     label="Top Tickers"
-                    text="Leading market tickers categorized by institutional criteria: Unusual OTM volume, sweeps, high momentum, and premium size."
+                    text="Tape-derived leaders: near-dated OTM unusual, vendor/heuristic sweeps, momentum vs OI, and call/put premium. Descriptive ranks, not ENTER."
                     align="left"
                   />
                 </h2>
@@ -2424,25 +2560,38 @@ function downloadHistoryTapeCsv(): void {
                   <strong class="fig">{{ tickerScore(row.score) }}</strong>
                 </div>
                 <div
-                  v-if="row.bullish_share != null || row.bearish_share != null"
+                  v-if="
+                    row.bullish_share != null ||
+                    row.bearish_share != null ||
+                    row.call_share != null ||
+                    row.put_share != null
+                  "
                   class="ticker-sentiment-bar"
                   aria-hidden="true"
                 >
                   <i
                     class="bull-bar"
-                    :style="{ width: `${Math.round((row.bullish_share ?? 0.5) * 100)}%` }"
+                    :style="{
+                      width: `${Math.round((row.bullish_share ?? row.call_share ?? 0.5) * 100)}%`,
+                    }"
                   />
                   <i
                     class="bear-bar"
-                    :style="{ width: `${Math.round((row.bearish_share ?? 0.5) * 100)}%` }"
+                    :style="{
+                      width: `${Math.round((row.bearish_share ?? row.put_share ?? 0.5) * 100)}%`,
+                    }"
                   />
                 </div>
                 <div class="sym-chip-foot">
                   <small>
                     {{
-                      row.bullish_share == null
-                        ? 'No classified share'
-                        : `${fractionPercent(row.bullish_share, 0)} / ${fractionPercent(row.bearish_share, 0)}`
+                      row.share_basis === 'call_put_premium'
+                        ? row.call_share == null
+                          ? 'Call/put mix missing'
+                          : `C/P ${fractionPercent(row.call_share, 0)} / ${fractionPercent(row.put_share, 0)}`
+                        : row.bullish_share == null
+                          ? 'UNSIGNED · NO SIGNED SHARE'
+                          : `${fractionPercent(row.bullish_share, 0)} / ${fractionPercent(row.bearish_share, 0)} signed`
                     }}
                   </small>
                   <span v-if="row.print_count" class="chip-count label"
@@ -2731,8 +2880,8 @@ function downloadHistoryTapeCsv(): void {
               <p>{{ workspaceBrief.body }}</p>
               <div class="pulse-cadence label">
                 <span><i aria-hidden="true" /> {{ pulseState.label }}</span>
-                <span>AUTO POLL {{ pollSeconds }}S</span>
-                <span>SERVER CACHE {{ payload.cache?.ttl_seconds ?? '—' }}S</span>
+                <span>AUTO POLL {{ pollSeconds }}S · NOT A WEBSOCKET</span>
+                <span>{{ cacheCopy }}</span>
                 <span>{{ rankMoveCount }} RANK MOVES</span>
               </div>
             </div>
@@ -2840,7 +2989,7 @@ function downloadHistoryTapeCsv(): void {
                   Tape presets
                   <HelpTip
                     label="Tape Presets"
-                    text="Quick filters for institutional flow: Golden Sweeps ($100k+ sweeps), Sweeps, Whales ($500k+), Vol > OI opening activity, Unusual, Momentum, Moonshot, and My Book."
+                    text="Descriptive tape filters: vendor golden flag, sweeps (vendor vs burst heuristic), whales ($500k+), Vol > OI, Unusual, Momentum, Moonshot, and My Book. Not certified firehose labels."
                     align="left"
                   />
                 </legend>
@@ -3033,15 +3182,33 @@ function downloadHistoryTapeCsv(): void {
             </div>
           </section>
 
-          <!-- Realtime Option Flow Live Table (Institutional Centerpiece) -->
-          <section class="realtime-tape-card rise" aria-label="Realtime Option Flow">
+          <!-- Provider-sample options tape (15s HTTP poll, not a websocket) -->
+          <section class="realtime-tape-card rise" aria-label="Provider options tape">
             <header class="realtime-tape-header">
               <div class="realtime-title-line">
                 <i class="live-pulse-dot" aria-hidden="true" />
-                <h2>{{ activeSymbol }} Realtime Option Flow</h2>
-                <span class="live-tag label">STREAMING</span>
+                <h2>{{ tapeTitle }}</h2>
+                <span class="live-tag label">15s POLL</span>
               </div>
               <div class="tape-quick-actions">
+                <div class="mini-segment tape-display-seg">
+                  <button
+                    type="button"
+                    class="label"
+                    :class="{ on: tapeDisplayMode === 'table' }"
+                    @click="tapeDisplayMode = 'table'"
+                  >
+                    TABLE
+                  </button>
+                  <button
+                    type="button"
+                    class="label"
+                    :class="{ on: tapeDisplayMode === 'cards' }"
+                    @click="tapeDisplayMode = 'cards'"
+                  >
+                    CARDS
+                  </button>
+                </div>
                 <span class="tape-count-badge label">{{ tapeRows.length }} PRINTS</span>
                 <button
                   type="button"
@@ -3061,7 +3228,10 @@ function downloadHistoryTapeCsv(): void {
               </div>
             </header>
 
-            <div v-if="tapeRows.length" class="table-scroll tape-scroll">
+            <div
+              v-if="tapeRows.length && tapeDisplayMode === 'table'"
+              class="table-scroll tape-scroll"
+            >
               <table class="grid tape-table tape-live">
                 <caption class="sr-only">
                   Live options-flow prints. Select a row to inspect its contract and open the
@@ -3075,6 +3245,7 @@ function downloadHistoryTapeCsv(): void {
                   <col class="tape-col-fill" />
                   <col class="tape-col-class" />
                   <col class="tape-col-vol-oi" />
+                  <col class="tape-col-heat" />
                   <col class="tape-col-premium" />
                   <col class="tape-col-percentile" />
                   <col class="tape-col-aggressor" />
@@ -3194,7 +3365,7 @@ function downloadHistoryTapeCsv(): void {
                         <span>Class</span>
                         <HelpTip
                           label="Execution Class"
-                          text="Order classification: Sweeps (multi-exchange aggressive market orders), Golden Sweeps ($1M+ sweeps), Blocks (large single negotiated prints), Splits, and Multileg orders."
+                          text="Order classification: vendor sweep vs burst heuristic, vendor golden flag (only if tagged), blocks, splits, and multileg. Descriptive — not certified and not ENTER."
                           align="left"
                         />
                         <span class="sort-indicator">{{ tapeSortArrow('trade_class') }}</span>
@@ -3222,6 +3393,30 @@ function downloadHistoryTapeCsv(): void {
                           align="center"
                         />
                         <span class="sort-indicator">{{ tapeSortArrow('vol_oi') }}</span>
+                      </span>
+                    </th>
+                    <th
+                      class="num sortable th-heat"
+                      role="columnheader"
+                      tabindex="0"
+                      :aria-sort="
+                        tapeSortKey === ('heat' as any)
+                          ? tapeSortDir === 'asc'
+                            ? 'ascending'
+                            : 'descending'
+                          : 'none'
+                      "
+                      @click="setTapeSort('heat' as any)"
+                      @keydown.enter="setTapeSort('heat' as any)"
+                    >
+                      <span class="th-content">
+                        <span>Heat</span>
+                        <HelpTip
+                          label="Heat Score"
+                          text="0–100 execution intensity score based on premium tier, Vol/OI ratio, OTM moneyness, and execution speed."
+                          align="center"
+                        />
+                        <span class="sort-indicator">{{ tapeSortArrow('heat' as any) }}</span>
                       </span>
                     </th>
                     <th
@@ -3294,92 +3489,341 @@ function downloadHistoryTapeCsv(): void {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr
-                    v-for="(row, index) in tapeRows"
-                    :key="`${row.timestamp}-${row.symbol}-${row.expiry}-${row.strike}-${index}`"
-                    :class="{ incoming: isNewPrint(row), selected: isSelectedPrint(row) }"
-                    role="button"
-                    tabindex="0"
-                    :aria-label="`Inspect ${row.symbol || 'unknown'} ${row.right || 'option'} ${row.strike ?? ''} option print`"
-                    :aria-pressed="isSelectedPrint(row)"
-                    @click="selectTapeRow(row)"
-                    @keydown.enter="selectTapeRow(row)"
-                    @keydown.space.prevent="selectTapeRow(row)"
-                  >
-                    <td class="fig" :title="row.timestamp">
-                      <span class="time-readout">{{ tapeTime(row.timestamp) }}</span>
-                      <span v-if="isNewPrint(row)" class="new-badge label">NEW</span>
-                    </td>
-                    <td class="symbol-cell">
-                      <div class="symbol-cell-content">
-                        <button
-                          v-if="row.symbol"
-                          type="button"
-                          class="symbol-button fig"
-                          :title="tickerCompanyName(row.symbol) || undefined"
-                          @click.stop="openSymbol(row.symbol)"
-                        >
-                          {{ row.symbol }}
-                        </button>
-                        <span v-else>{{ DASH }}</span>
-                        <small
-                          v-if="row.underlying_price != null"
-                          class="tape-spot-label fig"
-                          :class="
-                            row.underlying_price && row.strike
-                              ? tone(
-                                  row.right === 'call'
-                                    ? row.underlying_price - row.strike
-                                    : row.strike - row.underlying_price,
-                                )
-                              : ''
-                          "
-                        >
-                          {{ usd(row.underlying_price, 2) }}
-                        </small>
-                      </div>
-                    </td>
-                    <td class="contract-cell">
-                      <span class="right-chip label" :class="row.right">{{
-                        row.right.toUpperCase()
-                      }}</span>
-                      <strong class="strike-val fig">{{ usd(row.strike, 2) }}</strong>
-                    </td>
-                    <td class="expiry-cell fig" :title="row.expiry ?? undefined">
-                      <div class="expiry-cell-content">
-                        <div class="expiry-primary">
-                          <strong>{{ shortDate(row.expiry) }}</strong>
-                          <span class="dte-pill label" :class="formatDteBadge(row.dte).className">{{
-                            formatDteBadge(row.dte).label
-                          }}</span>
+                  <template v-for="(row, index) in tapeRows" :key="`${tapeRowKey(row)}-${index}`">
+                    <tr
+                      :class="{ incoming: isNewPrint(row), selected: isSelectedPrint(row) }"
+                      role="button"
+                      tabindex="0"
+                      :aria-label="`Inspect ${row.symbol || 'unknown'} ${row.right || 'option'} ${row.strike ?? ''} option print`"
+                      :aria-pressed="isSelectedPrint(row)"
+                      @click="selectTapeRow(row)"
+                      @keydown.enter="selectTapeRow(row)"
+                      @keydown.space.prevent="selectTapeRow(row)"
+                    >
+                      <td class="fig" :title="row.timestamp">
+                        <span class="time-readout">{{ tapeTime(row.timestamp) }}</span>
+                        <span v-if="isNewPrint(row)" class="new-badge label">NEW</span>
+                      </td>
+                      <td class="symbol-cell">
+                        <div class="symbol-cell-content">
+                          <button
+                            v-if="row.symbol"
+                            type="button"
+                            class="symbol-button fig"
+                            :title="tickerCompanyName(row.symbol) || undefined"
+                            @click.stop="openSymbol(row.symbol)"
+                          >
+                            {{ row.symbol }}
+                          </button>
+                          <span v-else>{{ DASH }}</span>
+                          <small
+                            v-if="row.underlying_price != null"
+                            class="tape-spot-label fig"
+                            :class="
+                              row.underlying_price && row.strike
+                                ? tone(
+                                    row.right === 'call'
+                                      ? row.underlying_price - row.strike
+                                      : row.strike - row.underlying_price,
+                                  )
+                                : ''
+                            "
+                          >
+                            {{ usd(row.underlying_price, 2) }}
+                          </small>
                         </div>
+                      </td>
+                      <td class="contract-cell">
+                        <span class="right-chip label" :class="row.right">{{
+                          row.right.toUpperCase()
+                        }}</span>
+                        <strong class="strike-val fig">{{ usd(row.strike, 2) }}</strong>
+                      </td>
+                      <td class="expiry-cell fig" :title="row.expiry ?? undefined">
+                        <div class="expiry-cell-content">
+                          <div class="expiry-primary">
+                            <strong>{{ shortDate(row.expiry) }}</strong>
+                            <span
+                              class="dte-pill label"
+                              :class="formatDteBadge(row.dte).className"
+                              >{{ formatDteBadge(row.dte).label }}</span
+                            >
+                          </div>
+                          <span
+                            class="moneyness-tag label"
+                            :class="formatMoneyness(row.otm_pct).className"
+                          >
+                            {{ formatMoneyness(row.otm_pct).label }}
+                          </span>
+                        </div>
+                      </td>
+                      <td class="execution-cell num fig">
+                        <strong>{{ usd(row.price, 2) }}</strong>
+                        <small>× {{ exactCount(row.contracts ?? row.volume) }}</small>
+                      </td>
+                      <td>
+                        <div class="class-cell-lockup">
+                          <span
+                            class="flow-badge label"
+                            :class="classifyFlowOrder(row).className"
+                            :title="`${classifyFlowOrder(row).description} · ${tradeClassTitle(row)}`"
+                          >
+                            <i
+                              v-if="classifyFlowOrder(row).type === 'golden_sweep'"
+                              class="badge-pip"
+                              aria-hidden="true"
+                            />
+                            {{ classifyFlowOrder(row).label }}
+                          </span>
+                          <button
+                            v-if="row.sweep_fill_count && row.sweep_fill_count > 1"
+                            type="button"
+                            class="table-fills-btn"
+                            :class="{ open: isSweepFillsExpanded(tapeRowKey(row)) }"
+                            @click.stop="toggleSweepFills(tapeRowKey(row))"
+                          >
+                            {{ row.sweep_fill_count }} FILLS
+                            {{ isSweepFillsExpanded(tapeRowKey(row)) ? '▲' : '▼' }}
+                          </button>
+                        </div>
+                        <small class="label">{{
+                          tradeClassSourceLabel(row.trade_class_source)
+                        }}</small>
+                      </td>
+                      <td class="vol-oi-cell num">
+                        <div class="vol-oi-lockup">
+                          <span
+                            class="vol-oi-pill label"
+                            :class="{
+                              'vol-oi-high': computeVolOiRatio(
+                                row.contracts ?? row.volume,
+                                row.open_interest,
+                              ).isHigh,
+                              'vol-oi-extreme': computeVolOiRatio(
+                                row.contracts ?? row.volume,
+                                row.open_interest,
+                              ).isExtreme,
+                            }"
+                            :title="
+                              computeVolOiRatio(row.contracts ?? row.volume, row.open_interest)
+                                .isHigh
+                                ? 'Unusual Volume > Open Interest (Opening Activity)'
+                                : 'Volume to Open Interest ratio'
+                            "
+                          >
+                            <span
+                              v-if="
+                                computeVolOiRatio(row.contracts ?? row.volume, row.open_interest)
+                                  .isHigh
+                              "
+                              class="hot-pip"
+                              aria-hidden="true"
+                              >•</span
+                            >
+                            {{
+                              computeVolOiRatio(row.contracts ?? row.volume, row.open_interest)
+                                .formatted
+                            }}
+                          </span>
+                          <small v-if="row.open_interest != null" class="oi-faint-sub"
+                            >OI: {{ compact(row.open_interest) }}</small
+                          >
+                        </div>
+                      </td>
+                      <td class="num heat-cell">
                         <span
-                          class="moneyness-tag label"
-                          :class="formatMoneyness(row.otm_pct).className"
+                          v-if="row.heat != null"
+                          class="heat-pill label"
+                          :class="heatScoreCls(row.heat)"
                         >
-                          {{ formatMoneyness(row.otm_pct).label }}
+                          <span class="heat-lbl">HEAT</span>
+                          {{ Math.round(row.heat) }}
                         </span>
-                      </div>
-                    </td>
-                    <td class="execution-cell num fig">
-                      <strong>{{ usd(row.price, 2) }}</strong>
-                      <small>× {{ exactCount(row.contracts ?? row.volume) }}</small>
-                    </td>
-                    <td>
-                      <span
-                        class="flow-badge label"
-                        :class="classifyFlowOrder(row).className"
-                        :title="`${classifyFlowOrder(row).description} · ${tradeClassTitle(row)}`"
+                        <span v-else class="ink-dim">—</span>
+                      </td>
+                      <td
+                        class="fig num tape-premium"
+                        :class="classifyPremiumTier(row.premium).className"
                       >
-                        <i
-                          v-if="classifyFlowOrder(row).type === 'golden_sweep'"
-                          class="badge-pip"
-                          aria-hidden="true"
-                        />
+                        <div class="premium-meter-wrap">
+                          <span
+                            class="premium-fill-meter"
+                            :style="{ width: heatWidth(row.premium_percentile) }"
+                          />
+                          <span
+                            v-if="classifyPremiumTier(row.premium).isWhale"
+                            class="whale-indicator label"
+                            :class="classifyPremiumTier(row.premium).className"
+                          >
+                            {{ classifyPremiumTier(row.premium).label }}
+                          </span>
+                          <span class="premium-val-text">{{ moneyCompact(row.premium) }}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="heat-cell" :class="heatClass(row.premium_percentile)">
+                          <span class="heat-track" aria-hidden="true"
+                            ><i :style="{ width: heatWidth(row.premium_percentile) }"
+                          /></span>
+                          <span class="fig">{{ fractionPercent(row.premium_percentile, 0) }}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          class="aggressor label"
+                          :class="signedPrintTokenClass(row.aggressor ?? row.aggressor_label)"
+                          >{{ aggressorLabel(row) }}</span
+                        >
+                      </td>
+                    </tr>
+                    <tr
+                      v-if="
+                        row.sweep_fill_count &&
+                        row.sweep_fill_count > 1 &&
+                        isSweepFillsExpanded(tapeRowKey(row))
+                      "
+                      class="table-fills-subrow"
+                    >
+                      <td colspan="11" class="fills-subrow-cell">
+                        <div class="fills-subrow-content">
+                          <div class="subrow-title">
+                            CONSTITUENT EXECUTION FILLS (BURST AGGREGATE):
+                          </div>
+                          <div class="subrow-fills-grid">
+                            <div
+                              v-for="(fill, fIdx) in row.sweep_fills || []"
+                              :key="fIdx"
+                              class="subrow-fill-chip"
+                            >
+                              <span class="subfill-time">{{ tapeTime(fill.timestamp) }}</span>
+                              <span class="subfill-contracts"
+                                >{{ num(fill.contracts, 0) }} contracts</span
+                              >
+                              <span class="subfill-price">@ ${{ num(fill.price || 0, 2) }}</span>
+                              <span class="subfill-prem">${{ compact(fill.premium || 0) }}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- CARDS MODE: Visual Stalker Stream -->
+            <div v-if="tapeRows.length && tapeDisplayMode === 'cards'" class="tape-cards-container">
+              <div class="tape-cards-grid">
+                <div
+                  v-for="row in tapeRows"
+                  :key="`card-${tapeRowKey(row)}`"
+                  class="tape-stalker-card if-card"
+                  :class="{
+                    anomalous: (row.anomaly_flags ?? []).length > 0,
+                    isWhale: (row.premium ?? 0) >= 100_000,
+                    isMegaWhale: (row.premium ?? 0) >= 500_000,
+                    isGoldenSweep: classifyFlowOrder(row).type === 'golden_sweep',
+                    isSweep: row.trade_class === 'sweep' || row.is_sweep === true,
+                    [row.right]: true,
+                  }"
+                  @click="selectTapeRow(row)"
+                >
+                  <!-- Card Header -->
+                  <div class="card-head-row">
+                    <div class="card-head-left">
+                      <span class="card-sym fig">{{ row.symbol }}</span>
+                      <span class="ts-time fig">{{ tapeTime(row.timestamp) }}</span>
+                    </div>
+                    <div class="card-head-right">
+                      <span
+                        v-if="classifyPremiumTier(row.premium).isWhale"
+                        :class="classifyPremiumTier(row.premium).className"
+                      >
+                        {{ classifyPremiumTier(row.premium).label }}
+                      </span>
+                      <span class="flow-badge label" :class="classifyFlowOrder(row).className">
                         {{ classifyFlowOrder(row).label }}
                       </span>
-                    </td>
-                    <td class="vol-oi-cell num">
+                      <span
+                        v-if="row.sweep_fill_count && row.sweep_fill_count > 1"
+                        class="flow-badge badge-fills"
+                      >
+                        {{ row.sweep_fill_count }} FILLS
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- Hero Row -->
+                  <div class="card-hero-row">
+                    <div class="hero-left">
+                      <div class="hero-prem-lockup" :class="row.right">
+                        <span class="prem-label label">PREMIUM</span>
+                        <strong class="prem-val fig">${{ compact(row.premium || 0) }}</strong>
+                      </div>
+                      <span class="hero-sub label">
+                        {{ num(row.contracts ?? row.volume ?? 0, 0) }} contracts @
+                        {{ row.price != null ? `$${num(row.price, 2)}` : '—' }}
+                      </span>
+                    </div>
+                    <div class="hero-right">
+                      <div class="hero-tags">
+                        <span class="right-chip label" :class="row.right">
+                          {{ (row.right || 'CALL').toUpperCase() }}
+                        </span>
+                        <div
+                          v-if="row.heat != null"
+                          class="heat-pill label"
+                          :class="heatScoreCls(row.heat)"
+                        >
+                          <span class="heat-lbl">HEAT</span>
+                          {{ Math.round(row.heat) }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 6-Cell Matrix -->
+                  <div class="card-specs-matrix">
+                    <div class="spec-cell">
+                      <span class="spec-label">EXPIRATION</span>
+                      <span class="spec-val">
+                        {{ shortDate(row.expiry) }}
+                        <small class="dte-sub">· {{ formatDteBadge(row.dte).label }}</small>
+                      </span>
+                    </div>
+                    <div class="spec-cell">
+                      <span class="spec-label">STRIKE</span>
+                      <span class="spec-val strike-val">${{ num(row.strike ?? 0, 2) }}</span>
+                    </div>
+                    <div class="spec-cell">
+                      <span class="spec-label">SPOT</span>
+                      <span class="spec-val">{{
+                        row.underlying_price != null ? `$${num(row.underlying_price, 2)}` : '—'
+                      }}</span>
+                    </div>
+                    <div class="spec-cell">
+                      <span class="spec-label">OTM / ITM</span>
+                      <span class="spec-val" :class="formatMoneyness(row.otm_pct).className">
+                        {{ formatMoneyness(row.otm_pct).label }}
+                      </span>
+                    </div>
+                    <div class="spec-cell">
+                      <span class="spec-label">OPEN INT</span>
+                      <span class="spec-val">{{
+                        row.open_interest != null ? num(row.open_interest, 0) : '—'
+                      }}</span>
+                    </div>
+                    <div class="spec-cell">
+                      <span class="spec-label">IMPLIED VOL</span>
+                      <span class="spec-val">{{
+                        row.implied_volatility != null ? pctFrac(row.implied_volatility, 0) : '—'
+                      }}</span>
+                    </div>
+                  </div>
+
+                  <!-- Footer -->
+                  <div class="card-foot-row">
+                    <div class="foot-left">
                       <span
                         class="vol-oi-pill label"
                         :class="{
@@ -3387,70 +3831,66 @@ function downloadHistoryTapeCsv(): void {
                             row.contracts ?? row.volume,
                             row.open_interest,
                           ).isHigh,
-                          'vol-oi-extreme': computeVolOiRatio(
-                            row.contracts ?? row.volume,
-                            row.open_interest,
-                          ).isExtreme,
                         }"
-                        :title="
-                          computeVolOiRatio(row.contracts ?? row.volume, row.open_interest).isHigh
-                            ? 'Unusual Volume > Open Interest (Opening Activity)'
-                            : 'Volume to Open Interest ratio'
-                        "
                       >
-                        <span
-                          v-if="
-                            computeVolOiRatio(row.contracts ?? row.volume, row.open_interest).isHigh
-                          "
-                          class="hot-pip"
-                          aria-hidden="true"
-                          >•</span
-                        >
                         {{
                           computeVolOiRatio(row.contracts ?? row.volume, row.open_interest)
                             .formatted
                         }}
                       </span>
-                    </td>
-                    <td
-                      class="fig num tape-premium"
-                      :class="classifyPremiumTier(row.premium).className"
-                    >
-                      <div class="premium-meter-wrap">
-                        <span
-                          class="premium-fill-meter"
-                          :style="{ width: heatWidth(row.premium_percentile) }"
-                        />
-                        <span
-                          v-if="classifyPremiumTier(row.premium).isWhale"
-                          class="whale-indicator label"
-                          :class="classifyPremiumTier(row.premium).className"
-                        >
-                          {{ classifyPremiumTier(row.premium).label }}
-                        </span>
-                        <span class="premium-val-text">{{ moneyCompact(row.premium) }}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="heat-cell" :class="heatClass(row.premium_percentile)">
-                        <span class="heat-track" aria-hidden="true"
-                          ><i :style="{ width: heatWidth(row.premium_percentile) }"
-                        /></span>
-                        <span class="fig">{{ fractionPercent(row.premium_percentile, 0) }}</span>
-                      </div>
-                    </td>
-                    <td>
                       <span
-                        class="aggressor label"
-                        :class="signedPrintTokenClass(row.aggressor ?? row.aggressor_label)"
-                        >{{ aggressorLabel(row) }}</span
+                        v-for="tag in (row.anomaly_flags ?? []).slice(0, 2)"
+                        :key="tag"
+                        class="anomaly-chip label"
                       >
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                        {{ tag.replace(/_/g, ' ') }}
+                      </span>
+                    </div>
+                    <button
+                      v-if="row.sweep_fill_count && row.sweep_fill_count > 1"
+                      type="button"
+                      class="fills-toggle-btn"
+                      @click.stop="toggleSweepFills(tapeRowKey(row))"
+                    >
+                      {{
+                        isSweepFillsExpanded(tapeRowKey(row))
+                          ? '▲ HIDE FILLS'
+                          : `▼ ${row.sweep_fill_count} FILLS`
+                      }}
+                    </button>
+                  </div>
+
+                  <!-- Fills Drawer -->
+                  <div
+                    v-if="
+                      row.sweep_fill_count &&
+                      row.sweep_fill_count > 1 &&
+                      isSweepFillsExpanded(tapeRowKey(row))
+                    "
+                    class="card-fills-drawer"
+                  >
+                    <div class="fills-drawer-head">
+                      CONSTITUENT EXECUTION FILLS (BURST AGGREGATE)
+                    </div>
+                    <div class="fills-drawer-list">
+                      <div
+                        v-for="(fill, fIdx) in row.sweep_fills || []"
+                        :key="fIdx"
+                        class="fill-drawer-item"
+                      >
+                        <span class="fill-item-time">{{ tapeTime(fill.timestamp) }}</span>
+                        <span class="fill-item-contracts"
+                          >{{ num(fill.contracts, 0) }} contracts</span
+                        >
+                        <span class="fill-item-px">@ ${{ num(fill.price || 0, 2) }}</span>
+                        <span class="fill-item-prem">${{ compact(fill.premium || 0) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div v-else class="tape-unavailable">
+            <div v-else-if="!tapeRows.length" class="tape-unavailable">
               <AppIcon name="density" :size="22" />
               <div>
                 <strong>{{
@@ -3720,7 +4160,7 @@ function downloadHistoryTapeCsv(): void {
                       Concentration
                       <HelpTip
                         label="Flow Concentration"
-                        text="Top strike and DTE expiration zone where institutional order volume is clustered."
+                        text="Top strike and DTE in this provider sample. Missing strike/DTE stay named missing — never a fake zero."
                         align="center"
                       />
                       <span class="sort-indicator">{{ reviewSortArrow('concentration') }}</span>
@@ -3919,26 +4359,26 @@ function downloadHistoryTapeCsv(): void {
           </Panel>
         </main>
 
-        <!-- Right Column: Realtime Flow Analytics Sidebar (28% width) -->
+        <!-- Right Column: provider-sample analytics sidebar (28% width) -->
         <aside class="flow-sidebar-column">
           <!-- Card 1: Flow Trend Sparkline & Cumulative Delta -->
           <div class="sidebar-card trend-card rise">
             <div class="sidebar-card-head">
-              <span class="label section-kicker">Realtime Flow Analytics</span>
-              <h3 class="sidebar-card-title">{{ activeSymbol }} Flow Trend</h3>
+              <span class="label section-kicker">Provider sample analytics</span>
+              <h3 class="sidebar-card-title">{{ isFilteredBySymbol ? `${activeSymbol} Flow Trend` : 'Market Flow Trend' }}</h3>
             </div>
             <div class="trend-readout-row">
               <div>
                 <span class="label">Cumulative Net Flow</span>
-                <strong class="fig net-flow-val" :class="netFlowTotal >= 0 ? 'pos' : 'neg'">
-                  {{ netFlowTotal >= 0 ? '+' : '−' }}${{ compact(Math.abs(netFlowTotal)) }}
+                <strong class="fig net-flow-val" :class="netFlowTotal > 0 ? 'pos' : netFlowTotal < 0 ? 'neg' : 'neutral'">
+                  {{ netFlowTotal > 0 ? '+' : netFlowTotal < 0 ? '−' : '' }}${{ compact(Math.abs(netFlowTotal)) }}
                 </strong>
               </div>
               <button
                 type="button"
                 class="trend-badge-btn label"
                 :class="[
-                  netFlowTotal >= 0 ? 'bullish' : 'bearish',
+                  netFlowTotal > 0 ? 'bullish' : netFlowTotal < 0 ? 'bearish' : 'neutral',
                   { active: rightFilter !== 'all' },
                 ]"
                 :title="
@@ -3946,13 +4386,18 @@ function downloadHistoryTapeCsv(): void {
                 "
                 @click="netFlowTotal >= 0 ? toggleCallFilter() : togglePutFilter()"
               >
-                {{ netFlowTotal >= 0 ? 'CALL DOMINANT' : 'PUT DOMINANT' }}
+                {{ netFlowTotal > 0 ? 'CALL DOMINANT' : netFlowTotal < 0 ? 'PUT DOMINANT' : 'BALANCED' }}
                 <span v-if="rightFilter !== 'all'" class="filter-on-tag">FILTERED</span>
               </button>
             </div>
             <!-- Trend SVG Chart -->
             <div class="trend-chart-box" :title="`Cumulative flow: ${moneyCompact(netFlowTotal)}`">
-              <svg viewBox="0 0 240 54" class="trend-svg" preserveAspectRatio="none">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 240 54"
+                class="trend-svg"
+                preserveAspectRatio="none"
+              >
                 <path :d="flowTrendAreaPath" class="trend-area" />
                 <path
                   :d="flowTrendSvgPath"
@@ -3987,7 +4432,7 @@ function downloadHistoryTapeCsv(): void {
                     title="Filter Call-led flow"
                     @click="toggleCallFilter"
                   >
-                    Calls {{ activeTickerStats.callPct }}%
+                    Calls {{ distributionStats.callPct }}%
                   </button>
                   <button
                     type="button"
@@ -3996,20 +4441,28 @@ function downloadHistoryTapeCsv(): void {
                     title="Filter Put-led flow"
                     @click="togglePutFilter"
                   >
-                    Puts {{ activeTickerStats.putPct }}%
+                    Puts {{ distributionStats.putPct }}%
                   </button>
                 </div>
-                <div class="dist-track interactive" title="Click green for Calls, red for Puts">
+                <!-- A second, mouse-only route to the two filters the buttons above
+                       already expose. Hidden from the accessibility tree rather
+                       than duplicated into it: the keyboard path exists, and
+                       announcing the same two actions twice is only noise. -->
+                <div
+                  class="dist-track interactive"
+                  aria-hidden="true"
+                  title="Click green for Calls, red for Puts"
+                >
                   <i
                     class="call-segment clickable"
                     :class="{ dimmed: rightFilter === 'put' }"
-                    :style="{ width: `${activeTickerStats.callPct}%` }"
+                    :style="{ width: `${distributionStats.callPct}%` }"
                     @click="toggleCallFilter"
                   />
                   <i
                     class="put-segment clickable"
                     :class="{ dimmed: rightFilter === 'call' }"
-                    :style="{ width: `${activeTickerStats.putPct}%` }"
+                    :style="{ width: `${distributionStats.putPct}%` }"
                     @click="togglePutFilter"
                   />
                 </div>
@@ -4023,7 +4476,7 @@ function downloadHistoryTapeCsv(): void {
                   @click="toggleCallFilter"
                 >
                   <span class="label">Total Call Premium</span>
-                  <strong class="fig">{{ moneyCompact(activeTickerStats.callPremium) }}</strong>
+                  <strong class="fig">{{ moneyCompact(distributionStats.callPremium) }}</strong>
                 </button>
                 <button
                   type="button"
@@ -4033,13 +4486,24 @@ function downloadHistoryTapeCsv(): void {
                   @click="togglePutFilter"
                 >
                   <span class="label">Total Put Premium</span>
-                  <strong class="fig">{{ moneyCompact(activeTickerStats.putPremium) }}</strong>
+                  <strong class="fig">{{ moneyCompact(distributionStats.putPremium) }}</strong>
                 </button>
               </div>
             </div>
           </div>
 
-          <!-- Card 3: Top Flow Contracts / Active Strikes -->
+          <!-- Card 3: Premium concentration across the expiry curve -->
+          <div class="sidebar-card expiry-concentration-card rise">
+            <div class="sidebar-card-head">
+              <span class="label section-kicker">Expiry Concentration</span>
+              <h3 class="sidebar-card-title">
+                {{ isFilteredBySymbol ? `${activeSymbol} Premium by Expiry` : 'Premium by Expiry' }}
+              </h3>
+            </div>
+            <FlowExpiryConcentration :concentration="flowConcentration" />
+          </div>
+
+          <!-- Card 4: Top Flow Contracts / Active Strikes -->
           <div class="sidebar-card top-contracts-card rise">
             <div class="sidebar-card-head">
               <span class="label section-kicker">Largest Orders</span>
@@ -4077,13 +4541,13 @@ function downloadHistoryTapeCsv(): void {
           <!-- Card 4: Institutional Blocks & Lit Pool Radar -->
           <div class="sidebar-card institutional-alert-card rise">
             <div class="alert-card-badge-line">
-              <span class="institutional-badge label">INSTITUTIONAL RADAR</span>
+              <span class="institutional-badge label">FLOW FLAGS</span>
               <span v-if="tapePreset !== 'all'" class="radar-live-pill label">FILTERED</span>
             </div>
-            <h3 class="alert-card-heading">Institutional Flow &amp; Lit Pool Radar</h3>
+            <h3 class="alert-card-heading">Descriptive size and sweep flags</h3>
             <p class="alert-card-description">
-              Live real-time detection of high-conviction institutional prints, sweep bursts, and
-              whale orders.
+              Size and sweep flags on the latest 15s HTTP poll. Heuristic bursts stay distinct from
+              vendor class. Not a certified firehose and not ENTER.
             </p>
             <div class="radar-action-grid">
               <button
@@ -4127,7 +4591,7 @@ function downloadHistoryTapeCsv(): void {
                 @click="togglePresetFilter('golden_sweeps')"
               >
                 <div class="radar-btn-meta">
-                  <span class="radar-btn-title">Golden Sweeps</span>
+                  <span class="radar-btn-title">Vendor golden flag</span>
                   <span class="radar-btn-count fig"
                     >{{ radarStats.goldenSweeps }} prints ·
                     {{ moneyCompact(radarStats.goldenSweepPremium) }}</span
@@ -4352,7 +4816,7 @@ function downloadHistoryTapeCsv(): void {
   width: 34px;
   height: 34px;
   flex: 0 0 auto;
-  color: var(--text-tertiary);
+  color: var(--meta-provenance);
   border: var(--hair) solid var(--border-strong);
   background: var(--surface-base);
   border-radius: var(--r-md);
@@ -4435,7 +4899,7 @@ function downloadHistoryTapeCsv(): void {
   flex-direction: column;
   gap: 2px;
   margin-left: auto;
-  color: var(--text-tertiary);
+  color: var(--meta-provenance);
   text-align: right;
   font-size: var(--t-micro);
 }
@@ -4509,7 +4973,7 @@ button:disabled {
   gap: var(--s3);
   min-height: 260px;
   padding: var(--s6);
-  color: var(--text-tertiary);
+  color: var(--meta-provenance);
   border: var(--hair) solid var(--border-strong);
   text-align: center;
   background: var(--surface-raised);
@@ -4535,7 +4999,7 @@ button:disabled {
 }
 
 .feed-recovery.empty-feed {
-  color: var(--text-tertiary);
+  color: var(--meta-provenance);
   border-color: var(--border-strong);
 }
 
@@ -4597,9 +5061,9 @@ button:disabled {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xl);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 44px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 44px),
     var(--surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
 }
 
@@ -4806,24 +5270,26 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: stretch;
+  gap: var(--s2);
 }
 .snapshot-metrics article {
   position: relative;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: var(--s1);
   min-width: 0;
-  padding: var(--s4) var(--s5);
-  border-right: var(--hair) solid var(--border-subtle);
+  padding: var(--s3) var(--s4);
+  border: var(--hair) solid var(--border-subtle);
+  border-radius: var(--r-md);
   background: var(--surface-base);
-  transition: background-color var(--dur-fast) var(--ease-out);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .snapshot-metrics article:hover {
   background: var(--surface-raised);
-}
-.snapshot-metrics article:last-child {
-  border-right: 0;
+  border-color: var(--border-strong);
 }
 .snapshot-metrics article > .label {
   overflow-wrap: normal;
@@ -4837,16 +5303,21 @@ button:disabled {
 .snapshot-metrics strong {
   color: var(--text-primary);
   font-family: var(--font-data);
-  font-size: 1.35rem;
+  font-size: var(--t-fig);
   font-weight: 800;
-  line-height: 1.15;
+  line-height: 1.05;
   letter-spacing: var(--track-tight);
+  font-variant-numeric: tabular-nums;
 }
 .snapshot-metrics small {
-  color: var(--text-secondary);
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-tertiary);
   font-size: var(--t-micro);
   line-height: 1.35;
   overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .freshness-stat {
@@ -4857,7 +5328,7 @@ button:disabled {
   top: var(--s2);
   right: var(--s2);
   padding: 1px 5px;
-  color: var(--text-tertiary);
+  color: var(--meta-provenance);
   border: var(--hair) solid var(--border-strong);
   font-size: var(--t-micro);
   font-weight: 800;
@@ -4888,9 +5359,9 @@ button:disabled {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xl);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 44px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 44px),
     var(--surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
 }
 
@@ -4988,9 +5459,9 @@ button:disabled {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xl);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 40px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 40px),
     var(--surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
 }
 
 .sector-head {
@@ -5006,7 +5477,7 @@ button:disabled {
   font: 700 var(--t-small) var(--font-display);
 }
 .sector-meta {
-  color: var(--text-tertiary);
+  color: var(--meta-provenance);
   font-size: var(--t-micro);
 }
 .sector-clear-link {
@@ -5113,9 +5584,9 @@ button:disabled {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xl);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 40px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 40px),
     var(--surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
 }
 .leaders-head {
   display: flex;
@@ -5330,9 +5801,9 @@ button:disabled {
   border-left: 3px solid var(--phosphor);
   border-radius: var(--r-xl);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 44px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 44px),
     var(--surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
 }
 
@@ -5979,7 +6450,7 @@ button.major-symbol:hover {
   display: block;
   margin-top: 4px;
   color: var(--text-tertiary);
-  font: 700 8px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   letter-spacing: 0.05em;
 }
 
@@ -6374,9 +6845,9 @@ button.major-symbol:hover {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xl);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 44px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 44px),
     var(--surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
 }
 .evidence-drawer.open {
@@ -6905,7 +7376,7 @@ th.sortable:hover {
   min-width: 0;
 }
 
-/* ── Realtime Tape Card (Main Table) ────────────────────────────────────── */
+/* ── Provider tape card (main table) ────────────────────────────────────── */
 .realtime-tape-card {
   display: flex;
   flex-direction: column;
@@ -6971,6 +7442,409 @@ th.sortable:hover {
   font-weight: 700;
 }
 
+.tape-display-seg {
+  display: inline-flex;
+  background: var(--surface-base);
+  border: var(--hair) solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  padding: 2px;
+  gap: 2px;
+}
+.tape-display-seg button {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  padding: 2px 8px;
+  font-size: var(--t-nano);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.tape-display-seg button.on {
+  background: var(--panel-hi);
+  color: var(--ink);
+  font-weight: 850;
+  box-shadow: var(--shadow-1);
+}
+
+.tape-col-heat {
+  width: 72px;
+}
+.th-heat {
+  text-align: right;
+}
+.heat-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+.heat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--t-nano);
+  font-weight: 850;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  letter-spacing: 0.03em;
+}
+.heat-extreme {
+  color: var(--short);
+  background: var(--short-wash);
+  border: var(--hair) solid var(--short);
+}
+.heat-high {
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: var(--hair) solid var(--warn);
+}
+.heat-med {
+  color: var(--call);
+  background: var(--call-wash);
+  border: var(--hair) solid var(--call-dim);
+}
+.heat-low {
+  color: var(--text-tertiary);
+  background: var(--surface-overlay);
+  border: var(--hair) solid var(--border-subtle);
+}
+
+.class-cell-lockup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.table-fills-btn {
+  background: var(--surface-overlay);
+  border: var(--hair) solid var(--border-subtle);
+  border-radius: var(--r-xs);
+  color: var(--phosphor);
+  font-size: var(--t-nano);
+  font-weight: 850;
+  padding: 1px 5px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+.table-fills-btn:hover,
+.table-fills-btn.open {
+  background: var(--wash-1);
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.vol-oi-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.oi-faint-sub {
+  font-size: var(--t-nano);
+  color: var(--text-tertiary);
+}
+
+.table-fills-subrow {
+  background: var(--void-lift);
+  border-bottom: 1px solid var(--rule-hi);
+}
+.fills-subrow-cell {
+  padding: 8px 16px !important;
+  border-left: 3.5px solid var(--phosphor);
+}
+.fills-subrow-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.subrow-title {
+  font-size: var(--t-nano);
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+.subrow-fills-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.subrow-fill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-xs);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.subfill-time {
+  color: var(--ink-dim);
+}
+.subfill-contracts {
+  font-weight: 750;
+  color: var(--ink);
+}
+.subfill-price {
+  color: var(--ink-soft);
+}
+.subfill-prem {
+  font-weight: 800;
+  color: var(--phosphor);
+}
+
+/* CARDS MODE */
+.tape-cards-container {
+  padding: var(--s3);
+  max-height: 620px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.tape-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 12px;
+}
+.tape-stalker-card.if-card {
+  background: linear-gradient(180deg, var(--panel-hi) 0%, var(--panel) 100%);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+  position: relative;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.tape-stalker-card.if-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--rule-hi);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+.tape-stalker-card.if-card.call {
+  border-left: 3.5px solid var(--call);
+}
+.tape-stalker-card.if-card.put {
+  border-left: 3.5px solid var(--put);
+}
+.card-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.card-head-left {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.card-sym {
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--ink);
+  letter-spacing: 0.03em;
+  font-family: var(--font-mono);
+  background: var(--void);
+  border: 1px solid var(--rule-hi);
+  padding: 2px 7px;
+  border-radius: var(--r-xs);
+}
+.card-head-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.badge-fills {
+  background: var(--wash-1);
+  color: var(--phosphor);
+  border: var(--hair) solid var(--border-strong);
+}
+
+.card-hero-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: 8px 0;
+  border-top: var(--hair) solid var(--rule);
+  border-bottom: var(--hair) solid var(--rule);
+}
+.hero-prem-lockup {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.prem-label {
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+.prem-val {
+  font-size: var(--t-fig);
+  font-weight: 900;
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.hero-prem-lockup.call .prem-val {
+  color: var(--call);
+}
+.hero-prem-lockup.put .prem-val {
+  color: var(--put);
+}
+.hero-sub {
+  font-size: 11px;
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+.hero-tags {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.card-specs-matrix {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 2px 0;
+}
+.spec-cell {
+  background: var(--void);
+  border: 1px solid var(--rule-faint);
+  border-radius: var(--r-xs);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2px;
+  min-height: 44px;
+}
+.spec-label {
+  font-size: var(--t-nano);
+  font-weight: 850;
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.spec-val {
+  font-size: var(--t-small);
+  font-weight: 750;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  line-height: 1.2;
+}
+.strike-val {
+  color: var(--ink);
+  font-weight: 850;
+  font-size: 13px;
+}
+.dte-sub {
+  font-size: var(--t-nano);
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.card-foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding-top: var(--s2);
+  border-top: var(--hair) solid var(--rule);
+}
+.foot-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.anomaly-chip {
+  padding: 1px 5px;
+  font-size: var(--t-nano);
+  border-radius: var(--r-xs);
+  background: var(--warn-wash);
+  color: var(--warn);
+  border: var(--hair) solid var(--warn);
+}
+.fills-toggle-btn {
+  background: var(--surface-overlay);
+  border: var(--hair) solid var(--border-subtle);
+  border-radius: var(--r-xs);
+  color: var(--phosphor);
+  font-size: var(--t-nano);
+  font-weight: 800;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+.fills-toggle-btn:hover {
+  background: var(--wash-1);
+  color: var(--ink);
+}
+
+.card-fills-drawer {
+  background: var(--void);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-xs);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.fills-drawer-head {
+  font-size: var(--t-nano);
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--rule-faint);
+  padding-bottom: 4px;
+}
+.fill-drawer-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 6px;
+  background: var(--surface-base);
+  border-radius: 2px;
+  border: 1px solid var(--rule-faint);
+}
+.fill-item-time {
+  color: var(--text-tertiary);
+}
+.fill-item-contracts {
+  font-weight: 700;
+  color: var(--ink);
+}
+.fill-item-px {
+  color: var(--text-secondary);
+}
+.fill-item-prem {
+  font-weight: 800;
+  color: var(--phosphor);
+}
+
 .realtime-tape-card .tape-scroll {
   max-height: 520px;
   overflow-y: auto;
@@ -6980,7 +7854,7 @@ th.sortable:hover {
 
 .tape-table tbody tr {
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .tape-table tbody tr:hover {
@@ -7143,7 +8017,7 @@ th.sortable:hover {
   border: 1px solid var(--short);
 }
 .filter-on-tag {
-  font-size: 8px;
+  font-size: var(--t-nano);
   padding: 0 3px;
   background: var(--void);
   border-radius: 2px;
@@ -7216,7 +8090,7 @@ th.sortable:hover {
   padding: 0;
   font: inherit;
   font-weight: 750;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 .dist-label-btn:hover {
   opacity: 0.8;
@@ -7263,8 +8137,8 @@ th.sortable:hover {
   cursor: pointer;
   text-align: left;
   transition:
-    background 0.12s ease,
-    border-color 0.12s ease;
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .dist-stat-btn:hover,
 .dist-stat-btn.active {
@@ -7311,8 +8185,8 @@ th.sortable:hover {
   border-radius: var(--r-sm);
   cursor: pointer;
   transition:
-    background-color 0.12s ease,
-    border-color 0.12s ease;
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
   text-align: left;
 }
 
@@ -7426,8 +8300,8 @@ th.sortable:hover {
   cursor: pointer;
   text-align: left;
   transition:
-    background 0.12s ease,
-    border-color 0.12s ease;
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .radar-grid-btn:hover {
   background: var(--panel-hi);
@@ -7457,7 +8331,7 @@ th.sortable:hover {
   white-space: nowrap;
 }
 .radar-btn-action {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 800;
   padding: 2px 4px;
   border-radius: 2px;
@@ -7492,8 +8366,8 @@ th.sortable:hover {
   border-radius: var(--r-xs);
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .copy-contract-btn:hover {
   background: var(--panel-raise);
@@ -7539,8 +8413,8 @@ th.sortable:hover {
   cursor: pointer;
   letter-spacing: 0.04em;
   transition:
-    background-color 0.12s ease,
-    border-color 0.12s ease;
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
   margin-top: 4px;
 }
 
@@ -7646,12 +8520,6 @@ th.sortable:hover {
   .snapshot-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .snapshot-metrics article:nth-child(2) {
-    border-right: 0;
-  }
-  .snapshot-metrics article:nth-child(n + 3) {
-    border-top: var(--hair) solid var(--border-subtle);
-  }
   .live-pulse {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7724,13 +8592,6 @@ th.sortable:hover {
   }
   .snapshot-metrics {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .snapshot-metrics article {
-    border-right: 0;
-    border-top: var(--hair) solid var(--border-subtle);
-  }
-  .snapshot-metrics article:first-child {
-    border-top: 0;
   }
   .live-pulse {
     grid-template-columns: minmax(0, 1fr);

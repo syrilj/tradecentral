@@ -57,7 +57,7 @@ figcaption {
   left: 0;
   color: #6f6f78;
   font-family: var(--font-display);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.12em;
 }
@@ -120,7 +120,7 @@ svg {
   margin-top: 12px;
   color: #c93a10;
   font-family: var(--font-display);
-  font-size: 7px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
 }
@@ -169,7 +169,7 @@ svg {
   padding-top: 8px;
   color: #565660;
   font-family: var(--font-ui);
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 .point-api {
   top: 50px;
@@ -192,7 +192,7 @@ footer {
   color: #6f6f78;
   border-top: 1px solid #e4e3de;
   font-family: var(--font-display);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }

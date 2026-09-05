@@ -25,7 +25,16 @@ withDefaults(
     stroke-linejoin="round"
     aria-hidden="true"
   >
-    <template v-if="name === 'desk'">
+    <template v-if="name === 'vpa'">
+      <path d="M6 3v3M6 18v3" />
+      <rect x="4" y="6" width="4" height="12" rx="1" />
+      <path d="M12 2v5M12 15v7" />
+      <rect x="10" y="7" width="4" height="8" rx="1" />
+      <path d="M18 5v3M18 16v3" />
+      <rect x="16" y="8" width="4" height="8" rx="1" />
+      <path d="M3 21h18" />
+    </template>
+    <template v-else-if="name === 'desk'">
       <rect x="3" y="3" width="7" height="7" rx="1" />
       <rect x="14" y="3" width="7" height="7" rx="1" />
       <rect x="3" y="14" width="7" height="7" rx="1" />
@@ -40,6 +49,14 @@ withDefaults(
       <path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" />
       <path d="M4 12 12 16.5 20 12" />
       <path d="M4 16.5 12 21l8-4.5" />
+    </template>
+    <template v-else-if="name === 'brief'">
+      <!-- Stacked lenses read as one sheet: a page rule over three lanes of
+           differing weight, the way the Brief stacks field, levels, odds. -->
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+      <path d="M7 8h10" />
+      <path d="M7 12h6" />
+      <path d="M7 16h8" />
     </template>
     <template v-else-if="name === 'chain'">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -235,6 +252,12 @@ withDefaults(
       <path
         d="M12 3.5c2.4 2.2 3.7 5.2 3.7 8.5s-1.3 6.3-3.7 8.5c-2.4-2.2-3.7-5.2-3.7-8.5s1.3-6.3 3.7-8.5Z"
       />
+    </template>
+    <template v-else-if="name === 'amt'">
+      <!-- Market profile on its side: a baseline plus horizontal bars whose
+           length is longest at the middle rows, tapering top and bottom. -->
+      <path d="M4 3v18" />
+      <path d="M4 5h4M4 8h8M4 11h13M4 14h13M4 17h8M4 19.5h4" />
     </template>
     <template v-else-if="name === 'absorption'">
       <path d="M4 19h16" />

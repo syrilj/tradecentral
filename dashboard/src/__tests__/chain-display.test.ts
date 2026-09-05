@@ -53,6 +53,11 @@ describe('chainDisplay helpers', () => {
     expect(optionsSkewLabel('heavy_call_sweep')).toEqual({ label: 'Call Sweep', tone: 'up' })
     expect(optionsSkewLabel('bullish_call_drift')).toEqual({ label: 'Bull Drift', tone: 'up' })
     expect(optionsSkewLabel('hedged')).toEqual({ label: 'Hedged', tone: 'cool' })
+
+    // A missing skew is null — never a fake "Neutral" chip.
+    expect(optionsSkewLabel(null)).toBeNull()
+    expect(optionsSkewLabel(undefined)).toBeNull()
+    expect(optionsSkewLabel('')).toBeNull()
   })
 
   it('computes flow types and marker URLs correctly', async () => {

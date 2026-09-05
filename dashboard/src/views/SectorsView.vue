@@ -378,7 +378,8 @@ const expandedNames = computed(() => {
           </thead>
           <tbody>
             <tr v-for="(w, i) in filteredWatch" :key="i" @click="open(w.symbol)">
-              <td class="fig sym">{{ w.symbol }}</td>
+              <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="open(w.symbol)"><span class="sr-only">Select row</span></button>{{ w.symbol }}</td>
               <td class="label">{{ w.sector_hint }}</td>
               <td class="fig etf-sym">{{ w.etf }}</td>
               <td>
@@ -552,7 +553,7 @@ const expandedNames = computed(() => {
   box-shadow: inset 2px 0 0 var(--short);
 }
 .rot-chev {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   text-align: right;
 }
 .rot-expand {

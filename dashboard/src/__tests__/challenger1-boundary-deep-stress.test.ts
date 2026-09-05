@@ -186,11 +186,11 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
     it('handles empty tape (0 prints, $0 premium) without division by zero', () => {
       const volOi = computeVolOiRatio(0, 0)
       expect(volOi.ratio).toBeNull()
-      expect(volOi.formatted).toBe('0.00x')
+      expect(volOi.formatted).toBe('VOL MISSING')
 
       const volOiNull = computeVolOiRatio(null, null)
       expect(volOiNull.ratio).toBeNull()
-      expect(volOiNull.formatted).toBe('0.00x')
+      expect(volOiNull.formatted).toBe('VOL/OI MISSING')
 
       const dir = buildOptionsDirection(null, 'live')
       expect(dir).toBeDefined()
@@ -208,8 +208,8 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
         open_interest: 5,
       }
       const classified = classifyFlowOrder(massivePrint)
-      expect(classified.type).toBe('golden_sweep')
-      expect(classified.label).toBe('GOLDEN SWEEP')
+      expect(classified.type).toBe('sweep')
+      expect(classified.label).not.toBe('GOLDEN SWEEP')
 
       const tier = classifyPremiumTier(50_000_000)
       expect(tier.tier).toBe('mega_whale')
@@ -227,11 +227,20 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
       expect(formatMoneyness(-0.005)).toEqual({ label: 'ATM', className: 'moneyness-atm' })
       expect(formatMoneyness(0.05)).toEqual({ label: 'OTM +5.0%', className: 'moneyness-otm' })
       expect(formatMoneyness(-0.05)).toEqual({ label: 'ITM -5.0%', className: 'moneyness-itm' })
-      expect(formatMoneyness(null)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-      expect(formatMoneyness(undefined)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-      expect(formatMoneyness(NaN)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-      expect(formatMoneyness(Infinity)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-      expect(formatMoneyness(-Infinity)).toEqual({ label: 'N/A', className: 'moneyness-none' })
+      expect(formatMoneyness(null)).toEqual({ label: 'OTM MISSING', className: 'moneyness-none' })
+      expect(formatMoneyness(undefined)).toEqual({
+        label: 'OTM MISSING',
+        className: 'moneyness-none',
+      })
+      expect(formatMoneyness(NaN)).toEqual({ label: 'OTM MISSING', className: 'moneyness-none' })
+      expect(formatMoneyness(Infinity)).toEqual({
+        label: 'OTM MISSING',
+        className: 'moneyness-none',
+      })
+      expect(formatMoneyness(-Infinity)).toEqual({
+        label: 'OTM MISSING',
+        className: 'moneyness-none',
+      })
     })
 
     it('handles DTE badge formatting across boundary days (0D, 7D, 30D, 90D, 365D, negative, null)', () => {
@@ -245,9 +254,9 @@ describe('Challenger 1: Empirical Adversarial & Boundary Stress Test Suite', () 
       expect(formatDteBadge(90)).toEqual({ label: '90D', className: 'dte-quarterly' })
       expect(formatDteBadge(91)).toEqual({ label: '91D', className: 'dte-leap' })
       expect(formatDteBadge(365)).toEqual({ label: '365D', className: 'dte-leap' })
-      expect(formatDteBadge(null)).toEqual({ label: 'N/A', className: 'dte-unknown' })
-      expect(formatDteBadge(undefined)).toEqual({ label: 'N/A', className: 'dte-unknown' })
-      expect(formatDteBadge(NaN)).toEqual({ label: 'N/A', className: 'dte-unknown' })
+      expect(formatDteBadge(null)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
+      expect(formatDteBadge(undefined)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
+      expect(formatDteBadge(NaN)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
     })
 
     it('verifies namedEmpty, mixShareLabel, concentrationLabel, and pulseWindowCopy robustness', () => {

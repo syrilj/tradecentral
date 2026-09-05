@@ -104,13 +104,18 @@ const allSectorRows = computed(() => {
         <span class="eyebrow">SECTOR ROTATION &amp; PAIR CORRELATION</span>
         <h3 class="card-title">
           {{ cleanSym }} &middot; {{ sectorName }}
-          <span
+          <!-- Switches the whole card to another symbol, so it is a control,
+               not a caption. As a bare span it had no keyboard path and no
+               equivalent elsewhere on the card. -->
+          <button
             v-if="!isIndexOrEtf"
+            type="button"
             class="etf-badge font-mono"
+            :aria-label="`Switch to ${sectorEtf}`"
             @click="emit('selectSymbol', sectorEtf)"
           >
             Pair: {{ sectorEtf }}
-          </span>
+          </button>
         </h3>
       </div>
       <div class="pair-status-pill font-mono" :class="pairLeadershipStatus.tone">
@@ -201,7 +206,7 @@ const allSectorRows = computed(() => {
 .sector-pair-card {
   background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 1rem;
   display: flex;
   flex-direction: column;
@@ -216,7 +221,7 @@ const allSectorRows = computed(() => {
 }
 
 .eyebrow {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
@@ -233,14 +238,14 @@ const allSectorRows = computed(() => {
 }
 
 .etf-badge {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   background: var(--panel-hi);
   color: var(--phosphor);
   border: 1px solid var(--rule-hi);
   padding: 0.125rem 0.375rem;
-  border-radius: 3px;
+  border-radius: var(--r-xs);
   cursor: pointer;
-  transition: all var(--duration-fast, 120ms) ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .etf-badge:hover {
@@ -249,10 +254,10 @@ const allSectorRows = computed(() => {
 }
 
 .pair-status-pill {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-weight: 700;
   padding: 0.25rem 0.5rem;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .pair-status-pill.long {
@@ -282,7 +287,7 @@ const allSectorRows = computed(() => {
 .align-box {
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 0.625rem 0.75rem;
   display: flex;
   flex-direction: column;
@@ -294,7 +299,7 @@ const allSectorRows = computed(() => {
 }
 
 .box-k {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
 }
@@ -311,12 +316,12 @@ const allSectorRows = computed(() => {
 }
 
 .sector-code {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
 }
 
 .box-sub {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
 }
 
@@ -337,7 +342,7 @@ const allSectorRows = computed(() => {
 }
 
 .strip-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
 }
 
@@ -350,15 +355,15 @@ const allSectorRows = computed(() => {
 .sector-pill {
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  border-radius: 3px;
+  border-radius: var(--r-xs);
   padding: 0.15rem 0.375rem;
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-dim);
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  transition: all var(--duration-fast, 120ms) ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .sector-pill.active {

@@ -341,7 +341,8 @@ const meta = computed(() => {
                 }"
                 @click="selectRow(row.symbol)"
               >
-                <td>
+                <td class="row-select-cell">
+  <button type="button" class="row-select-btn" @click.stop="selectRow(row.symbol)"><span class="sr-only">Select row</span></button>
                   <span class="fig sym">{{ row.symbol }}</span>
                   <span class="basis label">{{ row.signal_basis }}</span>
                 </td>
@@ -1247,7 +1248,7 @@ const meta = computed(() => {
 }
 
 .fine {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 .state {

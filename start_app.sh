@@ -6,6 +6,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# api_server.py reads provider credentials (LSE_API_KEY and friends) straight
+# from the environment and never loads a dotenv itself, so launching through
+# this script left them unset: the flow tape came back `credential_missing`
+# and the desk rendered empty. Export .env here when it exists; values in the
+# file take precedence over the caller's shell, so override with `.env` itself
+# rather than an inline prefix.
+if [ -f "$ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT/.env"
+  set +a
+fi
+
 API_PORT="${API_PORT:-8787}"
 FRONTEND_PORT="${FRONTEND_PORT:-5178}"
 API_URL="http://127.0.0.1:${API_PORT}"

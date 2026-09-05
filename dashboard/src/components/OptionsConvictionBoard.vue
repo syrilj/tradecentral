@@ -462,10 +462,11 @@ function selectionDisplay(row: OptionsBoardRow): string {
                     row.squeeze_score == null ? 'unmeasured' : row.squeeze_score > 0 ? 'pos' : 'neg'
                   "
                   :style="{
-                    width:
+                    transform: `scaleX(${
                       row.squeeze_score != null
-                        ? `${Math.min(100, Math.abs(row.squeeze_score))}%`
-                        : '0%',
+                        ? Math.min(100, Math.abs(row.squeeze_score)) / 100
+                        : 0
+                    })`,
                   }"
                 />
               </div>
@@ -865,7 +866,11 @@ th.sortable.active .sort-arr {
 
 .sq-spark-bar {
   height: 100%;
-  transition: width 0.4s ease;
+  /* Scaled rather than resized: animating `width` laid out and painted the
+     whole row on every poll, `scaleX` stays on the compositor. */
+  width: 100%;
+  transform-origin: left center;
+  transition: transform 0.4s var(--ease-out);
   min-width: 2px;
 }
 .sq-spark-bar.pos {
@@ -895,7 +900,7 @@ th.sortable.active .sort-arr {
   display: inline-block;
   font-size: var(--t-micro);
   font-weight: 600;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   letter-spacing: 0.03em;
 }
 .chip.halt {
@@ -925,6 +930,6 @@ th.sortable.active .sort-arr {
   margin: 0 0 0.3rem;
   white-space: normal;
   line-height: 1.5;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 </style>

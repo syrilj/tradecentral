@@ -36,12 +36,29 @@
   /* Ultra-subtle substrate grid */
   --grid: rgba(255, 255, 255, 0.025);
 
-  /* ---- ink -------------------------------------------------------------- */
+  /* ---- ink ---------------------------------------------------------------
+     A five-step ladder, but only the first four carry text. Every text step
+     clears WCAG AA (4.5:1) against `--panel-raise`, the darkest surface a
+     figure is ever set on — so a token can be chosen for emphasis without
+     having to re-check the contrast of the panel it lands in.
+
+       ink        13.9:1   figures, primary reads
+       ink-soft    9.8:1   body copy
+       ink-dim     5.8:1   secondary meta
+       ink-faint   4.6:1   the legible floor — quietest text allowed
+       ink-ghost   3.4:1   NOT FOR TEXT. Hairlines, disabled chrome, and
+                           decorative separators only. If it has to be read,
+                           it is at least `--ink-faint`.
+
+     Staleness, provenance and age are never set in the bottom two steps —
+     see `--status-stale` and `--meta-provenance` below. An operator misreading
+     stale data as live is the worst failure this interface has, so those
+     labels are held at `--ink-dim` or above. */
   --ink: #f0f2f7;
   --ink-soft: #c8cedb;
   --ink-dim: #949eb2;
-  --ink-faint: #6c768a;
-  --ink-ghost: #4e5668;
+  --ink-faint: #828ca2;
+  --ink-ghost: #6c768a;
 
   /* ---- the one accent ----------------------------------------------------
      Sage/phosphor for live state, active tabs, and selection. */
@@ -49,6 +66,12 @@
   --phosphor-dim: #7f9550;
   --phosphor-glow: rgba(169, 196, 108, 0.14);
   --phosphor-wash: rgba(169, 196, 108, 0.07);
+
+  /* ---- Workstation accent theme anchors (stable swatches) ----------------- */
+  --accent-theme-phosphor: #a9c46c;
+  --accent-theme-amber: #d9a441;
+  --accent-theme-cyan: #5b95b5;
+  --accent-theme-monochrome: #f0f2f7;
 
   /* ---- semantic aliases -------------------------------------------------- */
   --surface-canvas: var(--void);
@@ -66,22 +89,52 @@
   --status-stale: var(--warn);
   --status-proxy: var(--call);
 
-  /* ---- signed quantities ------------------------------------------------ */
+  /* ---- provenance & freshness ---------------------------------------------
+     Where a number came from, and how old it is. These were previously set in
+     the quietest ink available, which put the staleness of a figure at a lower
+     contrast than the figure itself — exactly backwards. Uncertainty is part
+     of the data model, so it is legible by contract: never below `--ink-dim`. */
+  --meta-provenance: var(--ink-dim);
+  --meta-age: var(--ink-dim);
+
+  /* ---- focus -------------------------------------------------------------
+     WCAG 2.2 SC 2.4.11 wants an indicator with at least the area of a 2px
+     perimeter, so the focus ring is deliberately thicker than `--hair`. */
+  --focus-ring-width: 2px;
+  --focus-ring: var(--focus-ring-width) solid var(--phosphor);
+  --focus-ring-offset: 2px;
+
+  /* ---- neutral washes & shadows ------------------------------------------
+     Flat alpha veils over whatever surface is beneath. These were open-coded
+     as `rgba(255,255,255,0.02)`-style literals in ~50 places; naming them keeps
+     the "no literal colour in a component" rule intact. */
+  --wash-1: rgba(255, 255, 255, 0.02);
+  --wash-2: rgba(255, 255, 255, 0.035);
+  --wash-3: rgba(255, 255, 255, 0.07);
+  --wash-line: rgba(255, 255, 255, 0.045);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.45);
+
+  /* ---- signed quantities --------------------------------------------------
+     Every one of these is set as text on a figure at some point, so each
+     clears 4.5:1 on `--panel-raise` as well as on the darker surfaces. The
+     `-dim` variants used to trade legibility for restraint and fell to
+     2.9–4.1:1 there; they are now held to the same floor as the rest. */
   --long: #4fae80;
   --long-wash: rgba(79, 174, 128, 0.12);
-  --short: #cf5f6b;
+  --short: #d36d78;
   --short-wash: rgba(207, 95, 107, 0.12);
   --call: #10b981;
   --call-hi: #34d399;
-  --call-dim: #0f9472;
+  --call-dim: #109e7a;
   --call-wash: rgba(16, 185, 129, 0.12);
-  --put: #f43f5e;
+  --put: #f66a82;
   --put-hi: #fb7185;
-  --put-dim: #c4324c;
+  --put-dim: #d9687c;
   --put-wash: rgba(244, 63, 94, 0.12);
   --warn: #d9a441;
   --warn-wash: rgba(217, 164, 65, 0.12);
-  --halt: #cf5f6b;
+  --halt: #d36d78;
 
   /* ---- translucent panel wash ----------------------------------------------
      A faint, one-step translucent panel overlay used for read-only legend
@@ -102,6 +155,15 @@
   --glass-surface: rgba(20, 23, 30, 0.58);
   --glass-surface-hi: rgba(32, 36, 46, 0.66);
   --glass-overlay: rgba(12, 14, 19, 0.72);
+  --glass-tint: rgba(169, 196, 108, 0.08);
+  --glass-rail-bg: linear-gradient(180deg, var(--glass-tint), transparent 180px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 120px),
+    var(--glass-base);
+  --glass-strip-bg: linear-gradient(90deg, var(--glass-tint), transparent 360px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 36px),
+    var(--glass-surface);
+  --glass-profile-btn-bg: linear-gradient(180deg, var(--glass-tint), transparent 30px), var(--void-lift);
+  --glass-drawer-bg: linear-gradient(180deg, var(--glass-tint), transparent 280px), var(--panel);
   --glass-border: rgba(255, 255, 255, 0.09);
   --glass-border-subtle: rgba(255, 255, 255, 0.055);
   --glass-border-hi: rgba(255, 255, 255, 0.16);
@@ -168,6 +230,10 @@
     Consolas, monospace;
   --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
 
+  /* 10px is the floor. Below it, holding 4.5:1 stops being enough to make a
+     label readable — the glyphs are too thin to carry the ratio — and the desk
+     had drifted to 8px and 9px in ~20 places. Nothing is set smaller. */
+  --t-nano: 0.625rem; /* 10px — the smallest label allowed  */
   --t-micro: 0.6875rem; /* 11px — crisp technical labels     */
   --t-tiny: 0.75rem; /* 12px — dense table meta           */
   --t-small: 0.8125rem; /* 13px — table body                 */
@@ -288,6 +354,45 @@
   --density-cell-padding: 6px 10px;
   --density-gap: 8px;
   --density-control-h: 34px;
+}
+
+/* ---- Workstation Accent Themes (Preferences) ----------------------------
+   Customizes the functional accent tone across the desk, interactive controls,
+   specular highlights, and floating glass tint. */
+[data-accent='phosphor'] {
+  --phosphor: #a9c46c;
+  --phosphor-dim: #7f9550;
+  --phosphor-glow: rgba(169, 196, 108, 0.14);
+  --phosphor-wash: rgba(169, 196, 108, 0.07);
+  --glass-tint: rgba(169, 196, 108, 0.08);
+  --glass-border-accent: rgba(169, 196, 108, 0.35);
+}
+
+[data-accent='amber'] {
+  --phosphor: #d9a441;
+  --phosphor-dim: #9e7425;
+  --phosphor-glow: rgba(217, 164, 65, 0.16);
+  --phosphor-wash: rgba(217, 164, 65, 0.08);
+  --glass-tint: rgba(217, 164, 65, 0.09);
+  --glass-border-accent: rgba(217, 164, 65, 0.4);
+}
+
+[data-accent='cyan'] {
+  --phosphor: #5b95b5;
+  --phosphor-dim: #3e6d87;
+  --phosphor-glow: rgba(91, 149, 181, 0.16);
+  --phosphor-wash: rgba(91, 149, 181, 0.08);
+  --glass-tint: rgba(91, 149, 181, 0.09);
+  --glass-border-accent: rgba(91, 149, 181, 0.4);
+}
+
+[data-accent='monochrome'] {
+  --phosphor: #f0f2f7;
+  --phosphor-dim: #949eb2;
+  --phosphor-glow: rgba(240, 242, 247, 0.14);
+  --phosphor-wash: rgba(240, 242, 247, 0.07);
+  --glass-tint: rgba(255, 255, 255, 0.06);
+  --glass-border-accent: rgba(240, 242, 247, 0.35);
 }
 
 /* Flow order badge components */
@@ -457,5 +562,21 @@
   *::before,
   *::after {
     animation-iteration-count: 1 !important;
+    /* Zeroing the tokens above covers everything that animates on a token.
+       A handful of rules still hard-code their own timing (the print-arrival
+       flash on Options, a few 0.4s bar transitions), and those kept running at
+       full length. Nothing is exempt now. Near-zero rather than zero so
+       transitionend/animationend still fire and no state machine waiting on
+       one can stall. */
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Affordances that signal "live" by pulsing still have to read as live when
+     they cannot pulse, so they hold their lit state instead of animating to it. */
+  .live-dot,
+  .nav-pulse {
+    opacity: 1 !important;
   }
 }

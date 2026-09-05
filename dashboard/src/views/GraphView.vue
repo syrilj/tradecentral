@@ -466,7 +466,8 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
                 :class="{ active: activeCommunity === c.id }"
                 @click="pickCommunity(c.id)"
               >
-                <td>
+                <td class="row-select-cell">
+  <button type="button" class="row-select-btn" @click.stop="pickCommunity(c.id)"><span class="sr-only">Select row</span></button>
                   <span
                     class="swatch"
                     :class="{ tail: c.id === OTHER }"
@@ -513,7 +514,8 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
                   class="row-click"
                   @click="selected = e.other"
                 >
-                  <td class="cname">{{ labelOf.get(e.other) ?? e.other }}</td>
+                  <td class="row-select-cell cname">
+  <button type="button" class="row-select-btn" @click.stop="selected = e.other"><span class="sr-only">Select row</span></button>{{ labelOf.get(e.other) ?? e.other }}</td>
                   <td class="fig num">{{ e.weight.toFixed(1) }}</td>
                 </tr>
               </tbody>
@@ -681,7 +683,7 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
 }
 .centre-sub {
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: var(--track-label);
   text-transform: uppercase;
   fill: var(--ink-faint);

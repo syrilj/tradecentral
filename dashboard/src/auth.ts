@@ -25,7 +25,9 @@ export function operatorAuthMode(): OperatorAuthMode {
 }
 
 export function isLocalAuthMode(): boolean {
-  return operatorAuthMode() === 'local'
+  if (operatorAuthMode() === 'local') return true
+  const key = String(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? '').trim()
+  return !key
 }
 
 export function allowedOperatorEmails(): string[] {

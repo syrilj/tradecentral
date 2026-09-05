@@ -312,6 +312,34 @@ def test_standalone_flow_never_reads_the_legacy_deep_snapshot(monkeypatch):
     assert "live_target_limit" not in seen
 
 
+def test_unusual_flow_cache_round_trip_labels_hit_and_age(monkeypatch):
+    api_server._UNUSUAL_FLOW_CACHE.clear()
+    builds = {"n": 0}
+
+    def build(**_):
+        builds["n"] += 1
+        return {
+            "rows": [{"symbol": "AAA", "premium": 100_000, "decision_authorized": False}],
+            "tape": [],
+            "coverage": {},
+            "feed_status": "live",
+            "decision_authorized": False,
+        }
+
+    monkeypatch.setattr(api_server, "build_unusual_options_flow", build)
+    miss = api_server._unusual_flow_payload_impl(limit=20, min_premium=25_000.0, force=False)
+    hit = api_server._unusual_flow_payload_impl(limit=20, min_premium=25_000.0, force=False)
+    assert builds["n"] == 1
+    assert miss["cache"]["hit"] is False
+    assert miss["cache"]["ttl_seconds"] == api_server._UNUSUAL_FLOW_TTL_S
+    assert hit["cache"]["hit"] is True
+    assert hit["cache"]["age_seconds"] >= 0
+    assert hit["cache"]["ttl_seconds"] == api_server._UNUSUAL_FLOW_TTL_S
+    force = api_server._unusual_flow_payload_impl(limit=20, min_premium=25_000.0, force=True)
+    assert builds["n"] == 2
+    assert force["cache"]["hit"] is False
+
+
 def test_flow_aggregate_carries_latest_tape_underlying_price(monkeypatch):
     api_server._UNUSUAL_FLOW_CACHE.clear()
     monkeypatch.setattr(

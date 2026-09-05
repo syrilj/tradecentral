@@ -117,7 +117,7 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
     it('enforces exact table column symmetry in PEAD table for split vs focus modes', () => {
       // PEAD table header check
       const peadTableMatch = desk.match(
-        /<table v-if="filteredPead\.length" class="grid table-pead"[\s\S]*?<\/thead>/,
+        /<table[^>]*?class="[^"]*table-pead"[^>]*>[\s\S]*?<\/thead>/,
       )
       expect(peadTableMatch).toBeTruthy()
       const peadHead = peadTableMatch![0]
@@ -150,7 +150,7 @@ describe('Empirical Stress Testing: DeskView.vue', () => {
     it('enforces exact table column symmetry in Directional table for split vs focus modes', () => {
       // Directional table header check
       const dirTableMatch = desk.match(
-        /<table v-if="filteredSignals\.length" class="grid table-directional"[\s\S]*?<\/thead>/,
+        /<table[^>]*?class="[^"]*table-directional"[^>]*>[\s\S]*?<\/thead>/,
       )
       expect(dirTableMatch).toBeTruthy()
       const dirHead = dirTableMatch![0]

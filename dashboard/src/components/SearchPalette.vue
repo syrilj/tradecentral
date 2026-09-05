@@ -46,9 +46,10 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'insiders', title: 'Insiders', idx: '15', hint: 'Form 4 · Fintel insider tape' },
   { name: 'changepoints', title: 'Breaks', idx: '13', hint: 'Bayesian regime breaks' },
   { name: 'momentum', title: 'Momentum', idx: '14', hint: 'Five Pillars · gap scan' },
-  { name: 'suggest', title: 'Setups', idx: '05', hint: 'Call/put · GEX sell' },
   { name: 'calculator', title: 'Calculator', idx: '16', hint: 'Spot · strike · DTE · P/L' },
   { name: 'flowstate', title: 'Flow State', idx: '15', hint: 'Daily proxy research' },
+  { name: 'vpa', title: 'VPA', idx: '17', hint: 'Volume Price Analysis & AI vision' },
+  { name: 'amt', title: 'AMT', idx: '18', hint: 'Auction Market Theory · balance vs breakout' },
 ]
 
 const q = ref('')
@@ -268,12 +269,19 @@ function commit(): void {
   min-width: 0;
 }
 .input::placeholder {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-ui);
   letter-spacing: 0;
 }
+/* The palette autofocuses this field, so the ring is usually redundant — but
+   "usually" is not "always": focus can return here from a result row, and with
+   `outline: none` and no replacement there was then nothing on screen saying
+   where typing would go. The ring is drawn inside the field so it does not
+   collide with the palette's own border. */
 .input:focus-visible {
-  outline: none;
+  outline: var(--focus-ring);
+  outline-offset: -3px;
+  border-radius: var(--r-xs);
 }
 
 .state {
@@ -304,7 +312,7 @@ function commit(): void {
   font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 .cmd-list {
@@ -416,7 +424,7 @@ function commit(): void {
 }
 
 .span {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   letter-spacing: 0.03em;
 }
 .bars {
@@ -441,7 +449,7 @@ function commit(): void {
   padding: var(--s2) var(--s4);
   border-top: var(--hair) solid var(--rule);
   background: var(--void-lift);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 kbd {

@@ -3,6 +3,8 @@ from pathlib import Path
 import time
 from typing import Any
 
+import pytest
+
 from edge.daily_plays.adapters.flow import (
     load_live_flow_activity,
     load_live_forward_flow,
@@ -12,6 +14,13 @@ from edge.daily_plays.adapters.flow import (
     normalize_flow_payload,
     reset_lse_circuit,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_lse_circuit():
+    reset_lse_circuit()
+    yield
+    reset_lse_circuit()
 
 
 def test_market_flow_uses_one_provider_window_and_groups_underlyings():
@@ -234,6 +243,7 @@ def test_market_flow_fail_closed_on_timeout():
     assert result["rows"] == []
     assert result["coverage"]["request_completed"] == 0
     assert result["warnings"] == ["flow_market_timeout"]
+    reset_lse_circuit()
 
 
 def test_market_flow_fail_closed_without_credentials(monkeypatch):

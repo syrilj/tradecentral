@@ -46,10 +46,10 @@ describe('Supply Chain & Thematic Beneficiaries Workspace', () => {
   })
 
   it('ValueChainGraph implements multi-tier deterministic SVG layout', () => {
-    expect(graph).toContain('Tier 2: Materials & Metrology')
-    expect(graph).toContain('Tier 1: Optics, Memory, Cooling')
-    expect(graph).toContain('Core Driver & Infrastructure')
-    expect(graph).toContain('Downstream Cloud & Enterprise')
+    expect(graph).toContain('Tier 2 Suppliers')
+    expect(graph).toContain('Tier 1 Suppliers')
+    expect(graph).toContain('Core Driver & Partners')
+    expect(graph).toContain('Downstream & Customers')
     expect(graph).toContain('chain-edge')
     expect(graph).toContain('node-card')
     expect(graph).toContain('arrow-supply')

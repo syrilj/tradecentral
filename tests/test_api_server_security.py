@@ -105,14 +105,17 @@ def _no_auth(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_mutating_paths_constant_matches_the_three_job_starting_endpoints():
+def test_mutating_paths_constant_matches_the_job_starting_endpoints():
     # Greppable, explicit source of truth -- pin its contents so a future
     # edit can't silently drop or add an endpoint without a test failing.
+    # /api/vpa/analyze joined the set when the VPA engine landed; the pin was
+    # not updated with it, so this guard sat red and stopped guarding anything.
     assert api_server._MUTATING_API_PATHS == frozenset(
         {
             "/api/trigger_scan",
             "/api/plays/run",
             "/api/options/backfill_oi",
+            "/api/vpa/analyze",
         }
     )
 
@@ -285,6 +288,33 @@ def test_static_file_read_error_does_not_leak_filesystem_path(monkeypatch, tmp_p
     # that failed to read.
     assert payload["endpoint"] == "/"
     assert "correlation_id" in payload
+
+
+def test_unusual_flow_errors_and_json_redact_provider_keys(monkeypatch):
+    _no_auth(monkeypatch)
+    secret = "lse-live-secret-value-xyz"
+    monkeypatch.setenv("LSE_API_KEY", secret)
+
+    def boom(**_kwargs):
+        raise RuntimeError(
+            f"upstream failed x-api-key={secret} LSE_API_KEY={secret} Authorization: Bearer {secret}"
+        )
+
+    monkeypatch.setattr(api_server, "build_unusual_options_flow", boom)
+    api_server._UNUSUAL_FLOW_CACHE.clear()
+    resp = _request("GET", "/api/unusual-flow?limit=20&min_premium=25000")
+    assert resp.status == 200
+    blob = resp.text
+    assert secret not in blob
+    assert "x-api-key=***" in blob or "x-api-key" not in blob.lower() or "***" in blob
+    assert "LSE_API_KEY=" not in blob or "LSE_API_KEY=***" in blob
+    body = resp.json()
+    assert body["decision_authorized"] is False
+    assert body["rows"] == []
+    assert body["tape"] == []
+    assert body.get("feed_status")
+    assert body.get("source_snapshot") == "market_flow"
+    assert isinstance(body.get("cache"), dict)
 
 
 def test_deliberate_validation_messages_are_not_sanitized(monkeypatch):

@@ -156,17 +156,17 @@ describe('Milestone 4: Options & Squeeze Formatters Honour the No-Fake-Zero Rule
   })
 
   describe('9. Flow Display Badge and Moneyness Fallbacks', () => {
-    it('computeVolOiRatio falls back to "0.00x" on missing inputs', () => {
+    it('computeVolOiRatio names missing volume and OI instead of 0.00x', () => {
       expect(computeVolOiRatio(null, null)).toEqual({
         ratio: null,
-        formatted: '0.00x',
+        formatted: 'VOL/OI MISSING',
         isHigh: false,
         isExtreme: false,
       })
-      expect(computeVolOiRatio(undefined, undefined).formatted).toBe('0.00x')
-      expect(computeVolOiRatio(100, null).formatted).toBe('0.00x')
-      expect(computeVolOiRatio(null, 100).formatted).toBe('0.00x')
-      expect(computeVolOiRatio(-50, 100).formatted).toBe('0.00x')
+      expect(computeVolOiRatio(undefined, undefined).formatted).toBe('VOL/OI MISSING')
+      expect(computeVolOiRatio(100, null).formatted).toBe('OI MISSING')
+      expect(computeVolOiRatio(null, 100).formatted).toBe('VOL MISSING')
+      expect(computeVolOiRatio(-50, 100).formatted).toBe('VOL MISSING')
     })
 
     it('computeVolOiRatio identifies 0 OI as "NEW (0 OI)"', () => {
@@ -178,16 +178,19 @@ describe('Milestone 4: Options & Squeeze Formatters Honour the No-Fake-Zero Rule
       })
     })
 
-    it('formatDteBadge falls back to "N/A" on missing inputs', () => {
-      expect(formatDteBadge(null)).toEqual({ label: 'N/A', className: 'dte-unknown' })
-      expect(formatDteBadge(undefined)).toEqual({ label: 'N/A', className: 'dte-unknown' })
-      expect(formatDteBadge(NaN)).toEqual({ label: 'N/A', className: 'dte-unknown' })
+    it('formatDteBadge names missing DTE', () => {
+      expect(formatDteBadge(null)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
+      expect(formatDteBadge(undefined)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
+      expect(formatDteBadge(NaN)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
     })
 
-    it('formatMoneyness falls back to "N/A" on missing inputs', () => {
-      expect(formatMoneyness(null)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-      expect(formatMoneyness(undefined)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-      expect(formatMoneyness(NaN)).toEqual({ label: 'N/A', className: 'moneyness-none' })
+    it('formatMoneyness names missing OTM', () => {
+      expect(formatMoneyness(null)).toEqual({ label: 'OTM MISSING', className: 'moneyness-none' })
+      expect(formatMoneyness(undefined)).toEqual({
+        label: 'OTM MISSING',
+        className: 'moneyness-none',
+      })
+      expect(formatMoneyness(NaN)).toEqual({ label: 'OTM MISSING', className: 'moneyness-none' })
     })
   })
 

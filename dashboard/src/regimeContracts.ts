@@ -220,3 +220,182 @@ export interface RegimeBreadthPayload {
   warnings: string[]
   cache: { hit: boolean; age_seconds: number; ttl_seconds: number } | null
 }
+
+// ---------------------------------------------------------------------------
+// Multi-Dimensional Unified Market Regime Contracts (R2, R3, R4, R5)
+// Conforms to Layer 3 deterministic reconciliation output from desk_regime_fusion.py.
+// ---------------------------------------------------------------------------
+
+export type PrimaryRegimeType =
+  | 'bull_trend'
+  | 'bear_trend'
+  | 'compression_range'
+  | 'mean_reverting'
+  | 'vol_expansion_breakout'
+  | 'uncertain_transitional'
+  | 'unmeasurable'
+
+export type ConfidenceBand = 'high' | 'moderate' | 'low'
+
+export interface ConfidenceComponents {
+  qData?: number
+  qBars?: number
+  qChain?: number
+  qFreshness?: number
+  aModels?: number
+  dBoundary?: number
+  dFlip?: number
+  dTrend?: number
+  sPersistence?: number
+  tenureBars?: number
+  whipsawPenalty?: number
+  tRisk?: number
+  hazardMultiplier?: number
+  compositeConfidence?: number
+}
+
+export interface CalibratedConfidence {
+  /** Strictly in [0.0, 1.0], or null when nothing has calibrated a score.
+   *  Null is not "low confidence" -- it is "no confidence was computed", and
+   *  the UI must render it as an em dash, never as a default figure. */
+  score: number | null
+  band: ConfidenceBand
+  penaltyFactors: string[]
+  components?: ConfidenceComponents
+}
+
+export interface SimplexProbabilities {
+  bullish: number
+  bearish: number
+  neutral: number
+}
+
+export type TrendState = 'strong_up' | 'up' | 'flat' | 'down' | 'strong_down' | 'unmeasured'
+
+export interface TrendContext {
+  state: TrendState
+  slope: number | null
+  kalmanVelocity: number | null
+  kalmanZScore: number | null
+  trendPersistence: number | null
+  measured: boolean
+}
+
+export type VolatilityStateType = 'compression' | 'normal' | 'elevated' | 'shock' | 'unmeasured'
+
+export interface VolatilityContext {
+  state: VolatilityStateType
+  realizedVolPct: number | null
+  impliedVolPct: number | null
+  volPercentile: number | null
+  parkinsonVolPct: number | null
+  ivHvRatio: number | null
+  measured: boolean
+}
+
+export type MarketStructureType = 'trending' | 'mean_reverting' | 'range_bound' | 'unmeasured'
+
+export interface StructureContext {
+  state: MarketStructureType
+  ouHalfLifeBars: number | null
+  hurstExponent: number | null
+  breakoutZScore: number | null
+  exhaustionZScore: number | null
+  measured: boolean
+}
+
+export type FlowStateType = 'accumulation' | 'distribution' | 'churn' | 'balanced' | 'unmeasured'
+
+export interface FlowContext {
+  state: FlowStateType
+  dealerGammaRegime: GammaRegime // 'short' | 'long' | 'flip' | 'unmeasurable'
+  netGexM: number | null
+  netVexM: number | null
+  netCharmDriftM: number | null
+  orderFlowDeltaM: number | null
+  hedgingPressureDirection: 'supportive' | 'pressuring' | 'neutral' | string
+  measured: boolean
+}
+
+export type TransitionRiskLevel = 'low' | 'moderate' | 'high' | 'critical'
+
+export interface TransitionRisk {
+  level: TransitionRiskLevel
+  changepointProb5d: number | null
+  changepointProb20d: number | null
+  mapRunLength: number | null
+  expectedRunLength: number | null
+  stabilityScore: number | null
+  measured: boolean
+}
+
+export type TransitionState = TransitionRisk
+
+export type AgreementBand = 'high' | 'moderate' | 'low' | 'conflict'
+
+export interface PairwiseConflictDetail {
+  conflictCode: string
+  modelA: string
+  modelB: string
+  correlation: number
+  severity: 'HIGH' | 'CRITICAL' | 'MEDIUM' | string
+  explanation: string
+}
+
+export type PairwiseConflict = PairwiseConflictDetail
+
+export interface ModelAgreement {
+  band: AgreementBand
+  agreementScore: number | null
+  agreeingModels: string[]
+  conflictingModels: string[]
+  divergenceSummary: string | null
+  pairwiseMatrix?: Record<string, Record<string, number>> | null
+  conflicts?: PairwiseConflictDetail[]
+}
+
+export type ModelAgreementState = ModelAgreement
+
+export interface DynamicExplanation {
+  headline: string
+  summary: string
+  leadingDrivers: string[]
+  riskFactors: string[]
+  uncertaintySources: string[]
+}
+
+export type DynamicExplanationState = DynamicExplanation
+
+export interface RegimeStructuralLevels {
+  callWall: number | null
+  putWall: number | null
+  gammaFlip: number | null
+  sessionVwap: number | null
+}
+
+export interface RegimeQuality {
+  measurable: boolean
+  missingLenses: string[]
+  reason: string | null
+  dataCompleteness?: number
+}
+
+export interface MarketRegimePayload {
+  symbol: string
+  asof_utc: string
+  spot: number | null
+  primary: PrimaryRegimeType
+  primaryLabel: string
+  confidence: CalibratedConfidence
+  probabilities?: SimplexProbabilities | null
+  trend: TrendContext
+  volatility: VolatilityContext
+  structure: StructureContext
+  flow: FlowContext
+  transition: TransitionRisk
+  agreement: ModelAgreement
+  explanation: DynamicExplanation
+  levels: RegimeStructuralLevels
+  quality: RegimeQuality
+  cache?: { hit: boolean; age_seconds: number; ttl_seconds: number }
+}

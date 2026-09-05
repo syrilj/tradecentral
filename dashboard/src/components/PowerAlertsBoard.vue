@@ -23,7 +23,7 @@ const props = defineProps<{
   prints: MarketFlowPrint[]
   rows: UnusualFlowRow[]
   book: string[]
-  asof: string
+  asof?: string | null
 }>()
 
 const emit = defineEmits<{

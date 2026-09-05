@@ -59,6 +59,11 @@ function applySymbol(): void {
   void res.refresh()
 }
 
+function selectBoardSymbol(s: string): void {
+  draft.value = s
+  applySymbol()
+}
+
 function clearSymbol(): void {
   draft.value = ''
   symbol.value = ''
@@ -288,12 +293,10 @@ const weightBars = computed(() => {
                 v-for="row in board"
                 :key="row.symbol"
                 class="clickable"
-                @click="
-                  draft = row.symbol;
-                  applySymbol();
-                "
+                @click="selectBoardSymbol(row.symbol)"
               >
-                <td class="fig">{{ row.attention_rank ?? DASH }}</td>
+                <td class="row-select-cell fig">
+  <button type="button" class="row-select-btn" @click.stop="selectBoardSymbol(row.symbol)"><span class="sr-only">Select row</span></button>{{ row.attention_rank ?? DASH }}</td>
                 <td class="fig sym">{{ row.symbol }}</td>
                 <td :class="sideTone(row.side)">{{ row.side }}</td>
                 <td class="fig" :class="tone(row.composite_score)">
@@ -538,7 +541,7 @@ const weightBars = computed(() => {
 }
 .reasons {
   margin: var(--s1) 0 0;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
 }
 .weight-list {
@@ -578,7 +581,7 @@ const weightBars = computed(() => {
 }
 .legend {
   margin: var(--s3) 0 0;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
 }
 .table-wrap {

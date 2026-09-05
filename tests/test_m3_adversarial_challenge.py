@@ -64,6 +64,37 @@ except ImportError:
 ASOF = datetime(2026, 8, 6, 20, 0, tzinfo=timezone.utc)
 
 
+def _asof_from_local_bars(data_path: Path, symbols: list[str]) -> datetime:
+    """An asof the local parquet store can actually satisfy.
+
+    Tests that read the live data/1d store cannot pin a literal asof: the
+    adapter fails closed on any bar dated after it, so every data refresh turns
+    a passing contract test red. Anchor on the newest bar the symbols share,
+    one hour after its close, and fall back to the module ASOF when nothing is
+    readable so the failure still surfaces.
+    """
+    import pandas as pd
+
+    newest: list[datetime] = []
+    for symbol in symbols:
+        path = data_path / f"{symbol}.parquet"
+        if not path.is_file():
+            continue
+        try:
+            frame = pd.read_parquet(path, columns=["close"])
+        except Exception:  # noqa: BLE001 - unreadable symbol just does not vote
+            continue
+        if frame.empty:
+            continue
+        stamp = pd.Timestamp(frame.index[-1])
+        stamp = stamp.tz_localize(timezone.utc) if stamp.tzinfo is None else stamp.tz_convert("UTC")
+        newest.append(stamp.to_pydatetime())
+    if not newest:
+        return ASOF
+    # The oldest of the per-symbol last bars: every symbol must be inside it.
+    return min(newest) + timedelta(hours=1)
+
+
 
 def _reference_un_deduplicated_v90_signal(symbol: str, frame: pd.DataFrame, horizon_days: int) -> dict[str, Any] | None:
     """The un-deduplicated reference implementation that extracts features and runs
@@ -254,7 +285,12 @@ def test_chain_free_adapter_model_parity_and_contracts(tmp_path):
         candidate_limit=10,
     )
 
-    ctx = RunContext.create(asof_utc=ASOF)
+    # Derive the asof from the data instead of pinning a literal. This test
+    # reads the live data/1d store, so a fixed ASOF fails the moment a routine
+    # refresh writes bars past it -- the adapter correctly rejects them as
+    # future_candle and returns nothing, and the failure looks like a contract
+    # regression rather than the stale constant it actually is.
+    ctx = RunContext.create(asof_utc=_asof_from_local_bars(data_path, test_symbols))
     results = list(adapter(context=ctx))
 
     assert len(results) == len(test_symbols) * 3, f"Expected {len(test_symbols) * 3} results, got {len(results)}"

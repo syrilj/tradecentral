@@ -72,4 +72,58 @@ describe('API request coalescing and in-memory caching', () => {
     expect(third).toEqual(mockProfile)
     expect(fetchCount).toBe(2)
   })
+
+  it('coalesces and caches api.priceAttractors calls', async () => {
+    let fetchCount = 0
+    const mockPayload = {
+      symbol: 'SPY',
+      spot: 598.42,
+      asof_utc: '2026-08-29T18:00:00Z',
+      regime_state: 'volatility_dampening',
+      regime_label: 'Vol Dampening (Long Γ)',
+      regime_strength: 0.85,
+      dominant_direction: 'bullish_pull',
+      primary_magnet: null,
+      levels: [],
+      confluence_clusters: [],
+      quality: {
+        measurable: true,
+        open_interest_available: true,
+        iv_available: true,
+        volume_available: true,
+        reason: null,
+      },
+      warnings: [],
+    }
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        fetchCount++
+        await new Promise((r) => setTimeout(r, 15))
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => mockPayload,
+        } as unknown as Response
+      }),
+    )
+
+    // Concurrent identical GET requests coalesced
+    const [res1, res2] = await Promise.all([api.priceAttractors('SPY'), api.priceAttractors('SPY')])
+    expect(res1).toEqual(mockPayload)
+    expect(res2).toEqual(mockPayload)
+    expect(fetchCount).toBe(1)
+
+    // Subsequent cached call
+    const cached = await api.priceAttractors('SPY')
+    expect(cached).toEqual(mockPayload)
+    expect(fetchCount).toBe(1)
+
+    // Force bypass
+    const forced = await api.priceAttractors('SPY', true)
+    expect(forced).toEqual(mockPayload)
+    expect(fetchCount).toBe(2)
+  })
 })

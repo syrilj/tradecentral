@@ -125,23 +125,31 @@ onUnmounted(() => {
 })
 
 const operatorInitials = computed(() => {
-  if (props.userName) {
-    const parts = props.userName.trim().split(/\s+/)
-    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
-    if (parts.length === 1 && parts[0]) return parts[0].slice(0, 2).toUpperCase()
+  const name = props.userName?.trim()
+  if (name) {
+    const norm = name.toLowerCase().replace(/[-_]/g, ' ')
+    if (norm !== 'local operator') {
+      const parts = name.split(/\s+/)
+      if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+      if (parts.length === 1 && parts[0]) return parts[0].slice(0, 2).toUpperCase()
+    }
   }
-  if (props.userEmail) {
-    const namePart = props.userEmail.split('@')[0]
-    return namePart.slice(0, 2).toUpperCase()
+  const email = props.userEmail?.trim()
+  if (email) {
+    const namePart = email.split('@')[0]
+    const normPart = namePart.toLowerCase().replace(/[-_]/g, ' ')
+    if (normPart !== 'local operator' && normPart !== 'local') {
+      return namePart.slice(0, 2).toUpperCase()
+    }
   }
   return 'OP'
 })
 
 const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = [
-  { id: 'phosphor', label: 'Phosphor', tokenColor: 'var(--phosphor)' },
-  { id: 'amber', label: 'Amber', tokenColor: 'var(--warn)' },
-  { id: 'cyan', label: 'Cyan', tokenColor: 'var(--cat-1)' },
-  { id: 'monochrome', label: 'Mono', tokenColor: 'var(--ink-soft)' },
+  { id: 'phosphor', label: 'Phosphor', tokenColor: 'var(--accent-theme-phosphor)' },
+  { id: 'amber', label: 'Amber', tokenColor: 'var(--accent-theme-amber)' },
+  { id: 'cyan', label: 'Cyan', tokenColor: 'var(--accent-theme-cyan)' },
+  { id: 'monochrome', label: 'Mono', tokenColor: 'var(--accent-theme-monochrome)' },
 ]
 </script>
 
@@ -294,6 +302,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
                 role="switch"
                 :aria-checked="streamUpdates"
                 aria-label="Toggle real-time stream updates"
+                @click.stop="toggleStream"
               >
                 <span class="toggle-knob" />
               </button>
@@ -314,6 +323,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
                 role="switch"
                 :aria-checked="soundEnabled"
                 aria-label="Toggle audio cue alerts"
+                @click.stop="toggleSound"
               >
                 <span class="toggle-knob" />
               </button>
@@ -385,15 +395,31 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   display: flex;
   flex-direction: column;
   background: var(--glass-surface-hi);
+  background: var(--glass-drawer-bg, var(--glass-surface-hi));
   backdrop-filter: var(--glass-blur-lg);
+  backdrop-filter: var(--chrome-optics-lg, var(--glass-blur-lg));
   -webkit-backdrop-filter: var(--glass-blur-lg);
-  border-left: var(--hair) solid var(--glass-border-hi);
-  border-top: none;
-  border-right: none;
-  border-bottom: none;
-  border-radius: 0;
-  box-shadow: var(--glass-shadow-drawer), var(--glass-specular);
+  -webkit-backdrop-filter: var(--chrome-optics-lg, var(--glass-blur-lg));
+  border-left: var(--hair) solid var(--glass-border-hi) !important;
+  border-top: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  border-radius: 0 !important;
+  box-shadow: var(--glass-shadow-drawer), var(--glass-specular), inset 1px 0 0 var(--glass-tint);
   overflow: hidden;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .drawer-backdrop {
+    background: var(--panel-hi);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .profile-drawer {
+    background: var(--panel-raise) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }
 
 /* Slide Transition */
@@ -424,7 +450,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   gap: 2px;
 }
 .head-pre {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: var(--track-label);
 }
@@ -472,7 +498,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   gap: var(--s3);
 }
 .section-label {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: var(--track-label);
@@ -554,7 +580,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   text-overflow: ellipsis;
 }
 .operator-badge {
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   font-weight: 700;
   padding: 1px 4px;
   border-radius: var(--r-xs);
@@ -570,8 +596,8 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   text-overflow: ellipsis;
 }
 .operator-role {
-  font-size: 8.5px;
-  color: var(--ink-ghost);
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
 }
 
 .operator-status-grid {
@@ -587,8 +613,8 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   gap: 2px;
 }
 .status-label {
-  font-size: 8px;
-  color: var(--ink-ghost);
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
 }
 .status-val {
   font-size: var(--t-tiny);
@@ -658,8 +684,8 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   box-shadow: var(--glass-specular-subtle);
 }
 .segment-sub {
-  font-size: 8px;
-  color: var(--ink-ghost);
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
 }
 .segment-btn.active .segment-sub {
   color: var(--phosphor);
@@ -703,7 +729,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   flex: 0 0 8px;
 }
 .swatch-label {
-  font-size: 8.5px;
+  font-size: var(--t-nano);
 }
 
 /* Toggle Rows */
@@ -775,8 +801,8 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   font-size: var(--t-micro);
 }
 .t-key {
-  color: var(--ink-ghost);
-  font-size: 8px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
 }
 .t-val-wrap {
   display: flex;
@@ -828,7 +854,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   color: inherit;
 }
 .signout-btn-label {
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.06em;
   color: inherit;

@@ -180,7 +180,7 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
       }
     })
 
-    it('ensures total sidebar items equals 25 unique routes', () => {
+    it('ensures total sidebar items equals 26 unique routes', () => {
       const primaryCount = (
         appContent.match(/primaryNav\s*=\s*\[([\s\S]*?)\]\s*as const/)?.[1].match(/name:/g) || []
       ).length
@@ -198,11 +198,12 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
       // Each must live in exactly
       // one group: overflowActiveItem matches on route name, so a duplicate
       // would light the primary nav and mark Tools active at the same time.
-      expect(primaryCount).toBe(7)
+      // Brief was added as the first primary destination, taking the count to 8.
+      expect(primaryCount).toBe(8)
       expect(deskCount).toBe(4)
       expect(marketCount).toBe(6)
       expect(researchCount).toBe(8)
-      expect(primaryCount + deskCount + marketCount + researchCount).toBe(25)
+      expect(primaryCount + deskCount + marketCount + researchCount).toBe(26)
     })
   })
 

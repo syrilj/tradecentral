@@ -83,10 +83,12 @@ const meta = computed(
       </g>
       <path class="flip-line" d="M176 16V132" />
       <circle class="spot-dot" cx="225" cy="74" r="5" />
-      <text x="183" y="25">FLIP</text>
-      <text x="234" y="69">SPOT</text>
-      <text x="20" y="67">CALL</text>
-      <text x="20" y="91">PUT</text>
+      <!-- Labels sit in the gutters between bars (bars are 11px wide, centred
+           on x = 43 + 52n) so none of them overprints a column. -->
+      <text x="160" y="22" text-anchor="end">FLIP</text>
+      <text x="225" y="139" text-anchor="middle">SPOT</text>
+      <text x="18" y="20">CALL</text>
+      <text x="18" y="139">PUT</text>
     </svg>
 
     <svg
@@ -172,7 +174,7 @@ footer {
   gap: 9px;
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 650;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -195,7 +197,10 @@ figcaption i {
   border: 1px solid var(--rule-hi);
   background: var(--void-lift);
 }
-svg {
+/* Direct child only. An unscoped `svg` selector also matched the AppIcon
+   inside .visual-symbol, stretching a 16px glyph to 100% x 142px so it broke
+   out of its caption box and floated over the plot. */
+.evidence-visual > svg {
   display: block;
   width: 100%;
   height: 142px;
@@ -230,7 +235,7 @@ svg {
 text {
   fill: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.08em;
 }
@@ -286,7 +291,7 @@ footer span:last-child {
   .evidence-visual {
     min-height: 205px;
   }
-  svg {
+  .evidence-visual > svg {
     height: 126px;
   }
 }

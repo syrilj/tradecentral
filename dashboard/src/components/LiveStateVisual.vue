@@ -87,10 +87,15 @@ withDefaults(
           <dt><AppIcon name="search" :size="14" />Searchable</dt>
           <dd>{{ searchable }}<small> symbols</small></dd>
         </dl>
-        <dl class="state-node node-readiness">
+        <dl class="state-node node-readiness" :class="cleared ? 'is-cleared' : 'is-blocked'">
           <dt><AppIcon name="gate" :size="14" />Live readiness</dt>
           <dd :class="cleared ? 'clear' : 'blocked'">{{ readinessLabel }}</dd>
-          <small v-if="blockers !== null && !cleared">{{ blockers }} blocking reasons</small>
+          <!-- A second <dd>, not a bare <small>: a <dl> may only contain
+               dt/dd/div, and the loose <small> made the definition list
+               invalid for assistive tech. -->
+          <dd v-if="blockers !== null && !cleared" class="blocker-note">
+            {{ blockers }} blocking reasons
+          </dd>
         </dl>
         <dl class="state-node node-shadow">
           <dt><AppIcon name="session" :size="14" />Shadow evidence</dt>
@@ -125,7 +130,7 @@ withDefaults(
 .proof-index {
   color: var(--phosphor);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.12em;
 }
@@ -167,7 +172,7 @@ withDefaults(
 .proof-source small {
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -209,7 +214,7 @@ figcaption,
   gap: 18px;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -283,7 +288,7 @@ figcaption {
 }
 .session-core small {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.1em;
 }
@@ -298,7 +303,7 @@ figcaption {
   margin-top: 5px;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
 }
 .state-node {
   position: absolute;
@@ -313,7 +318,7 @@ figcaption {
   gap: 6px;
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -325,10 +330,13 @@ figcaption {
   font-size: 16px;
 }
 .state-node dd small,
-.state-node > small {
+.state-node .blocker-note {
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
+}
+.state-node .blocker-note {
+  margin-top: 3px;
 }
 .node-universe {
   top: 27px;
@@ -341,6 +349,12 @@ figcaption {
 .node-readiness {
   bottom: 26px;
   left: 22px;
+  border-color: var(--put);
+}
+.node-readiness.is-cleared {
+  border-color: var(--call);
+}
+.node-readiness.is-blocked {
   border-color: var(--put);
 }
 .node-shadow {
@@ -397,7 +411,7 @@ figcaption {
 .aperture-down small {
   color: var(--short);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.1em;
 }
@@ -421,7 +435,7 @@ figcaption {
   padding: 7px 9px;
   border: 1px solid var(--rule-hi);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 @keyframes aperture-pulse {
   50% {

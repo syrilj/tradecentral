@@ -570,7 +570,7 @@ const filteredCandidates = computed(() => {
   color: var(--ink-faint);
 }
 .badge.unknown {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-style: italic;
 }
 
@@ -591,7 +591,7 @@ const filteredCandidates = computed(() => {
   color: var(--ink-dim);
 }
 .pillar-score.p-0 {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 .links-cell {
@@ -624,7 +624,7 @@ const filteredCandidates = computed(() => {
 }
 .subnote {
   margin-top: var(--s2);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-small);
 }
 </style>

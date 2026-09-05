@@ -45,7 +45,8 @@ describe('Milestone 4: Options Chain & Charm / Greeks Positioning Overhaul (R3)'
       expect(content).toContain('CHARM &amp; DEALER HEDGING DYNAMICS')
       expect(content).toContain('1. CHARM TIME DECAY')
       expect(content).toContain('2. GEX REGIME')
-      expect(content).toContain('3. LIVE FLOW AGGRESSION')
+      expect(content).toContain('3. TAPE BUYERS VS SELLERS')
+      expect(content).toContain('4. UNDERLYING VOLUME READ')
       expect(content).toContain('NET CHARM FLOW')
 
       // Check dense call/put strike grid columns

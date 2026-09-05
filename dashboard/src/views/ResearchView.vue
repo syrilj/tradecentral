@@ -268,7 +268,7 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
 
         <!-- IC DECAY tab -->
         <template v-if="chartTab === 'ic'">
-          <svg
+          <svg role="img" aria-label="Research result chart."
             v-if="icChart"
             :viewBox="`0 0 ${IC_W} ${IC_H}`"
             class="chart"
@@ -354,7 +354,7 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
         <!-- QUANTILE SPREAD tab -->
         <template v-else-if="chartTab === 'quantile'">
           <div v-if="qChart" class="qwrap">
-            <svg :viewBox="`0 0 100 ${Q_H}`" class="chart qchart" preserveAspectRatio="none">
+            <svg role="img" aria-label="Research result chart." :viewBox="`0 0 100 ${Q_H}`" class="chart qchart" preserveAspectRatio="none">
               <line
                 v-for="t in qChart.yTicks"
                 :key="`qg-${t}`"
@@ -554,7 +554,7 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
 }
 .tick-label {
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   fill: var(--ink-faint);
 }
 

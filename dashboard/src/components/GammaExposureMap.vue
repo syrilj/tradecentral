@@ -1681,7 +1681,7 @@ watch(
 }
 
 .quick-title {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.06em;
 }
@@ -1923,7 +1923,7 @@ watch(
 }
 
 .focus-metric small {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font: 500 var(--t-micro) var(--font-data);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2555,7 +2555,7 @@ line.level-connector {
 .sub-num {
   display: block;
   font-size: var(--t-micro);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 .call-num {

@@ -237,9 +237,60 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(css).toContain('--call: #10b981;')
     expect(css).toContain('--call-hi: #34d399;')
     expect(css).toContain('--call-wash: rgba(16, 185, 129, 0.12);')
-    expect(css).toContain('--put: #f43f5e;')
+    // --put was lifted from #f43f5e so that --put-dim can clear 4.5:1 on
+    // --panel-raise while staying strictly darker than --put (see the
+    // dimmed-variant ordering test in design-conformance.test.ts).
+    expect(css).toContain('--put: #f66a82;')
     expect(css).toContain('--put-hi: #fb7185;')
     expect(css).toContain('--put-wash: rgba(244, 63, 94, 0.12);')
+  })
+
+  it('every signed-quantity and ink text token clears WCAG AA on the darkest surface', () => {
+    const css = readSrc('styles/tokens.css')
+    const hex = (name: string): string => {
+      const m = css.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-fA-F]{6})\\s*;`))
+      if (!m) throw new Error(`token ${name} not found or not a 6-digit hex`)
+      return m[1]
+    }
+    const rgb = (h: string): number[] =>
+      [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
+    const chan = (c: number): number => {
+      const v = c / 255
+      return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+    }
+    const lum = (h: string): number => {
+      const [r, g, b] = rgb(h).map(chan)
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const ratio = (a: string, b: string): number => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
+      return (hi + 0.05) / (lo + 0.05)
+    }
+    // --panel-raise is the darkest surface a figure is ever set on, so it is
+    // the worst case for every one of these.
+    const surface = hex('--panel-raise')
+    const textTokens = [
+      '--ink',
+      '--ink-soft',
+      '--ink-dim',
+      '--ink-faint',
+      '--long',
+      '--short',
+      '--call',
+      '--call-hi',
+      '--call-dim',
+      '--put',
+      '--put-hi',
+      '--put-dim',
+      '--warn',
+      '--halt',
+    ]
+    for (const t of textTokens) {
+      expect(ratio(hex(t), surface), `${t} on --panel-raise`).toBeGreaterThanOrEqual(4.5)
+    }
+    // --ink-ghost is explicitly NOT a text token; it is allowed to sit below
+    // the floor precisely because nothing sets type in it.
+    expect(ratio(hex('--ink-ghost'), surface)).toBeLessThan(4.5)
   })
 })
 

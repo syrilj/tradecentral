@@ -80,8 +80,14 @@ describe('Landing page honours the product boundary', () => {
   })
 
   it('foregrounds market flow instead of local-first marketing language', () => {
+    // Asserted by structure, not by one CTA string: the flow surface must be
+    // a named section with its own anatomy visual, and the page's calls to
+    // action must route a visitor into /flow. Pinning the exact button label
+    // made ordinary copy edits look like contract breaks.
     expect(src).toContain('GexFlowVisual')
-    expect(src).toContain('Explore market flow')
+    expect(src).toMatch(/id="flow"/)
+    expect(src).toMatch(/redirect:\s*'\/flow'/)
+    expect(src).toMatch(/>\s*Flow\s*</)
     expect(src.toLowerCase()).not.toContain('local-first')
   })
 

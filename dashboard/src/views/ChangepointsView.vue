@@ -1031,7 +1031,8 @@ const symbolInsight = computed(() => {
                 :class="{ active: row.symbol === symbol }"
                 @click="loadSymbol(row.symbol)"
               >
-                <td class="fig sym">{{ row.symbol }}</td>
+                <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="loadSymbol(row.symbol)"><span class="sr-only">Select row</span></button>{{ row.symbol }}</td>
                 <td class="fig num break-cell">
                   <span class="break-bar"
                     ><i :style="{ width: `${Math.min(100, Math.max(0, row.break_prob * 100))}%` }"
@@ -1229,8 +1230,8 @@ const symbolInsight = computed(() => {
   color: var(--ink);
 }
 .search-hits .tier {
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
 }
 
 .segment {
@@ -1275,7 +1276,7 @@ const symbolInsight = computed(() => {
   align-items: flex-start;
 }
 .cr-item .label {
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 .cr-item .fig {
   font-size: var(--t-small);
@@ -1461,7 +1462,7 @@ const symbolInsight = computed(() => {
 }
 .break-label {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   fill: var(--warn);
 }
 
@@ -1679,7 +1680,7 @@ const symbolInsight = computed(() => {
 }
 
 .si-lbl {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
 }
 

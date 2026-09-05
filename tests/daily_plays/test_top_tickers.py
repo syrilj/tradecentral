@@ -83,5 +83,7 @@ def test_directional_share_uses_signed_premium_else_call_put():
 
     mixed = by_symbol["MIX"]
     assert mixed["share_basis"] == "call_put_premium"
-    assert mixed["bullish_share"] == 200_000 / 250_000
-    assert mixed["bearish_share"] == 50_000 / 250_000
+    assert mixed["bullish_share"] is None
+    assert mixed["bearish_share"] is None
+    assert mixed["call_share"] == 200_000 / 250_000
+    assert mixed["put_share"] == 50_000 / 250_000

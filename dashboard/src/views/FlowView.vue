@@ -3,6 +3,8 @@ import { computed, inject, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, type StatusPayload } from '@/api'
 import { useResource, type Resource } from '@/composables/useResource'
+import { num } from '@/format'
+import { printPremium, classifyFlowOrder, classifyPremiumTier } from '@/flowDisplay'
 import FlowDashboard from '@/components/FlowDashboard.vue'
 
 const FLOW_LIMIT = 500
@@ -33,6 +35,7 @@ const focusSymbol = ref(focusNameFromQuery())
 const unusual = useResource(
   () =>
     api.unusualFlow({
+      symbol: focusSymbol.value || undefined,
       limit: FLOW_LIMIT,
       minPremium: minPremium.value,
       force: forceNext.value,
@@ -44,7 +47,7 @@ function setPremium(value: number): void {
   minPremium.value = value
 }
 
-watch(minPremium, () => {
+watch([minPremium, focusSymbol], () => {
   void refreshFlow()
 })
 
@@ -71,6 +74,56 @@ watch(
     focusSymbol.value = focusNameFromQuery()
   },
 )
+
+const flowTapeStats = computed(() => {
+  const payload = unusual.data.value
+  if (!payload) return null
+  const summary = payload.summary
+  const tape = payload.tape ?? []
+
+  let callPrem = summary?.call_premium ?? 0
+  let putPrem = summary?.put_premium ?? 0
+  let goldenCount = 0
+  let whaleCount = 0
+  let sweepCount = 0
+
+  if (!summary && tape.length) {
+    for (const print of tape) {
+      const p = printPremium(print) ?? 0
+      const right = String(print.right || '').toLowerCase()
+      if (right === 'call') callPrem += p
+      else if (right === 'put') putPrem += p
+    }
+  }
+
+  for (const print of tape) {
+    const p = printPremium(print) ?? 0
+    const classified = classifyFlowOrder(print)
+    if (classified.type === 'golden_sweep') goldenCount++
+    else if (classified.type === 'sweep') sweepCount++
+    const tier = classifyPremiumTier(p)
+    if (tier.isWhale) whaleCount++
+  }
+
+  const total = callPrem + putPrem
+  if (total <= 0 && !tape.length) return null
+
+  const pcRatio = callPrem > 0 ? putPrem / callPrem : null
+  const callPct = summary?.call_flow_pct ?? (total > 0 ? (callPrem / total) * 100 : null)
+  const putPct = summary?.put_flow_pct ?? (total > 0 ? (putPrem / total) * 100 : null)
+
+  return {
+    totalCallM: callPrem / 1e6,
+    totalPutM: putPrem / 1e6,
+    callPct,
+    putPct,
+    pcRatio,
+    goldenCount,
+    whaleCount,
+    sweepCount,
+    totalPrints: summary?.tape_print_count ?? tape.length,
+  }
+})
 </script>
 
 <template>
@@ -78,23 +131,63 @@ watch(
     <header class="flow-head ticked rise">
       <div class="flow-title">
         <span class="label eyebrow"
-          ><i aria-hidden="true" class="live-dot" /> LIVE OPTIONS FLOW</span
+          ><i aria-hidden="true" class="live-dot" /> OPTIONS FLOW · 15s POLL</span
         >
         <h1>Market-Wide Order Flow</h1>
         <p>
-          Real-time institutional order activity across liquid names. Sweeps, blocks, and unusual
-          prints. Signed buy/sell when the feed marks it.
+          LSE options prints from one market-wide provider window. 15s HTTP poll — not a websocket
+          firehose. Sweeps, unusual, and heat are descriptive flags, not ENTER. Unsigned prints stay
+          unsigned.
         </p>
       </div>
       <div class="scope-stack">
-        <span class="scope-chip label live"><i aria-hidden="true" /> LIVE TAPE</span>
+        <span class="scope-chip label live"><i aria-hidden="true" /> PROVIDER TAPE</span>
         <span class="scope-chip label">SWEEPS &amp; BLOCKS</span>
-        <span class="scope-chip label">GOLDEN SWEEPS</span>
+        <span class="scope-chip label">HEURISTIC FLAGS</span>
         <span class="scope-chip label">POWER ALERTS</span>
         <span class="scope-chip label">WATCHLIST ALERTS</span>
         <span class="scope-chip label">15s POLL</span>
       </div>
     </header>
+
+    <!-- InsiderFinance Flow Terminal Market HUD -->
+    <div
+      v-if="flowTapeStats"
+      class="flow-market-hud rise"
+      aria-label="Market flow summary HUD"
+    >
+      <span class="hud-label label">FLOW HUD</span>
+      <div class="flow-hud-chip chip-call" title="Total Call Flow Premium">
+        <span class="hud-name label">CALL FLOW</span>
+        <span class="hud-val fig">${{ num(flowTapeStats.totalCallM, 1) }}M</span>
+        <span v-if="flowTapeStats.callPct != null" class="hud-sub fig">({{ num(flowTapeStats.callPct, 0) }}%)</span>
+      </div>
+      <div class="flow-hud-chip chip-put" title="Total Put Flow Premium">
+        <span class="hud-name label">PUT FLOW</span>
+        <span class="hud-val fig">${{ num(flowTapeStats.totalPutM, 1) }}M</span>
+        <span v-if="flowTapeStats.putPct != null" class="hud-sub fig">({{ num(flowTapeStats.putPct, 0) }}%)</span>
+      </div>
+      <div class="flow-hud-chip chip-ratio" title="Put/Call Premium Ratio">
+        <span class="hud-name label">P/C RATIO</span>
+        <span class="hud-val fig">{{ flowTapeStats.pcRatio != null ? num(flowTapeStats.pcRatio, 2) : '—' }}</span>
+      </div>
+      <div class="flow-hud-chip chip-golden" title="Vendor Golden Sweep Flags">
+        <span class="hud-name label">GOLDEN FLAGS</span>
+        <span class="hud-val fig">{{ flowTapeStats.goldenCount }}</span>
+      </div>
+      <div class="flow-hud-chip chip-sweeps" title="Aggressive Sweeps">
+        <span class="hud-name label">SWEEPS</span>
+        <span class="hud-val fig">{{ flowTapeStats.sweepCount }}</span>
+      </div>
+      <div class="flow-hud-chip chip-whales" title="Whale Orders ($500k+)">
+        <span class="hud-name label">WHALES</span>
+        <span class="hud-val fig">{{ flowTapeStats.whaleCount }}</span>
+      </div>
+      <div class="flow-hud-chip chip-neutral" title="Tape Sample Prints Count">
+        <span class="hud-name label">SAMPLED</span>
+        <span class="hud-val fig">{{ flowTapeStats.totalPrints }}</span>
+      </div>
+    </div>
 
     <FlowDashboard
       :payload="unusual.data.value"
@@ -136,7 +229,7 @@ watch(
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 48px),
     var(--surface-base);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
 }
 
 .flow-title {
@@ -247,5 +340,94 @@ h1 {
     flex-wrap: wrap;
     max-width: none;
   }
+}
+
+/* ==========================================================================
+   INSIDERFINANCE FLOW TERMINAL MARKET HUD
+   ========================================================================== */
+
+.flow-market-hud {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: 0.35rem 0.625rem;
+  border-radius: var(--r-md);
+  background: var(--surface-base);
+  border: var(--hair) solid var(--rule);
+}
+
+.flow-market-hud .hud-label {
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+  margin-right: 0.25rem;
+}
+
+.flow-hud-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--r-xs);
+  border: var(--hair) solid var(--rule);
+  background: var(--surface-subtle, var(--wash-1));
+}
+
+.flow-hud-chip.chip-call {
+  border-color: color-mix(in srgb, var(--call) 45%, var(--rule));
+  color: var(--call-hi, var(--call));
+  background: var(--call-wash);
+}
+
+.flow-hud-chip.chip-put {
+  border-color: color-mix(in srgb, var(--put) 45%, var(--rule));
+  color: var(--put-hi, var(--put));
+  background: var(--put-wash);
+}
+
+.flow-hud-chip.chip-ratio {
+  border-color: var(--rule-hi);
+  color: var(--ink);
+  background: var(--wash-1);
+}
+
+.flow-hud-chip.chip-golden {
+  border-color: var(--badge-golden-border);
+  color: var(--badge-golden);
+  background: var(--badge-golden-wash);
+}
+
+.flow-hud-chip.chip-sweeps {
+  border-color: color-mix(in srgb, var(--call) 35%, var(--rule));
+  color: var(--badge-sweep);
+  background: var(--badge-sweep-wash);
+}
+
+.flow-hud-chip.chip-whales {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--rule));
+  color: var(--warn);
+  background: var(--warn-wash);
+}
+
+.flow-hud-chip.chip-neutral {
+  border-color: var(--rule);
+  color: var(--ink-dim);
+  background: var(--wash-1);
+}
+
+.flow-hud-chip .hud-name {
+  font-size: var(--t-nano);
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+
+.flow-hud-chip .hud-val {
+  font-size: var(--t-micro);
+  font-weight: 700;
+}
+
+.flow-hud-chip .hud-sub {
+  font-size: var(--t-nano);
+  opacity: 0.85;
 }
 </style>

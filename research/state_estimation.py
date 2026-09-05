@@ -204,7 +204,10 @@ class KinematicKalmanResult:
     """Output from the 2-state Kinematic Kalman Filter."""
     latent_price: np.ndarray       # Latent equilibrium price p_hat_k
     velocity: np.ndarray           # Instantaneous latent velocity v_hat_k = dp/dt
-    velocity_zscore: np.ndarray    # Standardized velocity z-score: v_hat / sigma_v
+    # Velocity standardized against its own rolling window:
+    # (v_hat - mean_w(v_hat)) / sd_w(v_hat). Zero on bars before the window
+    # fills, where there is no norm to measure a departure from.
+    velocity_zscore: np.ndarray
     velocity_noise: np.ndarray     # Rolling standard deviation of velocity sigma_v
     innovations: np.ndarray        # Measurement innovations y_tilde_k = z_k - p_hat_{k|k-1}
     innovation_variance: np.ndarray# Innovation variance S_k
@@ -334,12 +337,45 @@ def kinematic_kalman_filter(
         kg_p[k] = K[0, 0]
         kg_v[k] = K[1, 0]
 
-    # Compute velocity standard deviation and z-score
+    # Compute velocity dispersion and a genuine z-score.
+    #
+    # This was `v_hat / rolling_sd`, which is a signal-to-noise ratio, not a
+    # standardization: it never subtracted the rolling mean. On a trending
+    # series the filtered velocity is both persistently positive and very
+    # smooth, so the numerator stayed large while the denominator collapsed and
+    # the "z-score" ran to +16 on an utterly ordinary drift -- which then fired
+    # the |z| >= breakout_z gate on essentially every bar. Centering on the
+    # rolling mean makes the number mean what its name and its 1.6-sigma
+    # threshold claim: how far velocity has departed from its own recent norm.
     v_series = pd.Series(v_hat)
-    rolling_sd = v_series.rolling(window=noise_window, min_periods=3).std(ddof=1).to_numpy()
-    rolling_sd = np.where(np.isnan(rolling_sd) | (rolling_sd < 1e-6), 1e-3, rolling_sd)
+    rolling = v_series.rolling(window=noise_window, min_periods=3)
+    rolling_mean = rolling.mean().to_numpy()
+    rolling_sd = rolling.std(ddof=1).to_numpy()
 
-    v_z = v_hat / rolling_sd
+    # The dispersion floor guards the division, so it has to be in the same
+    # units as velocity. The old fixed 1e-3 was not: it is a large floor for a
+    # $5 name and a negligible one for an index, so the same market behaviour
+    # produced different z-scores purely from the price level. Scale it off the
+    # series' own dispersion instead.
+    finite_v = v_hat[np.isfinite(v_hat)]
+    global_sd = float(np.std(finite_v, ddof=1)) if finite_v.size > 1 else 0.0
+    sd_floor = max(global_sd * 1e-3, 1e-12)
+    sd_established = np.isfinite(rolling_sd) & (rolling_sd >= sd_floor)
+    safe_sd = np.where(sd_established, rolling_sd, sd_floor)
+
+    # Bars before the window fills have no norm to be standardized against.
+    # Zero says "no deviation measured"; the old code divided by the floor and
+    # printed the resulting spike as a breakout.
+    mean_established = np.isfinite(rolling_mean)
+    v_z = np.where(
+        mean_established & sd_established,
+        (v_hat - np.where(mean_established, rolling_mean, 0.0)) / safe_sd,
+        0.0,
+    )
+
+    # `velocity_noise` keeps reporting the measured dispersion, not the floor,
+    # so a consumer can tell an unestablished window from a genuinely quiet one.
+    rolling_sd = np.where(np.isfinite(rolling_sd), rolling_sd, np.nan)
 
     # Momentum state detection
     exhaustion = (np.abs(v_z) <= exhaustion_z)
@@ -376,6 +412,64 @@ class AnchoredVWAPResult:
     lower_2sd: np.ndarray
 
 
+def _weighted_vwap_segment(
+    p: np.ndarray, v: np.ndarray, start: int, end: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Cumulative volume-weighted price and dispersion bands over ``p[start:end]``.
+
+    Uses West's incremental weighted-mean/M2 update (running weighted mean,
+    running weighted sum-of-squares-of-deviations) rather than E[X^2]-E[X]^2,
+    which cancels catastrophically when the cumulative sums are large relative
+    to the variance (high-priced instruments, long anchors). This is
+    numerically equivalent to the naive formula for well-conditioned inputs
+    and strictly more stable otherwise.
+
+    A bar with zero, negative, or non-finite volume contributes nothing to the
+    running sums: the VWAP and bands carry forward unchanged across it (the
+    output still has a value at that index once one has been established, so
+    the series stays aligned to the input length). If no bar in
+    ``[start, end)`` has had positive volume yet, that index is NaN -- a
+    missing anchor value is reported as missing, never fabricated.
+
+    Returns five arrays of length ``end - start``: vwap, upper_1sd, lower_1sd,
+    upper_2sd, lower_2sd.
+    """
+    m = end - start
+    vwap_arr = np.full(m, np.nan, dtype=float)
+    u1_arr = np.full(m, np.nan, dtype=float)
+    l1_arr = np.full(m, np.nan, dtype=float)
+    u2_arr = np.full(m, np.nan, dtype=float)
+    l2_arr = np.full(m, np.nan, dtype=float)
+
+    w_sum = 0.0
+    mean = 0.0
+    m2 = 0.0
+    established = False
+
+    for i in range(m):
+        t = start + i
+        vol = v[t]
+        px = p[t]
+        if np.isfinite(vol) and vol > 0.0 and np.isfinite(px):
+            w_sum += vol
+            delta = px - mean
+            mean += (vol / w_sum) * delta
+            m2 += vol * delta * (px - mean)
+            established = True
+
+        if established:
+            var_t = max(0.0, m2 / w_sum) if w_sum > 0.0 else 0.0
+            sd_t = math.sqrt(var_t)
+            vwap_arr[i] = mean
+            u1_arr[i] = mean + 1.0 * sd_t
+            l1_arr[i] = mean - 1.0 * sd_t
+            u2_arr[i] = mean + 2.0 * sd_t
+            l2_arr[i] = mean - 2.0 * sd_t
+        # else: no positive-volume bar seen yet in this segment -- leave NaN.
+
+    return vwap_arr, u1_arr, l1_arr, u2_arr, l2_arr
+
+
 def compute_anchored_vwap(
     prices: Sequence[float] | np.ndarray,
     volumes: Sequence[float] | np.ndarray,
@@ -384,19 +478,31 @@ def compute_anchored_vwap(
 ) -> list[AnchoredVWAPResult]:
     """Compute multiple Microstructure-Anchored VWAP curves.
 
-    Anchors can represent:
-      - Session Open (09:30 EST)
-      - Macro Economic Releases (08:30 CPI / 10:00 ISM)
-      - Gamma Flip Crossings (where spot price crossed S*)
+    An anchor is just a bar index the cumulative sums start from; this
+    function does not itself decide what an anchor *means*. Callers are
+    responsible for choosing anchors that correspond to a real, statable
+    event (a session open, a confirmed swing pivot, a gamma-flip crossing,
+    ...) -- an arbitrary bar index (e.g. the midpoint of a requested window)
+    is not a meaningful anchor and should not be passed here.
 
     Args:
-        prices: 1D array of representative prices (typically (H+L+C)/3 or Close).
-        volumes: 1D array of bar volumes.
-        anchor_indices: List of integer bar indices where an anchor reset occurs.
+        prices: 1D array of representative prices. Callers should prefer
+            (H+L+C)/3 (typical price) over close when high/low are available,
+            since typical price is the better proxy for where volume traded
+            within the bar; falling back to close is acceptable when it is
+            not.
+        volumes: 1D array of bar volumes. Zero/negative/non-finite volume
+            bars are skipped (see `_weighted_vwap_segment`); they do not drag
+            the VWAP and the series still carries a value forward for that
+            index once one has been established.
+        anchor_indices: List of integer bar indices where an anchor reset
+            occurs.
         anchor_names: Optional descriptive names for each anchor.
 
     Returns:
-        List of AnchoredVWAPResult objects, one per specified anchor.
+        List of AnchoredVWAPResult objects, one per specified anchor, each
+        covering the full input length with NaN before its anchor index (or
+        until the first positive-volume bar at/after it).
     """
     p = np.asarray(prices, dtype=float)
     v = np.asarray(volumes, dtype=float)
@@ -416,35 +522,18 @@ def compute_anchored_vwap(
             else f"Anchor_{idx + 1}_Bar_{a_idx}"
         )
 
+        seg_vwap, seg_u1, seg_l1, seg_u2, seg_l2 = _weighted_vwap_segment(p, v, a_idx, n)
+
         vwap_arr = np.full(n, np.nan, dtype=float)
         u1_arr = np.full(n, np.nan, dtype=float)
         l1_arr = np.full(n, np.nan, dtype=float)
         u2_arr = np.full(n, np.nan, dtype=float)
         l2_arr = np.full(n, np.nan, dtype=float)
-
-        cum_pv = 0.0
-        cum_v = 0.0
-        cum_pv2 = 0.0
-
-        for t in range(a_idx, n):
-            vol = max(1e-4, v[t])
-            px = p[t]
-            cum_pv += px * vol
-            cum_v += vol
-            cum_pv2 += (px ** 2) * vol
-
-            vwap_t = cum_pv / cum_v
-            vwap_arr[t] = vwap_t
-
-            # Weighted variance: E[X^2] - (E[X])^2
-            mean_sq = cum_pv2 / cum_v
-            var_t = max(0.0, mean_sq - (vwap_t ** 2))
-            sd_t = math.sqrt(var_t)
-
-            u1_arr[t] = vwap_t + 1.0 * sd_t
-            l1_arr[t] = vwap_t - 1.0 * sd_t
-            u2_arr[t] = vwap_t + 2.0 * sd_t
-            l2_arr[t] = vwap_t - 2.0 * sd_t
+        vwap_arr[a_idx:n] = seg_vwap
+        u1_arr[a_idx:n] = seg_u1
+        l1_arr[a_idx:n] = seg_l1
+        u2_arr[a_idx:n] = seg_u2
+        l2_arr[a_idx:n] = seg_l2
 
         results.append(
             AnchoredVWAPResult(
@@ -459,3 +548,117 @@ def compute_anchored_vwap(
         )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Session-aware VWAP primitives
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SessionVWAPResult:
+    """VWAP curve(s) that reset at every session boundary.
+
+    Every array is aligned 1:1 with the input bars. `session_start_indices`
+    lists the bar index of the first bar of each detected session (see
+    `derive_session_boundaries`). A bar's value depends only on bars in the
+    same session at or before it -- volume from a prior session never leaks
+    into the next one. This does NOT claim the input has genuine intraday
+    (sub-bar) resolution; on this repo's 1h bars it is a 7-point-per-day VWAP,
+    not a tick-level one. It does NOT know about exchange holidays or partial
+    sessions beyond what is already implied by gaps in the timestamp index.
+    """
+    vwap: np.ndarray
+    upper_1sd: np.ndarray
+    lower_1sd: np.ndarray
+    upper_2sd: np.ndarray
+    lower_2sd: np.ndarray
+    session_start_indices: list[int]
+
+
+def derive_session_boundaries(timestamps: Sequence[Any] | np.ndarray) -> list[int]:
+    """Return the bar index of the first bar of each session in `timestamps`.
+
+    A session boundary is declared wherever the calendar-date component of
+    consecutive timestamps changes -- this repo's intraday bars are yfinance
+    regular-hours 1h bars (naive local time, 09:30..15:30), so a date change
+    is exactly a session boundary. This function does NOT understand
+    exchange calendars, holidays, half days, or timezones: it purely reacts
+    to the date already present in the input. If timestamps are not already
+    in exchange-local time, boundaries derived here will be wrong.
+
+    Returns indices in ascending order; index 0 is always included when
+    `timestamps` is non-empty (the first bar always starts a session).
+    """
+    n = len(timestamps)
+    if n == 0:
+        return []
+
+    boundaries = [0]
+    prev_date = pd.Timestamp(timestamps[0]).date()
+    for i in range(1, n):
+        cur_date = pd.Timestamp(timestamps[i]).date()
+        if cur_date != prev_date:
+            boundaries.append(i)
+        prev_date = cur_date
+    return boundaries
+
+
+def compute_session_vwap(
+    prices: Sequence[float] | np.ndarray,
+    volumes: Sequence[float] | np.ndarray,
+    timestamps: Sequence[Any] | np.ndarray,
+) -> SessionVWAPResult:
+    """Compute a VWAP that resets to a fresh anchor at the start of every session.
+
+    This is the primitive callers should use instead of re-deriving session
+    boundaries themselves: it is `derive_session_boundaries` plus
+    `_weighted_vwap_segment` applied session-by-session, so bar i's VWAP and
+    bands depend only on bars within i's own session. It does NOT claim
+    directional or predictive meaning for the resulting curve -- it is purely
+    a reference price, matching the audit finding that VWAP distance carries
+    no directional information at this bar resolution.
+
+    Args:
+        prices: 1D array of representative prices (typical price preferred;
+            see `compute_anchored_vwap`).
+        volumes: 1D array of bar volumes.
+        timestamps: 1D sequence of per-bar timestamps, same length as prices.
+
+    Returns:
+        SessionVWAPResult with per-bar vwap/bands and the detected session
+        start indices. Empty arrays if inputs are empty or misaligned.
+    """
+    p = np.asarray(prices, dtype=float)
+    v = np.asarray(volumes, dtype=float)
+    n = len(p)
+    if n == 0 or len(v) != n or len(timestamps) != n:
+        empty = np.array([], dtype=float)
+        return SessionVWAPResult(empty, empty, empty, empty, empty, [])
+
+    boundaries = derive_session_boundaries(timestamps)
+    if not boundaries:
+        boundaries = [0]
+
+    vwap_arr = np.full(n, np.nan, dtype=float)
+    u1_arr = np.full(n, np.nan, dtype=float)
+    l1_arr = np.full(n, np.nan, dtype=float)
+    u2_arr = np.full(n, np.nan, dtype=float)
+    l2_arr = np.full(n, np.nan, dtype=float)
+
+    for i, start in enumerate(boundaries):
+        end = boundaries[i + 1] if i + 1 < len(boundaries) else n
+        seg_vwap, seg_u1, seg_l1, seg_u2, seg_l2 = _weighted_vwap_segment(p, v, start, end)
+        vwap_arr[start:end] = seg_vwap
+        u1_arr[start:end] = seg_u1
+        l1_arr[start:end] = seg_l1
+        u2_arr[start:end] = seg_u2
+        l2_arr[start:end] = seg_l2
+
+    return SessionVWAPResult(
+        vwap=vwap_arr,
+        upper_1sd=u1_arr,
+        lower_1sd=l1_arr,
+        upper_2sd=u2_arr,
+        lower_2sd=l2_arr,
+        session_start_indices=boundaries,
+    )

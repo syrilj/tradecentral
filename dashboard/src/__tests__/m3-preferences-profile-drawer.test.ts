@@ -169,7 +169,7 @@ describe('Milestone 3: Workstation Preferences & Profile Drawer Suite', () => {
       expect(drawerContent).toContain('sessionUptime')
     })
 
-    it('features interactive density segmented controls and accent swatches', () => {
+    it('features interactive density segmented controls and stable accent swatches', () => {
       expect(drawerContent).toContain('Layout Spacing Density')
       expect(drawerContent).toContain('role="radiogroup"')
       expect(drawerContent).toContain('role="radio"')
@@ -179,6 +179,22 @@ describe('Milestone 3: Workstation Preferences & Profile Drawer Suite', () => {
       expect(drawerContent).toContain('Real-Time Stream Updates')
       expect(drawerContent).toContain('Auditory Flow Signals')
       expect(drawerContent).toContain('role="switch"')
+
+      // Stable accent theme swatch tokens to prevent metamorphosis
+      expect(drawerContent).toContain('var(--accent-theme-phosphor)')
+      expect(drawerContent).toContain('var(--accent-theme-amber)')
+      expect(drawerContent).toContain('var(--accent-theme-cyan)')
+      expect(drawerContent).toContain('var(--accent-theme-monochrome)')
+    })
+
+    it('handles reduced transparency accessibility preference', () => {
+      expect(drawerContent).toContain('@media (prefers-reduced-transparency: reduce)')
+      expect(appContent).toContain('@media (prefers-reduced-transparency: reduce)')
+    })
+
+    it('normalizes local-operator variants to OP rather than LO', () => {
+      expect(drawerContent).toContain('normPart !== \'local operator\' && normPart !== \'local\'')
+      expect(appContent).toContain('normPart !== \'local operator\' && normPart !== \'local\'')
     })
 
     it('features telemetry section with live API status, quant engine, and active desk', () => {

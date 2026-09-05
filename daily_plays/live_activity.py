@@ -25,7 +25,11 @@ import pandas as pd
 
 from .activity_lean import _activity_lean
 from .adapters.flow import load_live_flow_activity, load_market_flow_activity
-from .options_intelligence import FLOW_PRESETS, build_options_top_tickers
+from .options_intelligence import (
+    FLOW_PRESETS,
+    _aggregate_sweep_bursts,
+    build_options_top_tickers,
+)
 from .qlib_scan_score import (
     SCORE_KIND as QLIB_SCORE_KIND,
     SOURCE_ID as QLIB_SOURCE_ID,
@@ -561,7 +565,7 @@ def build_unusual_options_flow(
     live_flow = load_market_flow_activity(
         fetcher=flow_fetcher,
         min_premium=min_premium,
-        limit=500,
+        limit=2_000,
         timeout_seconds=max(10.0, float(per_symbol_timeout_seconds)),
         allowed_symbols={_symbol(value) for value in symbols} if symbols else None,
     )
@@ -578,44 +582,40 @@ def build_unusual_options_flow(
         if not symbol:
             continue
         evidence = flow_row.get("evidence") if isinstance(flow_row.get("evidence"), Mapping) else {}
-        premium = _finite(evidence.get("premium")) or 0.0
+        premium = _finite(evidence.get("premium"))
         alerts = int(evidence.get("alert_count") or 0)
         # The public threshold is a symbol-level aggregate premium floor.
         # Missing/zero premium cannot prove that a row cleared the floor.
-        if premium < min_premium:
+        if premium is None or premium < min_premium:
             continue
         call_n = int(evidence.get("call_print_count") or 0)
         put_n = int(evidence.get("put_print_count") or 0)
-        # Premium share is the identity mix the UI bars show. Print-count
-        # imbalance used to disagree violently with those bars (e.g. more
-        # small call prints while a few puts dominate notional → "+call"
-        # while the bar is 90% put). Prefer premium; fall back to counts.
+        # Premium share is the identity mix the UI bars show. Never fall back
+        # to print counts: many small calls vs one put whale would invert mix.
         call_prem = _finite(evidence.get("call_premium"))
         put_prem = _finite(evidence.get("put_premium"))
         classified = (call_prem or 0.0) + (put_prem or 0.0)
         if classified > 0 and call_prem is not None and put_prem is not None:
             imbalance = (call_prem - put_prem) / classified  # + call heavy, − put heavy
         else:
-            total_n = max(call_n + put_n, 1)
-            imbalance = (call_n - put_n) / total_n
+            imbalance = None
         local = local_by.get(symbol, {})
-        # Absolute, cohort-invariant premium transform: adding an unrelated
-        # whale must not change every existing row's score. $1M saturates the
-        # premium component; the result remains an attention rank, not a
-        # historical unusualness estimate or probability.
+        # Absolute, cohort-invariant premium transform. Daily-bar activity is
+        # ranking context only — mixing it into unusual_score made local
+        # volume look like live unusualness.
         premium_component = min(
             math.log1p(max(premium, 0.0)) / math.log1p(1_000_000.0),
             1.0,
         )
-        local_score = float(local.get("activity_score") or 0.0)
-        unusual_score = round(min(100.0, 55.0 * premium_component + 0.45 * local_score), 1)
+        local_score = _finite(local.get("activity_score"))
+        unusual_score = round(min(100.0, 100.0 * premium_component), 1)
 
-        flags: list[str] = ["LIVE OPTIONS FLOW"]
+        flags: list[str] = ["PROVIDER TAPE"]
         if premium >= 1_000_000:
             flags.insert(0, "$1M+ PREMIUM")
         elif premium >= 250_000:
             flags.insert(0, "$250K+ PREMIUM")
-        if abs(imbalance) >= 0.45:
+        if imbalance is not None and abs(imbalance) >= 0.45:
             flags.append("CALL HEAVY" if imbalance > 0 else "PUT HEAVY")
         if alerts >= 8:
             flags.append("PRINT CLUSTER")
@@ -642,7 +642,8 @@ def build_unusual_options_flow(
         board.append({
             "symbol": symbol,
             "unusual_score": unusual_score,
-            "activity_score": local_score or unusual_score,
+            "local_activity_score": local_score,
+            "activity_score": local_score if local_score is not None else unusual_score,
             "score_kind": "ordinal_unusual_flow",
             "activity_rank": 0,
             "flags": flags[:5],
@@ -657,7 +658,7 @@ def build_unusual_options_flow(
             "print_count": alerts,
             "call_print_count": call_n,
             "put_print_count": put_n,
-            "call_put_imbalance": round(imbalance, 4),
+            "call_put_imbalance": round(imbalance, 4) if imbalance is not None else None,
             "contract_count": int(evidence.get("contract_count") or 0),
             "call_premium": call_prem,
             "put_premium": put_prem,
@@ -713,7 +714,12 @@ def build_unusual_options_flow(
         name: sum(1 for row in all_prints if name in (row.get("presets") or ()))
         for name in FLOW_PRESETS
     }
-    tape = tape[:max(100, min(500, int(row_limit) * 10))]
+    tape = _aggregate_sweep_bursts(tape)
+    tape = tape[:max(100, min(2000, int(row_limit) * 20))]
+    for print_row in tape:
+        print_row["decision_authorized"] = False
+    for print_row in all_prints:
+        print_row["decision_authorized"] = False
 
     visible_board = board[:max(1, int(row_limit))]
     total_premium = sum(float(row.get("premium") or 0.0) for row in board)
@@ -760,17 +766,20 @@ def build_unusual_options_flow(
     provider_prints = int(coverage.get("provider_prints") or 0)
     observed_symbols = int(coverage.get("observed_symbols") or 0)
     live_with_activity = int(coverage.get("with_activity") or 0)
-    feed_status = (
-        "live"
-        if board
-        else "no_prints"
-        if request_completed > 0
-        else "unavailable"
-    )
-    warnings = list(live_flow.get("warnings") or [])
+    warnings = [str(item) for item in (live_flow.get("warnings") or [])]
+    if any("credential_missing" in item.lower() for item in warnings):
+        feed_status = "credential_missing"
+    elif board:
+        feed_status = "live"
+    elif request_completed > 0:
+        feed_status = "no_prints"
+    else:
+        feed_status = "unavailable"
     feed_reason = (
         None
         if feed_status == "live"
+        else "LSE_API_KEY is not configured. The market-wide tape is unavailable; rows and prints stay empty."
+        if feed_status == "credential_missing"
         else "The market-wide provider request completed but no prints cleared the premium threshold."
         if feed_status == "no_prints"
         else "The market-wide provider request did not complete."
@@ -784,7 +793,7 @@ def build_unusual_options_flow(
         "schema_version": "unusual-options-flow-v1",
         # `asof` is the newest retained provider observation, never the request
         # completion time. `generated_at` separately records snapshot creation.
-        "asof": provider_asof or generated_at,
+        "asof": provider_asof,
         "generated_at": generated_at,
         "rows": visible_board,
         "tape": tape,
@@ -819,10 +828,12 @@ def build_unusual_options_flow(
         "score_kind": "ordinal_unusual_flow",
         "caveats": [
             "The provider window is one market-wide recent-print request, not a routed symbol scan.",
-            "Attention score blends a fixed log-premium scale with optional local activity; it is not historical unusualness or win probability.",
+            "unusual_score is a log-premium attention rank from the live tape only; local daily-bar activity is separate ranking context.",
             "Call/put print counts are identity only — not bought/sold direction.",
             "Put flow percentage is put premium divided by classified call + put premium.",
             "OTM distance is max(strike/spot−1, 0) for calls and max(1−strike/spot, 0) for puts.",
+            "This feed is a 15s HTTP poll of LSE prints, not a websocket firehose and not /api/flow-state daily-bar proxy.",
+            "Unusual, sweep, and heat are descriptive flags — not ENTER and not decision authorization.",
             "Click a row to open Options Drift / GEX for that symbol.",
         ],
     }

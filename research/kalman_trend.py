@@ -106,6 +106,12 @@ class KalmanTrendResult:
     open_at_end: bool
     noise_bars: int
     bars_per_day: float
+    velocity: np.ndarray | None = None
+    velocity_zscore: np.ndarray | None = None
+    velocity_noise: np.ndarray | None = None
+    trend_state: np.ndarray | None = None
+    persistence: np.ndarray | None = None
+    persistence_score: np.ndarray | None = None
 
 
 def bars_per_day(index: pd.Index | Sequence[float] | np.ndarray) -> float:
@@ -276,6 +282,25 @@ def kalman_trend(
     trades, open_at_end = _walk_positions(
         score, entry_z=float(entry_z), exit_z=float(exit_z), allow_short=bool(allow_short)
     )
+
+    # Classify trend states per bar
+    trend_state = np.empty(prices.size, dtype=object)
+    trend_state[score > 1.5] = "BULLISH_ACCELERATING"
+    trend_state[(score > 0.5) & (score <= 1.5)] = "BULLISH_TREND"
+    trend_state[(score >= -0.5) & (score <= 0.5)] = "FLAT_NEUTRAL"
+    trend_state[(score >= -1.5) & (score < -0.5)] = "BEARISH_TREND"
+    trend_state[score < -1.5] = "BEARISH_ACCELERATING"
+
+    # Compute persistence count
+    persistence = np.ones(prices.size, dtype=int)
+    for i in range(1, prices.size):
+        if trend_state[i] == trend_state[i - 1]:
+            persistence[i] = persistence[i - 1] + 1
+        else:
+            persistence[i] = 1
+
+    persistence_score = np.minimum(1.0, persistence / 10.0).astype(float)
+
     return KalmanTrendResult(
         level=level,
         slope=slope,
@@ -285,6 +310,12 @@ def kalman_trend(
         open_at_end=open_at_end,
         noise_bars=noise_bars,
         bars_per_day=float(measured),
+        velocity=slope,
+        velocity_zscore=score,
+        velocity_noise=noise,
+        trend_state=trend_state,
+        persistence=persistence,
+        persistence_score=persistence_score,
     )
 
 

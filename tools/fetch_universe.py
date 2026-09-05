@@ -45,6 +45,24 @@ def _load_symbols(path: Path) -> List[str]:
     return out
 
 
+def _on_disk_symbols(interval: str) -> List[str]:
+    """Every symbol that already has a parquet for this interval.
+
+    The config list is the *seed* universe, not the set the dashboard reads.
+    Anything already on disk is there because some board asked for it, and the
+    API will happily serve its last bar forever. Refreshing only the config
+    list left 42 names in data/1d rotting for weeks -- among them QQQ, IWM,
+    DIA, the SPDR sector ETFs (XLE/XLF/XLU/XLP), SMH/SOXX/XBI and the macro
+    complex (TLT/HYG/LQD/GLD/SLV). Every one of those feeds sector rotation,
+    the regime read, or the gamma strip, so the panel was ranking multi-week-old
+    ETF closes against same-day single-name closes and calling it rotation.
+    """
+    directory = OUT / interval
+    if not directory.is_dir():
+        return []
+    return sorted(path.stem.upper() for path in directory.glob("*.parquet"))
+
+
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -116,14 +134,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--sleep", type=float, default=0.35, help="Seconds between Yahoo calls")
     ap.add_argument("--config", type=Path, default=CFG)
+    ap.add_argument(
+        "--config-only",
+        action="store_true",
+        help="Refresh only the config universe, leaving other on-disk parquets stale.",
+    )
     args = ap.parse_args(argv)
 
-    symbols = (
-        [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-        if args.symbols
-        else _load_symbols(args.config)
-    )
     intervals = ["1h", "1d"] if args.interval == "both" else [args.interval]
+
+    if args.symbols:
+        symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    else:
+        symbols = _load_symbols(args.config)
+        if not args.config_only:
+            # Union in everything already on disk for the intervals we are
+            # about to refresh, so no served symbol is left behind. See
+            # _on_disk_symbols for why a config-only refresh silently rots the
+            # ETF and macro complex the dashboard ranks against.
+            seen = set(symbols)
+            for interval in intervals:
+                for sym in _on_disk_symbols(interval):
+                    if sym not in seen:
+                        seen.add(sym)
+                        symbols.append(sym)
 
     manifest: Dict[str, object] = {
         "generated_utc": datetime.now(timezone.utc).isoformat(),

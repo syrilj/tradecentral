@@ -46,6 +46,13 @@ const PAPER_FILES = new Set<string>([
   'src/components/EvidenceLayerVisual.vue',
   'src/components/FlowWorkspaceMockup.vue',
   'src/components/ProductMockup.vue',
+  // Per-card instrument plates for the landing page. Like the visuals above
+  // they render only inside .landing-page and resolve against its paper remap
+  // (--tc-yellow, --tc-blue), never against the desk palette.
+  'src/components/PrincipleDiagram.vue',
+  'src/components/FlowSignatureDiagram.vue',
+  'src/components/ModelLabPlate.vue',
+  'src/components/WorkspacePathPlate.vue',
 ])
 
 /** tokens.css IS allowed to define hex/rgb/rgba/hsl literals — it is the palette. */
@@ -506,5 +513,97 @@ describe('design-conformance guard — EXEMPT list integrity', () => {
   it('tokens.css and base.css are enforced (never EXEMPT)', () => {
     expect(EXEMPT.has(TOKENS_FILE), 'tokens.css must never be EXEMPT').toBe(false)
     expect(EXEMPT.has(BASE_FILE), 'base.css must never be EXEMPT').toBe(false)
+  })
+})
+
+/**
+ * Accessibility conformance guard.
+ *
+ * These encode the WCAG 2.2 AA rules the desk regressed on once already, in the
+ * same source-scanning style as the design guards above: cheap, no mounting,
+ * and they fail on the pattern rather than on a rendered snapshot that only
+ * exists when the options feed happens to be up.
+ */
+describe('accessibility guard — desk surfaces', () => {
+  const templateOf = (src: string): string => {
+    const m = src.match(/<template>([\s\S]*)<\/template>/)
+    return m ? m[1] : ''
+  }
+
+  /**
+   * A `<tr @click>` that selects a symbol is the whole point of the Options
+   * boards, and as a bare row it was reachable only by mouse (WCAG 2.1.1,
+   * Level A). Every clickable row must contain a real focusable control.
+   */
+  it('no clickable <tr> lacks a focusable control', () => {
+    const offenders: string[] = []
+    for (const rel of deskFiles()) {
+      const tpl = templateOf(read(rel))
+      if (!tpl) continue
+      const rowRe = /<tr\b([\s\S]*?)>([\s\S]*?)<\/tr>/g
+      let m: RegExpExecArray | null
+      while ((m = rowRe.exec(tpl)) !== null) {
+        const attrs = m[1]
+        const body = m[2]
+        if (!/@click|v-on:click/.test(attrs)) continue
+        const focusable =
+          /<button\b/.test(body) ||
+          /<a\b[^>]*href/.test(body) ||
+          /tabindex/.test(attrs) ||
+          /role\s*=\s*"button"/.test(attrs)
+        if (!focusable) {
+          offenders.push(`${rel}: clickable <tr> with no focusable control inside`)
+        }
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
+  })
+
+  /**
+   * `--ink-ghost` sits at 3.4:1 on --panel-raise. It is a hairline/chrome
+   * token by contract; anything that has to be read is at least --ink-faint.
+   */
+  it('--ink-ghost is never used as a text colour', () => {
+    const offenders: string[] = []
+    for (const rel of deskFiles()) {
+      const src = read(rel)
+      for (const style of src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) {
+        for (const hit of style[1].matchAll(/([^{}]*)\{[^{}]*color:\s*var\(--ink-ghost\)/g)) {
+          // `.prov-sep` is the one permitted use: an aria-hidden "·" separator.
+          if (/prov-sep/.test(hit[1])) continue
+          offenders.push(`${rel}: ${hit[1].trim().slice(-48)} sets text in --ink-ghost`)
+        }
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
+  })
+
+  /** Nothing is set below the 10px legibility floor. */
+  it('no font-size below the --t-nano floor', () => {
+    const offenders: string[] = []
+    for (const rel of deskFiles()) {
+      const src = read(rel)
+      for (const m of src.matchAll(/font-size:\s*([0-9](?:\.[0-9]+)?)px/g)) {
+        offenders.push(`${rel}: font-size ${m[1]}px is below the 10px floor`)
+      }
+      for (const m of src.matchAll(/font-size:\s*(0\.[0-5][0-9]*)rem/g)) {
+        offenders.push(`${rel}: font-size ${m[1]}rem is below the 10px floor`)
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
+  })
+
+  /** Every chart is either labelled or explicitly hidden — never neither. */
+  it('no <svg> is left without a role, label, or aria-hidden', () => {
+    const offenders: string[] = []
+    for (const rel of deskFiles()) {
+      const tpl = templateOf(read(rel))
+      for (const m of tpl.matchAll(/<svg\b[^>]*>/g)) {
+        if (!/role=|aria-label|aria-hidden/.test(m[0])) {
+          offenders.push(`${rel}: <svg> with no role / aria-label / aria-hidden`)
+        }
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
   })
 })

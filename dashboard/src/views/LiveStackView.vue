@@ -10,6 +10,9 @@ import GammaExposureMap from '@/components/GammaExposureMap.vue'
 import ThetaVannaChart from '@/components/ThetaVannaChart.vue'
 import IvSurfaceChart from '@/components/IvSurfaceChart.vue'
 import VolumeProfileChart from '@/components/VolumeProfileChart.vue'
+import RegimeStateBadge from '@/components/RegimeStateBadge.vue'
+import PriceDrawLadder from '@/components/PriceDrawLadder.vue'
+import type { PriceDrawTelemetryPayload, PriceDrawLevel } from '@/priceDrawContracts'
 
 /**
  * LIVE STACK — one underlier, every lens at once.
@@ -54,8 +57,21 @@ const optionsRes = useResource<OptionsIntelligence>(
   { intervalMs: REFRESH_MS },
 )
 
+const priceDrawRes = useResource<PriceDrawTelemetryPayload>(
+  () => api.priceAttractors(symbol.value),
+  { intervalMs: REFRESH_MS },
+)
+
+const priceDrawPayload = computed(() => priceDrawRes.data.value)
+const selectedLevelId = ref<string | null>(null)
+
+function handleSelectLevel(level: PriceDrawLevel): void {
+  selectedLevelId.value = level.id
+}
+
 watch(symbol, () => {
   void optionsRes.refresh({ clear: true })
+  void priceDrawRes.refresh({ clear: true })
 })
 
 watch(
@@ -351,10 +367,6 @@ const stackReadout = computed<string | null>(() => {
 const topConfluence = computed<ConfluenceCluster[]>(() =>
   [...confluence.value].filter((c) => c.lens_count >= 2).slice(0, 8),
 )
-
-function lensChipClass(family: string): string {
-  return `chip-${family}`
-}
 </script>
 
 <template>
@@ -365,6 +377,13 @@ function lensChipClass(family: string): string {
         <span class="idx fig">07</span>
         <h1 class="title lab">LIVE STACK</h1>
         <span class="badge" :class="dataModeBadge.toLowerCase()">{{ dataModeBadge }}</span>
+        <RegimeStateBadge
+          v-if="priceDrawPayload"
+          :payload="priceDrawPayload"
+          :compact="true"
+          :show-strength="true"
+          :show-vector="true"
+        />
       </div>
       <form class="sym-form" @submit.prevent="applySymbol">
         <input
@@ -443,39 +462,15 @@ function lensChipClass(family: string): string {
         <Panel
           label="LEVEL CONFLUENCE"
           index="03"
-          :meta="`${topConfluence.length} multi-lens zones`"
+          :meta="`${priceDrawPayload?.levels?.length ?? topConfluence.length} structural targets`"
         >
-          <table v-if="topConfluence.length" class="ladder fig">
-            <thead>
-              <tr>
-                <th>LEVEL</th>
-                <th>DIST</th>
-                <th>LENSES</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="c in topConfluence" :key="`${c.level}-${c.lens_count}`">
-                <td class="lvl">
-                  {{ num(c.level, 2) }} <span class="side">{{ c.above_spot ? '▲' : '▼' }}</span>
-                </td>
-                <td class="dist">
-                  {{ c.distance_pct != null ? signedPct(c.distance_pct * 100, 1) : '—' }}
-                </td>
-                <td class="chips">
-                  <span
-                    v-for="f in c.supporting_lenses"
-                    :key="f"
-                    class="chip"
-                    :class="lensChipClass(f)"
-                    >{{ f }}</span
-                  >
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-else class="empty">
-            No level is named by more than one lens yet — the stack has no overlap to show.
-          </p>
+          <PriceDrawLadder
+            :payload="priceDrawPayload"
+            :symbol="symbol"
+            :spot="spot"
+            :selected-level-id="selectedLevelId"
+            @select-level="handleSelectLevel"
+          />
         </Panel>
       </div>
 
@@ -733,7 +728,7 @@ function lensChipClass(family: string): string {
   color: var(--ink);
 }
 .v-headline.tone-missing {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 .v-detail {
@@ -791,14 +786,14 @@ function lensChipClass(family: string): string {
 .note,
 .method-note-global {
   margin: var(--s3) 0 0;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   line-height: 1.5;
 }
 
 .empty {
   margin: 0;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-tiny);
   letter-spacing: 0.02em;
   padding: var(--s3) 0;
@@ -887,7 +882,7 @@ function lensChipClass(family: string): string {
 }
 
 .disclaimer {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
   font-size: var(--t-micro);
   letter-spacing: 0.05em;

@@ -252,7 +252,7 @@ export function scorePowerAlert(print: MarketFlowPrint): number {
 export function powerAlertWhy(print: MarketFlowPrint): string[] {
   const why = [...(print.why ?? [])]
   const classified = classifyFlowOrder(print)
-  if (classified.type === 'golden_sweep') why.push('Golden sweep')
+  if (classified.type === 'golden_sweep') why.push('Vendor golden flag')
   else if (classified.type === 'sweep') why.push('Sweep')
   if (classified.type === 'block') why.push('Block')
   if (print.is_unusual) why.push('Unusual')

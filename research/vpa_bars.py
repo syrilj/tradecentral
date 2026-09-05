@@ -36,6 +36,7 @@ returns on every response as the user's proof the control did something.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,6 +49,52 @@ HOURLY_DIR = DATA_ROOT / "1h"
 # Order matters only as a read order; the fresher file always wins (see
 # `_load_daily_frame`). Never treat either directory as replacing the other.
 DAILY_DIRS: Tuple[Path, ...] = (DATA_ROOT / "1d", DATA_ROOT / "1d_wide")
+
+# On-demand fetch: one lock per symbol so two concurrent VPA requests for the
+# same never-before-seen symbol don't race to write the same parquet.
+_FETCH_LOCKS: Dict[str, threading.Lock] = {}
+_FETCH_LOCKS_LOCK = threading.Lock()
+
+
+def _fetch_lock_for(symbol: str) -> threading.Lock:
+    with _FETCH_LOCKS_LOCK:
+        if symbol not in _FETCH_LOCKS:
+            _FETCH_LOCKS[symbol] = threading.Lock()
+        return _FETCH_LOCKS[symbol]
+
+
+def _try_fetch_daily(symbol: str) -> bool:
+    """Fetch 10y daily OHLCV from Yahoo Finance and write to data/1d/.
+
+    Returns True if the file was successfully written, False on any error.
+    Never raises — callers degrade gracefully on failure.
+    """
+    lock = _fetch_lock_for(symbol)
+    with lock:
+        # Re-check inside the lock; another thread may have fetched while we waited.
+        target_dir = DATA_ROOT / "1d"
+        target_path = target_dir / f"{symbol}.parquet"
+        if target_path.is_file():
+            return True
+        try:
+            import sys as _sys
+            _tools_dir = str(EDGE_ROOT / "tools")
+            if _tools_dir not in _sys.path:
+                _sys.path.insert(0, _tools_dir)
+            from fetch_universe import fetch_one  # noqa: PLC0415
+            df = fetch_one(symbol, "1d")
+            if df is None or df.empty:
+                return False
+            target_dir.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(target_path)
+            return True
+        except Exception as exc:
+            import sys as _sys2
+            print(
+                f"[vpa_bars] on-demand fetch for {symbol} failed: {exc}",
+                file=_sys2.stderr,
+            )
+            return False
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,14}$")
 
@@ -312,9 +359,14 @@ def load_bars(
     else:
         daily, daily_src = _load_daily_frame(sym)
         if daily is None:
-            return [], _empty_meta(
-                requested, normalized, f"no daily parquet found for {sym} in data/1d or data/1d_wide"
-            )
+            # Symbol not on disk yet — try fetching it on demand from Yahoo.
+            print(f"[vpa_bars] {sym}: no daily parquet found — attempting on-demand fetch", flush=True)
+            if _try_fetch_daily(sym):
+                daily, daily_src = _load_daily_frame(sym)
+            if daily is None:
+                return [], _empty_meta(
+                    requested, normalized, f"no daily parquet found for {sym} in data/1d or data/1d_wide"
+                )
         source = daily_src
         if target == "1W":
             frame = _aggregate_weekly(daily)

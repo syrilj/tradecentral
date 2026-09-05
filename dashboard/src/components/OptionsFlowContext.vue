@@ -329,7 +329,7 @@ const deskAction = computed(() => {
   color: var(--short);
 }
 .identity-note {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   line-height: 1.35;
   white-space: normal;
@@ -376,7 +376,7 @@ const deskAction = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   white-space: nowrap;
 }
@@ -506,7 +506,7 @@ const deskAction = computed(() => {
   font-weight: 700;
 }
 .metric small {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
 }
 .metric .warn {

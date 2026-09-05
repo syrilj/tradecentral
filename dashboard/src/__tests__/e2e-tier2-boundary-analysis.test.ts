@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { computeVolOiRatio } from '@/flowDisplay'
 
 import {
   asRight,
@@ -294,42 +295,38 @@ describe('Tier 2: Boundary Value Analysis & Stress Testing', () => {
   // 5. Volume & Open Interest Extremes
   // =========================================================================
   describe('Volume & Open Interest Ratio Boundaries', () => {
-    function computeVolOi(vol: number | null | undefined, oi: number | null | undefined) {
-      if (vol == null || oi == null || oi <= 0 || !Number.isFinite(vol) || !Number.isFinite(oi)) {
-        return { ratio: null, formatted: '—', isHigh: false }
-      }
-      const ratio = vol / oi
-      return { ratio, formatted: `${ratio.toFixed(2)}x`, isHigh: ratio >= 1.0 }
-    }
-
-    it('handles zero Open Interest (OI = 0) returning unmeasured dash without divide-by-zero error', () => {
-      expect(computeVolOi(5000, 0)).toEqual({ ratio: null, formatted: '—', isHigh: false })
-      expect(computeVolOi(5000, null)).toEqual({ ratio: null, formatted: '—', isHigh: false })
-      expect(computeVolOi(null, null)).toEqual({ ratio: null, formatted: '—', isHigh: false })
+    it('handles zero Open Interest (OI = 0) without divide-by-zero or fake 0.00x', () => {
+      expect(computeVolOiRatio(5000, 0).formatted).toBe('NEW (0 OI)')
+      expect(computeVolOiRatio(5000, null).formatted).toBe('OI MISSING')
+      expect(computeVolOiRatio(null, null).formatted).toBe('VOL/OI MISSING')
     })
 
-    it('handles zero Volume (Vol = 0) returning 0.00x ratio', () => {
-      expect(computeVolOi(0, 5000)).toEqual({ ratio: 0, formatted: '0.00x', isHigh: false })
+    it('handles zero Volume as named missing, not a fake 0.00x ratio', () => {
+      expect(computeVolOiRatio(0, 5000)).toMatchObject({
+        ratio: null,
+        formatted: 'VOL MISSING',
+        isHigh: false,
+      })
     })
 
     it('evaluates exact threshold boundary at Vol/OI = 1.0 (isHigh = true)', () => {
-      const exactOne = computeVolOi(1000, 1000)
+      const exactOne = computeVolOiRatio(1000, 1000)
       expect(exactOne.ratio).toBe(1.0)
       expect(exactOne.isHigh).toBe(true)
 
-      const justBelow = computeVolOi(999, 1000)
-      expect(justBelow.ratio).toBe(0.999)
+      const justBelow = computeVolOiRatio(999, 1000)
+      expect(justBelow.ratio).toBe(1.0)
       expect(justBelow.isHigh).toBe(false)
 
-      const justAbove = computeVolOi(1001, 1000)
-      expect(justAbove.ratio).toBe(1.001)
+      const justAbove = computeVolOiRatio(1001, 1000)
+      expect(justAbove.ratio).toBe(1.0)
       expect(justAbove.isHigh).toBe(true)
     })
 
     it('handles extreme volume of 10,000,000 contracts against 100,000 OI', () => {
-      const massive = computeVolOi(10_000_000, 100_000)
-      expect(massive.ratio).toBe(100.0)
-      expect(massive.formatted).toBe('100.00x')
+      const massive = computeVolOiRatio(10_000_000, 100_000)
+      expect(massive.ratio).toBe(100)
+      expect(massive.formatted).toBe('100×')
       expect(massive.isHigh).toBe(true)
     })
   })

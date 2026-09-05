@@ -870,6 +870,37 @@ def _empty_forecast(*, status: str = MISSING_STATUS) -> dict[str, Any]:
     }
 
 
+def _treasury_forecast(
+    payload: Mapping[str, Any] | None,
+    intel: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Delegate to the NAV engine when the filings say this is a coin stack.
+
+    Import is local: the treasury module is a sibling in ``research`` and a
+    module-level import would make either file unusable without the other.
+    Classification failing closed is deliberate — an exception here must fall
+    back to the earnings engine, never blank the surface.
+    """
+    try:
+        try:
+            from research.treasury_nav_forecast import (
+                classify_digital_asset_treasury,
+                score_treasury_forecast,
+            )
+        except ImportError:  # pragma: no cover - checkout-as-edge namespace
+            from edge.research.treasury_nav_forecast import (  # type: ignore[no-redef]
+                classify_digital_asset_treasury,
+                score_treasury_forecast,
+            )
+        periods_per_year = _periods_per_year(payload)
+        evidence = classify_digital_asset_treasury(payload, periods_per_year)
+        if not evidence:
+            return None
+        return score_treasury_forecast(payload, intel, evidence)
+    except Exception:  # noqa: BLE001 - never let routing blank the forecast
+        return None
+
+
 def score_report_forecast(
     payload: Mapping[str, Any] | None,
     intel: Mapping[str, Any] | None = None,
@@ -885,6 +916,17 @@ def score_report_forecast(
     if isinstance(intel, Mapping):
         merged.update(intel)
     intel = merged
+
+    # A digital-asset treasury is not an operating business with a strange
+    # income statement — it is a coin position with a small software company
+    # attached. Capitalising a fair-value remeasurement as earnings growth and
+    # computing a P/E whose E is a crypto tick produces an arithmetically
+    # correct, economically meaningless mark. Route those names to the NAV
+    # engine, which values the stack instead of the bottom line.
+    treasury = _treasury_forecast(payload, intel)
+    if treasury is not None:
+        return treasury
+
     features = build_report_features(payload, intel)
     observed = _observed_model_count(features)
     used = [name for name in FEATURE_NAMES if features.get(name) is not None]

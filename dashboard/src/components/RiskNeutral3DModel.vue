@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
 }
 .hint {
   color: var(--ink-dim);
-  font: 600 9px var(--font-display);
+  font: 600 var(--t-nano) var(--font-display);
   background: var(--panel-wash);
   padding: 3px 8px;
   border: 1px solid var(--rule);

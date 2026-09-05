@@ -162,7 +162,7 @@ const emit = defineEmits<{
 
 .pill-count {
   font-family: var(--font-data);
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   opacity: 0.85;
   padding: 0.05rem 0.25rem;
   background: rgba(0, 0, 0, 0.35);
@@ -182,7 +182,7 @@ const emit = defineEmits<{
 }
 
 .meta-label {
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink-faint);
@@ -218,7 +218,7 @@ const emit = defineEmits<{
 
 .narrative-tag {
   font-family: var(--font-data);
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   color: var(--phosphor);
 }
@@ -243,7 +243,7 @@ const emit = defineEmits<{
 }
 
 .timeline-header {
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink-faint);
@@ -291,7 +291,7 @@ const emit = defineEmits<{
 
 .ticker-chip {
   font-family: var(--font-data);
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   padding: 0.1rem 0.3rem;
   background: var(--panel-raise);
   border: 1px solid var(--rule-hi);
@@ -315,7 +315,7 @@ const emit = defineEmits<{
 
 .related-label {
   font-family: var(--font-data);
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
 }
@@ -352,7 +352,7 @@ const emit = defineEmits<{
 
 .related-shared {
   font-family: var(--font-data);
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   color: var(--phosphor-dim);
 }
 </style>

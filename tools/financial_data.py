@@ -64,14 +64,19 @@ def get_financials_payload(symbol: str, period: str = "quarterly") -> dict[str, 
     sym = symbol.strip().upper()
     cache_key = f"{sym}:{period}"
     now = time.time()
+    # Statements move quarterly; the mark moves every tick. Caching the two
+    # together froze `spot_used` for a full 15 minutes, so the surface published
+    # a target measured from a price that could be a session old while the
+    # header showed the live one. Only the statements are cached here — the
+    # forecast is rescored against the live tape on every call.
     if cache_key in _CACHE_FINANCIALS:
         ts, data = _CACHE_FINANCIALS[cache_key]
         if now - ts < CACHE_TTL_S:
-            return data
+            return _with_model_forecast(data)
 
     payload = _build_financials_payload(sym, period)
     _CACHE_FINANCIALS[cache_key] = (now, payload)
-    return payload
+    return _with_model_forecast(payload)
 
 
 def _build_financials_payload(symbol: str, period: str) -> dict[str, Any]:
@@ -212,16 +217,28 @@ def _build_financials_payload(symbol: str, period: str) -> dict[str, Any]:
                 b_items = [
                     (["CashAndCashEquivalents", "CashCashEquivalentsAndShortTermInvestments"], "Cash & Cash Equivalents", {"indent": 1}),
                     (["OtherShortTermInvestments"], "Short-Term Investments", {"indent": 1}),
+                    (["CashCashEquivalentsAndShortTermInvestments"], "Cash & Short-Term Investments", {"indent": 1}),
                     (["CurrentAssets"], "Total Current Assets", {"is_bold": True}),
                     (["NetPPE", "PropertyPlantAndEquipmentNet"], "Property, Plant & Equipment", {"indent": 1}),
                     (["GoodwillAndOtherIntangibleAssets", "Goodwill"], "Goodwill & Intangible Assets", {"indent": 1}),
+                    # Split out from the combined line above. A digital-asset
+                    # treasury carries its coin here under ASU 2023-08 fair
+                    # value, and netting it against acquisition goodwill in one
+                    # row makes the stack unrecoverable. Both are emitted so the
+                    # NAV bridge can subtract one from the other.
+                    (["Goodwill"], "Goodwill", {"indent": 2}),
+                    (["OtherIntangibleAssets"], "Other Intangible Assets", {"indent": 2}),
                     (["TotalAssets"], "Total Assets", {"is_bold": True, "is_header": True}),
                     (["CurrentDebtAndCapitalLeaseObligation", "CurrentDebt"], "Current Debt & Leases", {"indent": 1}),
                     (["AccountsPayable"], "Accounts Payable", {"indent": 1}),
                     (["CurrentLiabilities"], "Total Current Liabilities", {"is_bold": True}),
                     (["LongTermDebtAndCapitalLeaseObligation", "LongTermDebt"], "Long-Term Debt", {"indent": 1}),
+                    (["TotalDebt"], "Total Debt", {"is_bold": True}),
                     (["TotalLiabilitiesNetMinorityInterest", "TotalLiabilities"], "Total Liabilities", {"is_bold": True}),
                     (["CommonStock"], "Common Stock", {"indent": 1}),
+                    # Preferred sits ahead of common. A NAV bridge that ignores
+                    # it hands the whole residual to the common holder.
+                    (["PreferredStockEquity", "PreferredStock"], "Preferred Stock Equity", {"indent": 1}),
                     (["RetainedEarnings"], "Retained Earnings", {"indent": 1}),
                     (["StockholdersEquity", "CommonStockEquity"], "Total Stockholders' Equity", {"is_bold": True, "is_total": True}),
                     (["WorkingCapital"], "Working Capital", {"is_bold": True}),
@@ -270,7 +287,7 @@ def _build_financials_payload(symbol: str, period: str) -> dict[str, Any]:
     if data is None or not data.get("income_statement", {}).get("rows"):
         data = _generate_fallback_financials(symbol, period)
 
-    return _with_model_forecast(data)
+    return data
 
 
 def _find_row_val(rows: list[dict[str, Any]], possible_keys: list[str]) -> float | None:
@@ -516,6 +533,37 @@ def _generate_fallback_financials(symbol: str, period: str) -> dict[str, Any]:
     }
 
 
+def _realtime_spot(symbol: str) -> tuple[float | None, str | None]:
+    """The same real-time mark the ticker header shows, or ``(None, None)``.
+
+    ``/api/stats`` prices the header off LSE equity candles — the same provider
+    as the live options chain. yfinance's ``currentPrice`` is a delayed
+    consolidated print that returns the *regular-session* close after hours, so
+    anchoring the forecast to it published a target measured from a price the
+    header was not showing: every scenario rail, the return-vs-hurdle line and
+    the "mark is still above the predicted price" verdict were all computed
+    against a different spot than the one on screen.
+
+    Imported lazily — ``api_server`` imports this module, so a module-level
+    import would be circular.
+    """
+    try:
+        try:
+            from tools.api_server import _fetch_lse_equity_spot
+        except ImportError:  # pragma: no cover - checkout-as-edge namespace
+            from edge.tools.api_server import _fetch_lse_equity_spot  # type: ignore[no-redef]
+    except Exception:  # noqa: BLE001 - the desk may run without the API module
+        return None, None
+    try:
+        spot, asof = _fetch_lse_equity_spot(symbol)
+    except Exception as exc:  # noqa: BLE001 - provider is best-effort
+        logger.debug("realtime spot resolve failed for %s: %s", symbol, exc)
+        return None, None
+    if spot is None or not math.isfinite(float(spot)) or float(spot) <= 0:
+        return None, None
+    return float(spot), f"lse_equity_candles:{asof or 'unknown'}"
+
+
 def resolve_forecast_intel(symbol: str) -> dict[str, Any]:
     """Live last print + recent tape. Never a fabricated $35 mark or Street target."""
     sym = (symbol or "").strip().upper()
@@ -527,6 +575,7 @@ def resolve_forecast_intel(symbol: str) -> dict[str, Any]:
         return dict(cached[1])
 
     intel: dict[str, Any] = {}
+    rt_spot, rt_source = _realtime_spot(sym)
     try:
         import yfinance as yf  # type: ignore[import-not-found]
         ticker = yf.Ticker(sym)
@@ -543,6 +592,7 @@ def resolve_forecast_intel(symbol: str) -> dict[str, Any]:
         if px is not None and px > 0:
             intel["last_price"] = round(px, 4)
             intel["current_price"] = round(px, 4)
+            intel["delayed_last_price"] = round(px, 4)
         eg = _safe_float(info.get("earningsGrowth"))
         rg = _safe_float(info.get("revenueGrowth"))
         if eg is not None:
@@ -557,6 +607,7 @@ def resolve_forecast_intel(symbol: str) -> dict[str, Any]:
             intel["trailing_eps"] = teps
         if hi and lo and hi > lo and px:
             intel["range_position"] = (px - lo) / (hi - lo)
+            intel["_range_bounds"] = (hi, lo)
         if closes is not None and len(closes) > 5:
             last = float(closes.iloc[-1])
             if last > 0:
@@ -570,6 +621,26 @@ def resolve_forecast_intel(symbol: str) -> dict[str, Any]:
                     intel["ret_3m"] = last / prev3 - 1.0
     except Exception as exc:
         logger.debug("live tape resolve failed for %s: %s", sym, exc)
+
+    if rt_spot is not None:
+        # Overrides the delayed print, and the range position is recomputed off
+        # it so the 52-week factor is not measured against a different price
+        # than the mark.
+        delayed = intel.get("delayed_last_price")
+        intel["last_price"] = round(rt_spot, 4)
+        intel["current_price"] = round(rt_spot, 4)
+        intel["spot_source"] = rt_source
+        if delayed:
+            intel["delayed_spot_gap"] = round(rt_spot / float(delayed) - 1.0, 6)
+        hi_lo = intel.pop("_range_bounds", None)
+        if hi_lo:
+            hi_v, lo_v = hi_lo
+            intel["range_position"] = (rt_spot - lo_v) / (hi_v - lo_v)
+    elif intel.get("last_price"):
+        intel["spot_source"] = "yfinance_delayed_last_price"
+        intel.pop("_range_bounds", None)
+    else:
+        intel.pop("_range_bounds", None)
 
     _CACHE_TAPE[sym] = (now, intel)
     return dict(intel)
@@ -586,7 +657,9 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
     if intel.get("last_price"):
         ratios = dict(out.get("ratios") or {})
         ratios["current_price"] = intel["last_price"]
-        ratios["spot_source"] = "live"
+        # Honest provenance. "live" used to be asserted unconditionally even
+        # when the print came from yfinance's delayed consolidated quote.
+        ratios["spot_source"] = intel.get("spot_source") or "live"
         out["ratios"] = ratios
         out["tape"] = {
             k: intel[k]
@@ -600,11 +673,61 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
                 "revenue_growth",
                 "forward_eps",
                 "trailing_eps",
+                "spot_source",
+                "delayed_last_price",
+                "delayed_spot_gap",
             )
             if k in intel
         }
+    intel = _with_treasury_intel(out, intel)
     out["model_forecast"] = score_report_forecast(out, intel)
     return out
+
+
+def _with_treasury_intel(
+    payload: Mapping[str, Any],
+    intel: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach coin marks when the filings describe a digital-asset treasury.
+
+    Only fetched for names that classify — a coin series is a wasted round trip
+    for the other 99% of the universe, and the classifier reads the statements
+    that are already in hand.
+    """
+    try:
+        try:
+            from research.treasury_nav_forecast import classify_digital_asset_treasury
+            from tools.coin_market_data import period_end_dates, resolve_treasury_intel
+        except ImportError:  # pragma: no cover - checkout-as-edge namespace
+            from edge.research.treasury_nav_forecast import (  # type: ignore[no-redef]
+                classify_digital_asset_treasury,
+            )
+            from edge.tools.coin_market_data import (  # type: ignore[no-redef]
+                period_end_dates,
+                resolve_treasury_intel,
+            )
+        per_year = 4 if str(payload.get("period_type") or "quarterly").lower() == "quarterly" else 1
+        if not classify_digital_asset_treasury(payload, per_year):
+            return intel
+        dates = period_end_dates(payload)
+        if not dates:
+            return intel
+        extra = resolve_treasury_intel(
+            str(payload.get("symbol") or ""),
+            dates,
+            live_spot=intel.get("last_price"),
+        )
+        merged = dict(intel)
+        merged.update(extra)
+        # A daily close is only a fallback for a name with no real-time feed.
+        if not merged.get("last_price") and extra.get("history_last_close"):
+            merged["last_price"] = extra["history_last_close"]
+            merged["current_price"] = extra["history_last_close"]
+            merged["spot_source"] = "daily_close"
+        return merged
+    except Exception as exc:  # noqa: BLE001 - never blank the forecast on this
+        logger.debug("treasury intel resolve failed: %s", exc)
+        return intel
 
 
 # ==============================================================================
@@ -1186,6 +1309,15 @@ def _build_company_profile_payload(symbol: str, *, ticker: Any | None = None) ->
             "fifty_two_week_high": _safe_round(info.get("fiftyTwoWeekHigh")),
             "fifty_two_week_low": _safe_round(info.get("fiftyTwoWeekLow")),
             "currency": info.get("currency", "USD"),
+            # Real valuation/growth fields from the same info payload — lets
+            # consumers (e.g. supply chain peers) show actual numbers instead
+            # of falling back to placeholders. None when the vendor omits them.
+            "forward_pe": _safe_round(_safe_float(info.get("forwardPE")), 2),
+            "revenue_growth_yoy": (
+                _safe_round(_safe_float(info.get("revenueGrowth")) * 100, 1)
+                if info.get("revenueGrowth") is not None
+                else None
+            ),
         },
         "officers": officers,
         "compensation": {

@@ -3,9 +3,34 @@ import { computed } from 'vue'
 import type { MicrostructureRegimeSnapshot } from '@/microstructureContracts'
 import { num, optSigned, DASH } from '@/format'
 
-const props = defineProps<{
-  snapshot: MicrostructureRegimeSnapshot | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    snapshot: MicrostructureRegimeSnapshot | null
+    /**
+     * Canonical levels from the page's single regime read (`regimeRead`).
+     * The snapshot carries its own flip/walls/peak, solved by a different
+     * endpoint on a slower clock; rendering those next to the ladder and the
+     * gamma map printed two different gamma flips for one surface. The
+     * canonical values win when supplied, the snapshot is the fallback, and
+     * any material disagreement is named in `divergences` rather than hidden.
+     */
+    spot?: number | null
+    gammaFlip?: number | null
+    callWall?: number | null
+    putWall?: number | null
+    pinStrike?: number | null
+    /** Net dealer gamma interpolated at live spot off the map's curve. */
+    netGammaAtSpotM?: number | null
+  }>(),
+  {
+    spot: null,
+    gammaFlip: null,
+    callWall: null,
+    putWall: null,
+    pinStrike: null,
+    netGammaAtSpotM: null,
+  },
+)
 
 /**
  * An unmeasurable snapshot carries zeros in every Greek, because there was
@@ -31,11 +56,76 @@ const hedgingFlowSign = computed<1 | -1 | null>(() => {
   return v >= 0 ? 1 : -1
 })
 
-const spot = computed(() => snap.value?.spot ?? null)
+/**
+ * One level per concept. `props.*` is the page's canonical read; the snapshot
+ * only fills a gap it alone measured. Distances are quoted against the same
+ * spot the rest of the page uses, so "+0.3%" here and "+0.13%" on the map can
+ * no longer describe the same level.
+ */
+const lv = computed(() => {
+  const s = snap.value
+  return {
+    spot: props.spot ?? s?.spot ?? null,
+    gammaFlip: props.gammaFlip ?? s?.gamma_flip ?? null,
+    callWall: props.callWall ?? s?.call_wall ?? null,
+    putWall: props.putWall ?? s?.put_wall ?? null,
+    pin: props.pinStrike ?? s?.absolute_gamma_peak ?? null,
+  }
+})
+
+/** Named `refSpot`, not `spot`: a computed sharing a prop's name shadows it
+ *  in the template and is a duplicate key to the compiler. */
+const refSpot = computed(() => lv.value.spot)
+
+/**
+ * Two solves for one level disagree, for this card's purposes, exactly when
+ * they would have *printed* as different prices. That is the complaint being
+ * answered: the page showed 770.33 in one panel and 770.47 in another, and a
+ * basis-point threshold would have called that gap immaterial and stayed
+ * silent about the one discrepancy the operator could actually see. Sub-cent
+ * float noise rounds to the same string and is silently ignored.
+ */
+function diverges(canonical: number | null, snapshotValue: number | null | undefined): boolean {
+  if (canonical == null || snapshotValue == null) return false
+  if (!Number.isFinite(canonical) || !Number.isFinite(snapshotValue)) return false
+  return level(canonical) !== level(snapshotValue)
+}
+
+/** Levels where the chain snapshot disagrees with the canonical read, named
+ *  so the gap is visible instead of resolving silently in one card's favour. */
+const divergences = computed<string[]>(() => {
+  const s = snap.value
+  if (!s) return []
+  const out: string[] = []
+  if (diverges(props.gammaFlip, s.gamma_flip)) out.push(`flip ${level(s.gamma_flip)}`)
+  if (diverges(props.callWall, s.call_wall)) out.push(`call wall ${level(s.call_wall)}`)
+  if (diverges(props.putWall, s.put_wall)) out.push(`put wall ${level(s.put_wall)}`)
+  if (diverges(props.pinStrike, s.absolute_gamma_peak))
+    out.push(`gamma peak ${level(s.absolute_gamma_peak)}`)
+  return out
+})
+
+/**
+ * The chain-wide strike sum and the curve read at spot are different
+ * measurements, not two attempts at one number, so both are labelled for what
+ * they are. `net_gex_profile_m` exists in the contract precisely because these
+ * can diverge; when they do, say so.
+ */
+const netGexAtSpot = computed<number | null>(() => {
+  const v = props.netGammaAtSpotM ?? snap.value?.net_gex_profile_m ?? null
+  return v != null && Number.isFinite(v) ? v : null
+})
+
+const netGexGapPct = computed<number | null>(() => {
+  const total = snap.value?.net_gex_m
+  const atSpot = netGexAtSpot.value
+  if (total == null || atSpot == null || !Number.isFinite(total) || total === 0) return null
+  return ((atSpot - total) / Math.abs(total)) * 100
+})
 
 function distToLevel(lvl: number | null): string {
-  if (!spot.value || !lvl || lvl <= 0) return DASH
-  const diff = ((lvl - spot.value) / spot.value) * 100
+  if (!refSpot.value || !lvl || lvl <= 0) return DASH
+  const diff = ((lvl - refSpot.value) / refSpot.value) * 100
   return optSigned(diff, 1) + '%'
 }
 
@@ -47,8 +137,8 @@ function level(v: number | null | undefined): string {
 // Visual meter calculations
 const callGexRatio = computed(() => {
   if (!snap.value) return 50
-  const call = Math.max(0, snap.value.call_gex_m)
-  const put = Math.max(0, Math.abs(snap.value.put_gex_m))
+  const call = snap.value.call_gex_m != null ? Math.max(0, snap.value.call_gex_m) : 0
+  const put = snap.value.put_gex_m != null ? Math.max(0, Math.abs(snap.value.put_gex_m)) : 0
   const total = call + put
   if (total <= 0) return 50
   return Math.round((call / total) * 100)
@@ -77,14 +167,12 @@ const callGexRatio = computed(() => {
       <!-- 1. Net GEX -->
       <div class="greek-box" :class="{ positive: isNetGexPositive, negative: !isNetGexPositive }">
         <div class="box-top">
-          <span class="greek-label">NET GEX (1% MOVE)</span>
+          <span class="greek-label">NET GEX · CHAIN TOTAL (1% MOVE)</span>
           <span class="state-pill" :class="isNetGexPositive ? 'pos' : 'neg'">
             {{ isNetGexPositive ? 'VOL DAMPEN' : 'VOL ACCEL' }}
           </span>
         </div>
-        <div class="greek-val font-mono">
-          {{ snap ? optSigned(snap.net_gex_m, 2) : DASH }}M
-        </div>
+        <div class="greek-val font-mono">{{ snap ? optSigned(snap.net_gex_m, 2) : DASH }}M</div>
         <!-- Visual Call vs Put Ratio Bar -->
         <div class="ratio-bar-wrap">
           <div class="ratio-bar">
@@ -93,9 +181,18 @@ const callGexRatio = computed(() => {
           </div>
         </div>
         <div class="greek-sub">
-          Calls: +${{ snap ? num(snap.call_gex_m, 1) : DASH }}M | Puts: -${{
-            snap ? num(Math.abs(snap.put_gex_m), 1) : DASH
-          }}M
+          Calls: {{ snap && snap.call_gex_m != null ? `+$${num(snap.call_gex_m, 1)}M` : DASH }} | Puts: {{
+            snap && snap.put_gex_m != null ? `-$${num(Math.abs(snap.put_gex_m), 1)}M` : DASH
+          }}
+        </div>
+        <!-- The map's headline is the curve read at live spot, which is a
+             different measurement from the chain-wide strike sum above.
+             Printed side by side and named, they stop reading as one number
+             that cannot make up its mind. -->
+        <div v-if="netGexAtSpot != null" class="greek-sub">
+          At spot (map curve): {{ optSigned(netGexAtSpot, 2) }}M<span v-if="netGexGapPct != null">
+            &middot; {{ optSigned(netGexGapPct, 0) }}% vs chain total</span
+          >
         </div>
       </div>
 
@@ -107,9 +204,7 @@ const callGexRatio = computed(() => {
             {{ isNetVexPositive ? 'VOL EXPANSION BID' : 'IV SPIKE SQUEEZE' }}
           </span>
         </div>
-        <div class="greek-val font-mono">
-          {{ snap ? optSigned(snap.net_vex_m, 2) : DASH }}M
-        </div>
+        <div class="greek-val font-mono">{{ snap ? optSigned(snap.net_vex_m, 2) : DASH }}M</div>
         <div class="greek-sub">
           {{
             isNetVexPositive
@@ -127,11 +222,9 @@ const callGexRatio = computed(() => {
             {{ isNetChexPositive ? 'TIME-DECAY LIFT' : 'TIME-DECAY DRAG' }}
           </span>
         </div>
-        <div class="greek-val font-mono">
-          {{ snap ? optSigned(snap.net_chex_m, 2) : DASH }}M/d
-        </div>
+        <div class="greek-val font-mono">{{ snap ? optSigned(snap.net_chex_m, 2) : DASH }}M/d</div>
         <div class="greek-sub">
-          0DTE Charm Drift: +${{ snap ? num(snap.zero_dte_charm_drift_m, 2) : DASH }}M/day
+          0DTE Charm Drift: {{ snap && snap.zero_dte_charm_drift_m != null ? `${optSigned(snap.zero_dte_charm_drift_m, 2)}M/day` : DASH }}
         </div>
       </div>
 
@@ -165,7 +258,7 @@ const callGexRatio = computed(() => {
         <div class="greek-sub">
           {{
             hedgingFlowSign === null
-              ? 'Not measured — needs a live spot and IV velocity, which this feed does not yet carry.'
+              ? 'Not measured: needs a live spot and IV velocity, which this feed does not yet carry.'
               : hedgingFlowSign === 1
                 ? 'Net Market Inflow (Dealers absorb supply)'
                 : 'Net Liquidity Extraction (Selling into drop)'
@@ -181,44 +274,67 @@ const callGexRatio = computed(() => {
       <div class="bound-item">
         <span class="b-label">PUT WALL (SUPPORT)</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-put-hi">{{ level(snap.put_wall) }}</span>
-          <span class="b-dist font-mono">({{ distToLevel(snap.put_wall) }})</span>
+          <span class="b-val font-mono text-put-hi">{{ level(lv.putWall) }}</span>
+          <span class="b-dist font-mono">({{ distToLevel(lv.putWall) }})</span>
         </div>
       </div>
       <div class="bound-item">
         <span class="b-label">GAMMA FLIP (S*)</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-warn">{{ level(snap.gamma_flip) }}</span>
+          <span class="b-val font-mono text-warn">{{ level(lv.gammaFlip) }}</span>
           <span class="b-dist font-mono">
-            ({{ snap.gamma_flip != null ? distToLevel(snap.gamma_flip) : 'none in range' }})
+            ({{ lv.gammaFlip != null ? distToLevel(lv.gammaFlip) : 'none in range' }})
           </span>
         </div>
       </div>
       <div class="bound-item">
         <span class="b-label">CALL WALL (RESISTANCE)</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-call-hi">{{ level(snap.call_wall) }}</span>
-          <span class="b-dist font-mono">({{ distToLevel(snap.call_wall) }})</span>
+          <span class="b-val font-mono text-call-hi">{{ level(lv.callWall) }}</span>
+          <span class="b-dist font-mono">({{ distToLevel(lv.callWall) }})</span>
         </div>
       </div>
       <div class="bound-item">
-        <span class="b-label">ABSOLUTE GAMMA PEAK</span>
+        <span class="b-label">PIN · ABSOLUTE GAMMA PEAK</span>
         <div class="b-val-row">
-          <span class="b-val font-mono text-phosphor">{{ level(snap.absolute_gamma_peak) }}</span>
-          <span class="b-dist font-mono">({{ distToLevel(snap.absolute_gamma_peak) }})</span>
+          <span class="b-val font-mono text-phosphor">{{ level(lv.pin) }}</span>
+          <span class="b-dist font-mono">({{ distToLevel(lv.pin) }})</span>
         </div>
       </div>
     </div>
 
+    <!-- Where the chain snapshot's own solve disagrees with the canonical
+         read above. Naming the gap is the point: silently preferring one
+         source is what let this card print a second gamma flip. -->
+    <p v-if="snap && divergences.length" class="divergence-note">
+      Chain snapshot solves these differently: {{ divergences.join(', ') }}. Levels above are the
+      page's single regime read; treat the spread as the surface's uncertainty, not as two levels.
+    </p>
+
+    <!-- Server-side caveats on this snapshot, which the card previously
+         dropped on the floor. -->
+    <p v-if="snap && snap.notes?.length" class="divergence-note">{{ snap.notes.join(' · ') }}</p>
+
     <!-- Withheld, and why. Zeros in every Greek box would read as a balanced
-         market rather than an absent one. -->
-    <p v-else-if="snapshot" class="withheld-note">
-      Dealer Greeks withheld — {{ snapshot.quality?.reason ?? 'no measurable option chain' }}.
+         market rather than an absent one. This is a standalone `v-if`, not the
+         tail of a `v-else-if` chain: the notes above sit between it and the
+         metrics row, so an `else` would bind to the wrong branch and print
+         "withheld" underneath a fully populated card. -->
+    <p v-if="!snap && snapshot" class="withheld-note">
+      Dealer Greeks withheld: {{ snapshot.quality?.reason ?? 'no measurable option chain' }}.
     </p>
   </div>
 </template>
 
 <style scoped>
+.divergence-note {
+  padding: var(--s2) var(--s3);
+  border-top: var(--hair) solid var(--rule);
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.5;
+}
+
 .withheld-note {
   padding: var(--s3);
   border-top: var(--hair) solid var(--rule);
@@ -230,7 +346,7 @@ const callGexRatio = computed(() => {
 .greeks-flow-card {
   background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 1rem;
   display: flex;
   flex-direction: column;
@@ -244,7 +360,7 @@ const callGexRatio = computed(() => {
 }
 
 .eyebrow {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
@@ -258,12 +374,12 @@ const callGexRatio = computed(() => {
 }
 
 .formula-badge {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-family: var(--font-mono, monospace);
   color: var(--ink-dim);
   background: var(--panel-hi);
   padding: 0.25rem 0.5rem;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   border: 1px solid var(--rule-faint);
 }
 
@@ -276,7 +392,7 @@ const callGexRatio = computed(() => {
 .greek-box {
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 0.75rem;
   display: flex;
   flex-direction: column;
@@ -290,7 +406,7 @@ const callGexRatio = computed(() => {
 }
 
 .state-pill {
-  font-size: 0.5625rem;
+  font-size: var(--t-nano);
   font-weight: 700;
   font-family: var(--font-mono, monospace);
   padding: 0.1rem 0.35rem;
@@ -322,7 +438,7 @@ const callGexRatio = computed(() => {
 }
 
 .greek-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
 }
@@ -364,7 +480,7 @@ const callGexRatio = computed(() => {
 }
 
 .greek-sub {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   color: var(--ink-dim);
   line-height: 1.3;
 }
@@ -376,7 +492,7 @@ const callGexRatio = computed(() => {
   padding: 0.75rem;
   background: var(--void-lift);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .bound-item {
@@ -386,7 +502,7 @@ const callGexRatio = computed(() => {
 }
 
 .b-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
 }
@@ -403,7 +519,7 @@ const callGexRatio = computed(() => {
 }
 
 .b-dist {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   color: var(--ink-faint);
 }
 

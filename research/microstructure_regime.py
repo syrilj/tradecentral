@@ -24,6 +24,7 @@ Theoretical Foundations:
      - Forward Negative Slide: S < S*, deep negative GEX below (liquidity cascade / acceleration)
      - Backward Negative Slide: S < S*, deep negative GEX overhead (violent short-squeeze)
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -31,7 +32,6 @@ import math
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Mathematical Constants & Standard Normal Helpers
@@ -68,9 +68,11 @@ def _Phi(x: float) -> float:
 # Black-Scholes Greeks (1st, 2nd, and 3rd order)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class OptionGreeks:
     """Complete Greek profile for a single contract."""
+
     delta: float
     gamma: float
     theta: float
@@ -195,9 +197,11 @@ def calculate_option_greeks(
 # Exposure Structs & Aggregation Functions
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class StrikeExposure:
     """Detailed Greek exposures for a single strike across calls and puts."""
+
     strike: float
     call_oi: int
     put_oi: int
@@ -208,16 +212,16 @@ class StrikeExposure:
     call_gamma: float
     put_gamma: float
     call_gex_m: float  # $ Millions per 1% spot move
-    put_gex_m: float   # $ Millions per 1% spot move
-    net_gex_m: float   # Net Dealer GEX ($M)
+    put_gex_m: float  # $ Millions per 1% spot move
+    net_gex_m: float  # Net Dealer GEX ($M)
     call_vex_m: float  # Vanna exposure ($M per 1% IV shift)
     put_vex_m: float
     net_vex_m: float
-    call_chex_m: float # Charm exposure ($M per day)
+    call_chex_m: float  # Charm exposure ($M per day)
     put_chex_m: float
     net_chex_m: float
-    speed_m: float     # Speed ($M per 1% spot move / $ spot)
-    zomma_m: float     # Zomma ($M per 1% spot move / 1% IV)
+    speed_m: float  # Speed ($M per 1% spot move / $ spot)
+    zomma_m: float  # Zomma ($M per 1% spot move / 1% IV)
 
 
 @dataclass(frozen=True)
@@ -229,6 +233,7 @@ class TopographyState:
     S*, so without it there is no quadrant to name and inventing one would put a
     confident label on a read that does not exist.
     """
+
     quadrant: str  # "forward_positive_ramp" | "backward_positive_ramp" | "forward_negative_slide" | "backward_negative_slide" | "unmeasurable"
     title: str
     description: str
@@ -254,14 +259,15 @@ class ChainQuality:
     them travel together rather than the UI having to infer trustworthiness
     from a plausible-looking value.
     """
+
     measurable: bool
     contracts: int
     strikes: int
     total_open_interest: int
-    iv_fallback_contracts: int   # contracts priced off the default IV, not a quote
+    iv_fallback_contracts: int  # contracts priced off the default IV, not a quote
     flip_located: bool
-    dealer_convention: str       # "index" | "equity" -- which sign assumption produced these numbers
-    reason: str | None = None    # why measurable is False
+    dealer_convention: str  # "index" | "equity" -- which sign assumption produced these numbers
+    reason: str | None = None  # why measurable is False
 
 
 @dataclass(frozen=True)
@@ -281,14 +287,18 @@ class SharedLevels:
     The Greeks this module adds on top are still computed here -- nothing else
     produces them.
     """
+
     gex_profile: Sequence[Mapping[str, float]]  # spot -> net_gex_m, the authoritative curve
     call_wall: float | None
     put_wall: float | None
+    gamma_flip: float | None = None
+    pin_strike: float | None = None
 
 
 @dataclass(frozen=True)
 class MicrostructureRegimeSnapshot:
     """Unified snapshot of microstructure regime dynamics."""
+
     symbol: str
     spot: float
     asof: str
@@ -313,7 +323,7 @@ class MicrostructureRegimeSnapshot:
     #: an instantaneous flow *rate*, and a rate computed from an assumed
     #: velocity is an assumption wearing a number's clothes.
     hedging_flow_m: float | None
-    zero_dte_charm_drift_m: float # Expected 0DTE afternoon charm drift ($M)
+    zero_dte_charm_drift_m: float  # Expected 0DTE afternoon charm drift ($M)
     gamma_flip: float | None
     call_wall: float | None
     put_wall: float | None
@@ -330,6 +340,7 @@ class MicrostructureRegimeSnapshot:
 # Exposure & Surface Profile Calculations
 # ---------------------------------------------------------------------------
 
+
 def calculate_contract_gex(
     *,
     open_interest: float,
@@ -340,7 +351,7 @@ def calculate_contract_gex(
     """Dollar Gamma Exposure per 1% underlying move: OI * M * Gamma * S^2 * 0.01."""
     if open_interest <= 0 or gamma <= 0 or spot <= 0:
         return 0.0
-    return open_interest * multiplier * gamma * (spot ** 2) * 0.01
+    return open_interest * multiplier * gamma * (spot**2) * 0.01
 
 
 def calculate_contract_vex(
@@ -446,6 +457,7 @@ def unmeasurable_regime_snapshot(
 # profile actually supports, or None.
 # ---------------------------------------------------------------------------
 
+
 def _build_gex_profile(
     *,
     strike_map: Mapping[float, Mapping[str, Any]],
@@ -483,8 +495,12 @@ def _build_gex_profile(
             c_gamma = cg_test.gamma if cg_test else 0.0
             p_gamma = pg_test.gamma if pg_test else 0.0
 
-            c_gex = calculate_contract_gex(open_interest=entry["call_oi"], gamma=c_gamma, spot=float(s_test))
-            p_gex = calculate_contract_gex(open_interest=entry["put_oi"], gamma=p_gamma, spot=float(s_test))
+            c_gex = calculate_contract_gex(
+                open_interest=entry["call_oi"], gamma=c_gamma, spot=float(s_test)
+            )
+            p_gex = calculate_contract_gex(
+                open_interest=entry["put_oi"], gamma=p_gamma, spot=float(s_test)
+            )
             s_gex += (phi_call * c_gex + phi_put * p_gex) / 1e6
 
         profile.append({"spot": round(float(s_test), 2), "net_gex_m": round(s_gex, 4)})
@@ -545,7 +561,8 @@ def _nearest_flip(profile: Sequence[Mapping[str, float]], spot: float) -> float 
 
 
 def _directional_walls(
-    exposures: Sequence["StrikeExposure"], spot: float,
+    exposures: Sequence["StrikeExposure"],
+    spot: float,
 ) -> tuple[float | None, float | None]:
     """Call wall above spot, put wall below spot.
 
@@ -603,7 +620,7 @@ def compute_microstructure_regime(
     rate: float = _DEFAULT_RATE,
     asof: str = "",
     is_index: bool = True,
-    ds_dt_pct: float | None = None,    # Daily spot return rate (e.g. +0.01 = +1%)
+    ds_dt_pct: float | None = None,  # Daily spot return rate (e.g. +0.01 = +1%)
     dvol_dt_pct: float | None = None,  # Daily IV change rate (e.g. -0.02 = -2% IV)
     shared_levels: SharedLevels | None = None,
 ) -> MicrostructureRegimeSnapshot:
@@ -658,7 +675,13 @@ def compute_microstructure_regime(
             right = str(row.get("right") or row.get("side") or "").strip().lower()
             if not right:
                 continue
-            right_norm = "call" if right in {"c", "call", "calls"} else "put" if right in {"p", "put", "puts"} else None
+            right_norm = (
+                "call"
+                if right in {"c", "call", "calls"}
+                else "put"
+                if right in {"p", "put", "puts"}
+                else None
+            )
             if right_norm is None:
                 continue
 
@@ -756,8 +779,12 @@ def compute_microstructure_regime(
         put_gamma = pg.gamma if pg else 0.0
 
         # Dollar GEX ($M)
-        call_gex_raw = calculate_contract_gex(open_interest=entry["call_oi"], gamma=call_gamma, spot=spot)
-        put_gex_raw = calculate_contract_gex(open_interest=entry["put_oi"], gamma=put_gamma, spot=spot)
+        call_gex_raw = calculate_contract_gex(
+            open_interest=entry["call_oi"], gamma=call_gamma, spot=spot
+        )
+        put_gex_raw = calculate_contract_gex(
+            open_interest=entry["put_oi"], gamma=put_gamma, spot=spot
+        )
         call_gex_m = (phi_call * call_gex_raw) / 1e6
         put_gex_m = (phi_put * put_gex_raw) / 1e6
         net_gex_m = call_gex_m + put_gex_m
@@ -765,8 +792,12 @@ def compute_microstructure_regime(
         # Vanna ($M)
         call_vanna = cg.vanna if cg else 0.0
         put_vanna = pg.vanna if pg else 0.0
-        call_vex_raw = calculate_contract_vex(open_interest=entry["call_oi"], vanna=call_vanna, spot=spot)
-        put_vex_raw = calculate_contract_vex(open_interest=entry["put_oi"], vanna=put_vanna, spot=spot)
+        call_vex_raw = calculate_contract_vex(
+            open_interest=entry["call_oi"], vanna=call_vanna, spot=spot
+        )
+        put_vex_raw = calculate_contract_vex(
+            open_interest=entry["put_oi"], vanna=put_vanna, spot=spot
+        )
         call_vex_m = (phi_call * call_vex_raw) / 1e6
         put_vex_m = (phi_put * put_vex_raw) / 1e6
         net_vex_m = call_vex_m + put_vex_m
@@ -774,8 +805,12 @@ def compute_microstructure_regime(
         # Charm ($M per day)
         call_charm = cg.charm if cg else 0.0
         put_charm = pg.charm if pg else 0.0
-        call_chex_raw = calculate_contract_chex(open_interest=entry["call_oi"], charm=call_charm, spot=spot)
-        put_chex_raw = calculate_contract_chex(open_interest=entry["put_oi"], charm=put_charm, spot=spot)
+        call_chex_raw = calculate_contract_chex(
+            open_interest=entry["call_oi"], charm=call_charm, spot=spot
+        )
+        put_chex_raw = calculate_contract_chex(
+            open_interest=entry["put_oi"], charm=put_charm, spot=spot
+        )
         call_chex_m = (phi_call * call_chex_raw) / 1e6
         put_chex_m = (phi_put * put_chex_raw) / 1e6
         net_chex_m = call_chex_m + put_chex_m
@@ -788,12 +823,16 @@ def compute_microstructure_regime(
         # Speed & Zomma
         call_speed = cg.speed if cg else 0.0
         put_speed = pg.speed if pg else 0.0
-        speed_raw = (entry["call_oi"] * call_speed + entry["put_oi"] * put_speed) * 100.0 * (spot ** 2) * 0.01
+        speed_raw = (
+            (entry["call_oi"] * call_speed + entry["put_oi"] * put_speed) * 100.0 * (spot**2) * 0.01
+        )
         speed_m = speed_raw / 1e6
 
         call_zomma = cg.zomma if cg else 0.0
         put_zomma = pg.zomma if pg else 0.0
-        zomma_raw = (entry["call_oi"] * call_zomma + entry["put_oi"] * put_zomma) * 100.0 * (spot ** 2) * 0.01
+        zomma_raw = (
+            (entry["call_oi"] * call_zomma + entry["put_oi"] * put_zomma) * 100.0 * (spot**2) * 0.01
+        )
         zomma_m = zomma_raw / 1e6
 
         total_call_gex += call_gex_m
@@ -836,7 +875,9 @@ def compute_microstructure_regime(
     # stay argmax -- but they are None on an empty ladder rather than spot.
     if strike_exposures:
         call_wall, put_wall = _directional_walls(strike_exposures, spot)
-        volatility_trigger = max(strike_exposures, key=lambda s: abs(s.speed_m) + abs(s.zomma_m)).strike
+        volatility_trigger = max(
+            strike_exposures, key=lambda s: abs(s.speed_m) + abs(s.zomma_m)
+        ).strike
         absolute_gamma_peak = max(strike_exposures, key=lambda s: abs(s.net_gex_m)).strike
     else:
         call_wall = put_wall = volatility_trigger = absolute_gamma_peak = None
@@ -844,8 +885,12 @@ def compute_microstructure_regime(
         # Upstream measured these from the same chain and the UI already renders
         # them; adopting rather than re-deriving is what keeps the page from
         # contradicting itself.
-        call_wall = shared_levels.call_wall
-        put_wall = shared_levels.put_wall
+        if shared_levels.call_wall is not None:
+            call_wall = shared_levels.call_wall
+        if shared_levels.put_wall is not None:
+            put_wall = shared_levels.put_wall
+        if shared_levels.pin_strike is not None:
+            absolute_gamma_peak = shared_levels.pin_strike
 
     # Net dealer GEX ($M) evaluated across spot -- the curve the flip is read
     # off. Recomputed here only when upstream did not already supply it.
@@ -868,7 +913,10 @@ def compute_microstructure_regime(
     # profile never changes sign -- there is no flip to report, and the old
     # spot * 0.95 / spot * 1.05 placeholders were indistinguishable from a
     # measured level once they reached the UI.
-    gamma_flip = _nearest_flip(gex_profile, spot)
+    if shared_levels is not None and shared_levels.gamma_flip is not None:
+        gamma_flip = shared_levels.gamma_flip
+    else:
+        gamma_flip = _nearest_flip(gex_profile, spot)
     flip_located = gamma_flip is not None
     distance_to_flip = (spot - gamma_flip) / spot if gamma_flip is not None and spot > 0 else None
 
@@ -927,7 +975,9 @@ def compute_microstructure_regime(
             title = "Forward Negative Slide"
             desc = "Deep negative GEX stacked below spot price."
             action = "Downward spot motion forces accelerating dealer short-selling."
-            behavior = "Directional breakdown cascades; severe volatility expansion and liquidity voids."
+            behavior = (
+                "Directional breakdown cascades; severe volatility expansion and liquidity voids."
+            )
         else:
             quadrant = "backward_negative_slide"
             title = "Backward Negative Slide"
@@ -948,7 +998,9 @@ def compute_microstructure_regime(
         put_wall=round(put_wall, 2) if put_wall is not None else None,
         gamma_flip=round(gamma_flip, 2) if gamma_flip is not None else None,
         volatility_trigger=round(volatility_trigger, 2) if volatility_trigger is not None else None,
-        absolute_gamma_peak=round(absolute_gamma_peak, 2) if absolute_gamma_peak is not None else None,
+        absolute_gamma_peak=(
+            round(absolute_gamma_peak, 2) if absolute_gamma_peak is not None else None
+        ),
     )
 
     # Regime Determination.
@@ -994,7 +1046,9 @@ def compute_microstructure_regime(
             f"Gamma Flip Level: ${gamma_flip:.2f} (Spot is {'above' if spot >= gamma_flip else 'below'} flip)"
         )
     else:
-        notes.append("No zero-gamma flip in the tested spot range -- net gamma holds one sign throughout.")
+        notes.append(
+            "No zero-gamma flip in the tested spot range -- net gamma holds one sign throughout."
+        )
     notes.append(
         "Call Wall resistance at "
         + (f"${call_wall:.2f}" if call_wall is not None else "n/a (no strikes above spot)")
@@ -1017,7 +1071,9 @@ def compute_microstructure_regime(
             "their Greeks are assumptions, not measurements."
         )
     if zero_dte_put_chex_total > 1.0:
-        notes.append(f"0DTE Charm decay provides ${zero_dte_put_chex_total:.2f}M afternoon unhedging tailwind")
+        notes.append(
+            f"0DTE Charm decay provides ${zero_dte_put_chex_total:.2f}M afternoon unhedging tailwind"
+        )
 
     return MicrostructureRegimeSnapshot(
         symbol=symbol,
@@ -1037,7 +1093,9 @@ def compute_microstructure_regime(
         call_wall=round(call_wall, 2) if call_wall is not None else None,
         put_wall=round(put_wall, 2) if put_wall is not None else None,
         volatility_trigger=round(volatility_trigger, 2) if volatility_trigger is not None else None,
-        absolute_gamma_peak=round(absolute_gamma_peak, 2) if absolute_gamma_peak is not None else None,
+        absolute_gamma_peak=(
+            round(absolute_gamma_peak, 2) if absolute_gamma_peak is not None else None
+        ),
         quality=ChainQuality(
             measurable=True,
             contracts=len(chain_rows),

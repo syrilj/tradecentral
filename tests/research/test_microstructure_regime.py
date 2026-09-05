@@ -265,3 +265,77 @@ def test_regime_strength_is_scale_free():
     # Same relative posture, wildly different absolute size -> same strength.
     assert large.regime_strength == pytest.approx(small.regime_strength, abs=0.05)
     assert 0.0 <= small.regime_strength <= 1.0
+
+
+def test_all_four_topography_quadrants_explicit():
+    """Verify distinct mapping into all 4 dealer topography quadrants."""
+    from edge.research.microstructure_regime import compute_microstructure_regime
+
+    spot = 500.0
+
+    # 1. Forward Positive Ramp: Spot >= Flip (Flip at ~491), heavy Call GEX overhead (> 500)
+    chain_fpr = [
+        {"strike": 480, "right": "put", "open_interest": 10000, "implied_volatility": 0.20, "dte": 15},
+        {"strike": 520, "right": "call", "open_interest": 20000, "implied_volatility": 0.20, "dte": 15},
+    ]
+    snap_fpr = compute_microstructure_regime(chain_fpr, symbol="SPY", spot=spot, asof="")
+    assert snap_fpr.gamma_flip is not None and spot >= snap_fpr.gamma_flip
+    assert snap_fpr.topography.quadrant == "forward_positive_ramp"
+
+    # 2. Backward Positive Ramp: Spot >= Flip (Flip at ~470), heavy Call cushion below spot
+    chain_bpr = [
+        {"strike": 460, "right": "put", "open_interest": 15000, "implied_volatility": 0.20, "dte": 15},
+        {"strike": 490, "right": "call", "open_interest": 20000, "implied_volatility": 0.20, "dte": 15},
+        {"strike": 520, "right": "call", "open_interest": 3000, "implied_volatility": 0.20, "dte": 15},
+    ]
+    snap_bpr = compute_microstructure_regime(chain_bpr, symbol="SPY", spot=spot, asof="")
+    assert snap_bpr.gamma_flip is not None and spot >= snap_bpr.gamma_flip
+    assert snap_bpr.topography.quadrant == "backward_positive_ramp"
+
+    # 3. Forward Negative Slide: Spot < Flip (Flip at ~505), deep negative GEX below spot
+    chain_fns = [
+        {"strike": 480, "right": "put", "open_interest": 20000, "implied_volatility": 0.20, "dte": 15},
+        {"strike": 530, "right": "call", "open_interest": 15000, "implied_volatility": 0.20, "dte": 15},
+    ]
+    snap_fns = compute_microstructure_regime(chain_fns, symbol="SPY", spot=spot, asof="")
+    assert snap_fns.gamma_flip is not None and spot < snap_fns.gamma_flip
+    assert snap_fns.topography.quadrant == "forward_negative_slide"
+
+    # 4. Backward Negative Slide: Spot < Flip (Flip at ~521), deep negative GEX overhead
+    chain_bns = [
+        {"strike": 480, "right": "put", "open_interest": 2000, "implied_volatility": 0.20, "dte": 15},
+        {"strike": 510, "right": "put", "open_interest": 25000, "implied_volatility": 0.20, "dte": 15},
+        {"strike": 540, "right": "call", "open_interest": 30000, "implied_volatility": 0.20, "dte": 15},
+    ]
+    snap_bns = compute_microstructure_regime(chain_bns, symbol="SPY", spot=spot, asof="")
+    assert snap_bns.gamma_flip is not None and spot < snap_bns.gamma_flip
+    assert snap_bns.topography.quadrant == "backward_negative_slide"
+
+
+def test_unbiased_gex_scenario_revaluation_non_linear():
+    """Verify true Black-Scholes scenario revaluation without fake linear multiplication."""
+    import pandas as pd
+    from edge.research.gex_model import compute_unbiased_gex_profile
+
+    spot = 100.0
+    chain = pd.DataFrame(
+        [
+            {
+                "strike": 102.0,
+                "option_type": "CALL",
+                "open_interest": 1000.0,
+                "gamma": 0.05,
+                "days_to_expiration": 30.0,
+                "implied_volatility": 0.20,
+            }
+        ]
+    )
+
+    profile = compute_unbiased_gex_profile(chain, spot_price=spot)
+
+    # Must not be simple linear multiplication
+    assert profile.scenario_positive_gex_usd != profile.total_abs_gamma_usd * 1.02
+    assert profile.scenario_negative_gex_usd != profile.total_abs_gamma_usd * 0.98
+
+    # When spot moves from 100 to 102 (+2%), the OTM 102 Call moves ATM and gains gamma
+    assert profile.scenario_positive_gex_usd > profile.total_abs_gamma_usd

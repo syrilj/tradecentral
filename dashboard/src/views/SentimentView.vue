@@ -488,7 +488,8 @@ const TICKER_HELP =
                 </thead>
                 <tbody>
                   <tr v-for="r in finraTop" :key="'h' + r.symbol" @click="openMarket(r.symbol)">
-                    <td class="fig sym">{{ r.symbol }}</td>
+                    <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="openMarket(r.symbol)"><span class="sr-only">Select row</span></button>{{ r.symbol }}</td>
                     <td class="fig num">{{ num(r.short_ratio, 3) }}</td>
                     <td class="fig num neg">{{ num(r.z_vs_own_hist, 2) }}</td>
                     <td class="label dim lean-cell">{{ finraLean(r.z_vs_own_hist, 'high') }}</td>
@@ -513,7 +514,8 @@ const TICKER_HELP =
                 </thead>
                 <tbody>
                   <tr v-for="r in finraLow" :key="'l' + r.symbol" @click="openMarket(r.symbol)">
-                    <td class="fig sym">{{ r.symbol }}</td>
+                    <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="openMarket(r.symbol)"><span class="sr-only">Select row</span></button>{{ r.symbol }}</td>
                     <td class="fig num">{{ num(r.short_ratio, 3) }}</td>
                     <td class="fig num pos">{{ num(r.z_vs_own_hist, 2) }}</td>
                     <td class="label dim lean-cell">{{ finraLean(r.z_vs_own_hist, 'low') }}</td>
@@ -605,7 +607,8 @@ const TICKER_HELP =
               </thead>
               <tbody>
                 <tr v-for="(r, i) in unified" :key="i" @click="openMarket(String(r.symbol))">
-                  <td class="fig sym">{{ r.symbol }}</td>
+                  <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="openMarket(String(r.symbol))"><span class="sr-only">Select row</span></button>{{ r.symbol }}</td>
                   <td>
                     <span class="kind" :class="kindClass(String(r.kind))">{{ r.kind }}</span>
                   </td>
@@ -665,7 +668,8 @@ const TICKER_HELP =
               </thead>
               <tbody>
                 <tr v-for="r in pxRows" :key="r.symbol" @click="openMarket(r.symbol)">
-                  <td class="fig sym">{{ r.symbol }}</td>
+                  <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="openMarket(r.symbol)"><span class="sr-only">Select row</span></button>{{ r.symbol }}</td>
                   <td class="fig num" :class="tone(r.ret_1d)">
                     {{ signedPct(Number(r.ret_1d) * 100, 2) }}
                   </td>
@@ -704,7 +708,8 @@ const TICKER_HELP =
               </thead>
               <tbody>
                 <tr v-for="r in shortRows" :key="r.symbol" @click="openMarket(r.symbol)">
-                  <td class="fig sym">{{ r.symbol }}</td>
+                  <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="openMarket(r.symbol)"><span class="sr-only">Select row</span></button>{{ r.symbol }}</td>
                   <td class="fig num">{{ num(r.value, 3) }}</td>
                   <td class="fig num" :class="tone(r.z)">{{ num(r.z, 2) }}</td>
                   <td class="label dim feat">{{ r.note }}</td>
@@ -736,7 +741,8 @@ const TICKER_HELP =
               </thead>
               <tbody>
                 <tr v-for="r in secRows" :key="r.symbol" @click="openMarket(r.symbol)">
-                  <td class="fig sym">{{ r.symbol }}</td>
+                  <td class="row-select-cell fig sym">
+  <button type="button" class="row-select-btn" @click.stop="openMarket(r.symbol)"><span class="sr-only">Select row</span></button>{{ r.symbol }}</td>
                   <td class="fig num">{{ r.form4_90d }}</td>
                   <td class="fig num">{{ r.eightk_90d }}</td>
                   <td class="fig num">{{ r.sc13_90d }}</td>

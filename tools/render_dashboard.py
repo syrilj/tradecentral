@@ -376,18 +376,27 @@ def fetch_sector_flow_signals() -> dict:
             "sectors_ranked": sectors_ranked,
             "watch_names": report.get("watch_names", []),
             "market_context": report.get("market_context", "Neutral Sector Flow"),
+            "available": bool(report.get("ok")),
+            "reason": None if report.get("ok") else report.get("reason"),
         }
     except Exception as e:
         print(f"Warning fetching sector flow: {e}")
+        # Fail closed. This used to return a literal rotation -- XLC/XLE/QQQ
+        # "money in", IGV/XLV "money out", AAPL/MSFT/AMD to watch -- whenever
+        # the scan raised. On screen that is indistinguishable from a measured
+        # panel, so a desk could rotate into names no scan ever ranked. An
+        # unavailable rotation must render as unavailable.
         return {
             "asof": None,
             "asof_bar": None,
             "source": "unavailable",
-            "money_in": ["XLC (Comm)", "XLE (Energy)", "QQQ (Tech)", "XLF (Fin)", "SMH (Semis)"],
-            "money_out": ["IGV (Software)", "XLV (Health)", "SOXX", "XLY (Cons)"],
+            "money_in": [],
+            "money_out": [],
             "sectors_ranked": [],
-            "watch_names": ["AAPL", "MSFT", "AMD"],
-            "market_context": "Sector Momentum Active",
+            "watch_names": [],
+            "market_context": None,
+            "available": False,
+            "reason": f"sector scan failed: {type(e).__name__}: {e}",
         }
 
 #: Rendered in place of any metric the artifact did not supply.
@@ -913,21 +922,48 @@ def get_dashboard_data(
     report("activity", 90, "Market activity board assembled.")
 
     # 5. Volatility Complex
+    #
+    # No literal fallback. The previous default rendered VIX 20.66 / slope
+    # 1.0058 stamped `"date": "Live"` whenever vol_complex.csv was missing or
+    # unreadable -- a fabricated volatility regime that is indistinguishable on
+    # screen from a measured one, and that drives the regime read. Absent vol
+    # must read as absent, with the reason attached.
     vol_file = ROOT / "edge" / "data" / "vol_complex.csv"
-    latest_vol = {"VIX": 20.66, "term_slope": 1.0058, "tail_risk": 139.55, "date": "Live"}
+    latest_vol = {
+        "VIX": None,
+        "term_slope": None,
+        "tail_risk": None,
+        "date": None,
+        "available": False,
+        "reason": f"missing artifact: {vol_file}",
+    }
     if vol_file.exists():
         try:
             df_vol = pd.read_csv(vol_file)
             last_row = df_vol.iloc[-1]
+
+            def _vol_metric(key: str) -> float | None:
+                try:
+                    value = float(last_row.get(key))
+                except (TypeError, ValueError):
+                    return None
+                return value if math.isfinite(value) else None
+
+            observed_date = last_row.get("Date")
             latest_vol = {
-                "VIX": float(last_row.get("VIX", 20.66)),
-                "term_slope": float(last_row.get("term_slope", 1.0058)),
-                "tail_risk": float(last_row.get("tail_risk", 139.55)),
-                "date": str(last_row.get("Date", "Live")),
+                "VIX": _vol_metric("VIX"),
+                "term_slope": _vol_metric("term_slope"),
+                "tail_risk": _vol_metric("tail_risk"),
+                # The observed bar date, never the word "Live": the panel is an
+                # end-of-day CSV and can be days behind.
+                "date": str(observed_date) if observed_date is not None else None,
+                "available": True,
+                "reason": None,
             }
-        except Exception:
-            pass
-            
+        except Exception as exc:  # noqa: BLE001 - report, never substitute
+            latest_vol["reason"] = f"unreadable artifact: {type(exc).__name__}"
+
+
     # 6. PEAD Gate Results
     pead_file = ROOT / "edge" / "runs" / "pead_catalyst" / "results.json"
     # No literal fallback metrics. A hardcoded 5.38 Sharpe rendered when the

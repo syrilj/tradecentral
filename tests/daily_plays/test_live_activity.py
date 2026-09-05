@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from edge.daily_plays.adapters.flow import reset_lse_circuit
 from edge.daily_plays.live_activity import (
     _activity_lean,
     build_market_activity_scan,
@@ -11,6 +12,13 @@ from edge.daily_plays.live_activity import (
     scan_local_market_activity,
 )
 from edge.daily_plays.qlib_scan_score import SCORE_KIND as QLIB_SCORE_KIND
+
+
+@pytest.fixture(autouse=True)
+def _reset_lse_circuit():
+    reset_lse_circuit()
+    yield
+    reset_lse_circuit()
 
 
 def _bars(*, jump: float = 0.0, volume_multiple: float = 1.0, periods: int = 70) -> pd.DataFrame:
@@ -247,7 +255,7 @@ def test_unusual_options_flow_ranks_live_premium_and_stays_unauthorized():
     assert result["rows"]
     assert result["rows"][0]["live"] is True
     assert result["rows"][0]["premium"] is not None
-    assert "LIVE OPTIONS FLOW" in result["rows"][0]["flags"] or any(
+    assert "PROVIDER TAPE" in result["rows"][0]["flags"] or any(
         "$" in f for f in result["rows"][0]["flags"]
     )
     assert all(row["decision_authorized"] is False for row in result["rows"])
@@ -434,6 +442,7 @@ def test_unusual_flow_classifies_mixed_prints_without_authorizing_or_inventing_s
 
 
 def test_unusual_flow_timeout_is_unavailable_fail_closed():
+    reset_lse_circuit()
     def boom(**_):
         raise TimeoutError("flow_provider_timeout")
 
@@ -449,6 +458,7 @@ def test_unusual_flow_timeout_is_unavailable_fail_closed():
     assert result["tape"] == []
     assert result["decision_authorized"] is False
     assert "flow_market_timeout" in result["warnings"]
+    reset_lse_circuit()
 
 
 def test_unusual_flow_never_substitutes_local_activity_for_live_rows():

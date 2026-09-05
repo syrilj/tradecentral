@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { bookAllocation, netDebit, type CalcLeg } from '@/optionsCalculator'
 
+import { classifyFlowOrder, computeVolOiRatio } from '@/flowDisplay'
 import { collectWatchlistAlerts, saveSeenAlertKeys } from '@/flowAlerts'
 
 import { buildOptionsDirection, type OptionsDirectionSummary } from '@/optionsDirection'
@@ -113,18 +114,12 @@ describe('Tier 4: Realistic Institutional Workload Scenarios', () => {
     const filtered = prints.filter((p) => p.dte === 0 && (p.premium ?? 0) >= 500_000)
     expect(filtered.length).toBeGreaterThan(30)
 
-    // 2. Classify Golden Sweeps with Vol/OI >= 1.0
-    const goldenSweeps = filtered.filter(
-      (p) =>
-        p.trade_class === 'sweep' &&
-        String(p.aggressor).toLowerCase() === 'ask' &&
-        (p.premium ?? 0) >= 500_000 &&
-        (p.volume ?? 0) / (p.open_interest ?? 1) >= 1.0,
-    )
-    expect(goldenSweeps).toHaveLength(filtered.length)
+    const sweeps = filtered.filter((p) => classifyFlowOrder(p).type === 'sweep')
+    expect(sweeps).toHaveLength(filtered.length)
+    expect(sweeps.every((p) => classifyFlowOrder(p).label !== 'GOLDEN SWEEP')).toBe(true)
+    expect(sweeps.every((p) => computeVolOiRatio(p.volume, p.open_interest).isHigh)).toBe(true)
 
-    // 3. Verify total aggregated premium
-    const totalPremium = goldenSweeps.reduce((sum, p) => sum + (p.premium ?? 0), 0)
+    const totalPremium = sweeps.reduce((sum, p) => sum + (p.premium ?? 0), 0)
     expect(totalPremium).toBeGreaterThan(25_000_000) // Over $25M in 0DTE sweep flow
   })
 

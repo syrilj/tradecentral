@@ -114,7 +114,24 @@ describe('DealerGammaMap withholds rather than drawing a flat line', () => {
     expect(html).toContain('FLIP')
     expect(html).toContain('CALL W')
     expect(html).toContain('PUT W')
-    expect(html).toContain('SPOT')
+    // Live spot is a rule plus a price pill on the axis, not a text label —
+    // assert the marker itself and the price it reports.
+    expect(html).toContain('spot-line')
+    expect(html).toContain('pill-spot')
+  })
+
+  it('ranks the structural levels instead of drawing four equal rules', async () => {
+    // The whole point of the ranking: the operator should be able to read
+    // "which level first" off the chart rather than sorting it themselves.
+    const html = await render()
+    expect(html).toContain('Levels by priority')
+    // Nearest-and-heaviest wins rank 1. With spot at 500 the flip at 505 is
+    // both closer and structurally weightier than either wall.
+    const flipRow = html.indexOf('Zero gamma')
+    const callRow = html.indexOf('Call wall')
+    expect(flipRow).toBeGreaterThan(-1)
+    expect(callRow).toBeGreaterThan(-1)
+    expect(flipRow).toBeLessThan(callRow)
   })
 
   it('surfaces the default-IV contract count, so assumed Greeks are visible', async () => {
@@ -137,7 +154,7 @@ describe('DealerGammaMap source contracts', () => {
     expect(src).toContain('const hi = Math.max(0, ...ys)')
   })
 
-  it('scales the ladder against the symbol\'s own peak, not a fixed $M constant', () => {
+  it("scales the ladder against the symbol's own peak, not a fixed $M constant", () => {
     // An index's per-strike gamma runs orders of magnitude above a single
     // name's; a fixed divisor saturates on one and vanishes on the other.
     expect(src).toContain('const ladderScaleM = computed(')

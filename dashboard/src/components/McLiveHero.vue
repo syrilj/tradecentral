@@ -253,6 +253,7 @@ function render(shown: number): void {
   const dxOf = (v: number): number => distX + ((v - domainLo) / (domainHi - domainLo)) * distW
 
   /* histogram from the first `shown` terminals (recomputed cheaply) */
+  counts.fill(0)
   const binW = (domainHi - domainLo) / N_BINS
   const seen = Math.min(shown, terminals.length)
   for (let i = 0; i < seen; i++) {
@@ -471,7 +472,7 @@ onBeforeUnmount(() => {
   bottom: 10px;
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 650;
   letter-spacing: 0.08em;
 }

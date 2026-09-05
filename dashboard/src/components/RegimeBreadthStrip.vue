@@ -109,8 +109,8 @@ const uniqueWarnings = computed(() => [...new Set(props.payload?.warnings ?? [])
     <!-- Idle until asked. This control is the ONLY way breadth ever fetches. -->
     <div v-if="!activated" class="idle-state">
       <p class="idle-copy label wraps">
-        Breadth prices 15 option chains against a metered feed — roughly 30–45s when cold. It stays
-        off until you ask for it.
+        Breadth prices 15 option chains against a metered feed, roughly 30 to 45s when cold. It
+        stays off until you ask for it.
       </p>
       <button type="button" class="go-live-btn" @click="fireActivate">GO LIVE</button>
     </div>
@@ -119,7 +119,7 @@ const uniqueWarnings = computed(() => [...new Set(props.payload?.warnings ?? [])
       <LoadingState v-if="loading && !payload" label="Loading breadth" compact />
 
       <p v-else-if="error && !payload" class="error-copy label wraps" role="alert">
-        Breadth unavailable — {{ error }}
+        Breadth unavailable: {{ error }}
       </p>
 
       <template v-else-if="payload">

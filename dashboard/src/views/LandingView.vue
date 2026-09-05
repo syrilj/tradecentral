@@ -9,11 +9,16 @@ import { age, DASH, num, shortDate, usd, signedPct, tone } from '@/format'
 import EvidenceLayerVisual from '@/components/EvidenceLayerVisual.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import BsLab from '@/components/BsLab.vue'
+import CapabilityScrollReveal from '@/components/CapabilityScrollReveal.vue'
+import FlowSignatureDiagram from '@/components/FlowSignatureDiagram.vue'
 import GexFlowVisual from '@/components/GexFlowVisual.vue'
 import LiveStateVisual from '@/components/LiveStateVisual.vue'
 import McLiveHero from '@/components/McLiveHero.vue'
+import ModelLabPlate from '@/components/ModelLabPlate.vue'
+import PrincipleDiagram from '@/components/PrincipleDiagram.vue'
 import Readout from '@/components/Readout.vue'
 import ResearchLoopVisual from '@/components/ResearchLoopVisual.vue'
+import WorkspacePathPlate from '@/components/WorkspacePathPlate.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
 // VolSurfaceCanvas statically imports three.js, so importing it here made the
 // 514 kB three chunk a hard dependency of `/` -- the public landing route, and
@@ -98,13 +103,15 @@ const apiDown = computed(() => Boolean(status.error.value && !status.data.value)
 const apiStale = computed(() => Boolean(status.error.value && status.data.value))
 const contacting = computed(() => status.loading.value && !status.data.value && !status.error.value)
 
+/* ── Interactive view modes for hero and flow visual banners ────────────── */
+const heroViewMode = ref<'mc' | 'workstation'>('mc')
+const flowViewMode = ref<'interactive' | 'tape'>('interactive')
+
 /* ── Rotating word in the hero lede ────────────────────────────────────────── */
-const ROTATING_WORDS = [
-  'positioning',
-  'signed flow',
-  'gamma structure',
-  'research evidence',
-] as const
+/* The rotating slot is sized to the longest of these and never resizes (see
+   .rotating-word), so keeping them within a few characters of each other
+   keeps the trailing gap down to ordinary word spacing. */
+const ROTATING_WORDS = ['dealer gamma', 'signed flow', 'implied range', 'gamma flip'] as const
 const rotatingIndex = ref(0)
 let rotateTimer: number | undefined
 function startRotating(): void {
@@ -123,7 +130,7 @@ function stopRotating(): void {
    Deterministic charset, rAF-driven, second line trails the first. The final
    headline always lives in the h1's aria-label; the animated spans are
    aria-hidden so assistive tech never reads the churn. */
-const HERO_LINES = ['Frontier market research.', 'In your hands.'] as const
+const HERO_LINES = ['Read the positioning', 'before the narrative.'] as const
 const heroAriaLabel = HERO_LINES.join(' ')
 const SCRAMBLE_CHARS = '01<>/[]{}#$%&*+=~ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 const scrambledLines = ref<string[]>([...HERO_LINES])
@@ -160,7 +167,7 @@ let fallObserver: IntersectionObserver | undefined
 
 function wireFallIns(reducedMotion: boolean): void {
   const blocks = document.querySelectorAll('.fall-in')
-  if (reducedMotion) {
+  if (reducedMotion || typeof IntersectionObserver === 'undefined') {
     blocks.forEach((el) => el.classList.add('in-view'))
     return
   }
@@ -173,7 +180,7 @@ function wireFallIns(reducedMotion: boolean): void {
         }
       }
     },
-    { threshold: 0.15, rootMargin: '0px 0px -6% 0px' },
+    { threshold: 0.05, rootMargin: '100px 0px' },
   )
   blocks.forEach((el) => fallObserver?.observe(el))
 }
@@ -212,45 +219,51 @@ const capabilities = [
   },
 ] as const
 
-const bentoChips = [
+const flowFeatures = [
   {
-    area: 'lab',
-    title: 'Model lab',
-    copy: 'A real Black-Scholes workbench running in the browser.',
-    tone: 'sq-yellow',
+    kind: 'gex' as const,
+    idx: '01 · GEX PROFILE',
+    title: 'Where dealers are pinned',
+    copy: 'Gamma concentration by strike, with the sign flip marked — the level above which hedging damps a move and below which it feeds one.',
   },
   {
-    area: 'work',
-    title: 'Workspaces',
-    copy: 'A research path that hands context forward, not a menu.',
-    tone: 'sq-blue',
+    kind: 'signed' as const,
+    idx: '02 · SIGNED TAPE',
+    title: 'Who hit the offer',
+    copy: 'Prints split into buyer- and seller-initiated flow. When the provider gives no side, the print stays unsigned instead of being guessed.',
+  },
+  {
+    kind: 'execution' as const,
+    idx: '03 · SWEEPS & BLOCKS',
+    title: 'How the order was worked',
+    copy: 'Intermarket sweeps taking four venues at once, told apart from a single block resting on one exchange.',
   },
 ] as const
 
 const principles = [
   {
     index: 'A',
-    title: 'Missing stays missing',
-    copy: 'Stale, unavailable, proxy, and degraded states are labelled—not silently converted to zero.',
-    svg: '<circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.3"/><path d="M8 12h8M12 8v8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.3"/>',
+    kind: 'missing' as const,
+    title: 'A gap stays a gap',
+    copy: 'Stale, unavailable, and proxied values are labelled where you read them. Nothing gets quietly filled with a zero that looks like a real number.',
   },
   {
     index: 'B',
-    title: 'Evidence stays typed',
-    copy: 'Ordinal research evidence is never presented as calibrated probability or trade authorization.',
-    svg: '<path d="M12 3l7 2.5v4.5c0 4.5-2.8 8.2-7 9.5-4.2-1.3-7-5-7-9.5V5.5L12 3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 12l2 2 4.5-4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
+    kind: 'typed' as const,
+    title: 'Evidence keeps its type',
+    copy: 'A strong ordinal reading is shown as a strong ordinal reading — never dressed up as a calibrated probability or a green light to trade.',
   },
   {
     index: 'C',
+    kind: 'failclosed' as const,
     title: 'Promotion fails closed',
-    copy: 'Readiness and pre-registered gates must agree before any strategy can advance beyond research.',
-    svg: '<rect x="5" y="10" width="14" height="10" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="15" r="1.2" fill="currentColor"/>',
+    copy: 'Readiness and pre-registered gates both have to clear before a strategy leaves research. One no-go holds the whole thing.',
   },
   {
     index: 'D',
+    kind: 'outside' as const,
     title: 'Execution stays outside',
-    copy: 'The checked-in pipeline contains no broker connection, order ticket, or submission route.',
-    svg: '<rect x="5" y="11" width="14" height="9" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M8 11V8a4 4 0 0 1 6.5-3.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.2" fill="currentColor"/>',
+    copy: 'No order ticket, no broker link, no submission route anywhere in the checked-in pipeline. You place trades in your own broker.',
   },
 ] as const
 
@@ -343,7 +356,10 @@ const landingNavOpen = ref(false)
 
 async function loadTape(): Promise<void> {
   try {
-    const payload = await api.compare(['SPY', 'QQQ', 'DIA', 'XLE'], '1m')
+    const payload = await api.compare(
+      TAPE.map((t) => t.sym),
+      '1m',
+    )
     const stats = payload.stats ?? {}
     tapeData.value = TAPE.map((t) => {
       const s = stats[t.sym]
@@ -386,14 +402,17 @@ onMounted(() => {
     if (prefersReducedMotion) return
 
     /* ── Hero copy fades in beside the decoding headline ─────────────────── */
-    gsap.from('.hero-eyebrow, .hero-lede, .hero-actions, .hero-boundary, .hero-warn-note', {
-      opacity: 0,
-      y: 12,
-      duration: 0.45,
-      stagger: 0.07,
-      ease: 'power3.out',
-      delay: 0.2,
-    })
+    gsap.from(
+      '.hero-eyebrow, .hero-lede, .hero-actions, .hero-try-note, .hero-boundary, .hero-warn-note',
+      {
+        opacity: 0,
+        y: 12,
+        duration: 0.45,
+        stagger: 0.07,
+        ease: 'power3.out',
+        delay: 0.2,
+      },
+    )
 
     /* ── Hero instrument frame draws in ───────────────────────────────────── */
     gsap.from('.hero-visual .instrument-frame', {
@@ -408,37 +427,53 @@ onMounted(() => {
     gsap.utils.toArray<HTMLElement>('.gsap-reveal').forEach((el) => {
       gsap.from(el, {
         opacity: 0,
-        y: 28,
-        duration: 0.65,
+        y: 20,
+        duration: 0.55,
         ease: 'power2.out',
-        scrollTrigger: { trigger: el, start: 'top 85%', toggleActions: 'play none none none' },
+        scrollTrigger: {
+          trigger: el,
+          start: 'top 92%',
+          toggleActions: 'play none none none',
+          once: true,
+        },
       })
     })
 
     /* ── Stat counters animate when the strip enters view ─────────────────── */
+    /* Values are read at trigger time, not at mount: the loopback resources
+       usually resolve after this hook runs, and reading them here would have
+       pinned every counter to 0 and skipped the tween. The markup already
+       renders the true figure, so the count-up is pure embellishment on top
+       of a correct value — never the thing that supplies it. */
     const statTargets = [
-      { el: '.stat-universe', value: Number(status.data.value?.broad_universe_count ?? 0) },
-      { el: '.stat-searchable', value: Number(status.data.value?.searchable_symbol_count ?? 0) },
-      { el: '.stat-gates', value: Number(gates.value?.go ?? 0) },
+      { el: '.stat-universe', read: () => Number(status.data.value?.broad_universe_count ?? 0) },
+      {
+        el: '.stat-searchable',
+        read: () => Number(status.data.value?.searchable_symbol_count ?? 0),
+      },
+      { el: '.stat-gates', read: () => Number(gates.value?.go ?? 0) },
     ]
-    statTargets.forEach(({ el, value }) => {
-      /* Target the figure, not the Readout root — writing textContent on the
-         root replaces the label and sub-label markup with a bare number. */
-      const node = document.querySelector(`${el} .val`)
-      if (!node || value === 0) return
-      const obj = { val: 0 }
-      gsap.to(obj, {
-        val: value,
-        duration: 1.4,
-        ease: 'power2.out',
-        snap: { val: 1 },
-        onUpdate: () => {
-          node.textContent = num(obj.val, 0)
-        },
-        scrollTrigger: {
-          trigger: '.stats-section',
-          start: 'top 80%',
-          toggleActions: 'play none none none',
+    statTargets.forEach(({ el, read }) => {
+      ScrollTrigger.create({
+        trigger: '.stats-section',
+        start: 'top 80%',
+        once: true,
+        onEnter: () => {
+          /* Target the figure, not the Readout root — writing textContent on
+             the root replaces the label and sub-label markup with a number. */
+          const node = document.querySelector(`${el} .val`)
+          const value = read()
+          if (!node || value === 0) return
+          const obj = { val: 0 }
+          gsap.to(obj, {
+            val: value,
+            duration: 1.4,
+            ease: 'power2.out',
+            snap: { val: 1 },
+            onUpdate: () => {
+              node.textContent = num(obj.val, 0)
+            },
+          })
         },
       })
     })
@@ -477,6 +512,9 @@ onMounted(() => {
   if (!prefersReducedMotion) runScramble()
   wireFallIns(prefersReducedMotion)
   startRotating()
+  setTimeout(() => {
+    ScrollTrigger.refresh()
+  }, 100)
 })
 
 onUnmounted(() => {
@@ -493,7 +531,7 @@ onUnmounted(() => {
     <!-- ── masthead: bordered cream toolbar ────────────────────────────────── -->
     <header class="masthead">
       <div class="masthead-inner">
-        <RouterLink class="brand" to="/" aria-label="TradeCentral home">
+        <RouterLink class="brand" to="/">
           <span class="brand-mark"><TradeCentralMark :size="24" /></span>
           <span class="wordmark">
             <strong>TradeCentral</strong>
@@ -501,11 +539,19 @@ onUnmounted(() => {
           </span>
         </RouterLink>
 
-        <nav id="landing-topnav" class="masthead-nav" aria-label="Product overview">
+        <nav
+          id="landing-topnav"
+          class="masthead-nav"
+          :class="{ 'is-open': landingNavOpen }"
+          aria-label="Product overview"
+        >
           <a href="#product" @click="landingNavOpen = false">Product</a>
+          <a href="#workstation" @click="landingNavOpen = false">Workstation</a>
           <a href="#flow" @click="landingNavOpen = false">Flow</a>
+          <a href="#regimes" @click="landingNavOpen = false">Regimes</a>
           <a href="#lab" @click="landingNavOpen = false">Model lab</a>
           <a href="#workspaces" @click="landingNavOpen = false">Workspaces</a>
+          <a href="#evidence" @click="landingNavOpen = false">Evidence</a>
           <a href="#method" @click="landingNavOpen = false">Method</a>
         </nav>
 
@@ -592,24 +638,38 @@ onUnmounted(() => {
             <i class="eyebrow-tick" aria-hidden="true" />US equities · Options intelligence
           </p>
 
+          <!-- The settled line is rendered (hidden) to hold the box, and the
+               churning copy is painted over it. Scramble glyphs are wider
+               than the lowercase they stand in for, so letting the churn size
+               the headline itself rewrapped it mid-animation and shifted the
+               entire hero — the page's whole remaining CLS budget. -->
           <h1 class="hero-headline" :aria-label="heroAriaLabel">
-            <span class="hero-line" aria-hidden="true">{{ scrambledLines[0] }}</span>
-            <span class="hero-line em" aria-hidden="true">{{ scrambledLines[1] }}</span>
+            <span
+              v-for="(line, i) in HERO_LINES"
+              :key="line"
+              class="hero-line"
+              :class="{ em: i === 1 }"
+              aria-hidden="true"
+            >
+              <span class="hero-line-box">{{ line }}</span>
+              <span class="hero-line-churn">{{ scrambledLines[i] }}</span>
+            </span>
           </h1>
 
           <p class="hero-lede">
-            TradeCentral brings dealer positioning, options flow, and research controls into one
-            evidence-first view—so a move has
+            Open a symbol and read its
             <span class="rotating-word">
               <span
                 v-for="(word, i) in ROTATING_WORDS"
                 :key="word"
                 class="rw-item"
                 :class="{ active: i === rotatingIndex }"
+                :aria-hidden="i !== rotatingIndex"
                 >{{ word }}</span
               >
             </span>
-            before it has a narrative.
+            — with the source and the age of every figure on screen. One workstation for the tape,
+            the surface, and the research behind them.
           </p>
 
           <div class="hero-actions">
@@ -617,7 +677,7 @@ onUnmounted(() => {
               class="button button-primary"
               :to="{ name: 'auth', query: { redirect: '/flow' } }"
             >
-              Explore market flow
+              See dealer positioning
               <svg
                 class="px-arrow"
                 width="20"
@@ -633,7 +693,7 @@ onUnmounted(() => {
               </svg>
             </RouterLink>
             <a class="button button-ghost" href="#lab">
-              Open the model lab
+              Try the model lab
               <svg
                 class="px-arrow px-down"
                 width="20"
@@ -649,6 +709,10 @@ onUnmounted(() => {
               </svg>
             </a>
           </div>
+
+          <p class="hero-try-note">
+            The model lab below runs without an account. Sign in when you want live chains.
+          </p>
 
           <div class="hero-boundary">
             <svg
@@ -680,24 +744,43 @@ onUnmounted(() => {
           </p>
         </div>
 
-        <!-- ── live Monte Carlo hero instrument ──────────────────────────────── -->
+        <!-- ── live Monte Carlo hero instrument & workstation preview ─────── -->
         <div class="hero-visual">
           <figure
             class="instrument-frame"
-            aria-label="Live Monte Carlo simulation: geometric Brownian motion paths accumulating into a terminal distribution beside its theoretical lognormal density. Structural model, not market data."
+            aria-label="Live Monte Carlo simulation and quantitative workstation preview. Structural model and operational interface telemetry."
           >
             <figcaption>
-              <span class="fig-label"
-                ><i class="fig-tick" aria-hidden="true" />LIVE MONTE CARLO</span
-              >
-              <span class="fig-state"
-                >STRUCTURAL · 1σ [{{ heroRange.p1Low.toFixed(1) }}–{{
-                  heroRange.p1High.toFixed(1)
-                }}]</span
-              >
+              <div class="fig-toggle-group" role="tablist" aria-label="Hero visual view">
+                <button
+                  type="button"
+                  role="tab"
+                  :aria-selected="heroViewMode === 'mc'"
+                  class="fig-tab-btn"
+                  :class="{ active: heroViewMode === 'mc' }"
+                  @click="heroViewMode = 'mc'"
+                >
+                  <i class="fig-tick" aria-hidden="true" />LIVE SIMULATION
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  :aria-selected="heroViewMode === 'workstation'"
+                  class="fig-tab-btn"
+                  :class="{ active: heroViewMode === 'workstation' }"
+                  @click="heroViewMode = 'workstation'"
+                >
+                  <i class="fig-tick" aria-hidden="true" />WORKSTATION
+                </button>
+              </div>
+              <span class="fig-state">{{
+                heroViewMode === 'mc'
+                  ? `STRUCTURAL · 1σ [${heroRange.p1Low.toFixed(1)}–${heroRange.p1High.toFixed(1)}]`
+                  : 'OPERATOR TELEMETRY'
+              }}</span>
             </figcaption>
 
-            <div class="hero-mc-stage">
+            <div v-if="heroViewMode === 'mc'" class="hero-mc-stage">
               <McLiveHero
                 :s0="MC.S0"
                 :sigma="MC.sigma"
@@ -710,16 +793,39 @@ onUnmounted(() => {
               />
             </div>
 
+            <div v-else class="hero-image-stage">
+              <picture>
+                <source srcset="/images/hero-workstation.webp" type="image/webp" />
+                <img
+                  src="/images/hero-workstation.jpg"
+                  alt="TradeCentral quantitative research workstation overview with options tape, volatility surface, dealer gamma exposure histogram, and kinematic price magnets"
+                  width="1376"
+                  height="768"
+                  loading="eager"
+                  decoding="async"
+                />
+              </picture>
+            </div>
+
             <footer>
-              <span class="fig-legend"><i class="leg-path" />GBM path</span>
-              <span class="fig-legend"><i class="leg-hist" />Terminal hist.</span>
-              <span class="fig-legend"><i class="leg-trace" />Lognormal φ</span>
-              <span class="fig-legend"><i class="leg-med" />Median</span>
-              <strong
-                >GBM · S₀={{ MC.S0 }} · σ={{ (MC.sigma * 100).toFixed(0) }}% · T={{
-                  (MC.T * 12).toFixed(0)
-                }}M · N={{ MC.totalPaths }}</strong
-              >
+              <template v-if="heroViewMode === 'mc'">
+                <span class="fig-legend"><i class="leg-path" />GBM path</span>
+                <span class="fig-legend"><i class="leg-hist" />Terminal hist.</span>
+                <span class="fig-legend"><i class="leg-trace" />Lognormal φ</span>
+                <span class="fig-legend"><i class="leg-med" />Median</span>
+                <strong
+                  >GBM · S₀={{ MC.S0 }} · σ={{ (MC.sigma * 100).toFixed(0) }}% · T={{
+                    (MC.T * 12).toFixed(0)
+                  }}M · N={{ MC.totalPaths }}</strong
+                >
+              </template>
+              <template v-else>
+                <span class="fig-legend"><i class="leg-path" />Tape Sweeps</span>
+                <span class="fig-legend"><i class="leg-hist" />Dealer GEX Flip</span>
+                <span class="fig-legend"><i class="leg-trace" />3D IV Surface</span>
+                <span class="fig-legend"><i class="leg-med" />Price Magnets</span>
+                <strong>TradeCentral Quantitative Research Workstation</strong>
+              </template>
             </footer>
           </figure>
         </div>
@@ -728,17 +834,28 @@ onUnmounted(() => {
       <!-- ── stats strip: bordered cell row ──────────────────────────────────── -->
       <section class="stats-section full-bleed" aria-label="Live instrument state">
         <div class="section-pad stats-strip">
+          <!-- Bound to the live resources, not to a literal "0". The GSAP
+               counter below animates the figure up from zero when the strip
+               scrolls into view, but the truthful value is what renders
+               without it: on reduced motion, before the tween, or if GSAP
+               never runs at all. -->
           <Readout
             label="Symbols tracked"
-            value="0"
+            :value="num(universe, 0)"
             sub="Broad universe"
             size="lg"
             class="stat-universe"
           />
-          <Readout label="Searchable" value="0" sub="Symbols" size="lg" class="stat-searchable" />
+          <Readout
+            label="Searchable"
+            :value="num(searchable, 0)"
+            sub="Symbols"
+            size="lg"
+            class="stat-searchable"
+          />
           <Readout
             label="Gates cleared"
-            value="0"
+            :value="num(gates?.go, 0)"
             sub="Pre-registered"
             size="lg"
             tone="accent"
@@ -746,6 +863,66 @@ onUnmounted(() => {
           />
           <Readout label="Shadow sessions" :value="shadow" sub="Evidence" size="lg" />
         </div>
+      </section>
+
+      <!-- ── WORKSTATION ARCHITECTURE SPOTLIGHT: Full multi-surface preview ── -->
+      <section id="workstation" class="spotlight-section section-pad gsap-reveal">
+        <header class="section-head">
+          <p class="section-eyebrow">
+            <i class="eyebrow-tick" aria-hidden="true" />Workstation Architecture
+          </p>
+          <h2>One terminal. Every critical telemetry layer.</h2>
+          <p class="section-lede">
+            From institutional options sweep detection and dealer gamma flip boundaries to 3D
+            implied volatility geometry and kinematic price magnet levels—unified in one
+            high-density, zero-guesswork operator desk.
+          </p>
+        </header>
+
+        <figure
+          class="instrument-frame spotlight-frame"
+          aria-label="TradeCentral quantitative research workstation interface overview showing options tape, volatility surface, dealer gamma histogram, market regimes, and kinematic price magnets"
+        >
+          <figcaption>
+            <span class="fig-label">
+              <i class="fig-tick" aria-hidden="true" />QUANTITATIVE WORKSTATION ARCHITECTURE
+            </span>
+            <span class="fig-state">SIX-PANE MULTI-SURFACE WORKBENCH</span>
+          </figcaption>
+
+          <div class="spotlight-stage">
+            <picture>
+              <source srcset="/images/hero-workstation.webp" type="image/webp" />
+              <img
+                src="/images/hero-workstation.jpg"
+                alt="TradeCentral full quantitative research workstation showing real-time options tape, 3D volatility surface, dealer gamma exposure histogram with zero-flip point, volatility dampening regime, and kinematic price magnet levels"
+                class="spotlight-img"
+                width="1376"
+                height="768"
+                loading="lazy"
+                decoding="async"
+              />
+            </picture>
+            <div class="spotlight-callouts" aria-label="Terminal features">
+              <span class="spotlight-tag tag-tape"><i class="tag-dot" />01 · Sweeping Tape</span>
+              <span class="spotlight-tag tag-vol"><i class="tag-dot" />02 · 3D IV Surface</span>
+              <span class="spotlight-tag tag-gex"><i class="tag-dot" />03 · Zero-Gamma Flip</span>
+              <span class="spotlight-tag tag-regime"><i class="tag-dot" />04 · Vol Dampening</span>
+              <span class="spotlight-tag tag-magnets"><i class="tag-dot" />05 · Price Magnets</span>
+              <span class="spotlight-tag tag-greeks"><i class="tag-dot" />06 · Greeks Matrix</span>
+            </div>
+          </div>
+
+          <footer>
+            <span class="fig-legend"><i class="leg-path" />Options Tape &amp; Sweeps</span>
+            <span class="fig-legend"><i class="leg-hist" />Dealer Gamma Profile</span>
+            <span class="fig-legend"><i class="leg-trace" />Kinematic Price Magnets</span>
+            <span class="fig-legend"><i class="leg-med" />Black-Scholes Greeks</span>
+            <strong
+              >Unified operator workspace · Zero fake zeroes · Source provenance verified</strong
+            >
+          </footer>
+        </figure>
       </section>
 
       <!-- ── NAVY BAND: evidence + live state + pipeline ─────────────────────── -->
@@ -840,23 +1017,58 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
+
+          <div class="gov-terminal-wrap gsap-reveal">
+            <figure
+              class="instrument-frame gov-terminal-frame"
+              aria-label="Systematic quantitative research and governance terminal showing model backtesting, walk-forward information coefficient decay, and pre-registered gate verdicts"
+            >
+              <figcaption>
+                <span class="fig-label">
+                  <i class="fig-tick" aria-hidden="true" />QUANTITATIVE RESEARCH &amp; GOVERNANCE
+                  TERMINAL
+                </span>
+                <span class="fig-state">PRE-REGISTERED GATES · SHADOW SESSIONS</span>
+              </figcaption>
+              <div class="image-stage">
+                <picture>
+                  <source srcset="/images/research-governance.webp" type="image/webp" />
+                  <img
+                    src="/images/research-governance.jpg"
+                    alt="Quantitative research governance terminal with walk-forward information coefficient decay curves and pre-registered gate verdicts"
+                    class="banner-preview-img"
+                    width="1376"
+                    height="768"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </picture>
+              </div>
+              <footer>
+                <span class="fig-legend"><i class="leg-path" />Walk-Forward IC Decay</span>
+                <span class="fig-legend"><i class="leg-hist" />Pre-Registered Gate Log</span>
+                <span class="fig-legend"><i class="leg-med" />Shadow Session Ledger</span>
+                <strong>Fail-closed promotion · Zero black boxes · Reproducible ledgers</strong>
+              </footer>
+            </figure>
+          </div>
         </div>
       </section>
 
-      <!-- ── editorial headline ──────────────────────────────────────────────── -->
+      <!-- ── editorial headline: capabilities fly into the line on scroll ────── -->
       <section class="editorial-section section-pad">
-        <h2 class="editorial-headline gsap-reveal">Do it all with TradeCentral.</h2>
+        <CapabilityScrollReveal />
       </section>
 
       <!-- ── MARKITECTURE: bento blocks that fall into place ─────────────────── -->
       <section id="product" class="bento-section section-pad">
         <header class="section-head gsap-reveal">
           <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Product</p>
-          <h2>One instrument. Three evidence layers.</h2>
+          <h2>Three evidence layers. Two ways in.</h2>
           <p class="section-lede">
-            Built for researchers and active traders who want institutional discipline without a
-            black-box confidence meter. Every surface has a specific question, a source, and an
-            honest failure state.
+            For researchers and active traders who want institutional discipline without a black-box
+            confidence score. Every surface answers one question, names its source, and shows you an
+            honest failure state when the data is not there.
           </p>
         </header>
 
@@ -880,19 +1092,34 @@ onUnmounted(() => {
             </div>
           </article>
 
-          <article
-            v-for="chip in bentoChips"
-            :key="chip.area"
-            class="bento-block bento-chip fall-in"
-            :class="`b-${chip.area}`"
-          >
-            <span class="accent-square" :class="chip.tone" aria-hidden="true" />
-            <h3>{{ chip.title }}</h3>
-            <p>{{ chip.copy }}</p>
+          <article class="bento-block bento-chip fall-in b-lab">
+            <span class="accent-square sq-yellow" aria-hidden="true" />
+            <header class="bento-head">
+              <h3>Model lab</h3>
+              <span class="bento-detail label">Black-Scholes · in your browser</span>
+            </header>
+            <ModelLabPlate />
+            <p class="bento-copy">
+              Drag volatility, expiry, and the strike and watch the Greeks respond. The closed forms
+              run on your machine — nothing here is a pre-rendered picture of a chart.
+            </p>
+            <a class="bento-jump" href="#lab">Try the lab<i aria-hidden="true">↓</i></a>
           </article>
 
-          <article class="bento-block b-diamond fall-in" aria-hidden="true">
-            <span class="diamond-core" />
+          <article class="bento-block bento-chip fall-in b-work">
+            <span class="accent-square sq-blue" aria-hidden="true" />
+            <header class="bento-head">
+              <h3>Workspaces</h3>
+              <span class="bento-detail label">One question per stop</span>
+            </header>
+            <WorkspacePathPlate />
+            <p class="bento-copy">
+              A path, not a menu. Each workspace answers one question and hands its symbol and
+              timeframe to the next, so you never rebuild context you already had.
+            </p>
+            <a class="bento-jump" href="#workspaces"
+              >See the whole path<i aria-hidden="true">↓</i></a
+            >
           </article>
         </div>
       </section>
@@ -901,38 +1128,21 @@ onUnmounted(() => {
       <section id="flow" class="product-feature section-pad">
         <div class="pf-copy gsap-reveal">
           <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Flow</p>
-          <h2>Explore market flow.</h2>
+          <h2>See what dealers have to hedge.</h2>
           <p class="section-lede">
-            Map dealer gamma by strike, locate the flip, and inspect the tape. Calls, puts, and
-            unsigned activity stay separate until the provider gives a side.
+            Map gamma by strike, find the level where hedging flips from damping a move to feeding
+            it, then read the tape underneath. Calls, puts, and unsigned prints stay separate until
+            the provider gives a side.
           </p>
 
           <div class="flow-feature-grid" aria-label="Flow structure capabilities">
-            <article class="flow-feature-box">
-              <span class="feature-top">
-                <span class="feature-icon"><AppIcon name="graph" :size="15" /></span>
-                <span class="feature-idx label">01 · GEX PROFILE</span>
-              </span>
-              <strong>Gamma Topology</strong>
-              <p>Concentration by strike, isolating positive vs negative dealer regimes.</p>
-            </article>
-            <article class="flow-feature-box">
-              <span class="feature-top">
-                <span class="feature-icon"><AppIcon name="flow" :size="15" /></span>
-                <span class="feature-idx label">02 · SIGNED TAPE</span>
-              </span>
-              <strong>Aggressor Side</strong>
-              <p>Prints separated into buyer vs seller initiated flow or marked unsigned.</p>
-            </article>
-            <article class="flow-feature-box">
-              <span class="feature-top">
-                <span class="feature-icon"><AppIcon name="pulse" :size="15" /></span>
-                <span class="feature-idx label">03 · SWEEPS &amp; BLOCKS</span>
-              </span>
-              <strong>Execution Class</strong>
-              <p>
-                Intermarket institutional sweeps distinguished from standard single-exchange fills.
-              </p>
+            <article v-for="feature in flowFeatures" :key="feature.kind" class="flow-feature-box">
+              <FlowSignatureDiagram class="feature-figure" :kind="feature.kind" />
+              <div class="feature-text">
+                <span class="feature-idx label">{{ feature.idx }}</span>
+                <strong>{{ feature.title }}</strong>
+                <p>{{ feature.copy }}</p>
+              </div>
             </article>
           </div>
 
@@ -961,7 +1171,172 @@ onUnmounted(() => {
             </svg>
           </RouterLink>
         </div>
-        <GexFlowVisual class="pf-visual gsap-reveal" />
+        <div class="pf-visual-stack gsap-reveal">
+          <div class="pf-mode-toggle" role="tablist" aria-label="Flow view format">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="flowViewMode === 'interactive'"
+              class="pf-mode-tab"
+              :class="{ active: flowViewMode === 'interactive' }"
+              @click="flowViewMode = 'interactive'"
+            >
+              <i class="fig-tick" aria-hidden="true" />INTERACTIVE GEX MODEL
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="flowViewMode === 'tape'"
+              class="pf-mode-tab"
+              :class="{ active: flowViewMode === 'tape' }"
+              @click="flowViewMode = 'tape'"
+            >
+              <i class="fig-tick" aria-hidden="true" />TAPE &amp; GEX DESK
+            </button>
+          </div>
+
+          <GexFlowVisual v-show="flowViewMode === 'interactive'" class="pf-visual" />
+
+          <figure
+            v-show="flowViewMode === 'tape'"
+            class="instrument-frame flow-banner-frame"
+            aria-label="Options order flow tape and dealer gamma exposure strike histogram"
+          >
+            <figcaption>
+              <span class="fig-label"
+                ><i class="fig-tick" aria-hidden="true" />ORDER FLOW &amp; DEALER GEX ENGINE</span
+              >
+              <span class="fig-state">MEASURED · ZERO-GAMMA FLIP</span>
+            </figcaption>
+            <div class="image-stage">
+              <picture>
+                <source srcset="/images/flow-gex-showcase.webp" type="image/webp" />
+                <img
+                  src="/images/flow-gex-showcase.jpg"
+                  alt="Options order flow tape and dealer gamma exposure strike histogram"
+                  class="banner-preview-img"
+                  width="1376"
+                  height="768"
+                  loading="lazy"
+                  decoding="async"
+                />
+              </picture>
+            </div>
+            <footer>
+              <span class="fig-legend"><i class="leg-path" />Sweeps &amp; Golden Sweeps</span>
+              <span class="fig-legend"><i class="leg-hist" />Strike Gamma Profile</span>
+              <span class="fig-legend"><i class="leg-med" />Flip Boundary</span>
+              <strong>Real-time order flow &amp; dealer positioning telemetry</strong>
+            </footer>
+          </figure>
+        </div>
+      </section>
+
+      <!-- ── PRODUCT: Market Regimes & Kinematic Price Magnets ───────────────── -->
+      <section id="regimes" class="product-feature product-feature-regimes section-pad">
+        <div class="pf-copy gsap-reveal">
+          <p class="section-eyebrow">
+            <i class="eyebrow-tick" aria-hidden="true" />Regimes &amp; Price Magnets
+          </p>
+          <h2>Where price is structurally pulled.</h2>
+          <p class="section-lede">
+            Stock prices do not drift in a vacuum. Dealer gamma exposure, option strike walls, and
+            microstructure liquidity create gravitational price magnets. TradeCentral classifies the
+            active volatility regime and quantifies structural price attraction targets in real
+            time.
+          </p>
+
+          <div class="flow-feature-grid" aria-label="Market regime capabilities">
+            <article class="flow-feature-box">
+              <div class="feature-text">
+                <span class="feature-idx label">01 · VOLATILITY REGIME</span>
+                <strong>Dampening vs. Amplification</strong>
+                <p>
+                  Detect positive dealer gamma dampening (mean-reversion) versus negative dealer
+                  gamma amplification (directional trend acceleration).
+                </p>
+              </div>
+            </article>
+            <article class="flow-feature-box">
+              <div class="feature-text">
+                <span class="feature-idx label">02 · PRICE MAGNETS</span>
+                <strong>Structural Attraction Levels</strong>
+                <p>
+                  Quantify distance and gravitational pull to Gamma Flip, Call Walls, Put Walls, and
+                  Kinematic Drift attractors.
+                </p>
+              </div>
+            </article>
+            <article class="flow-feature-box">
+              <div class="feature-text">
+                <span class="feature-idx label">03 · CONVICTION SCORE</span>
+                <strong>Gravitational Conviction</strong>
+                <p>
+                  Continuous attractor pull scoring synthesized from options open interest
+                  concentration, charm decay, and order book depth.
+                </p>
+              </div>
+            </article>
+          </div>
+
+          <div class="chip-row" aria-label="Regime coverage">
+            <span class="chip">Gamma flip target</span>
+            <span class="chip">Call wall magnet</span>
+            <span class="chip">Put wall magnet</span>
+            <span class="chip">Kinematic drift</span>
+            <span class="chip">Pull conviction</span>
+          </div>
+
+          <RouterLink class="px-link" :to="{ name: 'auth', query: { redirect: '/flow' } }">
+            Inspect price magnets
+            <svg
+              class="px-arrow"
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <rect x="1" y="8" width="10" height="4" />
+              <rect x="11" y="4" width="4" height="4" />
+              <rect x="11" y="12" width="4" height="4" />
+              <rect x="15" y="8" width="4" height="4" />
+            </svg>
+          </RouterLink>
+        </div>
+
+        <figure
+          class="instrument-frame regime-frame pf-visual gsap-reveal"
+          aria-label="Real-time market regime and price attraction magnet ladder telemetry"
+        >
+          <figcaption>
+            <span class="fig-label"
+              ><i class="fig-tick" aria-hidden="true" />MARKET REGIME &amp; PRICE MAGNET
+              LADDER</span
+            >
+            <span class="fig-state">VOLATILITY DAMPENING · STRUCTURAL MAGNETS</span>
+          </figcaption>
+          <div class="image-stage">
+            <picture>
+              <source srcset="/images/regime-magnets.webp" type="image/webp" />
+              <img
+                src="/images/regime-magnets.jpg"
+                alt="Real-time quantitative market regime classification and kinematic price magnet level ladder"
+                class="banner-preview-img"
+                width="1376"
+                height="768"
+                loading="lazy"
+                decoding="async"
+              />
+            </picture>
+          </div>
+          <footer>
+            <span class="fig-legend"><i class="leg-path" />Attraction vectors</span>
+            <span class="fig-legend"><i class="leg-hist" />Wall pinning levels</span>
+            <span class="fig-legend"><i class="leg-med" />Regime probability</span>
+            <strong>Multi-factor price magnet telemetry &amp; kinematic attractor ladder</strong>
+          </footer>
+        </figure>
       </section>
 
       <!-- ── PRODUCT: options surface (three.js, same parametric family) ─────── -->
@@ -1003,9 +1378,9 @@ onUnmounted(() => {
             :maturities="volMaturities"
           />
           <footer>
-            <span class="fig-legend"><i class="leg-mesh" />Wire mesh</span>
-            <span class="fig-legend"><i class="leg-call" />Short expiry</span>
-            <span class="fig-legend"><i class="leg-trace" />Vertex nodes</span>
+            <span class="fig-legend"><i class="leg-iv-low" />Low σ</span>
+            <span class="fig-legend"><i class="leg-iv-high" />High σ</span>
+            <span class="fig-legend"><i class="leg-node" />Vertex nodes</span>
             <strong
               >Parametric σ(K,T) · WebGL · {{ volStrikes.length }}×{{
                 volMaturities.length
@@ -1034,6 +1409,39 @@ onUnmounted(() => {
           Unitless model spot S₀ = $100 · carry r = 5% · dividend yield q = 0. The desk swaps these
           inputs for live quotes and chains after operator sign-in.
         </p>
+
+        <figure
+          class="instrument-frame lab-workbench-frame gsap-reveal"
+          aria-label="Options desk strategy workbench showing Black-Scholes Greeks matrix, 3D implied volatility surface, and payoff diagrams"
+        >
+          <figcaption>
+            <span class="fig-label"
+              ><i class="fig-tick" aria-hidden="true" />OPTIONS DESK WORKBENCH &amp; VOLATILITY
+              SURFACE</span
+            >
+            <span class="fig-state">BLACK-SCHOLES GREEKS · PAYOFF PROFILE</span>
+          </figcaption>
+          <div class="image-stage">
+            <picture>
+              <source srcset="/images/options-workbench.webp" type="image/webp" />
+              <img
+                src="/images/options-workbench.jpg"
+                alt="Options desk strategy workbench with interactive Black-Scholes Greeks matrix, 3D implied volatility surface, and multi-leg strategy payoff profile"
+                class="banner-preview-img"
+                width="1376"
+                height="768"
+                loading="lazy"
+                decoding="async"
+              />
+            </picture>
+          </div>
+          <footer>
+            <span class="fig-legend"><i class="leg-path" />3D Implied Volatility Surface</span>
+            <span class="fig-legend"><i class="leg-hist" />Black-Scholes Greeks Matrix</span>
+            <span class="fig-legend"><i class="leg-med" />Multi-Leg Payoff Dynamics</span>
+            <strong>Integrated quantitative options modeling workbench</strong>
+          </footer>
+        </figure>
       </section>
 
       <!-- ── PRODUCT: workspaces ─────────────────────────────────────────────── -->
@@ -1086,12 +1494,7 @@ onUnmounted(() => {
         <div class="principle-grid">
           <article v-for="principle in principles" :key="principle.index" class="principle fall-in">
             <span class="principle-index fig">{{ principle.index }}</span>
-            <span
-              class="principle-icon"
-              v-html="
-                `<svg width='22' height='22' viewBox='0 0 24 24' fill='none' aria-hidden='true'>${principle.svg}</svg>`
-              "
-            />
+            <PrincipleDiagram :kind="principle.kind" />
             <h3>{{ principle.title }}</h3>
             <p class="principle-copy">{{ principle.copy }}</p>
           </article>
@@ -1148,15 +1551,16 @@ onUnmounted(() => {
           <p class="section-eyebrow">
             <i class="eyebrow-tick" aria-hidden="true" />Research only · No execution
           </p>
-          <h2>Own your research edge.</h2>
+          <h2>Start with one symbol.</h2>
           <p class="section-lede">
-            One workstation for market context, options structure, and accountable research.
+            Pick a ticker, read its positioning, and follow the evidence back to the run that
+            produced it. That is the whole loop.
           </p>
           <RouterLink
             class="button button-primary"
             :to="{ name: 'auth', query: { redirect: '/flow' } }"
           >
-            Sign in and open Flow
+            Open Flow
             <svg
               class="px-arrow"
               width="20"
@@ -1171,9 +1575,7 @@ onUnmounted(() => {
               <rect x="15" y="8" width="4" height="4" />
             </svg>
           </RouterLink>
-          <small
-            >No credit card. No broker connection. Clerk session, then the measured tape.</small
-          >
+          <small>No credit card. No broker connection. Sign in, then the measured tape.</small>
         </div>
       </section>
     </main>
@@ -1196,7 +1598,9 @@ onUnmounted(() => {
           <nav class="footer-col" aria-label="Product">
             <p class="footer-col-title">Product</p>
             <a href="#product">Evidence layers</a>
+            <a href="#workstation">Workstation</a>
             <a href="#flow">Flow</a>
+            <a href="#regimes">Regimes</a>
             <a href="#lab">Model lab</a>
           </nav>
           <nav class="footer-col" aria-label="Research">
@@ -1217,7 +1621,12 @@ onUnmounted(() => {
         </div>
 
         <div class="footer-watermark-wrap" aria-hidden="true">
-          <svg class="footer-watermark" viewBox="0 0 420 220" fill="currentColor">
+          <svg
+            aria-hidden="true"
+            class="footer-watermark"
+            viewBox="0 0 420 220"
+            fill="currentColor"
+          >
             <rect x="0" y="180" width="20" height="40" />
             <rect x="28" y="160" width="20" height="60" />
             <rect x="56" y="120" width="20" height="100" />
@@ -1299,13 +1708,17 @@ onUnmounted(() => {
   --phosphor-dim: #c93a10;
   --phosphor-wash: rgba(255, 82, 41, 0.07);
   --phosphor-glow: rgba(255, 82, 41, 0.15);
-  --call: #0f8a5f;
-  --call-wash: rgba(15, 138, 95, 0.1);
+  /* Deepened from #0f8a5f / #a06a00: both are used as body text on this cream
+     ground (ticker changes, the stale-data note) and both landed under the
+     4.5:1 AA floor there — 4.20:1 and 4.45:1. These clear it at 5.17:1 and
+     5.66:1 while reading as the same green and amber in the figures. */
+  --call: #0a7a53;
+  --call-wash: rgba(10, 122, 83, 0.1);
   --put: #d92620;
   --put-wash: rgba(217, 38, 32, 0.08);
-  --long: #0f8a5f;
+  --long: #0a7a53;
   --short: #d92620;
-  --warn: #a06a00;
+  --warn: #8a5b00;
 
   /* Page-local palette: bright yellows/blues stay decorative-only (progress
      ticks, accents); text roles stay on the AA-checked ramp above. */
@@ -1317,8 +1730,11 @@ onUnmounted(() => {
   --tc-black: #09090b;
 
   /* Editorial typography (page-scoped; desk stacks untouched). */
-  --font-display: 'Inter Tight Variable', 'Inter Tight', 'Geist Variable', 'Geist', sans-serif;
-  --font-ui: 'Inter Variable', 'Inter', 'Geist Variable', 'Geist', sans-serif;
+  --font-display:
+    'Inter Tight Variable', 'Inter Tight', 'Inter Tight Metric Fallback', 'Geist Variable', 'Geist',
+    sans-serif;
+  --font-ui:
+    'Inter Variable', 'Inter', 'Inter Metric Fallback', 'Geist Variable', 'Geist', sans-serif;
   --font-data: 'Space Mono', 'IBM Plex Mono', 'Geist Mono Variable', monospace;
   --font-mono: 'Space Mono', 'IBM Plex Mono', 'Geist Mono Variable', monospace;
 
@@ -1481,7 +1897,7 @@ onUnmounted(() => {
   text-transform: uppercase;
   color: var(--ink-dim);
   border: var(--hair) solid var(--rule-hi);
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 5px 12px;
   white-space: nowrap;
 }
@@ -1665,13 +2081,16 @@ onUnmounted(() => {
   grid-template-columns: minmax(0, 6.5fr) minmax(0, 5.5fr);
   gap: clamp(36px, 5vw, 72px);
   align-items: center;
-  padding-block: clamp(64px, 8vw, 120px);
+  /* Tightened from clamp(64px, 8vw, 120px): with the headline set at up to
+     92px the old top padding pushed the primary call to action past the fold
+     on a 900px laptop viewport, so the first screen ended on body copy. */
+  padding-block: clamp(40px, 5vw, 76px);
 }
 .hero-eyebrow {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 26px;
+  margin-bottom: 20px;
   font-family: var(--font-data);
   font-size: 13px;
   letter-spacing: 0.14em;
@@ -1681,17 +2100,25 @@ onUnmounted(() => {
 .hero-headline {
   font-family: var(--font-display);
   font-weight: 500;
-  font-size: clamp(44px, 6.2vw, 92px);
+  font-size: clamp(40px, 5.4vw, 78px);
   line-height: 1;
   letter-spacing: -0.025em;
   color: var(--ink);
-  margin-bottom: 28px;
+  margin-bottom: 22px;
 }
 .hero-line {
   display: block;
+  position: relative;
 }
 .hero-line.em {
   color: var(--ink);
+}
+.hero-line-box {
+  visibility: hidden;
+}
+.hero-line-churn {
+  position: absolute;
+  inset: 0;
 }
 .hero-lede {
   max-width: 560px;
@@ -1700,20 +2127,24 @@ onUnmounted(() => {
   color: var(--ink-dim);
   margin-bottom: 34px;
 }
+/* Every word occupies the same single grid cell, so the container is
+   permanently as wide as the longest of them. Taking the inactive words out
+   of flow (the previous `position: absolute`) made the container resize on
+   each swap, reflowing the lede and everything under it — a layout shift
+   every 2.6s for as long as the page stayed open, and the largest single
+   contributor to CLS on mobile. */
 .rotating-word {
-  display: inline-flex;
-  position: relative;
+  display: inline-grid;
   color: var(--phosphor-dim);
   font-weight: 500;
 }
 .rw-item {
+  grid-area: 1 / 1;
   transition:
     opacity var(--dur-slow) var(--ease-out),
     transform var(--dur-slow) var(--ease-out);
 }
 .rw-item:not(.active) {
-  position: absolute;
-  inset: 0 auto auto 0;
   opacity: 0;
   transform: translateY(8px);
   pointer-events: none;
@@ -1738,6 +2169,12 @@ onUnmounted(() => {
 .hero-boundary strong {
   color: var(--ink);
   font-weight: 600;
+}
+.hero-try-note {
+  max-width: 480px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-faint);
 }
 .hero-warn-note {
   margin-top: 10px;
@@ -1804,7 +2241,7 @@ onUnmounted(() => {
 .instrument-frame > footer strong {
   margin-left: auto;
   font-weight: 400;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .fig-legend {
   display: inline-flex;
@@ -1815,23 +2252,36 @@ onUnmounted(() => {
   width: 10px;
   height: 2px;
 }
+/* These swatches must match what McLiveHero actually paints on the canvas:
+   the path fan and histogram are --ink-dim at low alpha, the closed-form
+   density is solid --ink, and the median rule is the dashed --phosphor. The
+   previous values named an orange path and a blue density that appear
+   nowhere in the figure, so the legend mislabelled its own chart. */
 .leg-path {
-  background: var(--phosphor);
+  background: var(--ink-dim);
+  opacity: 0.55;
 }
 .leg-hist {
   background: var(--ink-dim);
+  opacity: 0.35;
 }
 .leg-trace {
-  background: var(--tc-blue);
+  background: var(--ink);
 }
 .leg-med {
-  background: var(--ink-ghost);
+  background: repeating-linear-gradient(90deg, var(--phosphor) 0 3px, transparent 3px 5px);
 }
-.leg-mesh {
-  background: var(--ink-faint);
+/* VolSurfaceCanvas ramps its wire mesh from #ffaf01 at low implied vol to
+   #e51300 at high, and draws vertex nodes in #ff8204. The legend names those
+   exact values rather than the generic grey/yellow it carried before. */
+.leg-iv-low {
+  background: #ffaf01;
 }
-.leg-call {
-  background: var(--tc-yellow);
+.leg-iv-high {
+  background: #e51300;
+}
+.leg-node {
+  background: var(--phosphor-hi);
 }
 .surface-frame {
   min-height: 420px;
@@ -2033,7 +2483,7 @@ onUnmounted(() => {
   font-family: var(--font-data);
   font-size: 11px;
   font-style: normal;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .pipeline-step.done .pipeline-node {
   border-color: var(--rule-hi);
@@ -2070,13 +2520,13 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   grid-auto-rows: minmax(88px, auto);
+  /* Five cells, no filler. The previous layout carried a sixth `diamond` cell
+     holding nothing but a rotating square, and gave the lab and workspace
+     cells so much height for two lines of text that the whole band read as
+     unfinished. Every cell now carries its own instrument. */
   grid-template-areas:
-    'market market market market options options'
-    'market market market market options options'
-    'market market market market options options'
-    'governance governance lab lab options options'
-    'governance governance lab lab diamond diamond'
-    'work work work work diamond diamond';
+    'market market market options options options'
+    'governance governance lab lab work work';
   border-top: var(--hair) solid var(--rule-hi);
   border-left: var(--hair) solid var(--rule-hi);
 }
@@ -2105,27 +2555,6 @@ onUnmounted(() => {
 }
 .b-work {
   grid-area: work;
-  grid-column: span 4;
-  flex-direction: row;
-  align-items: center;
-  gap: 20px;
-}
-.b-diamond {
-  grid-area: diamond;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-}
-.diamond-core {
-  width: 46%;
-  aspect-ratio: 1;
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--tc-yellow);
-  transform: rotate(45deg);
-  transition: transform var(--dur-slow) var(--ease-out);
-}
-.b-diamond:hover .diamond-core {
-  transform: rotate(135deg);
 }
 .accent-square {
   position: absolute;
@@ -2192,26 +2621,53 @@ onUnmounted(() => {
   font-size: 20px;
   color: var(--ink);
 }
-.bento-chip {
-  justify-content: center;
-}
-.bento-chip h3 {
-  padding-left: 0;
-}
-.bento-chip p {
+.bento-chip .bento-copy {
   font-size: 13px;
-  line-height: 1.55;
-  color: var(--ink-dim);
-  max-width: 360px;
+}
+/* Mirrors .bento-stat's role in the evidence cards: a footer line that pins
+   to the bottom of the cell, so a five-cell row never ends on ragged
+   whitespace — and gives the two lightest cards somewhere to send a reader. */
+.bento-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: var(--hair) solid var(--rule);
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-decoration: none;
+}
+.bento-jump i {
+  font-style: normal;
+  color: var(--phosphor);
+  transition: transform var(--dur) var(--ease-out);
+}
+.bento-jump:hover i {
+  transform: translateY(3px);
 }
 
 /* ── Fall-in entrance (bento blocks, principles) ──────────────────────────── */
 .fall-in {
-  opacity: 0;
+  opacity: 1;
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
 }
-.fall-in.in-view {
-  animation: fall-in 0.7s cubic-bezier(0.68, -0.55, 0.27, 1.55) both;
-  animation-delay: calc(var(--fall-i, 0) * 70ms);
+@media (prefers-reduced-motion: no-preference) {
+  .fall-in:not(.in-view) {
+    opacity: 0;
+    transform: translateY(-24px);
+  }
+  .fall-in.in-view {
+    opacity: 1;
+    transform: translateY(0);
+    animation: fall-in 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: calc(var(--fall-i, 0) * 60ms);
+  }
 }
 .bento-grid > :nth-child(1) {
   --fall-i: 0;
@@ -2245,18 +2701,11 @@ onUnmounted(() => {
 }
 @keyframes fall-in {
   0% {
-    transform: translateY(-120px) scale(1);
+    transform: translateY(-24px);
     opacity: 0;
   }
-  55% {
-    transform: translateY(0) scale(1.02, 0.96);
-    opacity: 1;
-  }
-  75% {
-    transform: translateY(-6px) scale(0.99, 1.02);
-  }
   100% {
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
     opacity: 1;
   }
 }
@@ -2292,55 +2741,52 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+/* Stacked rows, not three narrow columns. In a half-width copy column, three
+   side-by-side cards squeezed each diagram to ~190px — small enough that the
+   8px instrument labels collided with the geometry they were labelling. A row
+   gives the figure a stable 210px and the sentence a readable measure. */
 .flow-feature-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 0;
   margin-top: 26px;
+  border-top: var(--hair) solid var(--rule-hi);
 }
 .flow-feature-box {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px;
-  border: var(--hair) solid var(--rule-hi);
-  border-radius: 8px;
-  background: var(--void);
-  transition:
-    transform var(--dur) var(--ease-out),
-    border-color var(--dur) var(--ease-out);
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding-block: 16px;
+  border-bottom: var(--hair) solid var(--rule-hi);
+  transition: background var(--dur) var(--ease-out);
 }
 .flow-feature-box:hover {
-  transform: translateY(-3px);
-  border-color: var(--ink);
+  background: var(--void-lift);
 }
-.feature-top {
+.feature-figure {
+  min-width: 0;
+}
+.feature-text {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.feature-icon {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  color: var(--tc-cream);
-  background: var(--phosphor);
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 .feature-idx {
   font-size: 10px;
+  letter-spacing: 0.1em;
   color: var(--ink-faint);
 }
 .flow-feature-box strong {
   font-family: var(--font-display);
   font-weight: 500;
-  font-size: 15px;
+  font-size: 17px;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 .flow-feature-box p {
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: 13.5px;
+  line-height: 1.55;
   color: var(--ink-dim);
 }
 
@@ -2409,9 +2855,6 @@ onUnmounted(() => {
   font-size: 11px;
   letter-spacing: 0.1em;
   color: var(--phosphor-dim);
-}
-.principle-icon {
-  color: var(--ink-dim);
 }
 .principle h3 {
   font-family: var(--font-display);
@@ -2589,15 +3032,11 @@ onUnmounted(() => {
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .bento-grid {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     grid-template-areas:
-      'market market options options'
-      'market market options options'
-      'governance governance lab lab'
-      'work work work diamond';
-  }
-  .b-work {
-    grid-column: span 3;
+      'market options'
+      'governance lab'
+      'work work';
   }
   .principle-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -2644,7 +3083,8 @@ onUnmounted(() => {
     padding: 8px 16px 16px;
     z-index: 5;
   }
-  .masthead:has(.nav-menu-btn[aria-expanded='true']) .masthead-nav {
+  .masthead:has(.nav-menu-btn[aria-expanded='true']) .masthead-nav,
+  .masthead-nav.is-open {
     display: flex;
   }
   .masthead-nav a {
@@ -2729,7 +3169,8 @@ onUnmounted(() => {
   .hero-actions {
     display: grid;
   }
-  .hero-mc-stage {
+  .hero-mc-stage,
+  .hero-image-stage {
     height: 280px;
   }
   .stats-strip {
@@ -2742,8 +3183,9 @@ onUnmounted(() => {
   .stats-strip :deep(.readout:first-child) {
     border-top: 0;
   }
-  .flow-feature-grid {
+  .flow-feature-box {
     grid-template-columns: 1fr;
+    gap: 12px;
   }
   .principle-grid {
     grid-template-columns: 1fr;
@@ -2758,17 +3200,7 @@ onUnmounted(() => {
       'options'
       'governance'
       'lab'
-      'work'
-      'diamond';
-  }
-  .b-work {
-    grid-column: span 1;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-  }
-  .b-diamond {
-    min-height: 140px;
+      'work';
   }
   .footer-cols {
     grid-template-columns: 1fr;
@@ -2779,6 +3211,182 @@ onUnmounted(() => {
     align-items: flex-start;
     gap: 6px;
   }
+}
+
+/* ── Visual banner stages & view toggles ──────────────────────────────────── */
+.fig-toggle-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 6px;
+  padding: 2px;
+}
+.fig-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease-out);
+}
+.fig-tab-btn:hover {
+  color: var(--ink);
+}
+.fig-tab-btn.active {
+  color: var(--ink);
+  background: var(--tc-cream);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.hero-image-stage {
+  width: 100%;
+  height: 340px;
+  overflow: hidden;
+  background: #09090f;
+  border-bottom: var(--hair) solid var(--rule);
+}
+.hero-image-stage picture {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.hero-image-stage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.spotlight-section {
+  padding-block: clamp(24px, 4vw, 48px);
+}
+.spotlight-frame {
+  margin-top: 24px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.06);
+}
+.spotlight-stage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: #09090f;
+  border-bottom: var(--hair) solid var(--rule);
+}
+.spotlight-stage picture {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.spotlight-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+.spotlight-callouts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba(13, 13, 20, 0.96);
+  border-top: var(--hair) solid rgba(255, 255, 255, 0.08);
+}
+.spotlight-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #c9c9d4;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.spotlight-tag .tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--phosphor-hi);
+}
+
+.image-stage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: #0b0c10;
+  border-bottom: var(--hair) solid var(--rule);
+}
+.image-stage picture {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.banner-preview-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.pf-visual-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pf-mode-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: 6px;
+  padding: 2px;
+}
+.pf-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease-out);
+}
+.pf-mode-tab:hover {
+  color: var(--ink);
+}
+.pf-mode-tab.active {
+  color: var(--ink);
+  background: var(--tc-cream);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.product-feature-regimes {
+  border-top: var(--hair) solid var(--rule);
+}
+.lab-workbench-frame {
+  margin-top: 36px;
+}
+.gov-terminal-wrap {
+  margin-top: 36px;
 }
 
 /* Increase Contrast: rules harden and secondary ink steps up a level. */
@@ -2825,10 +3433,6 @@ onUnmounted(() => {
   .fall-in {
     opacity: 1;
     animation: none !important;
-  }
-  .diamond-core {
-    transform: none !important;
-    transition: none !important;
   }
   .px-arrow,
   .button:hover .px-arrow,

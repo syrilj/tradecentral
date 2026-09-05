@@ -2,6 +2,7 @@
  * Shared Flow display helpers — token classes, named empties, and pulse copy.
  * Kept pure so tests can drive the shipped labels without mounting Vue/Clerk.
  */
+import { compact, DASH, num, signed, signedPct, usd } from '@/format'
 
 export type FlowLeanState =
   'bullish' | 'bearish' | 'mixed' | 'unknown' | 'model-bullish' | 'model-bearish'
@@ -14,6 +15,16 @@ export const NO_MIX_IN_SAMPLE = 'NO MIX IN SAMPLE'
 export const NO_STRIKE_IN_TAPE = 'NO STRIKE IN TAPE'
 export const FIRST_WINDOW_BASELINE = 'first window baseline'
 export const PREVIOUS_PROVIDER_WINDOW = 'previous provider window'
+export const DTE_MISSING = 'DTE MISSING'
+export const OI_MISSING = 'OI MISSING'
+export const VOL_MISSING = 'VOL MISSING'
+export const VOL_OI_MISSING = 'VOL/OI MISSING'
+export const OTM_MISSING = 'OTM MISSING'
+export const UNSIGNED_PRINT = 'UNSIGNED'
+export const HTTP_POLL_NOT_WEBSOCKET = 'HTTP POLL · NOT A WEBSOCKET'
+export const CACHE_UNKNOWN = 'CACHE UNKNOWN'
+export const CLASS_SOURCE_MISSING = 'CLASS SOURCE MISSING'
+export const NO_PROVIDER_TIME = 'NO PROVIDER TIME'
 
 /** Instrument token class for lean / direction chips. */
 export function flowLeanTokenClass(state: string | null | undefined): string {
@@ -89,6 +100,7 @@ export interface FlowBadgeMeta {
 
 export interface FlowOrderInput {
   trade_class?: string | null
+  trade_class_source?: string | null
   is_sweep?: boolean | null
   is_block?: boolean | null
   aggressor?: string | null
@@ -110,9 +122,6 @@ export function classifyFlowOrder(print: FlowOrderInput): FlowBadgeMeta {
   ].map((f) => String(f).toLowerCase())
   const flags = new Set(rawFlags)
   const tradeClass = String(print.trade_class || '')
-    .toLowerCase()
-    .trim()
-  const aggressor = String(print.aggressor || print.aggressor_label || '')
     .toLowerCase()
     .trim()
   const isSweep = Boolean(
@@ -138,43 +147,32 @@ export function classifyFlowOrder(print: FlowOrderInput): FlowBadgeMeta {
     flags.has('combo') ||
     flags.has('straddle') ||
     flags.has('strangle')
-  const premium = Number(print.premium ?? 0)
-  const volume = Number(print.volume ?? print.contracts ?? 0)
-  const oi =
-    print.open_interest != null && Number.isFinite(Number(print.open_interest))
-      ? Number(print.open_interest)
-      : null
-  const isAskAggressor =
-    aggressor === 'buy' ||
-    aggressor === 'long' ||
-    aggressor === 'ask' ||
-    aggressor === 'above_ask' ||
-    flags.has('at_ask') ||
-    flags.has('above_ask')
   const isExplicitGolden = flags.has('golden_sweep') || flags.has('goldensweep')
+  const classSource = String(print.trade_class_source || '').toLowerCase()
+  const vendorClass = classSource === 'vendor'
 
-  // Golden Sweep: Sweep executed at/above ask with institutional size (>= $100k) or Vol > OI, or >= $500k
-  if (
-    isExplicitGolden ||
-    (isSweep && isAskAggressor && (premium >= 100_000 || (oi != null && oi > 0 && volume > oi))) ||
-    (isSweep && isAskAggressor && premium >= 500_000) ||
-    (isSweep && premium >= 1_000_000 && isAskAggressor)
-  ) {
+  // Vendor-tagged golden only. Size + ask-side never certifies a golden sweep.
+  if (isExplicitGolden) {
     return {
       type: 'golden_sweep',
-      label: 'GOLDEN SWEEP',
+      label: 'VENDOR GOLDEN FLAG',
       className: 'badge-golden-sweep',
       description:
-        'High-conviction intermarket sweep executed at/above ask with institutional size',
+        'Vendor tagged this print golden_sweep. Descriptive flag only — not certified and not ENTER.',
     }
   }
 
   if (isSweep) {
+    const heuristic = classSource === 'burst_heuristic' || flags.has('sweep_burst')
     return {
       type: 'sweep',
-      label: 'SWEEP',
+      label: heuristic && !vendorClass ? 'BURST SWEEP' : 'SWEEP',
       className: 'badge-sweep',
-      description: 'Intermarket sweep order routing across multiple exchanges to fill immediately',
+      description: heuristic
+        ? 'App-side ≤3s same-contract burst heuristic. Not a vendor sweep certification.'
+        : vendorClass
+          ? 'Vendor trade_class sweep. Descriptive execution tag — not ENTER.'
+          : 'Sweep-class print. Descriptive flag only — not a live institutional firehose.',
     }
   }
 
@@ -231,8 +229,14 @@ export function computeVolOiRatio(
       ? Number(openInterest)
       : null
 
-  if (vol === null || oi === null) {
-    return { ratio: null, formatted: '0.00x', isHigh: false, isExtreme: false }
+  if (vol === null && oi === null) {
+    return { ratio: null, formatted: VOL_OI_MISSING, isHigh: false, isExtreme: false }
+  }
+  if (vol === null || vol <= 0) {
+    return { ratio: null, formatted: VOL_MISSING, isHigh: false, isExtreme: false }
+  }
+  if (oi === null) {
+    return { ratio: null, formatted: OI_MISSING, isHigh: false, isExtreme: false }
   }
 
   if (oi === 0) {
@@ -324,7 +328,7 @@ export function flowWhaleTier(premium?: number | null): {
 
 export function formatDteBadge(dte?: number | null): { label: string; className: string } {
   if (dte == null || !Number.isFinite(Number(dte))) {
-    return { label: 'N/A', className: 'dte-unknown' }
+    return { label: DTE_MISSING, className: 'dte-unknown' }
   }
   const d = Math.round(Number(dte))
   if (d === 0) return { label: '0D', className: 'dte-0d' }
@@ -336,7 +340,7 @@ export function formatDteBadge(dte?: number | null): { label: string; className:
 
 export function formatMoneyness(otmPct?: number | null): { label: string; className: string } {
   if (otmPct == null || !Number.isFinite(Number(otmPct))) {
-    return { label: 'N/A', className: 'moneyness-none' }
+    return { label: OTM_MISSING, className: 'moneyness-none' }
   }
   const p = Number(otmPct)
   if (Math.abs(p) < 0.015) {
@@ -348,4 +352,204 @@ export function formatMoneyness(otmPct?: number | null): { label: string; classN
   }
   const formatted = Math.abs(p) >= 0.1 ? `${(p * 100).toFixed(0)}%` : `${(p * 100).toFixed(1)}%`
   return { label: `ITM ${formatted}`, className: 'moneyness-itm' }
+}
+
+export function tradeClassSourceLabel(source?: string | null): string {
+  const value = String(source || '')
+    .trim()
+    .toLowerCase()
+  if (value === 'vendor') return 'VENDOR CLASS'
+  if (value === 'burst_heuristic') return 'BURST HEURISTIC'
+  if (value === 'size_heuristic') return 'SIZE HEURISTIC'
+  if (value === 'unclassified') return 'UNCLASSIFIED'
+  return CLASS_SOURCE_MISSING
+}
+
+export function flowCacheCopy(
+  cache?: {
+    hit?: boolean
+    age_seconds?: number
+    ttl_seconds?: number
+  } | null,
+): string {
+  if (!cache) return CACHE_UNKNOWN
+  const hit = cache.hit ? 'HIT' : 'MISS'
+  const age =
+    cache.age_seconds != null && Number.isFinite(Number(cache.age_seconds))
+      ? `${Math.round(Number(cache.age_seconds))}s`
+      : 'AGE MISSING'
+  const ttl =
+    cache.ttl_seconds != null && Number.isFinite(Number(cache.ttl_seconds))
+      ? `${Math.round(Number(cache.ttl_seconds))}s TTL`
+      : 'TTL MISSING'
+  return `CACHE ${hit} · ${age} / ${ttl}`
+}
+
+export function flowTransportCopy(pollMs?: number | null): string {
+  if (pollMs == null || !Number.isFinite(Number(pollMs))) return HTTP_POLL_NOT_WEBSOCKET
+  const seconds = Math.max(1, Math.round(Number(pollMs) / 1000))
+  return `${seconds}s ${HTTP_POLL_NOT_WEBSOCKET}`
+}
+
+export function feedStatusCopy(status?: string | null): string {
+  const value = String(status || '')
+    .trim()
+    .toLowerCase()
+  if (!value) return 'FEED STATUS MISSING'
+  if (value === 'live') return 'PROVIDER SAMPLE'
+  if (value === 'no_prints') return 'NO PRINTS IN SAMPLE'
+  if (value === 'credential_missing') return 'CREDENTIAL MISSING'
+  if (value === 'unavailable' || value === 'timeout') return 'FEED UNAVAILABLE'
+  return value.replaceAll('_', ' ').toUpperCase()
+}
+
+export function signedVsUnsignedLabel(input: {
+  aggressor?: string | null
+  signed_premium?: number | null
+}): string {
+  const aggressor = String(input.aggressor || '')
+    .trim()
+    .toLowerCase()
+  if (aggressor === 'buy' || aggressor === 'sell' || input.signed_premium != null) {
+    return aggressor === 'buy' ? 'SIGNED BUY' : aggressor === 'sell' ? 'SIGNED SELL' : 'SIGNED'
+  }
+  return UNSIGNED_PRINT
+}
+
+/* ------------------------------------------------------------------ Quote & mix accuracy */
+
+export const DAY_RANGE_UNMEASURED = 'DAY RANGE UNMEASURED'
+export const FLOW_UNMEASURED = 'FLOW UNMEASURED'
+export const NO_PRICE_TRACE = 'NO PRICE TRACE'
+
+function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+/**
+ * Quote readout for the Flow workspace.
+ *
+ * `move` is a fractional return. When spot is present, the dollar move is
+ * reconstructed from the prior close implied by that return:
+ * prior = spot / (1 + move), dollars = spot - prior. When spot is missing the
+ * percentage is still shown, but no dollar amount is invented.
+ */
+export interface QuoteStatsInput {
+  spot?: number | null
+  move?: number | null
+  contractCount?: number | null
+}
+
+export interface QuoteStatsOutput {
+  spot: string
+  move: string
+  moveTone: 'pos' | 'neg' | 'neutral'
+  dayRange: string
+  volume: string
+}
+
+export function quoteStats(input: QuoteStatsInput): QuoteStatsOutput {
+  const spot = finiteNumber(input.spot)
+  const move = finiteNumber(input.move)
+  const volume = finiteNumber(input.contractCount)
+  const moveDollars = spot != null && move != null && move > -1 ? spot - spot / (1 + move) : null
+  const movePct = move == null ? null : move * 100
+  const moveLabel =
+    move == null
+      ? DASH
+      : moveDollars == null
+        ? signedPct(movePct, 2)
+        : `${signed(moveDollars, 2)} (${signedPct(movePct, 2)})`
+
+  return {
+    spot: spot == null ? DASH : usd(spot, 2),
+    move: moveLabel,
+    moveTone: move == null ? 'neutral' : move > 0 ? 'pos' : move < 0 ? 'neg' : 'neutral',
+    dayRange: DAY_RANGE_UNMEASURED,
+    volume: volume == null ? DASH : compact(volume),
+  }
+}
+
+/**
+ * Bullish/bearish flow mix. Both sides must be measured before a percentage
+ * split is rendered; a one-sided or absent read stays explicitly unmeasured.
+ */
+export interface FlowMixInput {
+  totalPremiumM?: number | null
+  bullishPremiumM?: number | null
+  bearishPremiumM?: number | null
+  netFlowM?: number | null
+}
+
+export interface FlowMixOutput {
+  totalPremium: string
+  bullishPct: number | null
+  bearishPct: number | null
+  bullishLabel: string
+  bearishLabel: string
+  netFlow: string
+  hasMix: boolean
+}
+
+export function flowMixStats(input: FlowMixInput): FlowMixOutput {
+  const bullish = finiteNumber(input.bullishPremiumM)
+  const bearish = finiteNumber(input.bearishPremiumM)
+  const total = finiteNumber(input.totalPremiumM)
+  const netFlow = finiteNumber(input.netFlowM)
+  const mixTotal = bullish != null && bearish != null ? bullish + bearish : null
+  const hasMix = mixTotal != null && mixTotal > 0
+  const bullishPct =
+    hasMix && bullish != null && mixTotal != null ? Math.round((bullish / mixTotal) * 100) : null
+  const bearishPct = bullishPct == null ? null : 100 - bullishPct
+
+  return {
+    totalPremium: total == null ? DASH : `$${num(total, 1)}M`,
+    bullishPct,
+    bearishPct,
+    bullishLabel: bullishPct == null ? FLOW_UNMEASURED : `${bullishPct}%`,
+    bearishLabel: bearishPct == null ? FLOW_UNMEASURED : `${bearishPct}%`,
+    netFlow: netFlow == null ? DASH : `${signed(netFlow, 1)}M`,
+    hasMix,
+  }
+}
+
+/** Signed print side. Call/put identity never becomes bullish/bearish. */
+export type FlowPrintSide = 'Bullish' | 'Bearish' | 'Neutral'
+
+export function printSide(input: {
+  bias?: string | null
+  aggressor?: string | null
+  aggressor_label?: string | null
+}): FlowPrintSide {
+  const bias = String(input.bias ?? '')
+    .trim()
+    .toLowerCase()
+  const aggressor = String(input.aggressor ?? input.aggressor_label ?? '')
+    .trim()
+    .toLowerCase()
+  if (bias === 'bullish' || aggressor === 'buy' || aggressor === 'long') return 'Bullish'
+  if (bias === 'bearish' || aggressor === 'sell' || aggressor === 'short') return 'Bearish'
+  return 'Neutral'
+}
+
+/**
+ * Premium from an explicit provider value, or from a fully measured
+ * price × volume × contract multiplier. Missing components stay missing —
+ * they never collapse to zero.
+ */
+export function printPremium(input: {
+  premium?: number | null
+  price?: number | null
+  volume?: number | null
+  contract_multiplier?: number | null
+}): number | null {
+  const premium = finiteNumber(input.premium)
+  if (premium != null) return premium
+  const price = finiteNumber(input.price)
+  const volume = finiteNumber(input.volume)
+  const multiplier = finiteNumber(input.contract_multiplier)
+  if (price == null || volume == null || multiplier == null) return null
+  return price * volume * multiplier
 }

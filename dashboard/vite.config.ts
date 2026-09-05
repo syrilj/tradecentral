@@ -36,6 +36,9 @@ export default defineConfig(({ mode }) => {
               if (id.includes('gsap')) {
                 return 'vendor-gsap'
               }
+              if (id.includes('echarts') || id.includes('zrender')) {
+                return 'vendor-echarts'
+              }
               if (id.includes('@clerk')) {
                 return 'vendor-clerk'
               }

@@ -315,7 +315,7 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
   text-align: left;
 }
 .dim {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .note {
   margin: var(--s3);

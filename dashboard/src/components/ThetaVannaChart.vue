@@ -421,7 +421,7 @@ circle {
 
 .method-note {
   margin: 0;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   line-height: 1.5;
 }

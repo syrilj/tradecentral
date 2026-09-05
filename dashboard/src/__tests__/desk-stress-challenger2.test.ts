@@ -159,10 +159,10 @@ describe('Challenger 2: DeskView Empirical Contract & Telemetry Stress Tests', (
     })
 
     it('condenses PEAD table columns in split mode by hiding Gap/ATR and Volume', () => {
-      expect(desk).toContain('v-if="dualViewMode !== \'split\'" class="label num col-gap"')
-      expect(desk).toContain('v-if="dualViewMode !== \'split\'" class="label num col-vol"')
-      expect(desk).toContain('v-if="dualViewMode !== \'split\'" class="fig num col-gap"')
-      expect(desk).toContain('v-if="dualViewMode !== \'split\'" class="fig num col-vol"')
+      expect(desk).toMatch(/v-if="dualViewMode !== 'split'"\s+class="label num col-gap"/)
+      expect(desk).toMatch(/v-if="dualViewMode !== 'split'"\s+class="label num col-vol"/)
+      expect(desk).toMatch(/v-if="dualViewMode !== 'split'"\s+class="fig num col-gap"/)
+      expect(desk).toMatch(/v-if="dualViewMode !== 'split'"\s+class="fig num col-vol"/)
       expect(desk).toContain(":class=\"{ 'is-split': dualViewMode === 'split' }\"")
     })
 

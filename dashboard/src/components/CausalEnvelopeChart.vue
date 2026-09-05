@@ -17,6 +17,14 @@ const props = withDefaults(
     putWall?: number | null
     gammaFlip?: number | null
     expectedMove?: ExpectedMoveMetrics | null
+    /**
+     * Live spot from the fast clock. The HUD's price is a *bar close* off the
+     * state-estimation series, which lags the tape by however long the bar is
+     * (a daily series can be days behind). Printed as "SPOT PRICE" next to the
+     * page's live spot, it read as a second, contradictory quote; it is now
+     * labelled as the bar close, with the live price beside it.
+     */
+    liveSpot?: number | null
     height?: number
     hoverIndex?: number | null
   }>(),
@@ -27,6 +35,7 @@ const props = withDefaults(
     putWall: null,
     gammaFlip: null,
     expectedMove: null,
+    liveSpot: null,
     height: 440,
     hoverIndex: null,
   },
@@ -175,13 +184,48 @@ const vwapPaths = computed(() => {
   })
 })
 
-// Active Latest Signal for chart target & stop projections
-const latestSignal = computed(() => {
+/**
+ * How many bars back a signal may sit and still be drawn as a live plan.
+ * Beyond this it is history: a five-month-old short's $586 target projected
+ * across a chart trading at $766 reads as the current trade, which is the one
+ * thing a stop line must never do.
+ */
+const SIGNAL_PROJECTION_MAX_AGE_BARS = 5
+
+/** The last entry signal in the window, live or not — the marker layer wants
+ *  it either way. */
+const lastEntrySignal = computed(() => {
   if (!props.signals || props.signals.length === 0) return null
   const candidates = props.signals.filter(
     (s) => s.action === 'ENTER_LONG' || s.action === 'ENTER_SHORT',
   )
   return candidates.length > 0 ? candidates[candidates.length - 1] : null
+})
+
+/** Bars between the last entry signal and the right edge of the series. */
+const lastSignalAgeBars = computed<number | null>(() => {
+  const sig = lastEntrySignal.value
+  const n = props.points.length
+  if (!sig || n === 0) return null
+  if (!Number.isFinite(sig.bar_index) || sig.bar_index < 0) return null
+  return Math.max(0, n - 1 - sig.bar_index)
+})
+
+/** Target/stop projections, drawn only while the signal is still current. */
+const latestSignal = computed(() => {
+  const age = lastSignalAgeBars.value
+  if (age == null || age > SIGNAL_PROJECTION_MAX_AGE_BARS) return null
+  return lastEntrySignal.value
+})
+
+/** Set when there is an entry signal but it is too old to project — so its
+ *  absence reads as "stale", not as "no setup found". */
+const staleSignalNote = computed<string | null>(() => {
+  const sig = lastEntrySignal.value
+  const age = lastSignalAgeBars.value
+  if (!sig || age == null || age <= SIGNAL_PROJECTION_MAX_AGE_BARS) return null
+  const when = sig.timestamp ? sig.timestamp.slice(0, 10) : `${age} bars ago`
+  return `Last setup (${sig.action.replace('ENTER_', '')} ${when}, ${age} bars back) is stale; its target and stop are not projected.`
 })
 
 // Signal Markers
@@ -255,6 +299,24 @@ const hoveredPoint = computed(() => {
   return props.points.length > 0 ? props.points[props.points.length - 1] : null
 })
 
+/**
+ * Live spot alongside the bar close, but only on the bar the series actually
+ * ends on: quoting today's price against a bar from March would be a second
+ * meaningless comparison in place of the one being fixed. Suppressed while the
+ * two agree to the cent, so the HUD does not carry a tile that repeats itself.
+ */
+const liveSpotGap = computed<{ spot: number; pct: number } | null>(() => {
+  const spot = props.liveSpot
+  const pts = props.points
+  if (spot == null || !Number.isFinite(spot) || !(spot > 0) || pts.length === 0) return null
+  const onLastBar = activeHoverIndex.value == null || activeHoverIndex.value === pts.length - 1
+  if (!onLastBar) return null
+  const barClose = pts[pts.length - 1].price
+  if (!Number.isFinite(barClose) || !(barClose > 0)) return null
+  const pct = ((spot - barClose) / barClose) * 100
+  return Math.abs(pct) >= 0.01 ? { spot, pct } : null
+})
+
 const hoveredSignal = computed(() => {
   if (!hoveredPoint.value || !props.signals) return null
   return (
@@ -293,8 +355,16 @@ function onSvgMouseLeave(): void {
         <span class="hud-v font-mono font-semibold">{{ hoveredPoint.t.slice(0, 10) }}</span>
       </div>
       <div class="hud-item">
-        <span class="hud-k">SPOT PRICE</span>
+        <span class="hud-k">BAR CLOSE</span>
         <span class="hud-v font-mono font-bold">${{ num(hoveredPoint.price, 2) }}</span>
+      </div>
+      <!-- The live quote, when it has moved away from the bar this series
+           ends on. Same surface, two clocks — say which is which. -->
+      <div v-if="liveSpotGap" class="hud-item">
+        <span class="hud-k">LIVE SPOT</span>
+        <span class="hud-v font-mono font-bold text-warn"
+          >${{ num(liveSpotGap.spot, 2) }} ({{ optSigned(liveSpotGap.pct, 2) }}% vs bar)</span
+        >
       </div>
       <div class="hud-item">
         <span class="hud-k">KERNEL MEAN m(t)</span>
@@ -303,7 +373,7 @@ function onSvgMouseLeave(): void {
       <div class="hud-item">
         <span class="hud-k">CAUSAL ENVELOPE</span>
         <span class="hud-v font-mono text-call-hi"
-          >[${{ num(hoveredPoint.nw_lower, 2) }} &mdash; ${{ num(hoveredPoint.nw_upper, 2) }}]</span
+          >[${{ num(hoveredPoint.nw_lower, 2) }} to ${{ num(hoveredPoint.nw_upper, 2) }}]</span
         >
       </div>
       <div v-if="expectedMove" class="hud-item">
@@ -356,9 +426,13 @@ function onSvgMouseLeave(): void {
       </div>
     </div>
 
+    <!-- A withheld projection must say it was withheld, or the operator reads
+         the empty chart as "no setup" rather than "the setup expired". -->
+    <p v-if="staleSignalNote" class="stale-signal-note">{{ staleSignalNote }}</p>
+
     <!-- Main Responsive SVG Canvas -->
     <div class="svg-canvas-wrapper">
-      <svg
+      <svg role="img" aria-label="Causal Nadaraya-Watson price envelope with band boundaries."
         :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
         class="chart-svg"
         preserveAspectRatio="xMidYMid meet"
@@ -825,6 +899,13 @@ function onSvgMouseLeave(): void {
 </template>
 
 <style scoped>
+.stale-signal-note {
+  margin: 0 0 var(--s2);
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  line-height: 1.5;
+}
+
 .envelope-chart-container {
   display: flex;
   flex-direction: column;
@@ -840,7 +921,7 @@ function onSvgMouseLeave(): void {
   padding: 0.5rem 0.875rem;
   background: var(--panel-hi);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   font-size: 0.75rem;
 }
 
@@ -852,7 +933,7 @@ function onSvgMouseLeave(): void {
 
 .hud-k {
   color: var(--ink-faint);
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   letter-spacing: 0.04em;
 }
 
@@ -867,7 +948,7 @@ function onSvgMouseLeave(): void {
   padding: 0.125rem 0.5rem;
   border-radius: 3px;
   font-family: var(--font-mono, monospace);
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-weight: 600;
   margin-left: auto;
 }
@@ -894,7 +975,7 @@ function onSvgMouseLeave(): void {
   padding: 0.375rem 0.75rem;
   background: var(--panel);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
 }
 
 .legend-item {
@@ -957,7 +1038,7 @@ function onSvgMouseLeave(): void {
   display: block;
   background: var(--void-lift);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   cursor: crosshair;
 }
 

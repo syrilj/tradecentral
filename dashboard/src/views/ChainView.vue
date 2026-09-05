@@ -189,7 +189,7 @@ function triggerSearch() {
   const sym = searchSymbol.value.trim().toUpperCase()
   selectedSymbol.value = sym
   drawerOpen.value = true
-  lastIngestStatus.value = `Ingesting ${sym}...`
+  lastIngestStatus.value = `Loading ${sym} graph...`
   void router.replace({ query: { ...route.query, symbol: sym } })
   void chainResource.refresh().then(() => {
     lastIngestStatus.value = `Loaded ${sym}`
@@ -201,9 +201,9 @@ function triggerSearch() {
 
 function triggerRefresh() {
   forceNext.value = true
-  lastIngestStatus.value = 'Re-scanning live SEC filings & transcripts...'
+  lastIngestStatus.value = 'Rebuilding graph from live profiles & filings...'
   void chainResource.refresh().then(() => {
-    lastIngestStatus.value = 'Live Ingest Complete'
+    lastIngestStatus.value = 'Graph rebuilt'
     setTimeout(() => {
       lastIngestStatus.value = null
     }, 4000)
@@ -298,11 +298,11 @@ function focusQuickTicker(sym: string) {
           type="button"
           class="refresh-btn"
           :disabled="chainResource.loading.value"
-          title="Live Ingest & Rescore Transcripts"
+          title="Rebuild graph from live profiles & filings"
           @click="triggerRefresh"
         >
-          <span v-if="chainResource.loading.value">⟳ Ingesting...</span>
-          <span v-else>⟳ Live Ingest</span>
+          <span v-if="chainResource.loading.value">⟳ Rebuilding...</span>
+          <span v-else>⟳ Refresh</span>
         </button>
       </div>
     </header>
@@ -535,7 +535,7 @@ function focusQuickTicker(sym: string) {
 
 .bridge-role {
   color: var(--ink-faint);
-  font-size: 0.6rem;
+  font-size: var(--t-nano);
 }
 
 .search-form {

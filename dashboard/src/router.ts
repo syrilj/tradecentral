@@ -6,7 +6,15 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     name: 'landing',
     component: () => import('@/views/LandingView.vue'),
-    meta: { title: 'About', public: true },
+    meta: {
+      // The public front door, so it carries a real page title rather than a
+      // nav label: this is the string that shows in search results and in a
+      // shared link, and "TradeCentral · About" said nothing about the product.
+      documentTitle: 'TradeCentral — dealer positioning and options flow for US equities',
+      description:
+        'Read dealer gamma by strike, signed options flow, and the research trail behind them in one workstation. Every figure names its source and shows when it is stale. Research only — no order routing.',
+      public: true,
+    },
   },
   {
     path: '/about',
@@ -17,6 +25,12 @@ const routes: RouteRecordRaw[] = [
     name: 'auth',
     component: () => import('@/views/AuthView.vue'),
     meta: { title: 'Operator access', public: true },
+  },
+  {
+    path: '/brief',
+    name: 'brief',
+    component: () => import('@/views/BriefView.vue'),
+    meta: { title: 'Brief', index: '00' },
   },
   {
     path: '/desk',
@@ -128,6 +142,18 @@ const routes: RouteRecordRaw[] = [
     name: 'evolution',
     component: () => import('@/views/EvolutionView.vue'),
     meta: { title: 'Evolution', index: '08' },
+  },
+  {
+    path: '/vpa',
+    name: 'vpa',
+    component: () => import('@/views/VpaView.vue'),
+    meta: { title: 'Volume Price Analysis', index: '08' },
+  },
+  {
+    path: '/amt',
+    name: 'amt',
+    component: () => import('@/views/AmtView.vue'),
+    meta: { title: 'Auction Market Theory', index: '08' },
   },
   {
     path: '/research',
@@ -242,13 +268,34 @@ router.beforeEach((to) => {
   return true
 })
 
+const DEFAULT_DESCRIPTION =
+  'Instrument panel for the edge/ trading research stack — signals, gates, trajectories, cloud training.'
+
+function setMetaDescription(content: string): void {
+  let tag = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+  if (!tag) {
+    tag = document.createElement('meta')
+    tag.name = 'description'
+    document.head.appendChild(tag)
+  }
+  tag.content = content
+}
+
 router.afterEach((to) => {
+  /* `documentTitle` wins when a route needs a standalone, un-prefixed title
+     (the public landing page). Everything else keeps the desk's
+     "TradeCentral · <nav label>" convention. */
+  const full = to.meta.documentTitle as string | undefined
   const t = to.meta.title as string | undefined
   const symRaw = to.query.symbol || to.query.setup
   const sym = typeof symRaw === 'string' && symRaw ? symRaw.trim().toUpperCase() : ''
-  if (t) {
+  if (full) {
+    document.title = full
+  } else if (t) {
     document.title = sym ? `TradeCentral · ${t} (${sym})` : `TradeCentral · ${t}`
   } else {
     document.title = 'TradeCentral · Research instrument'
   }
+
+  setMetaDescription((to.meta.description as string | undefined) ?? DEFAULT_DESCRIPTION)
 })

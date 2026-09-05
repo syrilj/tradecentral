@@ -46,8 +46,8 @@ class OptionsFilters:
                 date.fromisoformat(self.expiry)
             except ValueError as exc:
                 raise ValueError("expiry must be nearest, all, or YYYY-MM-DD") from exc
-        if not 1 <= self.tape_limit <= 500:
-            raise ValueError("tape_limit must be in [1, 500]")
+        if not 1 <= self.tape_limit <= 5000:
+            raise ValueError("tape_limit must be in [1, 5000]")
         if not -0.05 <= self.risk_free_rate <= 0.25:
             raise ValueError("risk_free_rate outside supported range")
 
@@ -674,7 +674,8 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
 
     right = _right(_first(row, "contract_type", "option_type", "right", "type")) or occ_info.get("right")
     observed = _timestamp(_first(row, "ts", "timestamp", "datetime", "time", "last_trade_at", "updated_at"))
-    volume = _integer(_first(row, "volume", "volume_today", "size", "contracts", "quantity")) or 0
+    volume_raw = _integer(_first(row, "volume", "volume_today", "size", "contracts", "quantity"))
+    volume = int(volume_raw) if volume_raw is not None else 0
     price = _number(_first(row, "price", "last_price", "trade_price", "fill_price", "mid"))
     premium = _number(_first(row, "premium", "total_premium", "est_premium", "notional"))
     multiplier = _integer(_first(row, "multiplier", "contract_multiplier"))
@@ -739,9 +740,9 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
         "symbol": symbol,
         "right": right,
         "premium": premium,
-        "volume": volume,
+        "volume": volume_raw,
         # contracts == volume for options tape (lot size = contract count).
-        "contracts": volume,
+        "contracts": volume_raw,
         "contract_multiplier": multiplier,
         "price": round(price, 4) if price is not None else None,
         "price_estimated": price_estimated,
@@ -787,7 +788,10 @@ def _robust_score(values: Sequence[float], value: float) -> float | None:
 def _annotate_tape_anomalies(tape: list[dict[str, Any]]) -> None:
     """Mark observable statistical outliers without inferring trade intent."""
     premiums = [float(row["premium"]) for row in tape]
-    volumes = [float(row["volume"]) for row in tape]
+    volumes = [
+        float(row["volume"]) if row.get("volume") is not None else 0.0
+        for row in tape
+    ]
     premium_center = median(premiums) if premiums else 0.0
 
     clusters: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
@@ -822,7 +826,7 @@ def _annotate_tape_anomalies(tape: list[dict[str, Any]]) -> None:
 
     for row in tape:
         premium = float(row["premium"])
-        volume = float(row["volume"])
+        volume = float(row["volume"]) if row.get("volume") is not None else 0.0
         premium_score = _robust_score(premiums, premium)
         volume_score = _robust_score(volumes, volume)
         flags: list[str] = []
@@ -902,7 +906,6 @@ def print_heat_score(
     size_f = max(0.0, float(size or 0.0))
     premium_f = max(0.0, float(premium or 0.0))
     volume_f = max(0.0, float(volume or 0.0))
-    dte_f = max(0.0, float(dte)) if dte is not None else 30.0
     size_term = math.log1p(size_f)
     premium_term = math.log1p(premium_f)
     volume_term = math.log1p(volume_f)
@@ -910,7 +913,11 @@ def print_heat_score(
         oi_term = 0.0
     else:
         oi_term = math.log1p(size_f / max(float(open_interest), 1.0))
-    dte_term = 1.0 / (1.0 + dte_f / float(UNUSUAL_MAX_DTE))
+    if dte is None:
+        dte_term = 0.0
+    else:
+        dte_f = max(0.0, float(dte))
+        dte_term = 1.0 / (1.0 + dte_f / float(UNUSUAL_MAX_DTE))
     raw = (
         0.30 * size_term
         + 0.30 * premium_term
@@ -1075,14 +1082,16 @@ def _ticker_direction_share(prints: Sequence[Mapping[str, Any]]) -> tuple[float 
         bear = sum(-float(row["signed_premium"]) for row in signed if float(row["signed_premium"]) < 0)
         classified = bull + bear
         basis = "signed_premium"
-    else:
-        bull = sum(float(row["premium"]) for row in prints if row.get("right") == "call")
-        bear = sum(float(row["premium"]) for row in prints if row.get("right") == "put")
-        classified = bull + bear
-        basis = "call_put_premium"
+        if classified <= 0:
+            return None, None, basis
+        return round(bull / classified, 6), round(bear / classified, 6), basis
+    call_prem = sum(float(row["premium"]) for row in prints if row.get("right") == "call")
+    put_prem = sum(float(row["premium"]) for row in prints if row.get("right") == "put")
+    classified = call_prem + put_prem
     if classified <= 0:
-        return None, None, basis
-    return round(bull / classified, 6), round(bear / classified, 6), basis
+        return None, None, "call_put_premium"
+    # Call/put premium mix is identity share, not bull/bear.
+    return round(call_prem / classified, 6), round(put_prem / classified, 6), "call_put_premium"
 
 
 def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1100,6 +1109,11 @@ def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, An
         sweeps = [row for row in prints if row.get("is_sweep")]
         momentum = [row for row in prints if row.get("is_momentum") or "momentum" in (row.get("presets") or ())]
         bull, bear, basis = _ticker_direction_share(prints)
+        signed_basis = basis == "signed_premium"
+        call_share = None if signed_basis else bull
+        put_share = None if signed_basis else bear
+        bullish_share = bull if signed_basis else None
+        bearish_share = bear if signed_basis else None
         metrics = {
             "unusual_otm": (
                 sum(float(row.get("otm_pct") or 0.0) * float(row.get("premium") or 0.0) for row in unusual)
@@ -1116,8 +1130,10 @@ def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, An
         }
         tickers.append({
             "symbol": symbol,
-            "bullish_share": bull,
-            "bearish_share": bear,
+            "bullish_share": bullish_share,
+            "bearish_share": bearish_share,
+            "call_share": call_share,
+            "put_share": put_share,
             "share_basis": basis,
             "print_count": len(prints),
             "metrics": metrics,
@@ -1132,6 +1148,8 @@ def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, An
                 "score": round(float(row["metrics"][name]), 6),
                 "bullish_share": row["bullish_share"],
                 "bearish_share": row["bearish_share"],
+                "call_share": row.get("call_share"),
+                "put_share": row.get("put_share"),
                 "share_basis": row["share_basis"],
                 "print_count": row["print_count"],
             }
@@ -1153,6 +1171,332 @@ def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, An
     }
 
 
+def _aggregate_sweep_bursts(tape_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse same-contract sweep-burst fills into one aggregate row per burst.
+
+    The LSE live flow emits each exchange fill as a separate row.  When
+    ``_annotate_tape_anomalies`` tags fills from the same ≤3-second burst as
+    ``sweep_burst``, the tape shows multiple low-contract rows rather than one
+    recognisable sweep.  This collapses them so the tape looks like the
+    standard ``SWEEP 1,063 @ ~$5.22`` display that users expect from platforms
+    that aggregate exchange fills into order-level rows.
+
+    Aggregation key: ``(right, strike, expiry_str)`` within the same burst.
+    A "burst" here is a consecutive run of rows with ``sweep_burst`` in their
+    ``anomaly_flags`` for that key, all within 10 seconds of the earliest print.
+
+    The aggregate row uses:
+    - ``timestamp``: earliest fill timestamp (datetime or isoformat string)
+    - ``premium``: sum of all fills
+    - ``contracts`` / ``volume``: sum of all fills
+    - ``price``: premium-weighted average fill price (marked with ``price_estimated=True``)
+    - ``sweep_fill_count``: number of fills merged (new field)
+    - ``sweep_fills``: list of individual fill dicts (new field, for drill-down)
+    - All other fields: copied from the fill with the highest premium
+    """
+    if not tape_rows:
+        return tape_rows
+
+    # Work in reverse-chronological order (already sorted that way by caller)
+    # but process in chronological order for burst detection.
+    chrono = sorted(tape_rows, key=lambda r: str(r.get("timestamp") or ""))
+
+    # Group consecutive sweep_burst fills by contract identity.
+    BURST_WINDOW_S = 10.0
+    result_chrono: list[dict[str, Any]] = []
+    consumed: set[int] = set()
+
+    for i, row in enumerate(chrono):
+        if id(row) in consumed:
+            continue
+        if "sweep_burst" not in (row.get("anomaly_flags") or []):
+            result_chrono.append(row)
+            continue
+
+        # This row starts a potential burst group.
+        key = (row.get("right"), row.get("strike"), str(row.get("expiry") or ""))
+        burst_rows = [row]
+        consumed.add(id(row))
+
+        # Determine anchor timestamp for window calculation.
+        ts0_raw = row.get("timestamp")
+        try:
+            ts0 = (
+                ts0_raw if isinstance(ts0_raw, datetime)
+                else datetime.fromisoformat(str(ts0_raw).replace("Z", "+00:00"))
+            )
+        except (ValueError, AttributeError):
+            ts0 = None
+
+        # Collect subsequent rows within the burst window.
+        for j in range(i + 1, len(chrono)):
+            other = chrono[j]
+            if id(other) in consumed:
+                continue
+            if "sweep_burst" not in (other.get("anomaly_flags") or []):
+                continue
+            other_key = (other.get("right"), other.get("strike"), str(other.get("expiry") or ""))
+            if other_key != key:
+                continue
+            if ts0 is not None:
+                ts_raw = other.get("timestamp")
+                try:
+                    ts_other = (
+                        ts_raw if isinstance(ts_raw, datetime)
+                        else datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                    )
+                    gap = abs((ts_other - ts0).total_seconds())
+                except (ValueError, AttributeError):
+                    gap = 0.0
+                if gap > BURST_WINDOW_S:
+                    continue
+            burst_rows.append(other)
+            consumed.add(id(other))
+
+        if len(burst_rows) == 1:
+            # Only one fill in this "burst" — emit as-is without aggregation.
+            result_chrono.append(burst_rows[0])
+            continue
+
+        # Aggregate the burst into one representative row.
+        anchor = max(burst_rows, key=lambda r: float(r.get("premium") or 0.0))
+        total_contracts = sum(int(r.get("contracts") or r.get("volume") or 0) for r in burst_rows)
+        total_premium = sum(float(r.get("premium") or 0.0) for r in burst_rows)
+        wt_price: float | None = None
+        wt_num = sum(
+            float(r.get("price") or 0.0) * int(r.get("contracts") or r.get("volume") or 0)
+            for r in burst_rows
+            if r.get("price") is not None
+        )
+        if total_contracts > 0 and wt_num > 0:
+            wt_price = wt_num / total_contracts
+
+        # Build the aggregate fill list (preserve order, convert timestamps).
+        def _fill_snapshot(r: dict[str, Any]) -> dict[str, Any]:
+            out = {
+                "timestamp": r["timestamp"] if isinstance(r["timestamp"], str)
+                             else r["timestamp"].isoformat(),
+                "contracts": int(r.get("contracts") or r.get("volume") or 0),
+                "price": round(float(r.get("price") or 0.0), 4) if r.get("price") is not None else None,
+                "premium": round(float(r.get("premium") or 0.0), 2),
+                "anomaly_flags": list(r.get("anomaly_flags") or []),
+            }
+            return out
+
+        # Use the earliest timestamp as the sweep's reported time.
+        earliest_ts = min(
+            burst_rows,
+            key=lambda r: str(r.get("timestamp") or ""),
+        ).get("timestamp")
+
+        agg = dict(anchor)
+        agg["timestamp"] = earliest_ts  # chronologically first fill
+        agg["contracts"] = total_contracts
+        agg["volume"] = total_contracts
+        agg["premium"] = round(total_premium, 2)
+        agg["price"] = round(wt_price, 4) if wt_price is not None else None
+        agg["price_estimated"] = True  # weighted average, not a single fill price
+        agg["is_sweep"] = True
+        agg["trade_class"] = "sweep"
+        agg["trade_class_source"] = "burst_aggregate"
+        # Merge anomaly flags from all fills (union, deduplicated).
+        all_flags: list[str] = []
+        seen_flags: set[str] = set()
+        for flag in (anchor.get("anomaly_flags") or []):
+            if flag not in seen_flags:
+                all_flags.append(flag)
+                seen_flags.add(flag)
+        for r in burst_rows:
+            for flag in (r.get("anomaly_flags") or []):
+                if flag not in seen_flags:
+                    all_flags.append(flag)
+                    seen_flags.add(flag)
+        agg["anomaly_flags"] = all_flags
+        agg["sweep_fill_count"] = len(burst_rows)
+        agg["sweep_fills"] = [_fill_snapshot(r) for r in burst_rows]
+        # Recompute heat score for the combined order size
+        oi = agg.get("open_interest")
+        agg["heat"] = print_heat_score(
+            size=float(total_contracts),
+            premium=float(total_premium),
+            open_interest=float(oi) if oi is not None else None,
+            dte=float(agg.get("dte")) if agg.get("dte") is not None else None,
+            volume=float(total_contracts),
+        )
+        if oi is not None and float(oi) > 0:
+            agg["relative_volume"] = round(total_contracts / float(oi), 2)
+        # Why tag: combine aggregate summary with underlying fill reasons.
+        fill_word = "fill" if len(burst_rows) == 1 else "fills"
+        why_list: list[str] = [f"sweep {len(burst_rows)} {fill_word} ≤{int(BURST_WINDOW_S)}s · burst aggregate"]
+        seen_why = set(why_list)
+        for r in burst_rows:
+            for w in (r.get("why") or []):
+                if w not in seen_why:
+                    why_list.append(w)
+                    seen_why.add(w)
+        agg["why"] = why_list
+        result_chrono.append(agg)
+
+    # Restore reverse-chronological order expected by callers.
+    result_chrono.sort(key=lambda r: str(r.get("timestamp") or ""), reverse=True)
+    return result_chrono
+
+
+#: Side-inference weights. A vendor-reported aggressor is the real thing; the
+#: quote rule against a live two-sided quote is the standard Lee-Ready read;
+#: the same rule against a same-day delayed reference quote is a hint; the
+#: tick test (price vs the previous print on the same contract, Lee-Ready's
+#: own fallback when no quote is available) is the weakest but still observed.
+PRESSURE_SIDE_WEIGHTS = {
+    "vendor": 1.0, "quote_rule_live": 0.8, "quote_rule_delayed": 0.5, "tick_rule": 0.4,
+}
+
+
+def _tick_rule_sides(tape_rows: Sequence[dict[str, Any]]) -> None:
+    """Sign still-unresolved prints by the tick test, per contract, in place.
+
+    Chronologically per (right, strike, expiry): an uptick vs the previous
+    print's price is a buy, a downtick a sell, a zero tick inherits the last
+    non-zero tick's direction, and the first print (or a run of zero ticks
+    with no prior direction) stays unresolved. Estimated prices (premium ÷
+    contracts) never participate. Only rows with no side yet are written.
+    """
+    by_contract: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in tape_rows:
+        if row.get("price_estimated") or _number(row.get("price")) is None:
+            continue
+        key = (row.get("right"), row.get("strike"), str(row.get("expiry") or ""))
+        by_contract.setdefault(key, []).append(row)
+    for rows in by_contract.values():
+        if len(rows) < 2:
+            continue
+        rows.sort(key=lambda r: str(r.get("timestamp") or ""))
+        last_price: float | None = None
+        last_dir: str | None = None
+        for row in rows:
+            price = float(row["price"])
+            if last_price is not None:
+                if price > last_price:
+                    tick = "buy"
+                elif price < last_price:
+                    tick = "sell"
+                else:
+                    tick = last_dir
+                if tick and not row.get("side_source"):
+                    row["inferred_side"] = tick
+                    row["side_source"] = "tick_rule"
+                    row["side_weight"] = PRESSURE_SIDE_WEIGHTS["tick_rule"]
+                    direction = _flow_direction(row.get("right"), tick)
+                    row["flow_direction"] = direction
+                    row["flow_signed_premium"] = (
+                        round(direction * float(row["premium"]), 2) if direction else None
+                    )
+                if tick:
+                    last_dir = tick
+            last_price = price
+
+
+def _infer_print_side(
+    row: Mapping[str, Any], quote: Mapping[str, Any] | None,
+) -> tuple[str | None, str | None, float]:
+    """(side, source, weight) for one print: who was the aggressor?
+
+    Precedence:
+      1. explicit vendor aggressor on the print (``aggressor`` = buy/sell);
+      2. quote rule against the matched chain contract: a live two-sided quote
+         classifies by position inside the spread (upper 40% = lifted the ask,
+         lower 40% = hit the bid, the middle 20% stays unresolved);
+      3. the same rule on a delayed reference quote only counts prints AT or
+         THROUGH the touch, because a 15-minute-old spread cannot place a
+         print inside itself honestly.
+
+    Returns ``(None, None, 0.0)`` when nothing resolves. Estimated prices
+    (premium ÷ contracts) are never compared against a quote.
+    """
+    aggressor = row.get("aggressor")
+    if aggressor in {"buy", "sell"}:
+        return aggressor, "vendor", PRESSURE_SIDE_WEIGHTS["vendor"]
+    if not quote or row.get("price_estimated"):
+        return None, None, 0.0
+    price = _number(row.get("price"))
+    bid = _number(quote.get("bid"))
+    ask = _number(quote.get("ask"))
+    if price is None or bid is None or ask is None or bid < 0 or ask <= bid:
+        return None, None, 0.0
+    position = (price - bid) / (ask - bid)
+    if quote.get("quote_live"):
+        if position >= 0.6:
+            return "buy", "quote_rule_live", PRESSURE_SIDE_WEIGHTS["quote_rule_live"]
+        if position <= 0.4:
+            return "sell", "quote_rule_live", PRESSURE_SIDE_WEIGHTS["quote_rule_live"]
+        return None, None, 0.0
+    # A delayed reference quote must come from the print's own session day; an
+    # 11-day-old snapshot says nothing about where today's spread was.
+    quote_ts = quote.get("observed_at")
+    print_ts = row.get("timestamp")
+    if not isinstance(quote_ts, datetime) or not isinstance(print_ts, datetime):
+        return None, None, 0.0
+    if quote_ts.date() != print_ts.date():
+        return None, None, 0.0
+    if position >= 0.999:
+        return "buy", "quote_rule_delayed", PRESSURE_SIDE_WEIGHTS["quote_rule_delayed"]
+    if position <= 0.001:
+        return "sell", "quote_rule_delayed", PRESSURE_SIDE_WEIGHTS["quote_rule_delayed"]
+    return None, None, 0.0
+
+
+def _flow_direction(right: Any, side: str | None) -> int | None:
+    """Underlying direction implied by an options print: buy call / sell put
+    → +1 (buying), buy put / sell call → −1 (selling)."""
+    if side == "buy":
+        return 1 if right == "call" else -1
+    if side == "sell":
+        return -1 if right == "call" else 1
+    return None
+
+
+def _tape_channel_from_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate side-resolved prints into one buyer/seller imbalance input.
+
+    ``signed_premium`` and ``gross_premium`` are side-weight adjusted, so a
+    delayed-quote print moves the needle half as much as a vendor-signed one.
+    ``resolved_premium`` / ``total_premium`` is the unweighted coverage: how
+    much of the tape actually had a side.
+    """
+    mix = {"vendor": 0, "quote_rule_live": 0, "quote_rule_delayed": 0, "tick_rule": 0, "unresolved": 0}
+    signed = gross = resolved = total = buy = sell = 0.0
+    n_signed = 0
+    for row in rows:
+        premium = float(row.get("premium") or 0.0)
+        total += premium
+        source = row.get("side_source")
+        direction = row.get("flow_direction")
+        if not source or not direction:
+            mix["unresolved"] += 1
+            continue
+        mix[source] = mix.get(source, 0) + 1
+        n_signed += 1
+        weight = float(row.get("side_weight") or 0.0)
+        signed += direction * premium * weight
+        gross += premium * weight
+        resolved += premium
+        if direction > 0:
+            buy += premium * weight
+        else:
+            sell += premium * weight
+    return {
+        "signed_premium": round(signed, 2),
+        "gross_premium": round(gross, 2),
+        "resolved_premium": round(resolved, 2),
+        "total_premium": round(total, 2),
+        "n_signed": n_signed,
+        "n_total": len(rows),
+        "source_mix": mix,
+        "buy_premium": round(buy, 2),
+        "sell_premium": round(sell, 2),
+    }
+
+
 def _flow_series(
     flow_rows: Sequence[Mapping[str, Any]],
     *,
@@ -1161,7 +1505,10 @@ def _flow_series(
     selected_expiry: str | None,
     mode_requested: str = "live",
     spot: float | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    chain_rows: Sequence[Mapping[str, Any]] = (),
+) -> tuple[
+    list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], list[float], list[float], dict[str, Any],
+]:
     lower, upper = _flow_date_bounds(filters, asof, mode_requested=mode_requested)
     normalized: list[dict[str, Any]] = []
     rejected: dict[str, Any] = {
@@ -1278,6 +1625,55 @@ def _flow_series(
             bucket["signed_net_premium"] = None
         series.append(bucket)
 
+    # Enrich tape rows with Open Interest and Implied Volatility from the chain
+    # before running anomaly annotation so relative volume (Vol/OI) and the
+    # 0-100 heat score can be computed accurately from genuine contract OI.
+    # The same contract match supplies the bid/ask the quote rule needs to
+    # infer which side of the market each print hit.
+    chain_by_key: dict[tuple[Any, ...], Mapping[str, Any]] = {}
+    chain_by_occ: dict[str, Mapping[str, Any]] = {}
+    for cr in chain_rows:
+        norm_c = _normalize_chain_row(cr, asof=asof, spot=spot or 0.0)
+        c_right = norm_c.get("right")
+        c_strike = norm_c.get("strike")
+        c_exp = norm_c.get("expiry")
+        if c_right and c_strike is not None and c_exp:
+            exp_str = c_exp.isoformat() if hasattr(c_exp, "isoformat") else str(c_exp)
+            chain_by_key[(c_right, round(float(c_strike), 4), exp_str)] = norm_c
+        occ = norm_c.get("occ_symbol")
+        if occ:
+            chain_by_occ[str(occ).upper().strip()] = norm_c
+
+    for row in tape_rows:
+        matched = None
+        occ = row.get("occ_symbol")
+        if occ and str(occ).upper().strip() in chain_by_occ:
+            matched = chain_by_occ[str(occ).upper().strip()]
+        elif row.get("right") and row.get("strike") is not None and row.get("expiry"):
+            exp_str = row["expiry"].isoformat() if hasattr(row["expiry"], "isoformat") else str(row["expiry"])
+            matched = chain_by_key.get((row["right"], round(float(row["strike"]), 4), exp_str))
+        if matched:
+            if (row.get("open_interest") is None or row.get("open_interest") == 0) and matched.get("open_interest"):
+                row["open_interest"] = matched["open_interest"]
+            if row.get("implied_volatility") is None and matched.get("iv"):
+                row["implied_volatility"] = matched["iv"]
+        side, side_source, side_weight = _infer_print_side(row, matched)
+        direction = _flow_direction(row.get("right"), side)
+        row["inferred_side"] = side
+        row["side_source"] = side_source
+        row["side_weight"] = side_weight
+        row["flow_direction"] = direction
+        row["flow_signed_premium"] = (
+            round(direction * float(row["premium"]), 2) if direction else None
+        )
+    # Whatever the quote rule could not place gets the tick test against the
+    # previous print on the same contract (the only side evidence a quoteless
+    # live chain leaves us), at the lowest weight.
+    _tick_rule_sides(tape_rows)
+    # Buyer/seller imbalance on the underlying, measured on the raw fills
+    # before sweep-burst aggregation changes the row count.
+    tape_channel = _tape_channel_from_rows(tape_rows)
+
     _annotate_tape_anomalies(tape_rows)
     series_by_time = {row["t"]: row for row in series}
     for row in tape_rows:
@@ -1304,10 +1700,21 @@ def _flow_series(
         for row in chronological
         if row.get("right") in {"call", "put"} and row.get("premium") is not None
     ]
+    # Collapse same-contract sweep-burst fills into one aggregate row per burst.
+    # Done after signed/activity extraction so the financial signals (which use
+    # raw fill timestamps) are not affected by the display-level grouping.
+    tape_rows = _aggregate_sweep_bursts(tape_rows)
     for row in tape_rows:
-        row["timestamp"] = row["timestamp"].isoformat()
-        row["expiry"] = row["expiry"].isoformat() if row["expiry"] else None
-    return series, tape_rows[: filters.tape_limit], rejected, signed_observations, activity_observations
+        ts = row["timestamp"]
+        row["timestamp"] = ts if isinstance(ts, str) else ts.isoformat()
+        exp = row.get("expiry")
+        if exp is not None and not isinstance(exp, str):
+            row["expiry"] = exp.isoformat()
+    return (
+        series, tape_rows[: filters.tape_limit], rejected, signed_observations,
+        activity_observations, tape_channel,
+    )
+
 
 
 def _chain_activity_series(
@@ -1643,43 +2050,135 @@ def _charm_map(
     return mapped, summary, chain_rows
 
 
+#: Tape channel evidence floors: fewer side-resolved prints than this, or a
+#: smaller share of premium with a side, and the channel abstains rather than
+#: pretending three prints are an order-flow read.
+PRESSURE_TAPE_MIN_PRINTS = 5
+PRESSURE_TAPE_MIN_COVERAGE = 0.10
+PRESSURE_TAPE_FULL_PRINTS = 20
+#: |imbalance| above this reads as a direction; below PRESSURE_NEUTRAL_BAND a
+#: channel is treated as neutral when scoring agreement.
+PRESSURE_DIRECTION_THRESHOLD = 0.25
+PRESSURE_NEUTRAL_BAND = 0.10
+PRESSURE_UNDERLYING_BARS = 7
+
+
+def _underlying_pressure(
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    asof: datetime | None = None,
+    n_bars: int = PRESSURE_UNDERLYING_BARS,
+    baseline_bars: int = 35,
+) -> dict[str, Any] | None:
+    """Volume-weighted close-location read of the underlying's last ``n_bars``.
+
+    CLV = ((close − low) − (high − close)) / (high − low) per bar, weighted by
+    that bar's volume: closes near the high on volume read as buying, near the
+    low as selling. This is a PROXY for signed order flow built from OHLCV
+    (there is no tick or quote data for the underlying here), so it is
+    labelled as such, carries half a channel's weight, and abstains below
+    three usable bars.
+    """
+    parsed: list[tuple[str, float, float, float, float, float]] = []
+    for row in bars or ():
+        o = _number(row.get("open") or row.get("o"))
+        h = _number(row.get("high") or row.get("h"))
+        lo = _number(row.get("low") or row.get("l"))
+        c = _number(row.get("close") or row.get("c"))
+        v = _number(row.get("volume") or row.get("v"))
+        if h is None or lo is None or c is None or h < lo:
+            continue
+        parsed.append((str(row.get("t") or row.get("timestamp") or ""), o if o is not None else c, h, lo, c, v or 0.0))
+    if len(parsed) < 3:
+        return None
+    window = parsed[-n_bars:]
+    numerator = denominator = 0.0
+    for _, _, h, lo, c, v in window:
+        if v <= 0:
+            continue
+        clv = ((c - lo) - (h - c)) / (h - lo) if h > lo else 0.0
+        numerator += clv * v
+        denominator += v
+    if denominator <= 0:
+        return None
+    ratio = max(-1.0, min(1.0, numerator / denominator))
+    prior = parsed[-(n_bars + baseline_bars):-n_bars] if len(parsed) > n_bars else []
+    prior_vols = [v for *_, v in prior if v > 0]
+    rvol = (
+        (denominator / len(window)) / (sum(prior_vols) / len(prior_vols))
+        if prior_vols else None
+    )
+    first_open = window[0][1]
+    last_close = window[-1][4]
+    change_pct = ((last_close / first_open) - 1.0) * 100.0 if first_open and first_open > 0 else None
+    timestamps = [_timestamp(t) for t, *_ in window]
+    timestamps = [t for t in timestamps if t is not None]
+    timeframe = None
+    if len(timestamps) >= 2:
+        gaps = sorted((b - a).total_seconds() for a, b in zip(timestamps, timestamps[1:]))
+        median_gap = gaps[len(gaps) // 2]
+        timeframe = "1h" if median_gap < 12 * 3600 else "1d"
+    last_ts = timestamps[-1] if timestamps else None
+    stale = bool(asof and last_ts and (asof - last_ts).total_seconds() > 3 * 86400)
+    return {
+        "ratio": round(ratio, 6),
+        "rvol": round(rvol, 4) if rvol is not None else None,
+        "bars_used": len(window),
+        "timeframe": timeframe,
+        "close_change_pct": round(change_pct, 4) if change_pct is not None else None,
+        "last_bar": last_ts.isoformat() if last_ts else None,
+        "stale": stale,
+        "method": "clv_volume_proxy",
+        "note": (
+            "Close-location-value × volume on the underlying's bars. A proxy for "
+            "signed order flow built from OHLCV, not tick-level aggressor data."
+        ),
+    }
+
+
 def _pressure_gauge(
-    *, net_charm_flow: float, net_gex_m: float, delta_weighted_call_vol: float,
-    delta_weighted_put_vol: float, abs_charm_flow: float | None = None,
-    abs_gex_m: float | None = None, alpha: float = 1.0, beta: float = 0.5,
+    *, net_charm_flow: float, net_gex_m: float = 0.0, delta_weighted_call_vol: float = 0.0,
+    delta_weighted_put_vol: float = 0.0, abs_charm_flow: float | None = None,
+    abs_gex_m: float | None = None, tape: Mapping[str, Any] | None = None,
+    underlying: Mapping[str, Any] | None = None, charm_coverage: float | None = None,
+    mode_resolved: str = "live", spot_stale: bool = False,
+    alpha: float = 1.0, beta: float = 0.5,
 ) -> dict[str, Any]:
-    """Normalized pressure signal in [−1, +1] from charm flow, GEX, and live volume.
+    """Pressure read in [−1, +1] with the confidence to trade on it (or not).
 
-    Each channel is first reduced to its own net/gross ratio in [−1, +1], then
-    the ratios are blended by weight:
+    Only SIGNED evidence votes on direction. Each voting channel is first
+    reduced to its own net/gross ratio in [−1, +1], then blended by weight:
 
-        charm  = −NetCharmFlow / GrossCharmFlow          (shares/day ÷ shares/day)
-        volume = (ΔWCall − ΔWPut) / (ΔWCall + ΔWPut)     (contracts ÷ contracts)
-        gex    = NetGEX / GrossGEX                       ($M ÷ $M)
-        imbalance = (charm + α·volume + β·gex) / (1 + α + β)   ← active channels only
+        charm      = −NetCharmFlow / GrossCharmFlow        weight 1.0
+                     dealer re-hedging from time decay — a positioning proxy
+        tape       = Σ dir·premium·w / Σ premium·w         weight 1.0
+                     buyer/seller imbalance of side-resolved option prints
+                     (buy call / sell put → +, buy put / sell call → −)
+        underlying = Σ CLV·volume / Σ volume               weight 0.5
+                     close-location proxy on the underlying's own bars
+        imbalance  = Σ w·r / Σ w over ACTIVE channels only
 
-    Normalizing *inside* each channel is what makes the blend real. The previous
-    form summed the three raw quantities directly, but they carry different
-    units and magnitudes — charm flow is shares/day (1e5–1e7), GEX is dollar
-    millions (1e1–1e2), delta-weighted volume is contracts (1e3–1e5). The charm
-    term swamped the rest: on a realistic liquid name the GEX term supplied
-    ~0.0% of the denominator, and even a $5,000M GEX moved the gauge only from
-    −1.000 to −0.980. The "three-factor blend" was in practice the sign of
-    net charm flow. Ratios put all three on one scale so α and β mean what they
-    claim, and a channel with no gross magnitude abstains rather than voting
-    "balanced".
+    Two inputs the old gauge blended are deliberately context now, not votes:
 
-    The charm-flow term is negated so the gauge agrees with the §5.5 dealer
-    hedge convention: positive net charm flow → dealers sell → selling
-    pressure, negative → dealers buy → buying pressure. (The spec's §5.7
-    formula uses the opposite sign; its own caveat marks the mapping as
-    convention-dependent, and a gauge that contradicts the charm KPI on the
-    same symbol is worse than either convention alone.)
+        call/put mix  (ΔWCall − ΔWPut)/(ΔWCall + ΔWPut) — contract identity,
+                      not aggressor side. A bought put and a sold put look
+                      identical here, so it cannot say who is pressing.
+        GEX sign      NetGEX / GrossGEX — a regime. Positive gamma DAMPENS a
+                      move, negative gamma AMPLIFIES it; neither is a direction,
+                      and blending it in biased every large cap toward "buying".
 
-    Readout: > +0.25 buying pressure building, < −0.25 selling pressure
-    building, otherwise balanced. The GEX regime is surfaced separately
-    (positive = mean-reversion, negative = trending) because the two behave
-    very differently.
+    Confidence (0–1, banded) scores how much the read deserves to be acted on:
+    weighted sign agreement across active channels (40%), evidence quality and
+    breadth (25%), magnitude (15%) and data freshness (20%). A single channel
+    can never corroborate itself, so a charm-only read is capped at "low";
+    history/delayed data is capped at "medium" and never actionable.
+
+    ``actionable`` is the one flag a live trader should key off: |imbalance|
+    beyond the direction threshold, medium-or-better confidence, live data and
+    no channel of full weight reading the opposite way.
+
+    The charm term is negated so the gauge agrees with the §5.5 dealer hedge
+    convention: positive net charm flow → dealers sell → selling pressure.
     """
     eps = 1e-9
     gross_charm = abs(abs_charm_flow) if abs_charm_flow is not None else abs(net_charm_flow)
@@ -1692,49 +2191,244 @@ def _pressure_gauge(
             return None
         return max(-1.0, min(1.0, net / gross))
 
-    channels: list[tuple[float, float]] = []  # (weight, ratio)
+    def _sign(value: float) -> int:
+        if value >= PRESSURE_NEUTRAL_BAND:
+            return 1
+        if value <= -PRESSURE_NEUTRAL_BAND:
+            return -1
+        return 0
+
+    reasons: list[str] = []
+    # (name, weight, ratio, evidence quality in [0, 1])
+    channels: list[tuple[str, float, float, float]] = []
+
     charm_ratio = _ratio(-net_charm_flow, gross_charm)
     if charm_ratio is not None:
-        channels.append((1.0, charm_ratio))
-    vol_ratio = _ratio(delta_weighted_call_vol - delta_weighted_put_vol, gross_vol)
-    if vol_ratio is not None:
-        channels.append((alpha, vol_ratio))
-    gex_ratio = _ratio(net_gex_m, gross_gex)
-    if gex_ratio is not None:
-        channels.append((beta, gex_ratio))
+        charm_quality = _clamp01(charm_coverage) if charm_coverage is not None else 1.0
+        channels.append(("charm", 1.0, charm_ratio, charm_quality))
+        if charm_coverage is not None and charm_coverage < 0.5:
+            reasons.append(f"charm: only {charm_coverage:.0%} of the chain could be charmed")
+    else:
+        reasons.append("charm: no measurable charm flow on this chain")
 
-    weight_total = sum(weight for weight, _ in channels)
+    tape_ratio: float | None = None
+    tape_out: dict[str, Any] | None = None
+    if tape:
+        n_signed = int(tape.get("n_signed") or 0)
+        n_total = int(tape.get("n_total") or 0)
+        gross_tape = float(tape.get("gross_premium") or 0.0)
+        resolved = float(tape.get("resolved_premium") or 0.0)
+        total = float(tape.get("total_premium") or 0.0)
+        coverage = resolved / total if total > eps else 0.0
+        quality = _clamp01(gross_tape / resolved) if resolved > eps else 0.0
+        raw_ratio = _ratio(float(tape.get("signed_premium") or 0.0), gross_tape)
+        tape_out = {
+            **dict(tape),
+            "coverage": round(coverage, 6),
+            "quality": round(quality, 6),
+            "ratio": None if raw_ratio is None else round(raw_ratio, 6),
+            "min_prints": PRESSURE_TAPE_MIN_PRINTS,
+            "min_coverage": PRESSURE_TAPE_MIN_COVERAGE,
+        }
+        if n_total == 0:
+            reasons.append("tape: no prints in the window")
+        elif raw_ratio is None or n_signed < PRESSURE_TAPE_MIN_PRINTS or coverage < PRESSURE_TAPE_MIN_COVERAGE:
+            reasons.append(
+                f"tape: {n_signed} of {n_total} prints side-resolved ({coverage:.0%} of premium) — "
+                f"below the {PRESSURE_TAPE_MIN_PRINTS}-print / {PRESSURE_TAPE_MIN_COVERAGE:.0%} floor, so it abstains"
+            )
+        else:
+            tape_ratio = raw_ratio
+            evidence = min(1.0, n_signed / PRESSURE_TAPE_FULL_PRINTS) * math.sqrt(coverage) * quality
+            channels.append(("tape", 1.0, tape_ratio, evidence))
+            mix = tape.get("source_mix") or {}
+            delayed = int(mix.get("quote_rule_delayed") or 0)
+            ticks = int(mix.get("tick_rule") or 0)
+            if ticks and ticks >= n_signed / 2:
+                reasons.append(
+                    "tape: most sides come from the tick test (price vs previous print, 0.4 weight) — "
+                    "the live chain carries no bid/ask to apply the quote rule"
+                )
+            elif delayed and delayed >= n_signed / 2:
+                reasons.append("tape: most sides come from a delayed reference quote (half weight)")
+    else:
+        reasons.append("tape: no flow prints available")
+
+    underlying_ratio: float | None = None
+    underlying_out: dict[str, Any] | None = None
+    if underlying and underlying.get("ratio") is not None:
+        underlying_ratio = max(-1.0, min(1.0, float(underlying["ratio"])))
+        underlying_out = dict(underlying)
+        bars_used = int(underlying.get("bars_used") or 0)
+        stale = bool(underlying.get("stale"))
+        quality = min(1.0, bars_used / PRESSURE_UNDERLYING_BARS) * (0.4 if stale else 0.6)
+        channels.append(("underlying", 0.5, underlying_ratio, quality))
+        if stale:
+            reasons.append("underlying: bars are stale")
+    else:
+        reasons.append("underlying: no bars supplied — volume corroboration unavailable")
+
+    # Context, never a vote.
+    call_put_mix = _ratio(delta_weighted_call_vol - delta_weighted_put_vol, gross_vol)
+    gex_ratio = _ratio(net_gex_m, gross_gex)
+    gex_regime = "amplifying" if net_gex_m < -eps else "dampening" if net_gex_m > eps else "neutral"
+
+    weight_total = sum(weight for _, weight, _, _ in channels)
     imbalance = (
-        sum(weight * ratio for weight, ratio in channels) / weight_total
+        sum(weight * ratio for _, weight, ratio, _ in channels) / weight_total
         if weight_total > eps else 0.0
     )
     imbalance = max(-1.0, min(1.0, imbalance))
-    if imbalance > 0.25:
-        label = "buying"
-    elif imbalance < -0.25:
-        label = "selling"
+    if imbalance > PRESSURE_DIRECTION_THRESHOLD:
+        direction = "buying"
+    elif imbalance < -PRESSURE_DIRECTION_THRESHOLD:
+        direction = "selling"
     else:
-        label = "balanced"
+        direction = "balanced"
+
+    head_sign = _sign(imbalance)
+    conflicts: list[dict[str, Any]] = []
+    agreement = 0.0
+    n_active = len(channels)
+    if channels:
+        agree_weight = 0.0
+        for name, weight, ratio, _ in channels:
+            channel_sign = _sign(ratio)
+            if head_sign == 0:
+                agree = 1.0 if channel_sign == 0 else 0.0
+                if abs(ratio) >= PRESSURE_DIRECTION_THRESHOLD:
+                    conflicts.append({
+                        "channel": name, "ratio": round(ratio, 6),
+                        "note": f"{name} reads {'buying' if ratio > 0 else 'selling'} but the blend is balanced",
+                    })
+            elif channel_sign == 0:
+                agree = 0.5
+            elif channel_sign == head_sign:
+                agree = 1.0
+            else:
+                agree = 0.0
+                conflicts.append({
+                    "channel": name, "ratio": round(ratio, 6),
+                    "note": f"{name} reads {'buying' if ratio > 0 else 'selling'} against the {direction} headline",
+                })
+            agree_weight += weight * agree
+        agreement = agree_weight / weight_total
+    if n_active == 1:
+        agreement = 0.5
+        reasons.append("uncorroborated: only one directional channel is active")
+    if n_active == 0:
+        reasons.append("no signed evidence: nothing here votes on direction")
+
+    evidence_score = (
+        0.6 * (sum(quality for *_, quality in channels) / n_active) + 0.4 * min(1.0, n_active / 3.0)
+        if channels else 0.0
+    )
+    magnitude = min(1.0, abs(imbalance) / 0.5)
+    live = str(mode_resolved or "").lower() == "live"
+    freshness = 1.0 if live else 0.4
+    if spot_stale:
+        freshness = max(0.0, freshness - 0.3)
+        reasons.append("spot is stale")
+    if not live:
+        reasons.append(f"{mode_resolved or 'history'} mode: delayed data caps confidence; not for live entries")
+    score = (
+        0.40 * agreement + 0.25 * evidence_score + 0.15 * magnitude + 0.20 * freshness
+        if channels else 0.0
+    )
+    if score >= 0.70:
+        band = "high"
+    elif score >= 0.50:
+        band = "medium"
+    elif score >= 0.30:
+        band = "low"
+    else:
+        band = "unmeasurable"
+    if n_active < 2 and band in {"high", "medium"}:
+        band = "low"
+    if not live and band == "high":
+        band = "medium"
+    if conflicts and band == "high":
+        band = "medium"
+    # Sides that come only from the tick test (mean weight < 0.5) are real but
+    # weak evidence; they can confirm a read, not make it "high".
+    if tape_ratio is not None and tape_out is not None and float(tape_out["quality"]) < 0.5 and band == "high":
+        band = "medium"
+        reasons.append("tape: side evidence is tick-test only, so confidence is capped at medium")
+
+    hard_conflict = any(
+        weight >= 1.0 and abs(ratio) >= PRESSURE_DIRECTION_THRESHOLD and _sign(ratio) == -head_sign
+        for _, weight, ratio, _ in channels
+    ) if head_sign else False
+    actionable = bool(
+        direction != "balanced" and band in {"high", "medium"} and live and not hard_conflict
+    )
+    if hard_conflict:
+        reasons.append("a full-weight channel reads the opposite way — no trade")
+
+    word = {"buying": "BUYING PRESSURE", "selling": "SELLING PRESSURE", "balanced": "BALANCED"}[direction]
+    if actionable:
+        verdict = f"{word} · {band.upper()} CONFIDENCE"
+    elif direction != "balanced":
+        verdict = f"LEAN {direction.upper()} · UNCONFIRMED ({band.upper()})"
+    else:
+        verdict = f"BALANCED · {band.upper()}"
+
     return {
         "imbalance": round(imbalance, 6),
-        "label": label,
+        "label": direction,
+        "direction": direction,
+        "actionable": actionable,
+        "verdict": verdict,
+        "confidence": {
+            "score": round(score, 4),
+            "band": band,
+            "agreement": round(agreement, 4),
+            "evidence": round(evidence_score, 4),
+            "magnitude": round(magnitude, 4),
+            "freshness": round(freshness, 4),
+            "channels_active": n_active,
+        },
+        "conflicts": conflicts,
+        "reasons": reasons,
         "components": {
             "net_charm_flow": round(net_charm_flow, 4),
             "delta_weighted_call_vol": round(delta_weighted_call_vol, 4),
             "delta_weighted_put_vol": round(delta_weighted_put_vol, 4),
             "net_gex_m": round(net_gex_m, 4),
         },
-        # Per-channel contribution, so the UI can show WHY the gauge reads the
-        # way it does instead of presenting one opaque number.
+        # Per-channel ratio, so the UI can show WHY the gauge reads the way it
+        # does. None = abstained (no data / below floor), never 0. `volume` and
+        # `gex` are kept for payload compatibility but are always None: they
+        # do not vote any more (see `context`).
         "channels": {
             "charm": None if charm_ratio is None else round(charm_ratio, 6),
-            "volume": None if vol_ratio is None else round(vol_ratio, 6),
-            "gex": None if gex_ratio is None else round(gex_ratio, 6),
+            "tape": None if tape_ratio is None else round(tape_ratio, 6),
+            "underlying": None if underlying_ratio is None else round(underlying_ratio, 6),
+            "volume": None,
+            "gex": None,
         },
-        "weights": {"alpha": alpha, "beta": beta},
+        "weights": {"charm": 1.0, "tape": 1.0, "underlying": 0.5, "alpha": alpha, "beta": beta},
+        "context": {
+            "call_put_mix": None if call_put_mix is None else round(call_put_mix, 6),
+            "gex_ratio": None if gex_ratio is None else round(gex_ratio, 6),
+            "gex_regime": gex_regime,
+            "follow_through": (
+                "moves extend (dealers hedge with the move)" if gex_regime == "amplifying"
+                else "moves fade (dealers hedge against the move)" if gex_regime == "dampening"
+                else "no gamma read"
+            ),
+        },
+        "tape": tape_out,
+        "underlying": underlying_out,
+        "thresholds": {
+            "direction": PRESSURE_DIRECTION_THRESHOLD,
+            "neutral": PRESSURE_NEUTRAL_BAND,
+        },
         "convention_note": (
             "Charm-flow sign follows the dealer-long-calls/short-puts convention; "
-            "positive net charm flow maps to selling pressure. Positioning proxy, not observed flow."
+            "positive net charm flow maps to selling pressure. Only signed evidence "
+            "(charm, side-resolved tape, underlying close-location) votes on direction; "
+            "call/put mix and GEX sign are context."
         ),
     }
 
@@ -2908,8 +3602,14 @@ def build_options_intelligence(
     asof_utc: datetime | None = None, warnings: Iterable[str] = (),
     open_interest_source: str = "provider",
     history_chain_rows: Sequence[Mapping[str, Any]] = (),
+    underlying_bars: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Create the dashboard payload without manufacturing missing observations."""
+    """Create the dashboard payload without manufacturing missing observations.
+
+    ``underlying_bars`` (chronological OHLCV dicts, typically the last few
+    sessions of 1h bars) feeds the pressure read's underlying corroboration
+    channel. Omit it and that channel abstains and says so.
+    """
     now = asof_utc or datetime.now(timezone.utc)
     latest_rows, chain_observed = _latest_chain(chain_rows)
     observed_spots = [
@@ -2945,13 +3645,16 @@ def build_options_intelligence(
     )
     spread_samples = [row["spread_pct"] for row in filtered_chain if row["spread_pct"] is not None]
     median_spread_pct = median(spread_samples) if spread_samples else None
-    flow_series, tape, flow_rejected, signed_observations, activity_observations = _flow_series(
+    (
+        flow_series, tape, flow_rejected, signed_observations, activity_observations, tape_channel,
+    ) = _flow_series(
         flow_rows,
         filters=filters,
         asof=now,
         selected_expiry=chain_context["selected_expiry"],
         mode_requested=mode_requested,
         spot=resolved_spot,
+        chain_rows=latest_rows,
     )
     # Keep an exact expiry as the structural/GEX focus, but do not let it turn
     # a live tape into an unsigned chain proxy when every otherwise-qualified
@@ -2971,6 +3674,7 @@ def build_options_intelligence(
             relaxed_rejected,
             relaxed_signed_observations,
             relaxed_activity_observations,
+            relaxed_tape_channel,
         ) = _flow_series(
             flow_rows,
             filters=filters,
@@ -2978,6 +3682,7 @@ def build_options_intelligence(
             selected_expiry=None,
             mode_requested=mode_requested,
             spot=resolved_spot,
+            chain_rows=latest_rows,
         )
         if relaxed_tape:
             flow_series = relaxed_series
@@ -2990,6 +3695,7 @@ def build_options_intelligence(
             }
             signed_observations = relaxed_signed_observations
             activity_observations = relaxed_activity_observations
+            tape_channel = relaxed_tape_channel
     activity_basis = "trade_tape"
     if not flow_series:
         flow_series = _chain_activity_series(chain_rows, filters=filters, asof=now)
@@ -3052,15 +3758,24 @@ def build_options_intelligence(
             delta_weighted_call_vol += max(0.0, float(delta)) * volume
         else:
             delta_weighted_put_vol += abs(float(delta)) * volume
+    charm_contracts = int(charm_summary["contracts_measured"]) + int(charm_summary["contracts_skipped"])
     pressure = _pressure_gauge(
         net_charm_flow=charm_summary["net_charm_flow"],
         net_gex_m=gex_summary["total_gex_m"],
         delta_weighted_call_vol=delta_weighted_call_vol,
         delta_weighted_put_vol=delta_weighted_put_vol,
         # Gross magnitudes normalize each channel onto a common [-1, 1] scale;
-        # without them the charm term's raw units swamp GEX and volume entirely.
+        # without them the charm term's raw units swamp everything else.
         abs_charm_flow=charm_summary["abs_charm_flow"],
         abs_gex_m=gex_summary.get("abs_gex_m"),
+        # Signed order flow from the tape and the underlying's own bars are the
+        # corroboration a positioning proxy needs before anyone trades on it.
+        tape=tape_channel if activity_basis == "trade_tape" else None,
+        underlying=_underlying_pressure(underlying_bars, asof=now) if underlying_bars else None,
+        charm_coverage=(
+            int(charm_summary["contracts_measured"]) / charm_contracts if charm_contracts else None
+        ),
+        mode_resolved=mode_resolved,
     )
     probability = _probability_context(
         filtered_chain, spot=resolved_spot, asof=chain_asof, rate=filters.risk_free_rate,

@@ -303,6 +303,86 @@ const gaugePct = computed(() => {
   return Math.round(((v + 1) / 2) * 100)
 })
 
+/** Server-side read: confidence band, actionability and the channels behind it. */
+const pressureBand = computed(() => pressure.value?.confidence?.band ?? 'unmeasurable')
+const pressureActionable = computed(() => pressure.value?.actionable === true)
+const pressureVerdict = computed(() => pressure.value?.verdict ?? pressureLabel.value)
+const tapeChannel = computed(() => pressure.value?.tape ?? null)
+const underlyingChannel = computed(() => pressure.value?.underlying ?? null)
+const pressureConflicts = computed(() => pressure.value?.conflicts ?? [])
+const pressureReasons = computed(() => pressure.value?.reasons ?? [])
+
+/** How the tape's sides were resolved — the trader should see what kind of evidence this is. */
+const tapeSideMixText = computed(() => {
+  const tape = tapeChannel.value
+  if (!tape || tape.n_total === 0) return 'no prints in window'
+  const mix = tape.source_mix
+  const parts: string[] = []
+  if (mix.vendor) parts.push(`${mix.vendor} vendor-signed`)
+  if (mix.quote_rule_live) parts.push(`${mix.quote_rule_live} vs live quote`)
+  if (mix.quote_rule_delayed) parts.push(`${mix.quote_rule_delayed} vs delayed quote (½ weight)`)
+  if (mix.tick_rule) parts.push(`${mix.tick_rule} by tick test (0.4 weight)`)
+  if (mix.unresolved) parts.push(`${mix.unresolved} unresolved`)
+  return parts.join(' · ')
+})
+
+interface PressureChannelRow {
+  key: 'charm' | 'tape' | 'underlying'
+  name: string
+  ratio: number | null
+  weight: number
+  detail: string
+  tone: 'buying' | 'selling' | 'balanced' | 'na'
+}
+
+/** One row per voting channel: what it read, how much it weighs, and why it may have abstained. */
+const pressureChannelRows = computed<PressureChannelRow[]>(() => {
+  const p = pressure.value
+  if (!p) return []
+  const tone = (ratio: number | null): PressureChannelRow['tone'] => {
+    if (ratio == null || !Number.isFinite(ratio)) return 'na'
+    const threshold = p.thresholds?.direction ?? 0.25
+    return ratio > threshold ? 'buying' : ratio < -threshold ? 'selling' : 'balanced'
+  }
+  const charmMeasured = charmSummary.value?.contracts_measured ?? 0
+  const charmSkipped = charmSummary.value?.contracts_skipped ?? 0
+  const tape = tapeChannel.value
+  const und = underlyingChannel.value
+  return [
+    {
+      key: 'charm',
+      name: 'Charm positioning',
+      ratio: p.channels.charm,
+      weight: p.weights.charm,
+      detail:
+        p.channels.charm == null
+          ? 'no measurable charm flow'
+          : `${signed(p.components.net_charm_flow, 0)} sh/d · ${charmMeasured}/${charmMeasured + charmSkipped} contracts · model proxy`,
+      tone: tone(p.channels.charm),
+    },
+    {
+      key: 'tape',
+      name: 'Tape buyers vs sellers',
+      ratio: p.channels.tape,
+      weight: p.weights.tape,
+      detail: tape
+        ? `${tape.n_signed}/${tape.n_total} prints sided · ${Math.round(tape.coverage * 100)}% of premium · ${tapeSideMixText.value}`
+        : 'no flow prints available',
+      tone: tone(p.channels.tape),
+    },
+    {
+      key: 'underlying',
+      name: 'Underlying volume read',
+      ratio: p.channels.underlying,
+      weight: p.weights.underlying,
+      detail: und
+        ? `${und.bars_used} × ${und.timeframe ?? '?'} bars · rvol ${und.rvol != null ? und.rvol.toFixed(2) + '×' : 'n/a'} · close-location proxy${und.stale ? ' · STALE' : ''}`
+        : 'no underlying bars supplied',
+      tone: tone(p.channels.underlying),
+    },
+  ]
+})
+
 const dataModeBadge = computed(() => {
   if (loading.value) return 'SYNC'
   if (error.value) return 'FAULT'
@@ -362,9 +442,33 @@ const microstructureAssessment = computed(() => {
     }
   }
 
-  // 3. Charm Buying Tailwind — charm may only speak when the gauge doesn't
-  // contradict it, so a blended "selling" read can't be relabelled by raw flow.
-  if (imb > 0.25 || (ratio <= -CHARM_ONE_SIDED && imb >= -0.25)) {
+  // 3. A directional lean the server could not confirm. This used to be
+  // promoted straight to "Strong Structural Buying/Selling Pressure" off the
+  // gauge sign alone; now the read says it is unconfirmed and why — a charm
+  // positioning proxy with no tape or underlying corroboration is a watch
+  // item, not a trade.
+  const actionable = pressure.value.actionable === true
+  const band = pressure.value.confidence?.band ?? 'unmeasurable'
+  if (!actionable && (Math.abs(imb) > 0.25 || Math.abs(ratio) >= CHARM_ONE_SIDED)) {
+    const lean = imb > 0.25 ? 'buying' : imb < -0.25 ? 'selling' : ratio < 0 ? 'buying' : 'selling'
+    const conflictText = pressure.value.conflicts.map((c) => c.note).join('; ')
+    const active = pressure.value.confidence?.channels_active ?? 0
+    return {
+      title: `Unconfirmed ${lean === 'buying' ? 'Buying' : 'Selling'} Lean`,
+      direction: 'NO TRADE · WAIT FOR CONFIRMATION',
+      action: `${band.toUpperCase()} CONFIDENCE`,
+      tone: 'balanced',
+      body: conflictText
+        ? `The evidence disagrees: ${conflictText}.`
+        : `The ${lean} read rests on ${active} directional channel${active === 1 ? '' : 's'} and is not corroborated by the tape or the underlying.`,
+      implication:
+        pressure.value.reasons.slice(0, 3).join(' · ') ||
+        'Wait for side-resolved tape flow or the underlying to confirm the positioning read.',
+    }
+  }
+
+  // 4. Charm Buying Tailwind — only when the blended read is confirmed.
+  if (actionable && imb > 0.25) {
     return {
       title: 'Strong Structural Buying Pressure',
       direction: 'LONG BIAS (BUYING TAILWIND)',
@@ -378,8 +482,8 @@ const microstructureAssessment = computed(() => {
     }
   }
 
-  // 4. Charm Selling Headwind — same guard as branch 3, mirrored.
-  if (imb < -0.25 || (ratio >= CHARM_ONE_SIDED && imb <= 0.25)) {
+  // 5. Charm Selling Headwind — same guard as branch 4, mirrored.
+  if (actionable && imb < -0.25) {
     return {
       title: 'Strong Structural Selling Pressure',
       direction: 'SHORT BIAS (SELLING HEADWIND)',
@@ -658,6 +762,9 @@ const strategies = computed(() => {
     (pw != null && spotVal != null && spotVal <= pw) ||
     (flip != null && spotVal != null && spotVal < flip && gex < 0)
 
+  // Only a server-confirmed directional read can arm a pressure-driven
+  // strategy. An unconfirmed lean leaves the range regime standing.
+  const actionable = pressure.value?.actionable === true
   const s1Active =
     gex >= 0 &&
     spotVal != null &&
@@ -665,16 +772,16 @@ const strategies = computed(() => {
     cw != null &&
     spotVal >= pw &&
     spotVal <= cw &&
-    Math.abs(imb) <= 0.25
+    (Math.abs(imb) <= 0.25 || !actionable)
   // s2Active (LONG/buying) is suppressed when the structural breakdown condition holds —
   // a bullish gauge reading alone does not override a structural support break.
+  // Charm one-sidedness on its own no longer arms it: a positioning proxy
+  // cannot corroborate itself.
   const s2Active =
     !structuralBreakdown &&
     ((cw != null && spotVal != null && spotVal >= cw) ||
-      (imb > 0.25 && (cw == null || (spotVal != null && spotVal < cw))) ||
-      (charmRatio.value <= -CHARM_ONE_SIDED && gex >= 0))
-  const s3Active =
-    structuralBreakdown || imb < -0.25
+      (actionable && imb > 0.25 && (cw == null || (spotVal != null && spotVal < cw))))
+  const s3Active = structuralBreakdown || (actionable && imb < -0.25)
 
   return [
     {
@@ -845,7 +952,6 @@ const isHistoryFallback = computed(
 const charmChartKey = computed(
   () => `${symbol.value}_${charmRows.value.length}_${modeResolved.value ?? 'init'}`,
 )
-
 </script>
 
 <template>
@@ -1051,7 +1157,7 @@ const charmChartKey = computed(
     </section>
 
     <!-- Pressure Gauge & Multi-Factor Decomposition -->
-    <Panel label="PRESSURE GAUGE &amp; FLOW POSTURE" :meta="pressureLabel" live>
+    <Panel label="PRESSURE GAUGE &amp; FLOW POSTURE" :meta="pressureVerdict" live>
       <div class="gauge-card-container">
         <!-- Main Gauge Bar -->
         <div class="gauge-body">
@@ -1095,23 +1201,44 @@ const charmChartKey = computed(
             <span class="buy">BUYING PRESSURE (+1.0) ▶</span>
           </div>
 
-          <p v-if="pressure" class="gauge-note label">
-            Charm flow {{ signed(pressure.components.net_charm_flow, 0) }} sh/d · ΔW call vol
-            {{ compact(pressure.components.delta_weighted_call_vol) }} · ΔW put vol
-            {{ compact(pressure.components.delta_weighted_put_vol) }} · GEX
-            {{ signed(pressure.components.net_gex_m, 1) }}M · α {{ pressure.weights.alpha }} · β
-            {{ pressure.weights.beta }}
-          </p>
           <!--
-            Each channel's own net/gross ratio, which is what the blend averages.
-            "n/a" means that channel had no gross magnitude and abstained — it did
-            NOT vote balanced, so it must not render as 0.
+            The read: verdict + confidence, then each voting channel's own
+            net/gross ratio. "n/a" means that channel abstained (no data or
+            below its evidence floor) — it did NOT vote balanced, so it must
+            not render as 0. Call/put mix and GEX sign are context, not votes.
           -->
-          <p v-if="pressure" class="gauge-note label">
-            Channels · charm {{ channelText(pressure.channels.charm) }} · volume
-            {{ channelText(pressure.channels.volume) }} · GEX
-            {{ channelText(pressure.channels.gex) }}
-          </p>
+          <div v-if="pressure" class="read-block" data-testid="pressure-read">
+            <div class="read-verdict">
+              <span class="fig read-verdict-text" :class="pressure.direction">{{ pressure.verdict }}</span>
+              <span class="conf-chip label" :class="pressureBand">
+                {{ pressureBand.toUpperCase() }} · {{ Math.round(pressure.confidence.score * 100) }}
+              </span>
+              <span class="conf-chip label" :class="pressureActionable ? 'actionable' : 'hold'">
+                {{ pressureActionable ? 'ACTIONABLE' : 'NO TRADE' }}
+              </span>
+            </div>
+            <div class="channel-list">
+              <template v-for="row in pressureChannelRows" :key="row.key">
+                <span class="label channel-name">{{ row.name }}</span>
+                <span class="fig channel-ratio" :class="row.tone">{{ channelText(row.ratio) }}</span>
+                <span class="label channel-detail">w {{ row.weight }} · {{ row.detail }}</span>
+              </template>
+            </div>
+            <p class="gauge-note label">
+              Context (not votes) · call/put mix {{ channelText(pressure.context.call_put_mix) }} · GEX
+              {{ signed(pressure.components.net_gex_m, 1) }}M {{ pressure.context.gex_regime }} —
+              {{ pressure.context.follow_through }} · agreement
+              {{ Math.round(pressure.confidence.agreement * 100) }}% · evidence
+              {{ Math.round(pressure.confidence.evidence * 100) }}% · freshness
+              {{ Math.round(pressure.confidence.freshness * 100) }}%
+            </p>
+            <ul v-if="pressureConflicts.length" class="reason-list conflict label">
+              <li v-for="c in pressureConflicts" :key="c.channel">⚠ {{ c.note }} ({{ signed(c.ratio, 2) }})</li>
+            </ul>
+            <ul v-if="pressureReasons.length" class="reason-list label">
+              <li v-for="(r, i) in pressureReasons" :key="i">{{ r }}</li>
+            </ul>
+          </div>
           <p v-else class="gauge-note label">Pressure unavailable until the chain loads.</p>
         </div>
 
@@ -1157,21 +1284,48 @@ const charmChartKey = computed(
             </p>
           </div>
 
-          <div class="factor-card">
+          <!--
+            Buyer/seller imbalance from side-resolved prints. Call-vs-put volume
+            used to sit here captioned "Bullish/Bearish bias" — a bought put and
+            a sold put are the same row in that number, so it never measured
+            who was pressing. The mix is still shown, as context.
+          -->
+          <div class="factor-card" :class="pressureChannelRows[1]?.tone">
             <div class="factor-head">
-              <span class="label">3. LIVE FLOW AGGRESSION</span>
-              <span class="factor-badge label">INTRADAY</span>
+              <span class="label">3. TAPE BUYERS VS SELLERS</span>
+              <span class="factor-badge label" :class="pressureChannelRows[1]?.tone">
+                {{ pressureChannelRows[1]?.tone === 'na' ? 'ABSTAINS' : (pressureChannelRows[1]?.tone ?? 'n/a').toUpperCase() }}
+              </span>
             </div>
-            <div class="factor-metric fig">
-              C: {{ compact(pressure.components.delta_weighted_call_vol) }} · P:
-              {{ compact(pressure.components.delta_weighted_put_vol) }}
+            <div class="factor-metric fig" :class="pressureChannelRows[1]?.tone">
+              {{ channelText(pressure.channels.tape) }}
+              <small v-if="tapeChannel">{{ tapeChannel.n_signed }}/{{ tapeChannel.n_total }} sided</small>
             </div>
             <p class="factor-desc">
               {{
-                pressure.components.delta_weighted_call_vol >
-                pressure.components.delta_weighted_put_vol
-                  ? 'Call taker volume leads put taker volume on a delta-weighted basis (Bullish bias).'
-                  : 'Put taker volume leads call taker volume on a delta-weighted basis (Bearish bias).'
+                tapeChannel && tapeChannel.n_total > 0
+                  ? `Buy ${compact(tapeChannel.buy_premium)} vs sell ${compact(tapeChannel.sell_premium)} premium on the underlying (buy call / sell put = buying). ${tapeSideMixText}. Call/put mix ${channelText(pressure.context.call_put_mix)} is contract identity, not side.`
+                  : 'No prints in the window, so the tape cannot say who is pressing.'
+              }}
+            </p>
+          </div>
+
+          <div class="factor-card" :class="pressureChannelRows[2]?.tone">
+            <div class="factor-head">
+              <span class="label">4. UNDERLYING VOLUME READ</span>
+              <span class="factor-badge label" :class="pressureChannelRows[2]?.tone">
+                {{ pressureChannelRows[2]?.tone === 'na' ? 'ABSTAINS' : (pressureChannelRows[2]?.tone ?? 'n/a').toUpperCase() }}
+              </span>
+            </div>
+            <div class="factor-metric fig" :class="pressureChannelRows[2]?.tone">
+              {{ channelText(pressure.channels.underlying) }}
+              <small v-if="underlyingChannel">rvol {{ underlyingChannel.rvol != null ? underlyingChannel.rvol.toFixed(2) + '×' : 'n/a' }}</small>
+            </div>
+            <p class="factor-desc">
+              {{
+                underlyingChannel
+                  ? `Closes ${underlyingChannel.ratio > 0.25 ? 'near the highs' : underlyingChannel.ratio < -0.25 ? 'near the lows' : 'mid-range'} on volume over the last ${underlyingChannel.bars_used} × ${underlyingChannel.timeframe ?? '?'} bars (${signed(underlyingChannel.close_change_pct ?? 0, 2)}%). ${underlyingChannel.note}`
+                  : 'No underlying bars were supplied, so the stock itself cannot corroborate the options read.'
               }}
             </p>
           </div>
@@ -1207,10 +1361,11 @@ const charmChartKey = computed(
       <!-- Snapshot data notice -->
       <div v-if="isHistoryFallback" class="snapshot-notice label">
         <span class="snap-icon">⏸</span>
-        SNAPSHOT DATA — live feed unavailable for {{ symbol }}. Values reflect the last cached chain ({{ asof ? shortDate(asof) : '—' }}). Cascade mechanics are correct for the snapshot; they update when a live feed reconnects.
+        SNAPSHOT DATA — live feed unavailable for {{ symbol }}. Values reflect the last cached chain
+        ({{ asof ? shortDate(asof) : '—' }}). Cascade mechanics are correct for the snapshot; they
+        update when a live feed reconnects.
       </div>
       <div class="flow-cascade-container">
-
         <div class="cascade-step">
           <div class="step-num label">STEP 1</div>
           <div class="step-title">Time &amp; Price State</div>
@@ -1324,8 +1479,7 @@ const charmChartKey = computed(
         -->
         <div v-else-if="charmAllSkipped" class="placeholder">
           <span class="ph-msg">
-            Charm not measurable for {{ symbol }} — no contract in the chain met the model's
-            inputs.
+            Charm not measurable for {{ symbol }} — no contract in the chain met the model's inputs.
           </span>
           <span v-if="charmSkipDetail" class="ph-sub label">{{ charmSkipDetail }}</span>
           <span v-if="charmSkipHint" class="ph-sub label">{{ charmSkipHint }}</span>
@@ -1342,7 +1496,8 @@ const charmChartKey = computed(
           :height="440"
         />
         <div v-if="isHistoryFallback && hasChain" class="snapshot-chart-notice label">
-          ⏸ Chart shows cached snapshot ({{ asof ? shortDate(asof) : '—' }}). Bar heights will refresh when a live chain reconnects.
+          ⏸ Chart shows cached snapshot ({{ asof ? shortDate(asof) : '—' }}). Bar heights will
+          refresh when a live chain reconnects.
         </div>
         <!-- Partial coverage: the chart is real but incomplete. Say which strikes are absent. -->
         <div
@@ -1351,9 +1506,9 @@ const charmChartKey = computed(
         >
           ⚠ {{ charmSummary?.contracts_skipped }} of
           {{ (charmSummary?.contracts_measured ?? 0) + (charmSummary?.contracts_skipped ?? 0) }}
-          contracts excluded — {{ charmSkipDetail }}. Those strikes are absent from the chart, not flat.
+          contracts excluded — {{ charmSkipDetail }}. Those strikes are absent from the chart, not
+          flat.
         </div>
-
       </div>
     </Panel>
 
@@ -2024,8 +2179,8 @@ h1 {
   flex-wrap: wrap;
 }
 .quick-label {
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   margin-right: 4px;
 }
 .chip-btn {
@@ -2034,7 +2189,7 @@ h1 {
   border-radius: var(--r-xs);
   background: var(--panel);
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   cursor: pointer;
   transition:
@@ -2066,7 +2221,7 @@ h1 {
   gap: 4px;
 }
 .symbol-box .label {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
   font-size: var(--t-micro);
   letter-spacing: 0.06em;
@@ -2179,7 +2334,7 @@ h1 {
   color: var(--phosphor);
 }
 .dte-note {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .iv-note {
   color: var(--call-hi);
@@ -2210,7 +2365,7 @@ h1 {
   justify-content: space-between;
 }
 .k-key {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
   font-size: var(--t-micro);
   letter-spacing: 0.06em;
@@ -2223,8 +2378,8 @@ h1 {
   height: 12px;
   border-radius: 50%;
   background: var(--panel-hi);
-  color: var(--ink-ghost);
-  font-size: 8px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   font-weight: 700;
   cursor: help;
 }
@@ -2297,8 +2452,13 @@ h1 {
 }
 
 @keyframes blink-tag {
-  0%, 100% { opacity: 0.85; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* Pressure gauge container */
@@ -2445,6 +2605,95 @@ h1 {
   letter-spacing: 0.03em;
 }
 
+/* Pressure read: verdict, confidence, channel table, reasons */
+.read-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.read-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.read-verdict-text {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.read-verdict-text.buying {
+  color: var(--call-hi);
+}
+.read-verdict-text.selling {
+  color: var(--put-hi);
+}
+.read-verdict-text.balanced {
+  color: var(--ink-dim);
+}
+.conf-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+.conf-chip.high,
+.conf-chip.actionable {
+  color: var(--call-hi);
+}
+.conf-chip.medium {
+  color: var(--ink);
+}
+.conf-chip.low,
+.conf-chip.unmeasurable,
+.conf-chip.hold {
+  color: var(--put-hi);
+}
+.channel-list {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 2px var(--s3);
+  align-items: baseline;
+}
+.channel-name {
+  color: var(--ink-dim);
+}
+.channel-ratio {
+  font-weight: 700;
+}
+.channel-ratio.buying {
+  color: var(--call-hi);
+}
+.channel-ratio.selling {
+  color: var(--put-hi);
+}
+.channel-ratio.balanced,
+.channel-ratio.na {
+  color: var(--ink-dim);
+}
+.channel-detail {
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+}
+.reason-list {
+  margin: 0;
+  padding-left: 1.1em;
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  line-height: 1.5;
+}
+.reason-list.conflict {
+  color: var(--put-hi);
+}
+.factor-card.na {
+  opacity: 0.75;
+}
+
 /* 3-Factor Breakdown Grid */
 .factor-grid {
   display: grid;
@@ -2483,7 +2732,7 @@ h1 {
 .factor-badge {
   padding: 1px 5px;
   border-radius: 2px;
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   border: var(--hair) solid var(--rule);
 }
@@ -2552,8 +2801,8 @@ h1 {
   flex-wrap: wrap;
 }
 .assess-tag {
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
 }
 .assess-title {
   font-size: var(--t-body);
@@ -2627,9 +2876,9 @@ h1 {
 }
 
 .step-num {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   letter-spacing: 0.06em;
 }
 .step-title {
@@ -2667,7 +2916,7 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: 14px;
   font-weight: 700;
   padding: 0 2px;
@@ -2713,7 +2962,7 @@ h1 {
   background: var(--phosphor-wash);
   color: var(--phosphor);
   border-color: var(--phosphor-dim);
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 .ticket-title {
   font-size: var(--t-display);
@@ -2741,8 +2990,8 @@ h1 {
   background: var(--panel);
 }
 .lvl-label {
-  font-size: 8px;
-  color: var(--ink-ghost);
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
   letter-spacing: 0.05em;
 }
 .lvl-val {
@@ -2772,9 +3021,9 @@ h1 {
   background: var(--void);
 }
 .inst-label {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 .inst-text {
   font-size: var(--t-body);
@@ -2799,8 +3048,8 @@ h1 {
   border-top: var(--hair) solid var(--rule-faint);
 }
 .mech-label {
-  font-size: 8px;
-  color: var(--ink-ghost);
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
 }
 .mech-text {
   font-size: var(--t-micro);
@@ -2852,7 +3101,7 @@ h1 {
 .strat-status {
   padding: 1px 6px;
   border-radius: var(--r-xs);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   border: var(--hair) solid var(--rule);
 }
@@ -2878,7 +3127,7 @@ h1 {
 }
 
 .dir-badge {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
 }
 .dir-badge.buying {
@@ -2898,7 +3147,7 @@ h1 {
 }
 
 .strat-regime {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: 10px;
 }
 
@@ -2908,8 +3157,8 @@ h1 {
   gap: 2px;
 }
 .strat-label {
-  color: var(--ink-ghost);
-  font-size: 9px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   text-transform: uppercase;
 }
 .strat-text {
@@ -2956,7 +3205,7 @@ h1 {
 }
 .stage-name {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
 }
 .stage-note {
@@ -2982,14 +3231,14 @@ h1 {
   flex-wrap: wrap;
 }
 .matrix-title {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
 }
 .current-spot-badge {
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 .current-spot-badge b {
   color: var(--ink);
@@ -3033,7 +3282,7 @@ h1 {
 }
 .m-dir {
   font-weight: 700;
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.04em;
 }
 .m-dir.call {
@@ -3049,7 +3298,7 @@ h1 {
 .m-badge {
   padding: 1px 5px;
   border-radius: var(--r-xs);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   border: var(--hair) solid var(--rule);
 }
@@ -3059,7 +3308,7 @@ h1 {
   border-color: var(--phosphor-dim);
 }
 .m-badge.pending {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   background: var(--void);
 }
 .m-rule {
@@ -3068,8 +3317,8 @@ h1 {
   line-height: 1.4;
 }
 .m-levels {
-  font-size: 8px;
-  color: var(--ink-ghost);
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
 }
 
 /* Table controls */
@@ -3090,7 +3339,7 @@ h1 {
   background: var(--void);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xs);
-  font-size: 9px;
+  font-size: var(--t-nano);
 }
 .table-search-input:focus {
   outline: none;
@@ -3108,7 +3357,7 @@ h1 {
   border: none;
   background: transparent;
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 600;
   cursor: pointer;
   text-transform: uppercase;
@@ -3124,7 +3373,7 @@ h1 {
   border-radius: var(--r-xs);
   background: var(--panel);
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   cursor: pointer;
 }
@@ -3160,7 +3409,7 @@ h1 {
   top: 0;
   z-index: 10;
   padding: 4px 8px;
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-align: center;
@@ -3192,7 +3441,7 @@ h1 {
   top: 26px;
   z-index: 9;
   padding: 6px 8px;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-align: right;
@@ -3255,7 +3504,7 @@ h1 {
   display: inline-block;
   padding: 1px 4px;
   border-radius: 2px;
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.04em;
   border: var(--hair) solid var(--rule);
@@ -3504,4 +3753,3 @@ h1 {
   background: var(--panel);
 }
 </style>
-

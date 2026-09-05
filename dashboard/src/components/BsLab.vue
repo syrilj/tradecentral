@@ -82,6 +82,46 @@ function toPath(pts: { x: number; y: number }[]): string {
 const callPath = computed(() => toPath(curves.value.call))
 const putPath = computed(() => toPath(curves.value.put))
 
+/* ── domain-aware helpers: raw value -> plot y, using the curves' own range ── */
+function plotYOfRaw(v: number): number {
+  const { lo, hi } = curves.value.domain
+  const span = hi - lo || 1
+  return midY - ((2 * (v - lo)) / span - 1) * (plotH / 2)
+}
+
+/** Zero line only exists when the plotted range actually crosses zero. */
+const zeroY = computed((): number | null => {
+  const { lo, hi } = curves.value.domain
+  return lo <= 0 && hi >= 0 ? plotYOfRaw(0) : null
+})
+
+/* ── marker dots pinned on both curves at the selected strike ─────────────── */
+const strikeIdx = computed(() =>
+  Math.min(Math.max(Math.round(((strike.value - K_LOW) / (K_HIGH - K_LOW)) * (N_PTS - 1)), 0), N_PTS - 1),
+)
+const callDotY = computed(() => midY - (curves.value.call[strikeIdx.value]?.y ?? 0) * (plotH / 2))
+const putDotY = computed(() => midY - (curves.value.put[strikeIdx.value]?.y ?? 0) * (plotH / 2))
+
+/* ── intrinsic payoff boundary (value tab): the expiry limit of both curves ── */
+const boundaryPath = computed((): { call: string; put: string } | null => {
+  if (activeGreek.value.id !== 'value') return null
+  const toBoundary = (intrinsic: (K: number) => number): string =>
+    curves.value.strikes
+      .map(
+        (K, i) =>
+          `${i === 0 ? 'M' : 'L'}${(M.l + ((K - K_LOW) / (K_HIGH - K_LOW)) * plotW).toFixed(1)},${plotYOfRaw(intrinsic(K)).toFixed(1)}`,
+      )
+      .join('')
+  return {
+    call: toBoundary((K) => Math.max(S - K, 0)),
+    put: toBoundary((K) => Math.max(K - S, 0)),
+  }
+})
+const boundaryNote = computed(() => {
+  if (!boundaryPath.value) return null
+  return { x: tickX(S) - 8, y: plotYOfRaw(0) - 8 }
+})
+
 /* ── ATM marker position on the shared axis ───────────────────────────────── */
 const atmX = computed(() => M.l + ((strike.value - K_LOW) / (K_HIGH - K_LOW)) * plotW)
 
@@ -206,7 +246,7 @@ onBeforeUnmount(() => ctx?.revert())
 
     <figcaption class="lab-head">
       <div class="lab-title lab-reveal">
-        <span class="fig-label">BLACK–SHOLES WORKBENCH</span>
+        <span class="fig-label">BLACK–SCHOLES WORKBENCH</span>
         <span class="fig-state">STRUCTURAL MODEL · DRAG TO EXPLORE</span>
       </div>
 
@@ -240,6 +280,8 @@ onBeforeUnmount(() => ctx?.revert())
     <div class="plot-stage lab-reveal">
       <svg
         ref="svgRef"
+        role="img"
+        aria-label="Black-Scholes option values across the strike axis, with the selected strike marked on both legs and the expiry payoff boundary shown."
         :viewBox="`0 0 ${VB_W} ${VB_H}`"
         preserveAspectRatio="xMidYMid meet"
         @pointerdown="onDown"
@@ -252,20 +294,33 @@ onBeforeUnmount(() => ctx?.revert())
           <line v-for="(y, i) in gridH" :key="`h${i}`" x1="16" :y1="y" :x2="VB_W - 16" :y2="y" />
           <line v-for="(x, i) in gridW" :key="`w${i}`" :x1="x" y1="28" :x2="x" :y2="VB_H - 32" />
         </g>
-        <!-- zero line -->
-        <line class="zero-line" x1="16" :y1="midY" :x2="VB_W - 16" :y2="midY" />
+        <!-- zero line, only when the plotted range crosses zero -->
+        <line v-if="zeroY !== null" class="zero-line" x1="16" :y1="zeroY" :x2="VB_W - 16" :y2="zeroY" />
 
-        <!-- payoff boundary annotation (meaningful for value; harmless otherwise) -->
-        <text class="plot-note" x="24" y="44">payoff boundary</text>
+        <!-- intrinsic payoff boundary: the expiry limit the smooth curves sit above -->
+        <g v-if="boundaryPath" class="boundary">
+          <path :d="boundaryPath.put" />
+          <path :d="boundaryPath.call" />
+          <text
+            v-if="boundaryNote"
+            class="plot-note"
+            :x="boundaryNote.x"
+            :y="boundaryNote.y"
+            text-anchor="end"
+          >
+            payoff boundary at expiry
+          </text>
+        </g>
 
         <!-- curves -->
         <path class="bs-curve put" :d="putPath" />
         <path class="bs-curve call" :d="callPath" />
 
-        <!-- draggable ATM/strike marker -->
+        <!-- draggable strike marker, dots pinned on both curves -->
         <g class="atm-marker">
           <line :x1="atmX" y1="22" :x2="atmX" :y2="VB_H - 30" />
-          <circle :cx="atmX" :cy="midY" r="3.5" />
+          <circle class="mk call" :cx="atmX" :cy="callDotY" r="3" />
+          <circle class="mk put" :cx="atmX" :cy="putDotY" r="3" />
         </g>
 
         <!-- strike axis ticks -->
@@ -332,7 +387,7 @@ onBeforeUnmount(() => ctx?.revert())
 .fig-label {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -340,7 +395,7 @@ onBeforeUnmount(() => ctx?.revert())
 .fig-state {
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 650;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -362,7 +417,7 @@ onBeforeUnmount(() => ctx?.revert())
 .ctl-name {
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -415,7 +470,7 @@ input[type='range']::-moz-range-thumb {
   border: var(--hair) solid var(--rule);
   background: var(--void-lift);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.08em;
   cursor: pointer;
@@ -456,9 +511,9 @@ input[type='range']::-moz-range-thumb {
   stroke-dasharray: 4 4;
 }
 .plot-note {
-  fill: var(--ink-ghost);
+  fill: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.06em;
 }
 .bs-curve {
@@ -473,30 +528,45 @@ input[type='range']::-moz-range-thumb {
   stroke: var(--put);
   opacity: 0.85;
 }
+.boundary path {
+  fill: none;
+  stroke: var(--ink-faint);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
+}
+.boundary .plot-note {
+  letter-spacing: 0.05em;
+}
 .atm-marker line {
   stroke: var(--ink-soft);
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
-.atm-marker circle {
-  fill: var(--ink);
+.atm-marker .mk {
   stroke: var(--void);
   stroke-width: 1.5;
+}
+.atm-marker .mk.call {
+  fill: var(--call);
+}
+.atm-marker .mk.put {
+  fill: var(--put);
 }
 .ticks text {
   fill: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.04em;
 }
 .ticks .dim {
-  fill: var(--ink-ghost);
+  fill: var(--ink-faint);
 }
 .plot-hint {
   margin: 6px 0 0;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -521,7 +591,7 @@ input[type='range']::-moz-range-thumb {
 .ro dt {
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -548,7 +618,7 @@ input[type='range']::-moz-range-thumb {
 .lab-footer > strong {
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.05em;
   white-space: nowrap;

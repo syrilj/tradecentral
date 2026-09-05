@@ -130,21 +130,29 @@ def test_insiders_endpoint(api_client):
 
 
 def test_government_endpoint(api_client):
-    """/api/government returns authentic regulatory disclosures for tracked symbols and clean missing state for untracked."""
-    # 1. Tracked symbol with real regulatory disclosures
+    """/api/government reports the missing state for every symbol; no feed is wired.
+
+    This case previously required ASTS to come back with non-empty congress,
+    contracts and patents. The only source that could satisfy it was the
+    fabricated congressional-trade generator's leftover cache, which named real
+    members of Congress against invented trades. No disclosure feed is
+    configured in this deployment, so the honest answer -- for tracked and
+    untracked symbols alike -- is an explicit missing state.
+    """
     res = api_client.get("/api/government?symbol=ASTS")
     assert res.status_code == 200
     data = res.json()
     assert data["symbol"] == "ASTS"
     assert isinstance(data["congress"], list)
-    assert data["available"] is True
-    assert data["source"] == "regulatory_disclosures_sec_usaspending_uspto_lda"
-    assert len(data["congress"]) > 0
+    assert data["available"] is False
+    assert data["source"] == "unavailable"
+    assert data["reason"]
+    assert data["congress"] == []
     assert "lobbying" in data
     assert "history" in data["lobbying"]
     assert "filings" in data["lobbying"]
-    assert len(data["contracts"]) > 0
-    assert len(data["patents"]) > 0
+    assert data["contracts"] == []
+    assert data["patents"] == []
 
     # 2. Untracked symbol reports unavailable
     res_un = api_client.get("/api/government?symbol=ZZTESTSYM")

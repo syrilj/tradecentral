@@ -193,7 +193,7 @@ function onSvgMouseLeave(): void {
 
     <!-- Velocity Time Series SVG Chart -->
     <div class="chart-wrapper">
-      <svg
+      <svg role="img" aria-label="Kalman kinematic phase plot: velocity against price level."
         :viewBox="`0 0 ${width} ${height}`"
         class="velocity-svg"
         preserveAspectRatio="xMidYMid meet"
@@ -359,7 +359,7 @@ function onSvgMouseLeave(): void {
 .kalman-phase-card {
   background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 1rem;
   display: flex;
   flex-direction: column;
@@ -374,7 +374,7 @@ function onSvgMouseLeave(): void {
 }
 
 .eyebrow {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
@@ -388,10 +388,10 @@ function onSvgMouseLeave(): void {
 }
 
 .badge {
-  font-size: 0.6875rem;
+  font-size: var(--t-micro);
   font-weight: 700;
   padding: 0.25rem 0.5rem;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   font-family: var(--font-mono, monospace);
 }
 
@@ -421,7 +421,7 @@ function onSvgMouseLeave(): void {
 .stat-box {
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   padding: 0.625rem 0.875rem;
   display: flex;
   flex-direction: column;
@@ -429,7 +429,7 @@ function onSvgMouseLeave(): void {
 }
 
 .stat-label {
-  font-size: 0.625rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   font-family: var(--font-mono, monospace);
 }
@@ -462,7 +462,7 @@ function onSvgMouseLeave(): void {
   display: block;
   background: var(--void-lift);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--r-sm);
   cursor: crosshair;
 }
 </style>

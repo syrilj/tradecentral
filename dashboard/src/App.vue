@@ -79,6 +79,28 @@ const operatorEmail = computed(() =>
     : (user.value?.primaryEmailAddress?.emailAddress ?? ''),
 )
 const operatorAllowed = computed(() => isAllowedOperatorEmail(operatorEmail.value))
+const stripOperatorInitials = computed(() => {
+  if (localMode) return 'OP'
+  const displayName = user.value?.fullName || user.value?.firstName
+  if (displayName) {
+    const clean = displayName.trim()
+    const norm = clean.toLowerCase().replace(/[-_]/g, ' ')
+    if (norm !== 'local operator') {
+      const parts = clean.split(/\s+/)
+      if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+      if (parts.length === 1 && parts[0]) return parts[0].slice(0, 2).toUpperCase()
+    }
+  }
+  const email = operatorEmail.value?.trim()
+  if (email) {
+    const namePart = email.split('@')[0]
+    const normPart = namePart.toLowerCase().replace(/[-_]/g, ' ')
+    if (normPart !== 'local operator' && normPart !== 'local') {
+      return namePart.slice(0, 2).toUpperCase()
+    }
+  }
+  return 'OP'
+})
 const signingOut = ref(false)
 
 const SIDEBAR_STORAGE_KEY = 'edge.sidebar.collapsed.v1'
@@ -216,8 +238,15 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
-/** Seven operator destinations. Everything else lives in Tools. */
+/** Eight operator destinations. Everything else lives in Tools. */
 const primaryNav = [
+  {
+    name: 'brief',
+    title: 'Brief',
+    hint: 'Every lens, one symbol',
+    icon: 'brief',
+    tab: true,
+  },
   {
     name: 'flow',
     title: 'Flow',
@@ -363,6 +392,20 @@ const macroTools = [
     title: 'Macro',
     hint: 'Cross-asset regime board',
     icon: 'globe',
+  },
+  {
+    name: 'vpa',
+    idx: 'V1',
+    title: 'VPA',
+    hint: 'Volume Price Analysis',
+    icon: 'vpa',
+  },
+  {
+    name: 'amt',
+    idx: 'V2',
+    title: 'AMT',
+    hint: 'Auction Market Theory',
+    icon: 'amt',
   },
 ] as const
 
@@ -730,8 +773,9 @@ function onMoreMenuKey(e: KeyboardEvent): void {
 }
 
 onMounted(() => {
-  /* Dynamic density initialization handled by usePreferences */
+  /* Dynamic density and accent initialization handled by usePreferences */
   document.documentElement.dataset.density = preferences.value.density
+  document.documentElement.dataset.accent = preferences.value.accent
   try {
     const savedSidebar = localStorage.getItem(SIDEBAR_STORAGE_KEY)
     if (savedSidebar === 'true') {
@@ -749,6 +793,16 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKey)
   document.removeEventListener('pointerdown', onOutsidePointer)
 })
+
+watch(
+  () => preferences.value.accent,
+  (accent) => {
+    if (typeof document !== 'undefined' && document.documentElement) {
+      document.documentElement.dataset.accent = accent
+    }
+  },
+  { immediate: true },
+)
 
 watch(
   () => route.fullPath,
@@ -912,99 +966,101 @@ function openFearGreed(): void {
               </div>
             </button>
             <Teleport to="body">
-              <div
-                v-if="moreOpen"
-                id="workspace-tools-menu"
-                ref="morePanel"
-                class="more-panel"
-                :style="morePanelStyle"
-                role="menu"
-                aria-label="More workspaces"
-                @keydown="onMoreMenuKey"
-              >
-                <button
-                  class="more-search"
-                  type="button"
-                  role="menuitem"
-                  @click="openSearchFromTools"
+              <Transition name="fade-slide">
+                <div
+                  v-if="moreOpen"
+                  id="workspace-tools-menu"
+                  ref="morePanel"
+                  class="more-panel"
+                  :style="morePanelStyle"
+                  role="menu"
+                  aria-label="More workspaces"
+                  @keydown="onMoreMenuKey"
                 >
-                  <AppIcon name="search" :size="16" />
-                  <span class="more-title label">Search symbol</span>
-                  <span class="more-idx fig">⌘K</span>
-                </button>
-                <RouterLink
-                  to="/"
-                  class="more-item"
-                  :class="{ on: route.name === 'landing' }"
-                  title="Instrument overview and readiness"
-                  role="menuitem"
-                  @click="moreOpen = false"
-                >
-                  <AppIcon name="home" :size="16" />
-                  <span class="more-title label">Overview</span>
-                  <span class="more-idx fig">HOME</span>
-                </RouterLink>
-                <div class="more-group label">Desk</div>
-                <RouterLink
-                  v-for="n in deskTools"
-                  :key="n.name"
-                  :to="{ name: n.name }"
-                  class="more-item"
-                  :class="{ on: route.name === n.name }"
-                  :title="n.hint"
-                  role="menuitem"
-                  @click="moreOpen = false"
-                >
-                  <AppIcon :name="n.icon" :size="16" />
-                  <span class="more-title label">{{ n.title }}</span>
-                  <span class="more-idx fig">{{ n.idx }}</span>
-                </RouterLink>
-                <div class="more-group label">Market</div>
-                <RouterLink
-                  v-for="n in marketTools"
-                  :key="n.name"
-                  :to="{ name: n.name }"
-                  class="more-item"
-                  :class="{ on: route.name === n.name }"
-                  :title="n.hint"
-                  role="menuitem"
-                  @click="moreOpen = false"
-                >
-                  <AppIcon :name="n.icon" :size="16" />
-                  <span class="more-title label">{{ n.title }}</span>
-                  <span class="more-idx fig">{{ n.idx }}</span>
-                </RouterLink>
-                <div class="more-group label">Macro</div>
-                <RouterLink
-                  v-for="n in macroTools"
-                  :key="n.name"
-                  :to="{ name: n.name }"
-                  class="more-item"
-                  :class="{ on: route.name === n.name }"
-                  :title="n.hint"
-                  role="menuitem"
-                  @click="moreOpen = false"
-                >
-                  <AppIcon :name="n.icon" :size="16" />
-                  <span class="more-title label">{{ n.title }}</span>
-                  <span class="more-idx fig">{{ n.idx }}</span>
-                </RouterLink>
-                <div class="more-group label">Research</div>
-                <RouterLink
-                  v-for="n in researchTools"
-                  :key="n.name"
-                  :to="{ name: n.name }"
-                  class="more-item"
-                  :class="{ on: route.name === n.name }"
-                  :title="n.hint"
-                  role="menuitem"
-                  @click="moreOpen = false"
-                >
-                  <AppIcon :name="n.icon" :size="16" />
-                  <span class="more-title label">{{ n.title }}</span>
-                  <span class="more-idx fig">{{ n.idx }}</span>
-                </RouterLink>
-              </div>
+                  <button
+                    class="more-search"
+                    type="button"
+                    role="menuitem"
+                    @click="openSearchFromTools"
+                  >
+                    <AppIcon name="search" :size="16" />
+                    <span class="more-title label">Search symbol</span>
+                    <span class="more-idx fig">⌘K</span>
+                  </button>
+                  <RouterLink
+                    to="/"
+                    class="more-item"
+                    :class="{ on: route.name === 'landing' }"
+                    title="Instrument overview and readiness"
+                    role="menuitem"
+                    @click="moreOpen = false"
+                  >
+                    <AppIcon name="home" :size="16" />
+                    <span class="more-title label">Overview</span>
+                    <span class="more-idx fig">HOME</span>
+                  </RouterLink>
+                  <div class="more-group label">Desk</div>
+                  <RouterLink
+                    v-for="n in deskTools"
+                    :key="n.name"
+                    :to="{ name: n.name }"
+                    class="more-item"
+                    :class="{ on: route.name === n.name }"
+                    :title="n.hint"
+                    role="menuitem"
+                    @click="moreOpen = false"
+                  >
+                    <AppIcon :name="n.icon" :size="16" />
+                    <span class="more-title label">{{ n.title }}</span>
+                    <span class="more-idx fig">{{ n.idx }}</span>
+                  </RouterLink>
+                  <div class="more-group label">Market</div>
+                  <RouterLink
+                    v-for="n in marketTools"
+                    :key="n.name"
+                    :to="{ name: n.name }"
+                    class="more-item"
+                    :class="{ on: route.name === n.name }"
+                    :title="n.hint"
+                    role="menuitem"
+                    @click="moreOpen = false"
+                  >
+                    <AppIcon :name="n.icon" :size="16" />
+                    <span class="more-title label">{{ n.title }}</span>
+                    <span class="more-idx fig">{{ n.idx }}</span>
+                  </RouterLink>
+                  <div class="more-group label">Macro</div>
+                  <RouterLink
+                    v-for="n in macroTools"
+                    :key="n.name"
+                    :to="{ name: n.name }"
+                    class="more-item"
+                    :class="{ on: route.name === n.name }"
+                    :title="n.hint"
+                    role="menuitem"
+                    @click="moreOpen = false"
+                  >
+                    <AppIcon :name="n.icon" :size="16" />
+                    <span class="more-title label">{{ n.title }}</span>
+                    <span class="more-idx fig">{{ n.idx }}</span>
+                  </RouterLink>
+                  <div class="more-group label">Research</div>
+                  <RouterLink
+                    v-for="n in researchTools"
+                    :key="n.name"
+                    :to="{ name: n.name }"
+                    class="more-item"
+                    :class="{ on: route.name === n.name }"
+                    :title="n.hint"
+                    role="menuitem"
+                    @click="moreOpen = false"
+                  >
+                    <AppIcon :name="n.icon" :size="16" />
+                    <span class="more-title label">{{ n.title }}</span>
+                    <span class="more-idx fig">{{ n.idx }}</span>
+                  </RouterLink>
+                </div>
+              </Transition>
             </Teleport>
           </div>
 
@@ -1247,7 +1303,7 @@ function openFearGreed(): void {
           <div class="strip-profile-avatar">
             <img v-if="user?.imageUrl" :src="user.imageUrl" alt="" class="strip-avatar-img" />
             <span v-else class="strip-avatar-initials fig">{{
-              (operatorEmail || 'OP').slice(0, 2).toUpperCase()
+              stripOperatorInitials
             }}</span>
             <span class="strip-operator-lamp" aria-hidden="true" />
           </div>
@@ -1258,7 +1314,9 @@ function openFearGreed(): void {
       <!-- ── content ──────────────────────────────────────────────────────── -->
       <main id="main-content" ref="stage" class="stage" tabindex="-1">
         <RouterView v-slot="{ Component }">
-          <component :is="Component" />
+          <Transition name="view-fade" mode="out-in">
+            <component :is="Component" />
+          </Transition>
         </RouterView>
       </main>
 
@@ -1349,12 +1407,11 @@ function openFearGreed(): void {
   gap: 4px;
   padding: 4px 0 0;
   border-right: var(--hair) solid var(--glass-border);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 120px),
-    var(--glass-base);
+  background: var(--glass-base);
+  background: var(--glass-rail-bg, var(--glass-base));
   backdrop-filter: var(--chrome-optics-lg);
   -webkit-backdrop-filter: var(--chrome-optics-lg);
-  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03), inset 0 1px 0 var(--glass-tint), inset -1px 0 0 var(--glass-tint);
   z-index: var(--z-rail);
   min-height: 0;
   overflow: hidden;
@@ -1474,7 +1531,7 @@ function openFearGreed(): void {
   display: flex;
   flex-direction: column;
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 750;
   line-height: 0.95;
   letter-spacing: 0.055em;
@@ -1523,6 +1580,10 @@ function openFearGreed(): void {
   background: var(--panel-hi);
   border-color: var(--glass-border);
   text-decoration: none;
+  transform: translateX(2px);
+}
+.rail.is-collapsed .nav-item:hover {
+  transform: scale(1.04);
 }
 
 .nav-item.on {
@@ -1567,7 +1628,7 @@ function openFearGreed(): void {
 
 .nav-hint {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   color: var(--ink-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -1652,9 +1713,9 @@ function openFearGreed(): void {
   padding: 2px 4px;
 }
 .operator-mail {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
@@ -1679,7 +1740,7 @@ function openFearGreed(): void {
   border: var(--hair) solid var(--rule-hi);
   border-radius: var(--r-xs);
   background: var(--panel-hi);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -1709,7 +1770,7 @@ function openFearGreed(): void {
   border-radius: var(--r-xs);
   background: var(--panel);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   font-weight: 600;
   letter-spacing: 0.06em;
   cursor: pointer;
@@ -1791,7 +1852,8 @@ function openFearGreed(): void {
   text-decoration: none;
   transition:
     background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
   white-space: nowrap;
 }
 .more-search {
@@ -1808,7 +1870,8 @@ function openFearGreed(): void {
   text-align: left;
   transition:
     background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .more-search:hover {
   color: var(--phosphor);
@@ -1818,6 +1881,7 @@ function openFearGreed(): void {
 .more-item:hover {
   background: var(--panel-hi);
   color: var(--ink);
+  transform: translateX(2px);
 }
 .more-item.on {
   color: var(--phosphor);
@@ -1843,7 +1907,7 @@ function openFearGreed(): void {
   padding: var(--s2) var(--s3) var(--s1);
   color: var(--ink-dim);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1861,15 +1925,27 @@ function openFearGreed(): void {
   padding: 0 var(--s4);
   border-bottom: var(--hair) solid var(--glass-border);
   background: var(--glass-surface);
+  background: var(--glass-strip-bg, var(--glass-surface));
   backdrop-filter: var(--glass-blur-md);
+  backdrop-filter: var(--chrome-optics-md, var(--glass-blur-md));
   -webkit-backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--chrome-optics-md, var(--glass-blur-md));
   box-shadow: var(--glass-specular-subtle), var(--glass-shadow-sm);
+  box-shadow: var(--glass-specular-subtle), var(--glass-shadow-sm), inset 0 -1px 0 var(--glass-tint);
   z-index: var(--z-strip);
   min-width: 0;
   /* The rail can expand or collapse independently of the viewport. Size the
      strip's disclosure rules from its real available width, not just from a
      viewport breakpoint. */
   container: instrument-strip / inline-size;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .strip {
+    background: var(--panel);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .gauges {
@@ -1996,7 +2072,7 @@ function openFearGreed(): void {
   min-width: 0;
   overflow: hidden;
   color: var(--ink-dim) !important;
-  font-size: 8px !important;
+  font-size: var(--t-nano) !important;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2006,7 +2082,7 @@ function openFearGreed(): void {
   overflow: hidden;
   margin-left: auto;
   color: var(--ink-dim) !important;
-  font-size: 8px !important;
+  font-size: var(--t-nano) !important;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2044,7 +2120,7 @@ function openFearGreed(): void {
 .g-basis {
   flex: 0 0 auto;
   color: var(--ink-dim) !important;
-  font-size: 8px !important;
+  font-size: var(--t-nano) !important;
   white-space: nowrap;
 }
 .g-context {
@@ -2052,7 +2128,7 @@ function openFearGreed(): void {
   margin-left: auto;
   white-space: nowrap;
   color: var(--ink-dim) !important;
-  font-size: 8px !important;
+  font-size: var(--t-nano) !important;
 }
 .g-context.stale {
   color: var(--warn) !important;
@@ -2093,7 +2169,7 @@ function openFearGreed(): void {
 }
 .rot-col-h {
   color: var(--ink-dim) !important;
-  font-size: 8px !important;
+  font-size: var(--t-nano) !important;
   letter-spacing: 0.08em;
 }
 .rot-legs {
@@ -2112,7 +2188,7 @@ function openFearGreed(): void {
   white-space: nowrap;
 }
 .rot-leg small {
-  font-size: 8px;
+  font-size: var(--t-nano);
 }
 .rot-in {
   color: var(--long);
@@ -2312,7 +2388,7 @@ function openFearGreed(): void {
   border-radius: var(--r-xs);
   background: var(--panel);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
 }
 
 .clock {
@@ -2337,6 +2413,7 @@ function openFearGreed(): void {
   border-radius: var(--r-capsule);
   border: var(--hair) solid var(--glass-border);
   background: var(--glass-surface);
+  background: var(--glass-profile-btn-bg, var(--glass-surface));
   backdrop-filter: var(--chrome-optics-sm);
   -webkit-backdrop-filter: var(--chrome-optics-sm);
   box-shadow: var(--glass-specular-subtle);
@@ -2374,7 +2451,7 @@ function openFearGreed(): void {
 }
 .strip-avatar-initials {
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   font-weight: 700;
   color: var(--phosphor);
 }
@@ -2389,7 +2466,7 @@ function openFearGreed(): void {
   border: 1px solid var(--void);
 }
 .strip-profile-badge {
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   color: var(--ink-dim);
   letter-spacing: 0.06em;
@@ -2538,6 +2615,7 @@ function openFearGreed(): void {
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-top: var(--hair) solid var(--rule-hi);
     border-right: 0;
+    box-shadow: inset 0 1px 0 var(--glass-tint), var(--glass-shadow-sm);
     overflow-x: auto;
     overflow-y: hidden;
     width: auto !important;

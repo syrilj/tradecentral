@@ -4,7 +4,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from edge.research.regimes import classify_regimes, performance_by_regime, slice_by_regime
+import math
+from edge.research.kalman_trend import kalman_trend
+from edge.research.regimes import (
+    classify_regimes,
+    compute_cusum_transition_risk,
+    compute_market_structure,
+    compute_ou_half_life,
+    compute_rolling_volatility_regime,
+    compute_variance_ratio,
+    performance_by_regime,
+    slice_by_regime,
+)
 from edge.research.statistics import (
     bonferroni_deflated_sharpe_approximation,
     date_block_bootstrap_ci,
@@ -50,6 +61,127 @@ def test_regime_classification_is_causal_under_future_mutation_and_slices_result
     assert slices
     assert int(summary["n"].sum()) == len(records)
     assert {"mean_return", "median_return", "win_rate"}.issubset(summary.columns)
+
+
+def test_rolling_volatility_percentile_eliminates_expanding_drift() -> None:
+    """Trailing 252d percentile recovers low-vol baseline after historical shock clears."""
+    rng = np.random.default_rng(123)
+    n = 600
+    idx = pd.bdate_range("2022-01-03", periods=n)
+    # Bars 0..200: Low vol (sigma=0.008)
+    # Bars 200..300: High vol shock (sigma=0.04)
+    # Bars 300..600: Low vol (sigma=0.008)
+    shocks = np.concatenate([
+        rng.normal(0.0, 0.008, 200),
+        rng.normal(0.0, 0.04, 100),
+        rng.normal(0.0, 0.008, 300),
+    ])
+    prices = pd.Series(100.0 * np.exp(np.cumsum(shocks)), index=idx, name="close")
+
+    result = compute_rolling_volatility_regime(prices, vol_window=20, percentile_window=252)
+
+    # During the shock (bar 250), percentile ranking vs prior 200 low-vol bars is high
+    assert result.volatility_percentile.iloc[250] > 0.85
+
+    # 252 bars after the shock ended (bar 570), the trailing 252d window contains only
+    # low-vol bars, so the percentile ranking recalibrates back to the middle (~0.50).
+    calibrated_pct = result.volatility_percentile.iloc[560:590].mean()
+    assert 0.30 <= calibrated_pct <= 0.70
+
+
+def test_variance_ratio_synthetic_regimes() -> None:
+    """Lo-MacKinlay VR(5) distinguishes random walk, momentum, and mean reversion."""
+    rng = np.random.default_rng(42)
+    n = 1000
+
+    # 1. Random walk: VR ~ 1.0
+    rw_ret = rng.normal(0.0, 0.01, n)
+    rw_log_p = np.cumsum(rw_ret)
+    vr_rw = compute_variance_ratio(rw_log_p, q=5)
+    assert 0.85 <= vr_rw <= 1.15
+
+    # 2. Autoregressive momentum: r_t = 0.5 * r_{t-1} + e_t -> VR > 1.2
+    mom_ret = np.zeros(n)
+    for t in range(1, n):
+        mom_ret[t] = 0.5 * mom_ret[t - 1] + rng.normal(0.0, 0.01)
+    mom_log_p = np.cumsum(mom_ret)
+    vr_mom = compute_variance_ratio(mom_log_p, q=5)
+    assert vr_mom > 1.20
+
+    # 3. Mean-reverting series: x_t = -0.5 * x_{t-1} + e_t -> VR < 0.85
+    mr_ret = np.zeros(n)
+    for t in range(1, n):
+        mr_ret[t] = -0.4 * mr_ret[t - 1] + rng.normal(0.0, 0.01)
+    mr_log_p = np.cumsum(mr_ret)
+    vr_mr = compute_variance_ratio(mr_log_p, q=5)
+    assert vr_mr < 0.85
+
+
+def test_ou_half_life_recovery() -> None:
+    """Estimate OU half-life matches theoretical target."""
+    rng = np.random.default_rng(99)
+    n = 500
+    # Known half-life t_half = 10.0 -> theta = ln(2)/10 -> beta = exp(-theta) = 2^(-0.1) ~ 0.933
+    target_half_life = 10.0
+    theta = math.log(2.0) / target_half_life
+    beta = math.exp(-theta)
+
+    x = np.zeros(n)
+    for t in range(1, n):
+        x[t] = beta * x[t - 1] + rng.normal(0.0, 1.0)
+    prices = 100.0 + x
+
+    est_half_life = compute_ou_half_life(prices, window=500)
+    assert est_half_life == pytest.approx(target_half_life, abs=2.0)
+
+
+def test_kalman_velocity_zscore_scale_free() -> None:
+    """Kalman velocity z-score is scale-free across small-cap vs mega-cap price scales."""
+    rng = np.random.default_rng(77)
+    n = 200
+    idx = pd.bdate_range("2024-01-02", periods=n)
+    ret = 0.002 + rng.normal(0.0, 0.01, n)
+    p_small = pd.Series(5.0 * np.exp(np.cumsum(ret)), index=idx)
+    p_large = pd.Series(5000.0 * np.exp(np.cumsum(ret)), index=idx)
+
+    res_small = kalman_trend(p_small, q=1e-6, noise_days=20)
+    res_large = kalman_trend(p_large, q=1e-6, noise_days=20)
+
+    # Score (velocity z-score) must be identical
+    np.testing.assert_allclose(res_small.score, res_large.score, atol=1e-9)
+    assert (res_small.trend_state == res_large.trend_state).all()
+
+
+def test_transition_risk_spikes_on_volatility_break() -> None:
+    """CUSUM and composite transition hazard spike on sudden volatility breaks."""
+    rng = np.random.default_rng(55)
+    n = 300
+    # 200 quiet bars followed by sudden 5-sigma shock
+    quiet = rng.normal(0.0, 0.005, 200)
+    shock = rng.normal(-0.04, 0.03, 100)
+    returns = pd.Series(np.concatenate([quiet, shock]))
+
+    res = compute_cusum_transition_risk(returns, vol_window=20, k=0.5, h=4.0)
+
+    # Quiet period transition risk is low/moderate
+    assert res.transition_risk.iloc[50:180].mean() < 0.35
+    # Transition risk spikes during the shock
+    assert res.transition_risk.iloc[201:220].max() > 0.75
+
+
+def test_zero_variance_and_warmup_hygiene() -> None:
+    """Constant price input produces clean bounded values without division errors."""
+    n = 100
+    idx = pd.bdate_range("2024-01-02", periods=n)
+    flat = pd.Series(np.full(n, 50.0), index=idx, name="close")
+
+    vol_res = compute_rolling_volatility_regime(flat, vol_window=20, percentile_window=60)
+    assert (vol_res.realized_volatility.dropna() == 0.0).all()
+    assert vol_res.volatility_shock.sum() == 0
+
+    struct_res = compute_market_structure(flat, vr_window=40, ou_window=30)
+    assert (struct_res.variance_ratio_5.dropna() == 1.0).all()
+    assert (struct_res.market_structure == "RANGE_BOUND").all()
 
 
 # ---------------------------------------------------------------------------

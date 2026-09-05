@@ -42,6 +42,7 @@ import {
   NO_SIGNAL,
   NO_STRIKE_IN_TAPE,
   PREVIOUS_PROVIDER_WINDOW,
+  classifyFlowOrder,
   concentrationLabel,
   flowLeanTokenClass,
   flowPriorityTokenClass,
@@ -145,46 +146,25 @@ describe('Tier 1: Feature Coverage Test Suite', () => {
   // Feature 1: Institutional Order Badges (Golden Sweep, Sweep, Block, Split, Multi-leg)
   // =========================================================================
   describe('F01: Institutional Order Badges & Taxonomy', () => {
-    it('classifies Golden Sweeps when aggressive ask side sweep exceeds premium threshold', () => {
-      const isGoldenSweep = (print: {
-        trade_class?: string
-        aggressor?: string
-        premium?: number
-      }) => {
-        return (
-          print.trade_class?.toLowerCase() === 'sweep' &&
-          (print.aggressor?.toLowerCase() === 'ask' ||
-            print.aggressor?.toLowerCase() === 'above_ask') &&
-          (print.premium ?? 0) >= 500_000
-        )
-      }
-
-      expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'ask', premium: 750_000 })).toBe(true)
-      expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'bid', premium: 750_000 })).toBe(
-        false,
-      )
-      expect(isGoldenSweep({ trade_class: 'sweep', aggressor: 'ask', premium: 200_000 })).toBe(
-        false,
-      )
-      expect(isGoldenSweep({ trade_class: 'block', aggressor: 'ask', premium: 1_000_000 })).toBe(
-        false,
-      )
+    it('does not invent certified golden sweeps from size + ask side', () => {
+      expect(
+        classifyFlowOrder({ trade_class: 'sweep', aggressor: 'ask', premium: 750_000 }).type,
+      ).toBe('sweep')
+      expect(
+        classifyFlowOrder({ trade_class: 'sweep', aggressor: 'bid', premium: 750_000 }).type,
+      ).toBe('sweep')
+      expect(classifyFlowOrder({ flags: ['golden_sweep'] }).type).toBe('golden_sweep')
+      expect(
+        classifyFlowOrder({ trade_class: 'block', aggressor: 'ask', premium: 1_000_000 }).type,
+      ).toBe('block')
     })
 
     it('differentiates Split orders and Multi-leg strategies with distinct badge metadata', () => {
-      const classifyOrderType = (tradeClass: string, flags: string[] = []) => {
-        if (flags.includes('multi_leg') || tradeClass === 'multileg') return 'multileg'
-        if (flags.includes('split') || tradeClass === 'split') return 'split'
-        if (tradeClass === 'block') return 'block'
-        if (tradeClass === 'sweep') return 'sweep'
-        return 'standard'
-      }
-
-      expect(classifyOrderType('split')).toBe('split')
-      expect(classifyOrderType('multileg')).toBe('multileg')
-      expect(classifyOrderType('standard', ['split'])).toBe('split')
-      expect(classifyOrderType('standard', ['multi_leg'])).toBe('multileg')
-      expect(classifyOrderType('block')).toBe('block')
+      expect(classifyFlowOrder({ trade_class: 'split' }).type).toBe('split')
+      expect(classifyFlowOrder({ trade_class: 'multileg' }).type).toBe('multileg')
+      expect(classifyFlowOrder({ flags: ['split'] }).type).toBe('split')
+      expect(classifyFlowOrder({ flags: ['multi_leg'] }).type).toBe('multileg')
+      expect(classifyFlowOrder({ trade_class: 'block' }).type).toBe('block')
     })
 
     it('maps signed side to instrument tokens without call/put color confusion', () => {

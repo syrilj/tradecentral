@@ -390,7 +390,7 @@ onBeforeUnmount(() => {
   top: 8px;
   padding: 3px 8px;
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.09em;
   color: var(--ink-faint);

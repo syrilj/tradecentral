@@ -297,7 +297,7 @@ const otherSide = computed(() => {
 
       <!-- Hidden ring wrap to preserve radial math test contracts -->
       <div class="ring-wrap visually-hidden" aria-hidden="true">
-        <svg class="ring-svg" viewBox="0 0 108 108">
+        <svg role="img" aria-label="Gamma squeeze probability ring." class="ring-svg" viewBox="0 0 108 108">
           <circle class="ring-track" cx="54" cy="54" r="42" />
           <circle
             class="ring-fill"
@@ -724,7 +724,7 @@ const otherSide = computed(() => {
   min-width: 0;
 }
 .bias-sub {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.08em;
 }
@@ -750,9 +750,9 @@ const otherSide = computed(() => {
   padding: 4px 6px;
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-xs, 2px);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   background: var(--glass-base);
   letter-spacing: 0.06em;
 }
@@ -805,7 +805,7 @@ const otherSide = computed(() => {
   padding: 0 4px;
 }
 .track-pocket-chip {
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   padding: 1px 5px;
   border-radius: 2px;
@@ -816,8 +816,8 @@ const otherSide = computed(() => {
 .track-labels {
   display: flex;
   justify-content: space-between;
-  font-size: 8px;
-  color: var(--ink-ghost);
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
   font-family: var(--font-data);
   font-weight: 600;
 }
@@ -919,7 +919,7 @@ const otherSide = computed(() => {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   letter-spacing: 0.1em;
 }
 .prob-track-head .fig {
@@ -1009,6 +1009,10 @@ const otherSide = computed(() => {
   pointer-events: none;
   outline: var(--hair) solid var(--rule-hi);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  /* `left` is the honest property here: the marker is positioned as a
+     percentage of the track, and a percentage translate would resolve against
+     the marker's own width instead. One element, once per payload — not worth
+     restructuring the track to save a layout pass. */
   transition: left var(--dur) var(--ease-out);
 }
 .prob-thumb.bullish {
@@ -1055,7 +1059,7 @@ const otherSide = computed(() => {
   color: var(--put-hi);
 }
 .signed-block .near {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.04em;
   font-family: var(--font-data);
@@ -1074,7 +1078,7 @@ const otherSide = computed(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.12em;
   padding-bottom: 4px;
@@ -1114,7 +1118,7 @@ const otherSide = computed(() => {
   border-left-color: var(--put);
 }
 .trig-key {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.1em;
   font-weight: 600;
@@ -1170,7 +1174,7 @@ const otherSide = computed(() => {
 }
 .ladder-head {
   display: none;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.1em;
   font-weight: 600;
@@ -1279,13 +1283,13 @@ const otherSide = computed(() => {
   font-style: normal;
 }
 .ld-dist .ld-abs {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-style: normal;
 }
 
 .ld-role {
   grid-area: role;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.08em;
   font-weight: 600;
@@ -1329,7 +1333,7 @@ const otherSide = computed(() => {
   flex: 0 0 auto;
   padding-top: var(--s2);
   border-top: var(--hair) solid var(--rule-faint);
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.06em;
   font-family: var(--font-data);
@@ -1373,11 +1377,15 @@ const otherSide = computed(() => {
 .prob-zones.unscored {
   opacity: 0.4;
 }
+/* The separator is decoration and already aria-hidden, so it may sit at rule
+   contrast. The provenance items are not decoration — age and contract count
+   are how an operator knows whether to trust the row — so they take the
+   provenance token rather than the quietest ink available. */
 .prov-sep {
-  color: var(--rule-hi);
+  color: var(--ink-ghost);
 }
 .prov-item {
-  color: var(--ink-ghost);
+  color: var(--meta-provenance);
   white-space: nowrap;
 }
 .prov :deep(.help) {
@@ -1591,8 +1599,8 @@ const otherSide = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: var(--ink-ghost);
-  font-size: 8px;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
   font-weight: 600;
 }
 .float-stat-cell .stat-footer .benchmark {

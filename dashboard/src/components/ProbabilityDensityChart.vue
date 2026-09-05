@@ -746,7 +746,7 @@ watch(canRender3d, (available) => {
 }
 .sigma-label {
   fill: var(--ink-faint);
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   letter-spacing: 0.04em;
   paint-order: stroke;
   stroke: var(--void);
@@ -854,7 +854,7 @@ watch(canRender3d, (available) => {
 }
 .probe-tip-text {
   fill: var(--phosphor);
-  font: 700 9px var(--font-data);
+  font: 700 var(--t-nano) var(--font-data);
 }
 .x-axis line {
   stroke: var(--rule-hi);
@@ -943,7 +943,7 @@ watch(canRender3d, (available) => {
 }
 .chip-btn {
   padding: 2px 6px;
-  font: 700 9px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   letter-spacing: 0.04em;
   color: var(--ink-dim);
   background: var(--panel);
@@ -984,7 +984,7 @@ watch(canRender3d, (available) => {
 }
 .calc-tile .label {
   color: var(--ink-dim);
-  font: 700 9px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   letter-spacing: 0.06em;
 }
 .calc-tile .fig {
@@ -1029,7 +1029,7 @@ watch(canRender3d, (available) => {
 }
 .pdf-chart .mode-toggle button:disabled {
   cursor: not-allowed;
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
   background: var(--panel);
 }
 </style>

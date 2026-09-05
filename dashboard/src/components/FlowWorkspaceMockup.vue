@@ -139,7 +139,7 @@ const queue = [
   border-right: 1px solid var(--mock-rule);
   background: #0d0e0d;
   font-family: var(--font-display);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -179,7 +179,7 @@ const queue = [
   color: #b7b5ad;
   border-bottom: 1px solid var(--mock-rule);
   font-family: var(--font-display);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
 }
 .mock-strip strong {
@@ -213,7 +213,7 @@ const queue = [
 .brief-copy p {
   color: var(--mock-orange);
   font-family: var(--font-display);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -250,7 +250,7 @@ const queue = [
 .queue small {
   color: #7d7b74;
   font-family: var(--font-display);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -294,7 +294,7 @@ const queue = [
 .majors header span {
   color: var(--mock-blue);
   font-family: var(--font-display);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
 }
 .majors dl {
@@ -305,7 +305,7 @@ const queue = [
 .majors dt {
   color: #75736c;
   font-family: var(--font-display);
-  font-size: 7px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -340,7 +340,7 @@ figcaption {
   margin-top: 10px;
   color: #8d8a82;
   font-family: var(--font-display);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }

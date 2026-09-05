@@ -187,6 +187,12 @@ export interface GreekCurve {
   put: Pt[]
   /** Strike axis ticks in price space. */
   strikes: number[]
+  /**
+   * Raw value range the y coordinates were mapped from. The workbench needs
+   * it to place the zero line and to draw the intrinsic payoff boundary on
+   * the same scale as the curves.
+   */
+  domain: { lo: number; hi: number }
 }
 
 /** φ(z) standard normal pdf. */
@@ -261,23 +267,39 @@ export function bsVega(p: BSInputs): number {
   return (p.S * normPdf(bsD1(p)) * Math.sqrt(p.T) * Math.exp(-p.q * p.T)) / 100
 }
 
-/** Per-day theta (calendar-day): Θ_day/365. Call theta by default. */
+/**
+ * Per-day theta (calendar-day): Θ_day/365. Call theta by default.
+ *
+ * Hull signs — the carry terms are NOT symmetric between legs:
+ *   Θ_call = −S·φ(d₁)·σ·e^{−qT}/(2√T) − rK·e^{−rT}·Φ(d₂) + qS·e^{−qT}·Φ(d₁)
+ *   Θ_put  = −S·φ(d₁)·σ·e^{−qT}/(2√T) + rK·e^{−rT}·Φ(−d₂) − qS·e^{−qT}·Φ(−d₁)
+ * (Earlier this had +rK on the call and −rK on the put, which handed
+ * deep-ITM calls positive theta and swapped the ATM pair; the identity
+ * Θ_put − Θ_call = rK·e^{−rT} at q=0 pins the correction in the tests.)
+ */
 export function bsThetaDay(p: BSInputs, kind: 'call' | 'put'): number {
   const s = p.sigma * Math.sqrt(p.T)
   if (s <= 0) return 0
-  const nd1 = normPdf(bsD1(p))
+  const d1 = bsD1(p)
+  const nd1 = normPdf(d1)
   const rTT = p.r * p.K * Math.exp(-p.r * p.T)
   const qTS = p.q * p.S * Math.exp(-p.q * p.T)
   const common = -(p.S * nd1 * p.sigma * Math.exp(-p.q * p.T)) / (2 * Math.sqrt(p.T))
   if (kind === 'call') {
-    return (common - qTS * normCdf(bsD1(p)) + rTT * normCdf(bsD1(p) - s)) / 365
+    return (common - rTT * normCdf(d1 - s) + qTS * normCdf(d1)) / 365
   }
-  return (common + qTS * normCdf(-bsD1(p)) - rTT * normCdf(s - bsD1(p))) / 365
+  return (common + rTT * normCdf(s - d1) - qTS * normCdf(-d1)) / 365
 }
 
 /**
  * Evaluate any supported Greek for call & put legs across a strike grid,
- * with values normalised to [0,1] over the grid for shared-axis plotting.
+ * normalised to [-1, 1] over the pair's shared value range for plotting.
+ *
+ * The mapping is domain-based (min/max of BOTH legs -> band edges), not
+ * symmetric maxAbs: value/gamma/vega are non-negative and theta is
+ * non-positive, so a symmetric scale pinned every curve to one half of the
+ * plot and left the other half permanently empty. One shared domain keeps
+ * call vs put honestly comparable; the rendered pair always spans the band.
  */
 export function greekCurves(
   greek: GreekKind,
@@ -320,16 +342,32 @@ export function greekCurves(
     putRaw.push(evalK(K, 'put'))
   }
 
-  // Shared symmetric normalisation keeps call/put visually comparable.
-  let maxAbs = 0
-  for (const v of [...callRaw, ...putRaw]) maxAbs = Math.max(maxAbs, Math.abs(v))
-  maxAbs = maxAbs || 1
+  // Shared call+put domain: the two legs share one scale so their relative
+  // size stays truthful. For value curves the floor includes 0 so the
+  // intrinsic payoff boundary (which touches 0) stays inside the band.
+  let lo = Infinity
+  let hi = -Infinity
+  for (const v of [...callRaw, ...putRaw]) {
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  if (greek === 'value') lo = Math.min(lo, 0)
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+    lo = 0
+    hi = 1
+  }
+  const span = hi - lo || 1 // flat curve guard: degenerates to a midline
 
+  // x is the STRIKE mapped onto [0, 100] — the scale's domain is the strike
+  // range, so it must be fed a strike, not the loop's 0..1 fraction. Feeding
+  // the fraction pushed every point to x ≈ -75 and drew the whole curve off
+  // the left of the viewBox, which is why the lab plot rendered empty.
+  const kScale = linearScale([strikes[0]!, strikes[strikes.length - 1]!], [0, 100])
   const toPoints = (raw: number[]): Pt[] =>
     raw.map((v, i) => ({
-      x: linearScale([strikes[0], strikes[strikes.length - 1]], [0, 100])(i / (n - 1)),
-      y: v / maxAbs, // [-1, 1]
+      x: kScale(strikes[i]!),
+      y: (2 * (v - lo)) / span - 1, // [lo, hi] -> [-1, 1]
     }))
 
-  return { call: toPoints(callRaw), put: toPoints(putRaw), strikes }
+  return { call: toPoints(callRaw), put: toPoints(putRaw), strikes, domain: { lo, hi } }
 }

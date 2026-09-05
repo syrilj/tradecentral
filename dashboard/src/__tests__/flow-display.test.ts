@@ -10,8 +10,11 @@ import {
   classifyPremiumTier,
   computeVolOiRatio,
   concentrationLabel,
+  feedStatusCopy,
+  flowCacheCopy,
   flowLeanTokenClass,
   flowPriorityTokenClass,
+  flowTransportCopy,
   flowWhaleTier,
   formatDteBadge,
   formatMoneyness,
@@ -19,6 +22,8 @@ import {
   namedEmpty,
   pulseWindowCopy,
   signedPrintTokenClass,
+  signedVsUnsignedLabel,
+  tradeClassSourceLabel,
 } from '@/flowDisplay'
 
 describe('flow display helpers (shipped)', () => {
@@ -101,24 +106,22 @@ describe('flow display helpers (shipped)', () => {
     ).not.toContain('prior sample')
   })
 
-  it('classifies institutional flow order taxonomy correctly', () => {
-    // Golden sweep
+  it('classifies flow order taxonomy without inventing certified golden sweeps', () => {
     expect(
       classifyFlowOrder({
         trade_class: 'sweep',
         aggressor: 'buy',
         premium: 250_000,
       }).type,
-    ).toBe('golden_sweep')
-
+    ).toBe('sweep')
     expect(
       classifyFlowOrder({
         is_sweep: true,
         aggressor: 'ask',
         volume: 1500,
         open_interest: 800,
-      }).type,
-    ).toBe('golden_sweep')
+      }).label,
+    ).not.toContain('GOLDEN SWEEP')
 
     expect(
       classifyFlowOrder({
@@ -126,18 +129,29 @@ describe('flow display helpers (shipped)', () => {
         aggressor: 'buy',
         premium: 600_000,
       }).type,
-    ).toBe('golden_sweep')
+    ).toBe('sweep')
 
     expect(
       classifyFlowOrder({
         flags: ['golden_sweep'],
-      }).type,
-    ).toBe('golden_sweep')
+      }),
+    ).toMatchObject({
+      type: 'golden_sweep',
+      label: 'VENDOR GOLDEN FLAG',
+    })
 
-    // Sweep
     expect(
       classifyFlowOrder({
         trade_class: 'sweep',
+        trade_class_source: 'burst_heuristic',
+        anomaly_flags: ['sweep_burst'],
+      }).label,
+    ).toBe('BURST SWEEP')
+
+    expect(
+      classifyFlowOrder({
+        trade_class: 'sweep',
+        trade_class_source: 'vendor',
         aggressor: 'sell',
         premium: 50_000,
       }).type,
@@ -205,14 +219,14 @@ describe('flow display helpers (shipped)', () => {
   it('computes Vol / OI ratios with proper edge case handling', () => {
     expect(computeVolOiRatio(null, null)).toEqual({
       ratio: null,
-      formatted: '0.00x',
+      formatted: 'VOL/OI MISSING',
       isHigh: false,
       isExtreme: false,
     })
 
     expect(computeVolOiRatio(100, null)).toEqual({
       ratio: null,
-      formatted: '0.00x',
+      formatted: 'OI MISSING',
       isHigh: false,
       isExtreme: false,
     })
@@ -226,7 +240,7 @@ describe('flow display helpers (shipped)', () => {
 
     expect(computeVolOiRatio(0, 0)).toEqual({
       ratio: null,
-      formatted: '0.00x',
+      formatted: 'VOL MISSING',
       isHigh: false,
       isExtreme: false,
     })
@@ -292,10 +306,10 @@ describe('flow display helpers (shipped)', () => {
     expect(flowWhaleTier(30_000).tier).toBeNull()
   })
 
-  it('formats DTE badges with clean N/A fallback on missing inputs', () => {
-    expect(formatDteBadge(null)).toEqual({ label: 'N/A', className: 'dte-unknown' })
-    expect(formatDteBadge(undefined)).toEqual({ label: 'N/A', className: 'dte-unknown' })
-    expect(formatDteBadge(NaN)).toEqual({ label: 'N/A', className: 'dte-unknown' })
+  it('formats DTE badges with named missing on missing inputs', () => {
+    expect(formatDteBadge(null)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
+    expect(formatDteBadge(undefined)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
+    expect(formatDteBadge(NaN)).toEqual({ label: 'DTE MISSING', className: 'dte-unknown' })
     expect(formatDteBadge(0)).toEqual({ label: '0D', className: 'dte-0d' })
     expect(formatDteBadge(5)).toEqual({ label: '5D', className: 'dte-weekly' })
     expect(formatDteBadge(21)).toEqual({ label: '21D', className: 'dte-monthly' })
@@ -303,12 +317,32 @@ describe('flow display helpers (shipped)', () => {
     expect(formatDteBadge(120)).toEqual({ label: '120D', className: 'dte-leap' })
   })
 
-  it('formats moneyness with clean N/A fallback on missing inputs', () => {
-    expect(formatMoneyness(null)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-    expect(formatMoneyness(undefined)).toEqual({ label: 'N/A', className: 'moneyness-none' })
-    expect(formatMoneyness(NaN)).toEqual({ label: 'N/A', className: 'moneyness-none' })
+  it('formats moneyness with named missing on missing inputs', () => {
+    expect(formatMoneyness(null)).toEqual({ label: 'OTM MISSING', className: 'moneyness-none' })
+    expect(formatMoneyness(undefined)).toEqual({
+      label: 'OTM MISSING',
+      className: 'moneyness-none',
+    })
+    expect(formatMoneyness(NaN)).toEqual({ label: 'OTM MISSING', className: 'moneyness-none' })
     expect(formatMoneyness(0.005)).toEqual({ label: 'ATM', className: 'moneyness-atm' })
     expect(formatMoneyness(0.05)).toEqual({ label: 'OTM +5.0%', className: 'moneyness-otm' })
     expect(formatMoneyness(-0.05)).toEqual({ label: 'ITM -5.0%', className: 'moneyness-itm' })
+  })
+
+  it('labels cache, poll transport, feed status, and vendor vs heuristic source', () => {
+    expect(flowCacheCopy({ hit: true, age_seconds: 4, ttl_seconds: 12 })).toBe(
+      'CACHE HIT · 4s / 12s TTL',
+    )
+    expect(flowCacheCopy({ hit: false, age_seconds: 0, ttl_seconds: 12 })).toBe(
+      'CACHE MISS · 0s / 12s TTL',
+    )
+    expect(flowTransportCopy(15_000)).toBe('15s HTTP POLL · NOT A WEBSOCKET')
+    expect(feedStatusCopy('live')).toBe('PROVIDER SAMPLE')
+    expect(feedStatusCopy('credential_missing')).toBe('CREDENTIAL MISSING')
+    expect(feedStatusCopy('unavailable')).toBe('FEED UNAVAILABLE')
+    expect(tradeClassSourceLabel('vendor')).toBe('VENDOR CLASS')
+    expect(tradeClassSourceLabel('burst_heuristic')).toBe('BURST HEURISTIC')
+    expect(signedVsUnsignedLabel({ aggressor: null, signed_premium: null })).toBe('UNSIGNED')
+    expect(signedVsUnsignedLabel({ aggressor: 'buy', signed_premium: 100 })).toBe('SIGNED BUY')
   })
 })

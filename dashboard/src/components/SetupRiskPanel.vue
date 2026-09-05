@@ -294,7 +294,7 @@ watch([accountEquity, selectedRiskPct, openRiskDollars], () => {
   min-width: 0;
 }
 .input-shell input::placeholder {
-  color: var(--ink-ghost);
+  color: var(--ink-faint);
 }
 
 .risk-meter {

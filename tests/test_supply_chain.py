@@ -211,7 +211,7 @@ def test_depth_filter_and_related_themes():
 
 
 def test_arbitrary_ticker_multi_tier_synthesis():
-    """Any arbitrary stock symbol must produce a valid 4-tier ecosystem with quant metrics."""
+    """Registry symbols produce a valid multi-tier ecosystem; underivable metrics stay null."""
     for test_sym in ["AAPL", "UBER", "COIN"]:
         payload = build_supply_chain_payload(symbol=test_sym, force_refresh=True)
         assert payload is not None
@@ -232,16 +232,21 @@ def test_arbitrary_ticker_multi_tier_synthesis():
         assert len(edges) >= 4
         assert any(e["source"] == test_sym or e["target"] == test_sym for e in edges)
 
-        # Check alpha & elasticity metrics
+        # Check alpha & elasticity metrics. Scoring inputs are real-or-null:
+        # metrics are nullable and may be None when no curated or live source
+        # provides them (fabricated mid-range defaults are no longer emitted).
         focal_metrics = payload["focal_entity"]["metrics"]
-        assert focal_metrics["elasticity_score"] > 0
-        assert focal_metrics["operating_leverage"] > 0
+        assert focal_metrics["elasticity_score"] is None or focal_metrics["elasticity_score"] > 0
+        assert focal_metrics["operating_leverage"] is None or focal_metrics["operating_leverage"] > 0
 
         # Check thematic narrative and summary
         summary = payload["thematic_summary"]
         assert summary["total_ecosystem_market_cap_b"] > 0
-        assert len(summary["top_beneficiaries"]) > 0
-        assert len(summary["catalyst_timeline"]) > 0
+        # top_beneficiaries contains only nodes with real scoring inputs; it
+        # may be empty when every non-focal node lacks elasticity inputs.
+        assert isinstance(summary["top_beneficiaries"], list)
+        # Catalyst timelines carry curated events only — [] when none exist.
+        assert isinstance(summary["catalyst_timeline"], list)
 
 
 def test_theme_auto_routing_on_symbol_query():

@@ -18,15 +18,27 @@ def test_health_and_unusual_flow_twice(api_client):
         assert response.status_code == 200
         body = response.json()
         assert body["source_snapshot"] == "market_flow"
+        assert body.get("feed_status")
+        assert isinstance(body.get("cache"), dict)
+        assert "hit" in body["cache"]
+        assert "age_seconds" in body["cache"]
+        assert "ttl_seconds" in body["cache"]
+        assert body["decision_authorized"] is False
         blob = str(body).lower()
         assert "dark pool" not in blob
         assert "no ats source" not in blob
+        assert "lse_api_key=" not in blob
+        assert "x-api-key=" not in blob
         tape = body.get("tape") or []
         if tape:
             row = tape[0]
             assert row.get("right") in {"call", "put"}
             assert "heat" in row
             assert "presets" in row or "is_unusual" in row
+            assert row.get("decision_authorized") is False
+            assert row.get("aggressor") in {None, "buy", "sell"}
+    assert flow_a.json()["source_snapshot"] == flow_b.json()["source_snapshot"]
+    assert flow_a.json()["feed_status"] == flow_b.json()["feed_status"]
 
 
 def test_options_suggest_is_unauthorized_for_a_named_symbol(api_client):

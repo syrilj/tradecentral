@@ -802,7 +802,8 @@ function isEngineTicket(play: PlaysDecision): boolean {
                 class="decision-row"
                 @click="openSymbol(String(row.symbol))"
               >
-                <td class="fig sym col-sym">{{ row.symbol }}</td>
+                <td class="row-select-cell fig sym col-sym">
+  <button type="button" class="row-select-btn" @click.stop="openSymbol(String(row.symbol))"><span class="sr-only">Select row</span></button>{{ row.symbol }}</td>
                 <td class="col-side">
                   <span class="side-pill" :class="sideClass(String(row.side))">{{
                     researchSide(row)

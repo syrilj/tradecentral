@@ -247,8 +247,8 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
       }
 
       const meta = classifyFlowOrder(megaSweep)
-      expect(meta.type).toBe('golden_sweep')
-      expect(meta.label).toBe('GOLDEN SWEEP')
+      expect(meta.type).toBe('sweep')
+      expect(meta.label).not.toBe('GOLDEN SWEEP')
 
       const tier = classifyPremiumTier(15_000_000)
       expect(tier.tier).toBe('mega_whale')
@@ -269,10 +269,10 @@ describe('Challenger 1: Empirical Flow Telemetry & Mathematical Stress Testing',
     })
 
     it('correctly handles null, negative, and unmeasured open interest / volume', () => {
-      expect(computeVolOiRatio(null, 5000).formatted).toBe('0.00x')
-      expect(computeVolOiRatio(5000, null).formatted).toBe('0.00x')
-      expect(computeVolOiRatio(-100, 5000).formatted).toBe('0.00x')
-      expect(computeVolOiRatio(5000, -100).formatted).toBe('0.00x')
+      expect(computeVolOiRatio(null, 5000).formatted).toBe('VOL MISSING')
+      expect(computeVolOiRatio(5000, null).formatted).toBe('OI MISSING')
+      expect(computeVolOiRatio(-100, 5000).formatted).toBe('VOL MISSING')
+      expect(computeVolOiRatio(5000, -100).formatted).toBe('OI MISSING')
       expect(computeVolOiRatio(undefined, undefined).ratio).toBeNull()
     })
 

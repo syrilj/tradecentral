@@ -75,11 +75,13 @@ function nav(viewName: string) {
         <div class="metric-card">
           <span class="metric-label">OPTIONS SKEW</span>
           <span
+            v-if="optionsSkewLabel(node.metrics?.options_skew)"
             class="metric-val text-sm"
-            :class="`text-${optionsSkewLabel(node.metrics?.options_skew).tone}`"
+            :class="`text-${optionsSkewLabel(node.metrics?.options_skew)!.tone}`"
           >
-            {{ optionsSkewLabel(node.metrics?.options_skew).label }}
+            {{ optionsSkewLabel(node.metrics?.options_skew)!.label }}
           </span>
+          <span v-else class="metric-val text-sm">—</span>
         </div>
       </div>
 
@@ -121,7 +123,8 @@ function nav(viewName: string) {
 
             <div v-if="ev.speaker" class="speaker-tag">Speaker: {{ ev.speaker }}</div>
 
-            <blockquote class="quote-body">"{{ ev.quote }}"</blockquote>
+            <!-- No verbatim quote is rendered unless a real quotation exists. -->
+            <blockquote v-if="ev.quote" class="quote-body">"{{ ev.quote }}"</blockquote>
 
             <div v-if="ev.context" class="quote-context">
               <span class="context-k">Context:</span> {{ ev.context }}
@@ -252,7 +255,7 @@ function nav(viewName: string) {
 }
 
 .metric-label {
-  font-size: 0.6rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.05em;
