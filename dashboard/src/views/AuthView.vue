@@ -429,7 +429,7 @@ watch(
   padding: 11px 12px;
   color: #812e35;
   background: #f3e4e3;
-  border-left: 3px solid #b94d56;
+  border-left: 1px solid #b94d56;
   font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.45;
@@ -470,7 +470,7 @@ watch(
 .auth-panel :deep(.cl-formButtonPrimary) {
   min-height: 47px;
   color: #fbfbf8;
-  border-left: 3px solid #ff5229;
+  border-left: 1px solid #ff5229;
   border-radius: 0;
   background: #09090b;
   box-shadow: none;

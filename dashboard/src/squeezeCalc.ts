@@ -1,4 +1,4 @@
-import type { SqueezeSetup } from '@/api'
+import type { OptionsSqueeze, SqueezeSetup } from '@/api'
 import { usd } from '@/format'
 
 export const RING_RADIUS = 42
@@ -71,7 +71,7 @@ export function calculateFeaturedSetup(
 }
 
 /**
- * Calculate SVG circle stroke-dashoffset for the squeeze probability ring.
+ * Calculate SVG circle stroke-dashoffset for the squeeze theory-score ring.
  *
  * Formula: RING_CIRCUMFERENCE * (1 - Math.min(100, Math.max(0, Math.abs(score))) / 100)
  * Handles negative scores (via Math.abs), bounds [0, 100], and invalid inputs.
@@ -386,4 +386,237 @@ export function formatSignedScore(v: number | null | undefined): string {
   const rounded = Number(v.toFixed(1))
   if (rounded === 0 || Object.is(rounded, -0)) return '0'
   return `${rounded > 0 ? '+' : ''}${rounded}`
+}
+
+function finiteNum(value: unknown): number | null {
+  if (value == null || typeof value === 'boolean') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+export type TheoryState =
+  | 'unmeasured'
+  | 'dampened'
+  | 'no_fuel'
+  | 'fuel_only'
+  | 'bull_lean'
+  | 'bear_lean'
+  | 'two_way'
+
+export type TheoryTermTone = 'fuel' | 'flow' | 'mom' | 'bull' | 'bear' | 'warn' | 'ink'
+
+export interface TheoryTerm {
+  id: string
+  label: string
+  display: string
+  fill01: number
+  detail: string
+  tone: TheoryTermTone
+}
+
+export interface TheoryIdentity {
+  measurable: boolean
+  signed: number | null
+  fuelUi: number | null
+  squeezeRisk: number | null
+  liquidityRatio: number | null
+  atmShare: number | null
+  weightedDte: number | null
+  urgency: number | null
+  flowImbalance: number | null
+  flowWeight: number
+  momentum: number | null
+  momentumFresh: boolean
+  convictionBull: number | null
+  convictionBear: number | null
+  bullUi: number | null
+  bearUi: number | null
+  advM: number | null
+  advAvailable: boolean
+  state: TheoryState
+  stateLabel: string
+  formula: string
+  terms: TheoryTerm[]
+}
+
+const THEORY_STATE_LABEL: Record<TheoryState, string> = {
+  unmeasured: 'UNMEASURED',
+  dampened: 'LONG Γ DAMPENS',
+  no_fuel: 'NO FUEL',
+  fuel_only: 'FUEL, NO SIDE',
+  bull_lean: 'BULL LEAN',
+  bear_lean: 'BEAR LEAN',
+  two_way: 'TWO-WAY',
+}
+
+const URGENCY_C = 0.05
+const DEFAULT_FLOW_WEIGHT = 0.5
+const FUEL_SCALE = 40
+const MOM_REF = 0.03
+
+/**
+ * Unpack the shipped theory squeeze identity for the board.
+ *
+ *   SR   = |GEX⁻_1%| / ADV · e^{−c T} · ATM share
+ *   fuel = tanh(40 · SR)
+ *   conv = 0.5 · signed_flow + 0.5 · clip(|mom| / 3%)
+ *   score = 100 · fuel · conv   (signed bull − bear)
+ *
+ * This is a gamma-structure diagnostic, not a calibrated probability. Do not
+ * map the 0–100 board onto Unlikely / Likely / Imminent — walk-forward 1d
+ * hit rate on the fired score has not beaten a momentum baseline.
+ */
+export function buildTheoryIdentity(
+  squeeze: OptionsSqueeze | null | undefined,
+): TheoryIdentity {
+  const c = squeeze?.components ?? {}
+  const t = squeeze?.theory ?? {}
+  const gex = t.short_premium_gex_m ?? {}
+
+  const squeezeRisk = finiteNum(t.squeeze_risk) ?? finiteNum(c.theory_squeeze_risk)
+  const fuelUi = finiteNum(t.fuel_ui) ?? finiteNum(squeeze?.negative_fuel)
+  const gexM = finiteNum(gex.total_gex_m)
+  const advFromTheory = finiteNum(t.adv_m)
+  const liquidityRatio =
+    finiteNum(c.theory_liquidity_ratio) ??
+    (gexM != null && advFromTheory != null && advFromTheory > 0
+      ? Math.abs(gexM) / advFromTheory
+      : null)
+  const atmShare = finiteNum(c.theory_atm_share) ?? finiteNum(gex.atm_share)
+  const weightedDte = finiteNum(c.theory_weighted_dte) ?? finiteNum(gex.weighted_dte)
+  const urgency = weightedDte == null ? null : Math.exp(-URGENCY_C * weightedDte)
+  const flowImbalance =
+    finiteNum(t.directional_flow_imbalance) ?? finiteNum(c.theory_directional_flow_imbalance)
+  const flowWeight = finiteNum(c.flow_weight) ?? DEFAULT_FLOW_WEIGHT
+  const momentum = finiteNum(t.momentum) ?? finiteNum(c.theory_momentum)
+  const momentumFresh = Boolean(t.momentum_fresh ?? c.theory_momentum_fresh)
+  const convictionBull = finiteNum(c.theory_conviction_bull)
+  const convictionBear = finiteNum(c.theory_conviction_bear)
+  const bullUi = finiteNum(t.bullish_ui) ?? (squeeze?.bullish != null ? squeeze.bullish * 100 : null)
+  const bearUi = finiteNum(t.bearish_ui) ?? (squeeze?.bearish != null ? squeeze.bearish * 100 : null)
+  const signed = finiteNum(squeeze?.score)
+  const advM = finiteNum(t.adv_m)
+  const advAvailable = t.adv_available !== false && (advM == null || advM > 0)
+  const measurable = t.measurable !== false && squeeze != null
+
+  let state: TheoryState = 'unmeasured'
+  if (!measurable || squeeze == null) {
+    state = 'unmeasured'
+  } else if (squeeze.long_gamma_dampened) {
+    state = 'dampened'
+  } else if ((fuelUi ?? 0) < 0.05) {
+    state = 'no_fuel'
+  } else if ((bullUi ?? 0) > 8 && (bearUi ?? 0) > 8) {
+    state = 'two_way'
+  } else if ((signed ?? 0) >= 20 || (bullUi ?? 0) >= 20) {
+    state = 'bull_lean'
+  } else if ((signed ?? 0) <= -20 || (bearUi ?? 0) >= 20) {
+    state = 'bear_lean'
+  } else {
+    state = 'fuel_only'
+  }
+
+  const momGate =
+    momentum == null || !momentumFresh ? null : Math.max(0, Math.min(1, Math.abs(momentum) / MOM_REF))
+  const flowGate = flowImbalance == null ? null : Math.max(0, Math.min(1, Math.abs(flowImbalance)))
+
+  const terms: TheoryTerm[] = [
+    {
+      id: 'liquidity',
+      label: '|GEX⁻| / ADV',
+      display: liquidityRatio == null ? '—' : liquidityRatio.toFixed(3),
+      fill01: liquidityRatio == null ? 0 : Math.max(0, Math.min(1, liquidityRatio)),
+      detail: 'Short-premium dealer gamma for a 1% move, as a fraction of average daily dollar volume.',
+      tone: 'fuel',
+    },
+    {
+      id: 'atm',
+      label: 'ATM SHARE',
+      display: atmShare == null ? '—' : `${Math.round(atmShare * 100)}%`,
+      fill01: atmShare == null ? 0 : Math.max(0, Math.min(1, atmShare)),
+      detail: 'Share of short-premium |GEX| sitting in the ATM band. Higher = more gamma at spot.',
+      tone: 'fuel',
+    },
+    {
+      id: 'urgency',
+      label: 'EXPIRY URGENCY',
+      display:
+        weightedDte == null
+          ? '—'
+          : `${weightedDte.toFixed(1)}D · e^{-cT}=${urgency == null ? '—' : urgency.toFixed(2)}`,
+      fill01: urgency == null ? 0 : Math.max(0, Math.min(1, urgency)),
+      detail: `e^{−${URGENCY_C} · weighted DTE}. Near-dated gamma is more urgent; 45D is ~0.11.`,
+      tone: 'fuel',
+    },
+    {
+      id: 'fuel',
+      label: 'FUEL tanh(40·SR)',
+      display: fuelUi == null ? '—' : `${Math.round(fuelUi * 100)}%`,
+      fill01: fuelUi == null ? 0 : Math.max(0, Math.min(1, fuelUi)),
+      detail: `SR=${squeezeRisk == null ? '—' : squeezeRisk.toFixed(4)}. Fuel is unsigned: no short gamma ⇒ no squeeze either way.`,
+      tone: 'fuel',
+    },
+    {
+      id: 'flow',
+      label: 'SIGNED FLOW',
+      display: flowImbalance == null ? 'UNSIGNED' : formatSignedScore(flowImbalance),
+      fill01: flowGate ?? 0,
+      detail:
+        flowImbalance == null
+          ? 'Tape has no buy/sell side. Unsigned call/put mix is identity, not direction.'
+          : `Aggressor-signed premium imbalance. Weight ${flowWeight.toFixed(2)} of conviction.`,
+      tone: 'flow',
+    },
+    {
+      id: 'mom',
+      label: '5D MOMENTUM',
+      display: !momentumFresh || momentum == null ? 'STALE' : `${(momentum * 100).toFixed(2)}%`,
+      fill01: momGate ?? 0,
+      detail: momentumFresh
+        ? `Close-to-close lookback, saturates at |r|=${(MOM_REF * 100).toFixed(0)}%. Weight ${(1 - flowWeight).toFixed(2)} of conviction.`
+        : 'Price series older than the freshness gate — momentum does not drive this score.',
+      tone: momentumFresh ? 'mom' : 'warn',
+    },
+    {
+      id: 'bull',
+      label: 'BULL LEG',
+      display: bullUi == null ? '—' : `${bullUi.toFixed(1)}`,
+      fill01: bullUi == null ? 0 : Math.max(0, Math.min(1, bullUi / 100)),
+      detail: `fuel × conviction_bull. Conviction ${convictionBull == null ? '—' : (convictionBull * 100).toFixed(0)}%.`,
+      tone: 'bull',
+    },
+    {
+      id: 'bear',
+      label: 'BEAR LEG',
+      display: bearUi == null ? '—' : `${bearUi.toFixed(1)}`,
+      fill01: bearUi == null ? 0 : Math.max(0, Math.min(1, bearUi / 100)),
+      detail: `fuel × conviction_bear. Conviction ${convictionBear == null ? '—' : (convictionBear * 100).toFixed(0)}%.`,
+      tone: 'bear',
+    },
+  ]
+
+  return {
+    measurable,
+    signed,
+    fuelUi,
+    squeezeRisk,
+    liquidityRatio,
+    atmShare,
+    weightedDte,
+    urgency,
+    flowImbalance,
+    flowWeight,
+    momentum,
+    momentumFresh,
+    convictionBull,
+    convictionBear,
+    bullUi,
+    bearUi,
+    advM,
+    advAvailable,
+    state,
+    stateLabel: THEORY_STATE_LABEL[state],
+    formula: `tanh(${FUEL_SCALE}·SR) × (${flowWeight.toFixed(1)}·flow + ${(1 - flowWeight).toFixed(1)}·mom)`,
+    terms,
+  }
 }

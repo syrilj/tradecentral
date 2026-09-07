@@ -1183,8 +1183,10 @@ function openFearGreed(): void {
                 <span class="rot-col-h label">IN</span>
                 <span class="rot-legs">
                   <span v-for="s in topRotations.in" :key="`in-${s.etf}`" class="rot-leg">
-                    <span class="fig">{{ s.etf }}</span>
-                    <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
+                    <span class="fig rot-sym">{{ s.etf }}</span>
+                    <small class="fig rot-pct">{{
+                      signedPct(Number(s.flow_score || 0) * 100, 1)
+                    }}</small>
                   </span>
                 </span>
               </span>
@@ -1192,8 +1194,10 @@ function openFearGreed(): void {
                 <span class="rot-col-h label">OUT</span>
                 <span class="rot-legs">
                   <span v-for="s in topRotations.out" :key="`out-${s.etf}`" class="rot-leg">
-                    <span class="fig">{{ s.etf }}</span>
-                    <small class="fig">{{ signedPct(Number(s.flow_score || 0) * 100, 1) }}</small>
+                    <span class="fig rot-sym">{{ s.etf }}</span>
+                    <small class="fig rot-pct">{{
+                      signedPct(Number(s.flow_score || 0) * 100, 1)
+                    }}</small>
                   </span>
                 </span>
               </span>
@@ -1321,19 +1325,28 @@ function openFearGreed(): void {
       </main>
 
       <!-- ── status footer — always visible ─────────────────────────────────── -->
-      <footer class="foot">
-        <span class="foot-label label">Feed</span>
-        <span
-          class="foot-state label"
-          :class="{ ok: !status.error.value, stale: !!status.error.value }"
-          :title="status.error.value ?? 'Backend status feed'"
-        >
-          {{ status.loading.value ? 'SYNC' : status.error.value ? 'FAULT' : 'OK' }}
-          <template v-if="status.fetchedAt.value"> · {{ age(status.fetchedAt.value) }}</template>
+      <footer class="foot" :class="marketSessionClass">
+        <span class="foot-cluster">
+          <span class="foot-label label">Feed</span>
+          <span
+            class="foot-state label"
+            :class="{ ok: !status.error.value, stale: !!status.error.value }"
+            :title="status.error.value ?? 'Backend status feed'"
+          >
+            {{ status.loading.value ? 'SYNC' : status.error.value ? 'FAULT' : 'OK' }}
+            <template v-if="status.fetchedAt.value"> · {{ age(status.fetchedAt.value) }}</template>
+          </span>
         </span>
         <span class="foot-div" aria-hidden="true" />
-        <span class="foot-label label">UTC</span>
-        <span class="fig foot-clock">{{ clock }}</span>
+        <span class="foot-cluster">
+          <span class="foot-label label">Session</span>
+          <span class="fig foot-session">{{ marketSessionLabel }}</span>
+        </span>
+        <span class="foot-div" aria-hidden="true" />
+        <span class="foot-cluster foot-clock-cluster">
+          <span class="foot-label label">UTC</span>
+          <span class="fig foot-clock">{{ clock }}</span>
+        </span>
       </footer>
 
       <SearchPalette
@@ -2001,8 +2014,9 @@ function openFearGreed(): void {
   min-width: 118px;
 }
 .gauge-rot {
-  flex: 1.6 1 240px;
-  min-width: 196px;
+  flex: 1.8 1 268px;
+  min-width: 228px;
+  container: rot-cell / inline-size;
 }
 .gauge-fg {
   flex: 1.2 1 200px;
@@ -2155,22 +2169,24 @@ function openFearGreed(): void {
 }
 .rot-board {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px 12px;
+  grid-template-rows: auto auto;
+  gap: 1px;
   min-width: 0;
   align-self: end;
   width: 100%;
 }
 .rot-col {
   display: grid;
-  grid-template-rows: auto auto;
-  gap: 2px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 6px;
   min-width: 0;
 }
 .rot-col-h {
   color: var(--ink-dim) !important;
   font-size: var(--t-nano) !important;
   letter-spacing: 0.08em;
+  line-height: 1.2;
 }
 .rot-legs {
   display: flex;
@@ -2180,15 +2196,30 @@ function openFearGreed(): void {
   overflow: hidden;
 }
 .rot-leg {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
   gap: 4px;
   min-width: 0;
+  flex: 0 1 auto;
   font-weight: 600;
   white-space: nowrap;
 }
-.rot-leg small {
+.rot-sym {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rot-pct {
+  flex: 0 0 auto;
   font-size: var(--t-nano);
+  font-variant-numeric: tabular-nums;
+}
+.rot-leg:nth-child(n + 2) {
+  display: none;
+}
+@container rot-cell (min-width: 248px) {
+  .rot-leg:nth-child(2) {
+    display: inline-flex;
+  }
 }
 .rot-in {
   color: var(--long);
@@ -2484,29 +2515,38 @@ function openFearGreed(): void {
   padding: var(--s5);
 }
 
-/* ---- footer (feed + clock — always visible) ------------------------------ */
+/* ---- footer (feed + session + clock — always visible) -------------------- */
 .foot {
   grid-area: foot;
   display: flex;
   align-items: center;
-  gap: var(--s4);
+  gap: 14px;
   padding: 0 var(--s5);
-  height: 28px;
-  border-top: var(--hair) solid var(--glass-border);
-  background: var(--void-lift);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
+  height: 36px;
+  border-top: 2px solid var(--phosphor-dim);
+  background: var(--void);
   z-index: var(--z-strip);
 }
 
+.foot-cluster {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.foot-clock-cluster {
+  margin-left: auto;
+}
+
 .foot-label {
-  color: var(--ink-dim);
+  color: var(--ink-faint);
+  letter-spacing: 0.1em;
 }
 .foot-state {
   font-weight: 700;
 }
 .foot-state.ok {
-  color: var(--long);
+  color: var(--phosphor);
 }
 .foot-state.stale {
   color: var(--short);
@@ -2514,9 +2554,25 @@ function openFearGreed(): void {
 
 .foot-div {
   width: var(--hair);
-  height: 14px;
-  background: var(--rule);
+  height: 16px;
+  background: var(--rule-hi);
   flex: 0 0 auto;
+}
+
+.foot-session {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+.foot.closed .foot-session,
+.foot.after_hours .foot-session,
+.foot.premarket .foot-session {
+  color: var(--warn);
+}
+.foot.regular .foot-session {
+  color: var(--phosphor);
 }
 
 .foot-clock {
@@ -2524,6 +2580,7 @@ function openFearGreed(): void {
   color: var(--ink);
   font-weight: 600;
   letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The strip sheds tape detail, then whole gauges, as width runs out — a gauge
@@ -2545,11 +2602,8 @@ function openFearGreed(): void {
     display: none;
   }
 }
-@media (max-width: 1320px) {
+@media (max-width: 1240px) {
   .gauge-rot {
-    display: none;
-  }
-  .rot-leg:nth-child(n + 2) {
     display: none;
   }
 }

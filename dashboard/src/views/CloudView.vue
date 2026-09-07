@@ -103,7 +103,6 @@ const extras = computed(() => {
 
     <Panel
       label="Job queue"
-      index="—"
       :meta="`${jobs.length} job${jobs.length === 1 ? '' : 's'}`"
       :delay="60"
       flush
@@ -135,15 +134,15 @@ const extras = computed(() => {
       </p>
     </Panel>
 
-    <Panel v-if="storage" label="Artifact storage" index="—" :delay="120">
+    <Panel v-if="storage" label="Artifact storage" :delay="120">
       <pre class="raw">{{ JSON.stringify(storage, null, 2) }}</pre>
     </Panel>
 
-    <Panel v-if="credits" label="Credits & cost" index="—" :delay="160">
+    <Panel v-if="credits" label="Credits & cost" :delay="160">
       <pre class="raw">{{ JSON.stringify(credits, null, 2) }}</pre>
     </Panel>
 
-    <Panel v-if="extras.length" label="Environment" index="—" :delay="200">
+    <Panel v-if="extras.length" label="Environment" :delay="200">
       <dl class="kv">
         <template v-for="[k, v] in extras" :key="k">
           <dt class="label">{{ k.replace(/_/g, ' ') }}</dt>

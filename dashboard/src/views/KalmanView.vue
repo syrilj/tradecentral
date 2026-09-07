@@ -367,11 +367,11 @@ const truncated = computed(() => {
       <div class="banner label">
         <span>
           Log price as a level moving at a latent velocity. The traded output is the velocity
-          measured against its own noise — not the level, and not a gate verdict.
+          measured against its own noise, not the level, and not a gate verdict.
         </span>
         <HelpTip
           label="What the filter does"
-          text="State [level, velocity] with F = [[1,1],[0,1]], process noise q on both states, observation variance R = 1. Only the ratio q/R sets the gain, so R is fixed. Signals are read at bar i and filled at bar i+1's open — no look-ahead. The trade list is an in-sample reconstruction with no costs."
+          text="State [level, velocity] with F = [[1,1],[0,1]], process noise q on both states, observation variance R = 1. Only the ratio q/R sets the gain, so R is fixed. Signals are read at bar i and filled at bar i+1's open (no look-ahead). The trade list is an in-sample reconstruction with no costs."
         />
       </div>
 
@@ -577,7 +577,7 @@ const truncated = computed(() => {
           </svg>
 
           <figcaption class="label fig-cap">
-            03 · Slope / noise — the traded signal
+            03 · Slope / noise: the traded signal
             <span v-if="scoreChart" class="scale-note">
               asinh axis · peak |z| {{ num(scoreChart.peak, 1) }}
             </span>

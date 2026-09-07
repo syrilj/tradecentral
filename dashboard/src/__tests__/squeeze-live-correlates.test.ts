@@ -199,9 +199,10 @@ describe('SqueezeScreener source: no fabricated figures', () => {
     expect(src).toContain('UNSCORED')
   })
 
-  it('hides the probability marker when nothing was scored', () => {
-    expect(src).toContain('v-if="boardScore != null"')
-    expect(src).toContain('.prob-zones.unscored')
+  it('renders a dash on the theory dial when nothing was scored, not a fake 0/100', () => {
+    expect(src).toContain("boardScore == null ? DASH : formatSignedScore(boardScore)")
+    expect(src).toContain("boardScore == null ? 'UNSCORED' : '/100'")
+    expect(src).not.toContain('PROBABILITY SCORE')
   })
 
   it('ships the measured price ladder and its distance columns', () => {

@@ -395,10 +395,10 @@ const rangeRead = computed(() => {
           : 'Range unstable',
     body:
       m.regime === 'positive_gamma'
-        ? 'Dealers are long gamma — they buy weakness and sell strength, so moves get absorbed.'
+        ? 'Dealers are long gamma: they buy weakness and sell strength, so moves get absorbed.'
         : m.regime === 'negative_gamma'
-          ? 'Dealers are short gamma — they sell weakness and buy strength, so moves get bigger.'
-          : 'Dealers sit near the sign change; hedging can invert on a small move.',
+          ? 'Dealers are short gamma: they sell weakness and buy strength, so moves get bigger.'
+          : 'Dealer gamma is balanced or neutral: flow does not reliably pin or accelerate spot.',
     netGex: m.net_gex_m,
     charm: cs,
   }
@@ -668,7 +668,7 @@ function openSymbol(sym: string): void {
         <div class="setups-title-block">
           <h2 class="setups-title">Top setups right now</h2>
           <p class="setups-sub">
-            The funnel's own ranking, live — ENTER first, then the watchlist. Click a name to read
+            The funnel's own ranking, live: ENTER first, then the watchlist. Click a name to read
             it in depth below.
           </p>
         </div>
@@ -777,7 +777,7 @@ function openSymbol(sym: string): void {
         <p>
           {{
             playsPayload?.reason ??
-            'Run the decision funnel to rank today’s setups live — it takes a few minutes in the background.'
+            'Run the decision funnel to rank today’s setups live: it takes a few minutes in the background.'
           }}
         </p>
         <button type="button" class="btn" :disabled="runRunning" @click="runTodayScan">
@@ -830,7 +830,7 @@ function openSymbol(sym: string): void {
             }}</span>
           </div>
 
-          <p class="caveat">{{ call.weightNote }} Ordinal — not a probability, not an order.</p>
+          <p class="caveat">{{ call.weightNote }} Ordinal: not a probability, not an order.</p>
         </template>
         <p v-else class="empty">
           {{ humaniseError(callRes.error.value, 'The call') ?? 'Reading the blend…' }}
@@ -1026,7 +1026,7 @@ function openSymbol(sym: string): void {
             <span>{{ w.detail }}</span>
           </li>
         </ul>
-        <p v-else class="empty ok">Nothing flagged — every lens reported cleanly.</p>
+        <p v-else class="empty ok">Nothing flagged: every lens reported cleanly.</p>
       </section>
     </div>
 
@@ -1194,7 +1194,6 @@ h1 {
   color: var(--ink);
   font-size: var(--t-small);
   border: var(--hair) solid var(--short);
-  border-inline-start: 3px solid var(--short);
   border-radius: var(--r-md);
   background: var(--short-wash);
 }
@@ -1227,7 +1226,7 @@ h1 {
   gap: var(--s3);
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--rule);
-  border-inline-start: 3px solid var(--phosphor-dim);
+  border-inline-start: 1px solid var(--phosphor-dim);
   border-radius: var(--r-lg);
   background: var(--panel);
 }
@@ -1292,7 +1291,6 @@ h1 {
   display: block;
   block-size: 100%;
   background: var(--phosphor);
-  transition: width var(--dur) var(--ease-out);
 }
 
 .run-msg {
@@ -1312,7 +1310,7 @@ h1 {
   gap: var(--s2);
   padding: var(--s3);
   border: var(--hair) solid var(--rule);
-  border-inline-start: 3px solid var(--unknown);
+  border-inline-start: 1px solid var(--unknown);
   border-radius: var(--r-md);
   background: var(--panel-wash);
 }
@@ -1553,7 +1551,7 @@ h1 {
 
 /* ── the call ───────────────────────────────────────────────────────────*/
 .call-card {
-  border-inline-start: 3px solid var(--unknown);
+  border-inline-start: 1px solid var(--unknown);
 }
 
 .call-card.long {
@@ -1691,7 +1689,7 @@ h1 {
 
 /* ── range ──────────────────────────────────────────────────────────────*/
 .range-card {
-  border-inline-start: 3px solid var(--unknown);
+  border-inline-start: 1px solid var(--unknown);
 }
 
 .range-card.positive_gamma {
@@ -1838,7 +1836,7 @@ h1 {
 
 /* ── where it's pulling ─────────────────────────────────────────────────*/
 .target-card {
-  border-inline-start: 3px solid var(--unknown);
+  border-inline-start: 1px solid var(--unknown);
 }
 
 .target-card.bullish_pull {

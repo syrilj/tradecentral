@@ -285,17 +285,26 @@ def expiry_policy(symbol: str, moment: datetime) -> ExpiryPolicy:
                 rationale="index product before 13:30 ET: 0DTE permitted",
                 zero_dte_permitted=True,
             )
+        # "1DTE" in the spec means the next expiry, not an expiry exactly one
+        # calendar day out. Enforcing dte == 1 literally would route nothing on
+        # a Friday afternoon, when the next expiry is Monday and three calendar
+        # days away -- the exact session the rule exists to serve. The ceiling
+        # is 3 so a Friday reaches Monday and no further.
         return ExpiryPolicy(
-            sym, max_dte=1, min_dte=1,
+            sym, max_dte=3, min_dte=1,
             rationale=(
                 "index product after 13:30 ET: 0DTE theta exceeds ~1% of premium "
-                "per 15 minutes of consolidation, so route to 1DTE"
+                "per 15 minutes of consolidation, so route to the next expiry"
             ),
             zero_dte_permitted=False,
         )
 
     # Single name. Thursday (3) and Friday (4) entries reach past the weekend.
-    if local.weekday() >= 3:
+    # Tested for membership, not `>= 3`: that also caught Saturday and Sunday
+    # and had the policy assert "entered Thu/Fri" on a weekend. No entry is
+    # permitted then anyway -- `session_gate` blocks it -- but the rationale
+    # string is rendered on the desk, and a false reason is still false.
+    if local.weekday() in (3, 4):
         return ExpiryPolicy(
             sym, max_dte=14, min_dte=7,
             rationale="single name entered Thu/Fri: 7-14 DTE to clear the weekend",
@@ -461,12 +470,10 @@ def select_contract(
             continue
         considered += 1
 
-        raw_expiry = row.get("expiry") or row.get("expiration") or row.get("exp")
-        try:
-            exp_date = date.fromisoformat(str(raw_expiry))
-        except (TypeError, ValueError):
+        resolved = _row_expiry_dte(row, today=today)
+        if resolved is None:
             continue
-        dte = (exp_date - today).days
+        exp_date, dte = resolved
         if not policy.admits(dte):
             out_of_policy += 1
             continue
@@ -500,7 +507,7 @@ def select_contract(
                 {
                     "strike": strike,
                     "right": right,
-                    "expiry": exp_date.isoformat(),
+                    "expiry": None if exp_date is None else exp_date.isoformat(),
                     "delta": round(delta, 4),
                     "dte": dte,
                     "spread": check,
@@ -545,6 +552,33 @@ def select_contract(
         considered=considered,
         warnings=warnings,
     )
+
+
+def _row_expiry_dte(
+    row: Mapping[str, Any], *, today: date
+) -> tuple[date | None, int] | None:
+    """(expiry date, days-to-expiry) for a chain row, or None if neither reads.
+
+    Two row shapes reach this router. The 0DTE chain fetch carries a dated
+    `expiry` string; the main options payload carries an integer `dte` and no
+    expiry at all. The policy is written in DTE, so an explicit `dte` is taken
+    at face value and the date is left None rather than back-solved into a
+    calendar day the feed never asserted -- adding `dte` to today would land on
+    a weekend or holiday and print an expiry that does not trade.
+    """
+    raw_dte = row.get("dte")
+    if raw_dte is not None:
+        try:
+            return None, int(raw_dte)
+        except (TypeError, ValueError):
+            pass
+
+    raw_expiry = row.get("expiry") or row.get("expiration") or row.get("exp")
+    try:
+        exp_date = date.fromisoformat(str(raw_expiry))
+    except (TypeError, ValueError):
+        return None
+    return exp_date, (exp_date - today).days
 
 
 def _row_delta(

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { OptionsDirectionRead } from '@/optionsDirection'
+import type { OptionsSqueeze } from '@/api'
 import { num, optSignedGex, optUsd, pctFrac } from '@/format'
 
 const props = defineProps<{
@@ -12,6 +13,7 @@ const props = defineProps<{
   gammaFlip?: number | null
   regime?: string | null
   totalGexM?: number | null
+  squeeze?: OptionsSqueeze | null
 }>()
 
 function signedScore(value: number | null): string {
@@ -160,6 +162,118 @@ const regimeInfo = computed(() => {
   }
 })
 
+/**
+ * Quantitative Squeeze Mechanics Model.
+ * Synthesizes dealer gamma fuel, tape pressure, momentum, and boundary pinning.
+ */
+const squeezeDiagnostics = computed(() => {
+  const sq = props.squeeze
+  const read = props.read
+  const reg = regimeInfo.value
+  const fm = flipMath.value
+  const spot = finiteNum(props.spot)
+  const cw = finiteNum(props.callWall)
+  const pw = finiteNum(props.putWall)
+
+  // 1. Long Gamma Dampening: dealers absorb moves, suppressing runaway squeeze cascades
+  const isDampened = Boolean(
+    sq?.long_gamma_dampened ||
+      (fm?.side === 'above' && reg.isPos) ||
+      (reg.isPos && !reg.isNeg && fm?.side !== 'below'),
+  )
+
+  // 2. Fuel status (negative GEX / short gamma provides runaway fuel)
+  let fuelLabel: string
+  let fuelTone: 'bullish' | 'bearish' | 'neutral' | 'warn'
+  if (isDampened) {
+    fuelLabel = 'FUEL: LONG Γ DAMPENED'
+    fuelTone = 'warn'
+  } else if (sq?.negative_fuel != null && sq.negative_fuel > 0) {
+    fuelLabel = `FUEL: ${Math.round(sq.negative_fuel * 100)}% SHORT Γ`
+    fuelTone = 'bearish'
+  } else if (reg.isNeg || fm?.side === 'below') {
+    fuelLabel = 'FUEL: SHORT Γ LOADED'
+    fuelTone = 'bearish'
+  } else {
+    fuelLabel = 'FUEL: NEUTRAL / BALANCED'
+    fuelTone = 'neutral'
+  }
+
+  // 3. Trigger status (signed flow vs price momentum)
+  let triggerLabel: string
+  let triggerTone: 'bullish' | 'bearish' | 'neutral' | 'warn'
+  if (read.signedFlow != null && Math.abs(read.signedFlow) >= 0.05) {
+    const s = read.signedFlow > 0 ? '+' : ''
+    triggerLabel = `TRIGGER: SIGNED TAPE ${s}${pctFrac(read.signedFlow, 1)}`
+    triggerTone = read.signedFlow > 0 ? 'bullish' : 'bearish'
+  } else if (read.momentum != null && Math.abs(read.momentum) >= 0.005) {
+    const s = read.momentum > 0 ? '+' : ''
+    triggerLabel = `TRIGGER: MOMENTUM ${s}${pctFrac(read.momentum, 2)}`
+    triggerTone = read.momentum > 0 ? 'bullish' : 'bearish'
+  } else {
+    triggerLabel = 'TRIGGER: NO TAPE BIAS'
+    triggerTone = 'neutral'
+  }
+
+  // 4. Squeeze Status / Phase Tag
+  let statusTag: string
+  let statusTone: 'bullish' | 'bearish' | 'neutral' | 'warn'
+  let mechanicsNote: string
+
+  if (isDampened) {
+    statusTag = 'SQUEEZE DAMPENED'
+    statusTone = 'warn'
+    mechanicsNote =
+      'Long dealer gamma absorbs volatility; dealers lean against moves and suppress runaway squeeze cascades.'
+  } else if (read.state === 'bullish' && (reg.isNeg || fm?.side === 'below')) {
+    statusTag = 'UPSIDE SQUEEZE RISK'
+    statusTone = 'bullish'
+    mechanicsNote =
+      'Short gamma fuel loaded with upside directional pressure. Dealer hedging accelerates through call wall.'
+  } else if (read.state === 'bearish' && (reg.isNeg || fm?.side === 'below')) {
+    statusTag = 'DOWNSIDE SQUEEZE RISK'
+    statusTone = 'bearish'
+    mechanicsNote =
+      'Short gamma fuel loaded with downside directional pressure. Dealer hedging accelerates through put wall.'
+  } else if (spot != null && cw != null && pw != null && spot >= pw && spot <= cw) {
+    statusTag = 'COMPRESSION COIL'
+    statusTone = 'neutral'
+    mechanicsNote =
+      'Spot is bound within structural walls. Directional expansion pinned until outer boundary breach.'
+  } else {
+    statusTag =
+      read.state === 'bullish'
+        ? 'BULLISH LEAN'
+        : read.state === 'bearish'
+          ? 'BEARISH LEAN'
+          : 'NEUTRAL SQUEEZE'
+    statusTone =
+      read.state === 'bullish' ? 'bullish' : read.state === 'bearish' ? 'bearish' : 'neutral'
+    mechanicsNote = read.subhead
+  }
+
+  return {
+    isDampened,
+    fuelLabel,
+    fuelTone,
+    triggerLabel,
+    triggerTone,
+    statusTag,
+    statusTone,
+    mechanicsNote,
+  }
+})
+
+const corridorSummary = computed(() => {
+  const cw = finiteNum(props.callWall)
+  const pw = finiteNum(props.putWall)
+  const spot = finiteNum(props.spot)
+  if (cw == null || pw == null || cw <= pw || spot == null || spot <= 0) return null
+  const span = cw - pw
+  const pct = (span / spot) * 100
+  return `${optUsd(span)} (${num(pct, 1)}%) CORRIDOR`
+})
+
 const hasStructure = computed(
   () =>
     props.spot != null &&
@@ -291,9 +405,17 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
     :title="read.confirmation"
   >
     <div class="positioning-layout">
+      <!-- Main Direction & Gamma Head -->
       <div class="direction-head">
+        <!-- Card 1: Squeeze & Direction Engine -->
         <div class="score-block">
-          <span class="eyebrow label">{{ symbol }} · UNDERLYING DIRECTION</span>
+          <div class="card-eyebrow label">
+            <span class="eyebrow-text">{{ symbol }} · UNDERLYING DIRECTION</span>
+            <span class="squeeze-phase-badge label" :class="squeezeDiagnostics.statusTone">
+              {{ squeezeDiagnostics.statusTag }}
+            </span>
+          </div>
+
           <div class="dir-title-line">
             <strong class="fig score-val" :class="squeezeMeter.tone">{{
               signedScore(read.score)
@@ -307,6 +429,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
               }}
             </span>
           </div>
+
+          <!-- Squeeze Spectrum Telemetry Meter -->
           <div
             class="sq-meter"
             role="meter"
@@ -329,14 +453,27 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             </span>
             <span class="sq-end label bull">BULLISH</span>
           </div>
+
+          <!-- Squeeze Model Diagnostics Row -->
           <div class="dir-sub-line">
             <span v-if="regimeInfo.distToFlip" class="flip-dist-chip label">{{
               regimeInfo.distToFlip
             }}</span>
-            <span class="dir-subhead label">{{ read.subhead }}</span>
+            <span class="sq-chip label" :class="squeezeDiagnostics.fuelTone">{{
+              squeezeDiagnostics.fuelLabel
+            }}</span>
+            <span class="sq-chip label" :class="squeezeDiagnostics.triggerTone">{{
+              squeezeDiagnostics.triggerLabel
+            }}</span>
+          </div>
+
+          <!-- Descriptive Subhead / Mechanics Note -->
+          <div class="dir-subhead-box">
+            <p class="dir-subhead label">{{ read.subhead }}</p>
           </div>
         </div>
 
+        <!-- Card 2: Dealer Gamma & Hedging Model -->
         <div class="dealer-gamma-card">
           <div class="card-eyebrow label">
             <span>DEALER GAMMA</span>
@@ -351,14 +488,25 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             <span class="action-tag label" :class="regimeInfo.tone">{{
               regimeInfo.actionTag
             }}</span>
+            <span class="hedging-flow-badge label" :class="regimeInfo.tone">{{
+              regimeInfo.isPos
+                ? 'MEAN-REVERTING'
+                : regimeInfo.isNeg
+                  ? 'TREND-ACCELERATING'
+                  : 'BALANCED'
+            }}</span>
           </div>
           <p class="dealer-thesis-text">{{ regimeInfo.dealerThesis }}</p>
           <div class="dealer-derivation" aria-label="How the dealer read was derived">
-            <span class="deriv-row label">{{ regimeInfo.derivation }}</span>
-            <span class="deriv-row label">{{ regimeInfo.bookDerivation }}</span>
+            <div class="deriv-item">
+              <span class="deriv-row label">{{ regimeInfo.derivation }}</span>
+            </div>
+            <div class="deriv-item">
+              <span class="deriv-row label">{{ regimeInfo.bookDerivation }}</span>
+            </div>
           </div>
           <p v-if="regimeInfo.conflict" class="dealer-conflict label">
-            NET GEX AND SPOT-SIDE DISAGREE — net gamma is
+            NET GEX AND SPOT-SIDE DISAGREE: net gamma is
             {{ regimeInfo.isPos ? 'long' : 'short' }} across the chain while spot sits
             {{ regimeInfo.isPos ? 'below' : 'above' }} the flip. The hedging read above follows spot
             versus the flip.
@@ -366,6 +514,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
         </div>
       </div>
 
+      <!-- Evidence Matrix Strip -->
       <div class="evidence-strip" aria-label="Directional evidence">
         <div class="evidence-cell basis-cell">
           <span class="label">DIRECTION COMES FROM</span>
@@ -428,6 +577,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
         </div>
       </div>
 
+      <!-- Unified Positioning Telemetry Map -->
       <div
         v-if="hasStructure && structureRange"
         class="positioning-range-meter"
@@ -438,7 +588,10 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             <span class="wall-head-label">PUT WALL</span>
             <strong class="wall-head-price">{{ optUsd(putWall) }}</strong>
           </div>
-          <span class="meter-title label">POSITIONING TELEMETRY MAP</span>
+          <div class="meter-center">
+            <span class="meter-title label">POSITIONING TELEMETRY MAP</span>
+            <span v-if="corridorSummary" class="corridor-summary label">{{ corridorSummary }}</span>
+          </div>
           <div class="wall-head-item call">
             <strong class="wall-head-price">{{ optUsd(callWall) }}</strong>
             <span class="wall-head-label">CALL WALL</span>
@@ -474,6 +627,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
               <span class="zone-label">DAMP · LONG GAMMA</span>
             </div>
 
+            <!-- Put Wall Marker -->
             <div
               v-if="structureRange.putWallPct != null"
               class="range-marker put-wall"
@@ -491,6 +645,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
               </span>
             </div>
 
+            <!-- Gamma Flip Boundary Marker -->
             <div
               v-if="structureRange.flipPct != null"
               class="range-marker gamma-flip"
@@ -524,6 +679,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
               </span>
             </div>
 
+            <!-- Spot Location Needle -->
             <div
               class="range-marker spot-marker"
               :class="markerEdgeCls(structureRange.spotPct)"
@@ -538,6 +694,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
               </span>
             </div>
 
+            <!-- Call Wall Marker -->
             <div
               v-if="structureRange.callWallPct != null"
               class="range-marker call-wall"
@@ -566,6 +723,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             </div>
           </div>
 
+          <!-- Precision Instrument Ruler -->
           <svg
             class="range-ruler"
             viewBox="0 0 100 6"
@@ -597,11 +755,11 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   flex-direction: column;
   min-height: 60px;
   border: var(--hair) solid var(--glass-border);
-  border-left: 3px solid var(--direction-tone);
+  border-left: 2px solid var(--direction-tone);
   background: var(--glass-surface);
   backdrop-filter: var(--glass-blur-md);
   -webkit-backdrop-filter: var(--glass-blur-md);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-xs, 2px);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   overflow: hidden;
 }
@@ -615,7 +773,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   --direction-tone: var(--warn);
 }
 .direction-brief.unavailable {
-  --direction-tone: var(--ink-ghost);
+  --direction-tone: var(--ink-dim);
 }
 
 .positioning-layout {
@@ -626,7 +784,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 
 .direction-head {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(220px, 0.85fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(240px, 0.85fr);
   align-items: stretch;
   min-width: 0;
 }
@@ -639,9 +797,9 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .score-block {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  padding: 8px 12px 10px;
+  padding: 10px 14px 12px;
   background: var(--void-lift);
   border-right: var(--hair) solid var(--rule);
 }
@@ -652,18 +810,71 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   }
 }
 
-.score-block .eyebrow {
+.card-eyebrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.eyebrow-text {
   color: var(--ink-faint);
   font-size: var(--t-nano);
   letter-spacing: 0.06em;
+  font-weight: 700;
 }
 
+.squeeze-phase-badge {
+  padding: 1px 7px;
+  border-radius: var(--r-xs, 2px);
+  font-size: var(--t-nano);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void);
+  color: var(--ink-dim);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.squeeze-phase-badge.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--rule));
+  background: var(--warn-wash);
+}
+.squeeze-phase-badge.bullish {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call) 40%, var(--rule));
+  background: var(--call-wash);
+}
+.squeeze-phase-badge.bearish {
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put) 40%, var(--rule));
+  background: var(--put-wash);
+}
+.squeeze-phase-badge.neutral {
+  color: var(--ink-dim);
+  border-color: var(--rule-hi);
+  background: var(--void);
+}
+
+.dir-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .score-val {
-  font-size: 1.15rem;
+  font-size: 1.25rem;
   font-weight: 800;
   letter-spacing: -0.03em;
   color: var(--direction-tone);
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-data);
 }
 .score-val.bullish {
   color: var(--long);
@@ -677,8 +888,41 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .score-max {
   color: var(--ink-faint);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
+}
+.direction-mark {
+  color: var(--direction-tone);
+  font-weight: 800;
+  font-size: 1.1rem;
+}
+.direction-title {
+  color: var(--direction-tone);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.confidence {
+  padding: 2px 7px;
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  border-radius: var(--r-xs, 2px);
+  letter-spacing: 0.04em;
+}
+.confidence.high,
+.confidence.medium {
+  color: var(--direction-tone);
+  border-color: color-mix(in srgb, var(--direction-tone) 40%, var(--rule));
+}
+.confidence.low {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--rule));
+  background: var(--warn-wash);
+}
+.confidence.wait {
+  color: var(--ink-dim);
 }
 
 .sq-meter {
@@ -706,11 +950,14 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   min-width: 0;
   background: var(--void);
   border: var(--hair) solid var(--rule);
-  border-radius: 1px;
+  border-radius: 2px;
+  overflow: visible;
 }
 .sq-spectrum {
   display: flex;
   height: 100%;
+  border-radius: 1px;
+  overflow: hidden;
 }
 .sq-spectrum i {
   flex: 1 1 0;
@@ -718,41 +965,42 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   height: 100%;
 }
 .sq-spectrum i:nth-child(1) {
-  background: var(--short);
+  background: color-mix(in srgb, var(--short) 70%, transparent);
 }
 .sq-spectrum i:nth-child(2) {
-  background: color-mix(in srgb, var(--short) 55%, var(--warn));
+  background: color-mix(in srgb, var(--short) 35%, transparent);
 }
 .sq-spectrum i:nth-child(3) {
-  background: var(--ink-faint);
+  background: transparent;
 }
 .sq-spectrum i:nth-child(4) {
-  background: color-mix(in srgb, var(--long) 55%, var(--warn));
+  background: color-mix(in srgb, var(--long) 35%, transparent);
 }
 .sq-spectrum i:nth-child(5) {
-  background: var(--long);
+  background: color-mix(in srgb, var(--long) 70%, transparent);
 }
 .sq-zero {
   position: absolute;
-  top: -2px;
-  bottom: -2px;
+  top: -3px;
+  bottom: -3px;
   left: 50%;
   width: 1px;
-  background: var(--ink);
+  background: var(--rule-hi);
   transform: translateX(-50%);
   pointer-events: none;
 }
 .sq-thumb {
   position: absolute;
   top: 50%;
-  width: 8px;
-  height: 12px;
+  width: 6px;
+  height: 14px;
   border-radius: 1px;
   background: var(--ink);
-  border: var(--hair) solid var(--void-lift);
+  border: 1px solid var(--void);
   transform: translate(-50%, -50%);
   pointer-events: none;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-1);
+  z-index: 2;
 }
 .sq-thumb.bullish {
   background: var(--long);
@@ -760,44 +1008,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .sq-thumb.bearish {
   background: var(--short);
 }
-
-.dir-title-line {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-.direction-mark {
-  color: var(--direction-tone);
-  font-weight: 800;
-  font-size: 1rem;
-}
-.direction-title {
-  color: var(--direction-tone);
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-}
-.confidence {
-  padding: 1px 6px;
-  border: var(--hair) solid var(--rule-hi);
-  background: var(--void);
-  font-size: var(--t-micro);
-  font-weight: 700;
-  border-radius: var(--r-xs);
-}
-.confidence.high,
-.confidence.medium {
-  color: var(--direction-tone);
-  border-color: color-mix(in srgb, var(--direction-tone) 45%, var(--rule));
-}
-.confidence.low {
-  color: var(--warn);
-  border-color: var(--warn);
-}
-.confidence.wait {
-  color: var(--ink-dim);
+.sq-thumb.neutral {
+  background: var(--ink-soft);
 }
 
 .dir-sub-line {
@@ -807,53 +1019,78 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   flex-wrap: wrap;
   min-width: 0;
 }
-.dir-subhead {
-  overflow: hidden;
-  color: var(--ink-faint);
-  font-size: var(--t-nano);
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1 1 auto;
-}
 .flip-dist-chip {
-  padding: 1px 6px;
-  border: var(--hair) solid var(--warn);
+  padding: 1px 7px;
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 45%, var(--rule));
   color: var(--warn);
   background: var(--warn-wash);
   font-size: var(--t-nano);
-  border-radius: var(--r-xs);
+  font-weight: 700;
+  font-family: var(--font-data);
+  border-radius: var(--r-xs, 2px);
   white-space: nowrap;
+}
+.sq-chip {
+  padding: 1px 7px;
+  border-radius: var(--r-xs, 2px);
+  font-size: var(--t-nano);
+  font-weight: 600;
+  font-family: var(--font-data);
+  letter-spacing: 0.03em;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.sq-chip.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--rule));
+  background: var(--warn-wash);
+}
+.sq-chip.bullish {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call) 35%, var(--rule));
+  background: var(--call-wash);
+}
+.sq-chip.bearish {
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put) 35%, var(--rule));
+  background: var(--put-wash);
+}
+
+.dir-subhead-box {
+  padding: 5px 8px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs, 2px);
+  margin-top: 2px;
+}
+
+.dir-subhead {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--t-tiny);
+  line-height: 1.45;
+  white-space: normal;
 }
 
 .dealer-gamma-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 12px 10px;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  background: var(--void-lift);
   min-width: 0;
-}
-
-.card-eyebrow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s2);
-  color: var(--ink-faint);
-  font-size: var(--t-micro);
-  font-weight: 700;
-  letter-spacing: 0.08em;
 }
 
 .dealer-hero-row {
   display: flex;
   align-items: center;
-  gap: var(--s3);
+  gap: 8px;
   flex-wrap: wrap;
 }
 .dealer-hero-num {
-  font-size: var(--t-fig);
+  font-size: 1.25rem;
   font-weight: 800;
   line-height: 1.1;
   letter-spacing: -0.03em;
@@ -870,7 +1107,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 }
 
 .action-tag {
-  padding: 3px 10px;
+  padding: 2px 8px;
   border-radius: var(--r-xs, 2px);
   font-size: var(--t-micro);
   font-weight: 800;
@@ -878,42 +1115,67 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   border: var(--hair) solid var(--rule-hi);
   background: var(--void);
   color: var(--ink-dim);
-  box-shadow: var(--glass-specular-subtle);
+  white-space: nowrap;
 }
 .action-tag.bearish {
   color: var(--put-hi);
-  border-color: var(--put);
+  border-color: color-mix(in srgb, var(--put) 40%, var(--rule));
   background: var(--put-wash);
 }
 .action-tag.bullish {
   color: var(--call-hi);
-  border-color: var(--call);
+  border-color: color-mix(in srgb, var(--call) 40%, var(--rule));
   background: var(--call-wash);
+}
+
+.hedging-flow-badge {
+  padding: 2px 7px;
+  border-radius: var(--r-xs, 2px);
+  font-size: var(--t-nano);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.hedging-flow-badge.bullish {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call) 30%, var(--rule));
+}
+.hedging-flow-badge.bearish {
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put) 30%, var(--rule));
 }
 
 .dealer-thesis-text {
   margin: 0;
-  color: var(--ink-dim);
+  color: var(--ink-soft);
   font-size: var(--t-tiny);
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  line-height: 1.4;
+  white-space: normal;
 }
 
 .dealer-derivation {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-top: 6px;
+  gap: 4px;
+  margin-top: 4px;
   padding-top: 6px;
   border-top: var(--hair) solid var(--rule);
+}
+.deriv-item {
+  display: flex;
+  align-items: baseline;
+  padding: 3px 8px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs, 2px);
 }
 .deriv-row {
   font-family: var(--font-data);
   font-size: var(--t-micro);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--ink-faint);
   letter-spacing: 0.02em;
   white-space: normal;
@@ -921,16 +1183,15 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 }
 
 .dealer-conflict {
-  margin: 6px 0 0;
-  padding: 4px 6px;
-  border-left: 2px solid var(--warn, var(--ink-dim));
-  background: var(--glass-wash, transparent);
-  color: var(--ink-dim);
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--warn);
+  background: var(--warn-wash);
+  color: var(--warn);
   font-size: var(--t-micro);
   line-height: 1.35;
   white-space: normal;
-  text-transform: none;
-  letter-spacing: 0;
+  border-radius: 0 var(--r-xs, 2px) var(--r-xs, 2px) 0;
 }
 
 .regime-tag-badge {
@@ -941,16 +1202,16 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   border-radius: var(--r-xs, 2px);
   background: var(--void);
   color: var(--ink-dim);
-  box-shadow: var(--glass-specular-subtle);
+  white-space: nowrap;
 }
 .regime-tag-badge.bullish {
   color: var(--call-hi);
-  border-color: var(--call);
+  border-color: color-mix(in srgb, var(--call) 40%, var(--rule));
   background: var(--call-wash);
 }
 .regime-tag-badge.bearish {
   color: var(--put-hi);
-  border-color: var(--put);
+  border-color: color-mix(in srgb, var(--put) 40%, var(--rule));
   background: var(--put-wash);
 }
 
@@ -958,12 +1219,10 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
-  background: var(--glass-border);
-  border: 0;
-  border-top: var(--hair) solid var(--glass-border);
-  border-radius: 0;
+  background: var(--rule);
+  border-top: var(--hair) solid var(--rule);
+  border-bottom: var(--hair) solid var(--rule);
   overflow: hidden;
-  margin-top: 0;
 }
 @media (max-width: 700px) {
   .evidence-strip {
@@ -973,23 +1232,26 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .evidence-cell {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 4px 8px;
+  gap: 2px;
+  padding: 6px 12px;
   background: var(--panel);
   min-width: 0;
 }
 .evidence-cell > span {
   color: var(--ink-faint);
   font-size: var(--t-nano);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .evidence-cell strong {
   color: var(--ink);
+  font-family: var(--font-data);
   font-size: var(--t-micro);
-  line-height: 1.15;
+  font-weight: 700;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -997,6 +1259,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .evidence-cell small {
   color: var(--ink-faint);
   font-size: var(--t-nano);
+  font-weight: 600;
+  letter-spacing: 0.03em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1017,20 +1281,19 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .positioning-range-meter {
   display: flex;
   flex-direction: column;
-  gap: var(--s2);
-  padding: 8px 12px 10px;
+  gap: 6px;
+  padding: 10px 14px 12px;
   background: var(--void);
-  border-top: var(--hair) solid var(--rule);
 }
 
 .range-meter-head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
+  align-items: center;
   font-size: var(--t-micro);
   color: var(--ink-faint);
-  letter-spacing: 0.08em;
-  padding-bottom: 4px;
+  letter-spacing: 0.06em;
+  padding-bottom: 2px;
 }
 .wall-head-item {
   display: flex;
@@ -1054,23 +1317,36 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   font-weight: 800;
   font-size: 13px;
 }
+.meter-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
 .meter-title {
   font-weight: 700;
   color: var(--ink-faint);
   font-size: var(--t-nano);
   letter-spacing: 0.08em;
 }
+.corridor-summary {
+  font-family: var(--font-data);
+  font-size: var(--t-nano);
+  color: var(--phosphor-dim);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
 
 .range-track-container {
   position: relative;
   width: 100%;
   padding-top: 28px;
-  padding-bottom: 14px;
+  padding-bottom: 12px;
 }
 
 .range-track.visual-track {
   position: relative;
-  height: 52px;
+  height: 48px;
   background: var(--void-lift);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xs, 2px);
@@ -1084,16 +1360,15 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   display: flex;
   align-items: center;
   overflow: hidden;
-  border-radius: var(--r-xs, 2px);
 }
 .range-zone.short-gamma {
   background: var(--put-wash);
-  border-right: var(--hair) solid color-mix(in srgb, var(--put) 35%, var(--rule));
+  border-right: 1px dashed color-mix(in srgb, var(--put) 40%, var(--rule));
   justify-content: flex-start;
 }
 .range-zone.long-gamma {
   background: var(--call-wash);
-  border-left: var(--hair) solid color-mix(in srgb, var(--call) 35%, var(--rule));
+  border-left: 1px dashed color-mix(in srgb, var(--call) 40%, var(--rule));
   justify-content: flex-end;
 }
 .range-zone.full-zone {
@@ -1134,8 +1409,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 
 .range-marker {
   position: absolute;
-  top: -8px;
-  bottom: -8px;
+  top: -6px;
+  bottom: -6px;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -1183,8 +1458,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 
 .marker-needle {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
+  top: -2px;
+  bottom: -2px;
   width: 3px;
   background: var(--ink);
   border-radius: 1px;
@@ -1197,27 +1472,28 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   display: inline-flex;
   align-items: baseline;
   gap: 3px;
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: var(--r-xs, 2px);
   font-size: var(--t-micro);
   line-height: 1.1;
   white-space: nowrap;
   border: var(--hair) solid var(--rule);
   background: var(--void-lift);
+  box-shadow: var(--shadow-1);
 }
 .marker-pill.put {
   color: var(--put-hi);
-  border-color: var(--put);
+  border-color: color-mix(in srgb, var(--put) 45%, var(--rule));
   background: var(--put-wash);
 }
 .marker-pill.call {
   color: var(--call-hi);
-  border-color: var(--call);
+  border-color: color-mix(in srgb, var(--call) 45%, var(--rule));
   background: var(--call-wash);
 }
 .marker-pill.flip {
   color: var(--warn);
-  border-color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
   background: var(--warn-wash);
   top: -20px;
 }
@@ -1231,31 +1507,39 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .marker-pill.spot {
   color: var(--ink);
   border-color: var(--ink-dim);
-  background: var(--panel-hi);
+  background: var(--panel-raise);
   font-weight: 700;
-  top: 16px;
+  top: 14px;
+  white-space: nowrap;
+  min-width: max-content;
+  padding: 2px 8px;
 }
 
 .pill-label {
   font-size: var(--t-micro);
-  opacity: 0.8;
+  font-weight: 600;
+  opacity: 0.85;
 }
 .pill-val {
   font-family: var(--font-data);
-  font-weight: 700;
+  font-weight: 800;
 }
 .pill-dist {
   font-size: var(--t-micro);
-  opacity: 0.85;
+  font-family: var(--font-data);
+  opacity: 0.9;
   margin-left: 2px;
 }
 
 .you-are-here {
-  display: block;
+  display: inline-block;
   font-size: var(--t-nano);
   color: var(--phosphor);
   font-weight: 700;
   letter-spacing: 0.04em;
+  font-family: var(--font-display);
   text-transform: lowercase;
+  white-space: nowrap;
+  margin-left: 4px;
 }
 </style>

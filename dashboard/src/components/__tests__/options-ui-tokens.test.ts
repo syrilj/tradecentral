@@ -64,6 +64,11 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(src).toMatch(/var\(--put/)
     expect(src).toMatch(/\.ring-fill\.bullish\s*\{\s*stroke:\s*var\(--call/)
     expect(src).toMatch(/\.ring-fill\.bearish\s*\{\s*stroke:\s*var\(--put/)
+    expect(src).toContain('THEORY SCORE · NOT A FORECAST')
+    expect(src).not.toContain('PROBABILITY SCORE')
+    expect(src).not.toContain('Imminent')
+    expect(src).not.toContain('⚡')
+    expect(src).not.toMatch(/ring-wrap visually-hidden/)
   })
 
   it('GammaExposureMap bars/legend use call/put tokens and flat net dots', () => {
@@ -148,7 +153,8 @@ describe('Options UI token gate (shipped SFCs)', () => {
     expect(brief).toContain('SIGNED FLOW')
     expect(brief).toContain('PRICE MOMENTUM')
     expect(brief).toContain('NOT DIRECTION')
-    expect(flow).toContain('CALL = EMERALD · PUT = CRIMSON · IDENTITY, NOT DIRECTION')
+    expect(flow).toContain('CONTRACT MIX · NOT SIGNED DIRECTION')
+    expect(flow).toContain('IDENTITY, NOT DIRECTION')
     expect(flow).not.toContain('BULLISH · CALL-HEAVY')
     expect(flow).not.toContain('BEARISH · PUT-HEAVY')
   })

@@ -3606,7 +3606,7 @@ const finChartData = computed(() => {
               {{
                 ownershipMix.partition
                   ? 'Slices sum to outstanding.'
-                  : 'Independent shares of outstanding — 13F and insider holdings can overlap, so they are not stacked to 100%.'
+                  : 'Independent shares of outstanding: 13F and insider holdings can overlap, so they are not stacked to 100%.'
               }}
             </p>
           </div>
@@ -4655,7 +4655,6 @@ const finChartData = computed(() => {
   height: 100%;
   border-radius: 2px;
   background: var(--rule-hi);
-  transition: width var(--dur-fast);
 }
 
 .score-bar-fill.pos {
@@ -4993,7 +4992,6 @@ const finChartData = computed(() => {
   flex: 1;
   max-width: 18px;
   border-radius: 2px 2px 0 0;
-  transition: height var(--dur-fast);
 }
 
 .fin-bar.rev {
@@ -5715,7 +5713,6 @@ const finChartData = computed(() => {
   display: block;
   height: 100%;
   border-radius: 2px;
-  transition: width var(--dur-fast);
 }
 
 /* Compare Performance Table & Correlation Matrix */

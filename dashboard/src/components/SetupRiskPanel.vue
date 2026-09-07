@@ -305,7 +305,6 @@ watch([accountEquity, selectedRiskPct, openRiskDollars], () => {
   display: block;
   height: 100%;
   background: var(--phosphor-dim);
-  transition: width var(--dur) var(--ease-out);
 }
 
 .risk-output {

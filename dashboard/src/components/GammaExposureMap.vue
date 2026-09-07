@@ -1231,6 +1231,7 @@ watch(
               <rect
                 v-if="bar.winnerH > 0 && bar.winnerSide === 'call'"
                 class="call-bar winner-bar"
+                :class="{ 'wall-highlight': bar.isCallWall }"
                 :x="bar.cx - bar.thickness / 2"
                 :y="bar.winnerY"
                 :width="bar.thickness"
@@ -1246,6 +1247,7 @@ watch(
               <rect
                 v-else-if="bar.winnerH > 0 && bar.winnerSide === 'put'"
                 class="put-bar winner-bar"
+                :class="{ 'wall-highlight': bar.isPutWall }"
                 :x="bar.cx - bar.thickness / 2"
                 :y="bar.winnerY"
                 :width="bar.thickness"
@@ -1266,6 +1268,7 @@ watch(
               <rect
                 v-if="bar.callH > 0"
                 class="call-bar"
+                :class="{ 'wall-highlight': bar.isCallWall }"
                 :x="bar.cx - bar.thickness / 2"
                 :y="bar.callY"
                 :width="bar.thickness"
@@ -1280,6 +1283,7 @@ watch(
               <rect
                 v-if="bar.putH > 0"
                 class="put-bar"
+                :class="{ 'wall-highlight': bar.isPutWall }"
                 :x="bar.cx - bar.thickness / 2"
                 :y="bar.putY"
                 :width="bar.thickness"
@@ -1295,7 +1299,7 @@ watch(
             <template v-else-if="viewMode === 'net'">
               <rect
                 v-if="bar.netH > 0"
-                :class="bar.net >= 0 ? 'call-bar' : 'put-bar'"
+                :class="[bar.net >= 0 ? 'call-bar' : 'put-bar', { 'wall-highlight': bar.isCallWall || bar.isPutWall }]"
                 :x="bar.cx - bar.thickness / 2"
                 :y="bar.net >= 0 ? zeroY - bar.netH : zeroY"
                 :width="bar.thickness"
@@ -2118,6 +2122,13 @@ svg {
   fill: var(--put);
 }
 
+.strike-bar .call-bar.wall-highlight,
+.strike-bar .put-bar.wall-highlight {
+  stroke: var(--ink);
+  stroke-width: 1.5px;
+  stroke-dasharray: none;
+}
+
 .strike-bar .net-dot {
   fill: var(--ink);
 }
@@ -2234,10 +2245,10 @@ svg {
   stroke: var(--put-hi);
 }
 .level.spot line {
-  stroke: var(--ink);
-  stroke-dasharray: none;
+  stroke: var(--phosphor);
+  stroke-dasharray: 3 3;
   stroke-width: 1.5px;
-  opacity: 0.9;
+  opacity: 0.95;
 }
 .level.flip line {
   stroke: var(--warn);
@@ -2260,7 +2271,7 @@ line.level-connector {
   stroke: var(--put-hi);
 }
 .level.spot .level-connector {
-  stroke: var(--ink-dim);
+  stroke: var(--phosphor-dim);
 }
 .level.flip .level-connector {
   stroke: var(--warn);
@@ -2280,8 +2291,8 @@ line.level-connector {
   stroke: var(--put);
 }
 .level.spot .level-badge-bg {
-  fill: var(--void-lift);
-  stroke: var(--ink-dim);
+  fill: var(--phosphor-wash);
+  stroke: var(--phosphor-dim);
 }
 .level.flip .level-badge-bg {
   fill: var(--warn-wash);
@@ -2301,7 +2312,7 @@ line.level-connector {
   fill: var(--put-hi);
 }
 .level.spot text {
-  fill: var(--ink);
+  fill: var(--phosphor);
 }
 .level.flip text {
   fill: var(--warn);

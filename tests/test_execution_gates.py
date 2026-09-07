@@ -156,6 +156,18 @@ def test_spy_runs_0dte_only_before_the_theta_cutoff():
     assert afternoon.admits(1)
 
 
+def test_friday_afternoon_index_can_still_reach_monday():
+    """"1DTE" means the next expiry; on a Friday that is three days out.
+
+    An exact dte == 1 test routes nothing on Friday afternoon -- the very
+    session the post-13:30 rule exists to serve.
+    """
+    friday = expiry_policy("SPY", _et(2026, 9, 4, 14, 0))
+    assert friday.admits(3)
+    assert not friday.admits(0)
+    assert not friday.admits(4)
+
+
 def test_single_names_never_run_0dte():
     for hour in (10, 14):
         policy = expiry_policy("TSLA", _et(2026, 9, 2, hour, 0))
@@ -167,6 +179,13 @@ def test_single_names_never_run_0dte():
 def test_thursday_entry_reaches_past_the_weekend():
     policy = expiry_policy("MSTR", _et(2026, 9, 3, 10, 0))  # Thursday
     assert policy.min_dte == 7 and policy.max_dte == 14
+
+
+def test_weekend_does_not_claim_a_thursday_friday_entry():
+    """Saturday is not late in the week; it is not a trading day at all."""
+    saturday = expiry_policy("MSTR", _et(2026, 9, 5, 10, 0))
+    assert (saturday.min_dte, saturday.max_dte) == (2, 5)
+    assert "Thu/Fri" not in saturday.rationale
 
 
 # --------------------------------------------------------------------------

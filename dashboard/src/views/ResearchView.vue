@@ -183,7 +183,7 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
           <span class="pill">DIAGNOSTIC ONLY</span>
           <span class="banner-text">
             Computed outside <code>simulate_long_short</code>. These numbers describe the shape of
-            the signal — they are not evidence for a gate and never authorise a trade.
+            the signal: they are not evidence for a gate and never authorise a trade.
           </span>
         </div>
         <div class="counts">
@@ -237,7 +237,6 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
     <template v-if="available">
       <Panel
         label="Signal diagnostics"
-        index="—"
         :meta="
           chartTab === 'ic'
             ? 'IC decay'
@@ -254,7 +253,7 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
             :class="{ on: chartTab === 'ic' }"
             @click="chartTab = 'ic'"
           >
-            IC DECAY
+            IC DECAY (1..20d)
           </button>
           <button
             type="button"
@@ -262,14 +261,16 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
             :class="{ on: chartTab === 'quantile' }"
             @click="chartTab = 'quantile'"
           >
-            QUANTILE SPREAD
+            QUANTILES + COST
           </button>
         </div>
 
         <!-- IC DECAY tab -->
         <template v-if="chartTab === 'ic'">
-          <svg role="img" aria-label="Research result chart."
+          <svg
             v-if="icChart"
+            role="img"
+            aria-label="Research result chart."
             :viewBox="`0 0 ${IC_W} ${IC_H}`"
             class="chart"
             preserveAspectRatio="none"

@@ -140,7 +140,7 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
         </thead>
         <tbody>
           <tr v-if="filteredPrints.length === 0">
-            <td colspan="7" class="empty-tape-cell font-mono">NO PRINTS — TAPE IDLE</td>
+            <td colspan="7" class="empty-tape-cell font-mono">NO PRINTS · TAPE IDLE</td>
           </tr>
           <tr v-for="(row, idx) in filteredPrints" :key="idx">
             <td class="time-col font-mono text-ink-dim">{{ row.time || DASH }}</td>

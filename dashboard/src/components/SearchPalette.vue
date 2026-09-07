@@ -199,7 +199,7 @@ function commit(): void {
                   <template v-if="h.n_bars"
                     >{{ shortDate(h.first_date) }} to {{ shortDate(h.last_date) }}</template
                   >
-                  <template v-else>not in local catalog — open via live bars</template>
+                  <template v-else>not in local catalog: open via live bars</template>
                 </span>
                 <span class="bars fig">{{ h.n_bars || '—' }}</span>
               </button>

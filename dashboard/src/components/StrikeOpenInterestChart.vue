@@ -14,7 +14,7 @@ export interface StrikeOiPoint {
 const props = withDefaults(
   defineProps<{
     rows: StrikeOiPoint[]
-    spot: number | null
+    spot?: number | null
     expiryLabel?: string | null
     callWall?: number | null
     putWall?: number | null

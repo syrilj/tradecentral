@@ -681,7 +681,7 @@ const topConfluence = computed<ConfluenceCluster[]>(() =>
   color: var(--ink-soft);
   font-size: var(--t-small);
   line-height: 1.55;
-  border-left: 2px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   padding-left: var(--s3);
 }
 

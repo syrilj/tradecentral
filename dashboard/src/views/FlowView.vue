@@ -135,8 +135,8 @@ const flowTapeStats = computed(() => {
         >
         <h1>Market-Wide Order Flow</h1>
         <p>
-          LSE options prints from one market-wide provider window. 15s HTTP poll — not a websocket
-          firehose. Sweeps, unusual, and heat are descriptive flags, not ENTER. Unsigned prints stay
+          LSE options prints from one market-wide provider window. 15s HTTP poll (not a websocket
+          firehose). Sweeps, unusual, and heat are descriptive flags, not ENTER. Unsigned prints stay
           unsigned.
         </p>
       </div>
@@ -224,7 +224,7 @@ const flowTapeStats = computed(() => {
   gap: var(--s6);
   padding: var(--s4) var(--s5);
   border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
   border-radius: var(--r-xl);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 48px),

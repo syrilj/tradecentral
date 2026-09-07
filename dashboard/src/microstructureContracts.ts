@@ -24,6 +24,11 @@ export interface StrikeExposure {
   net_chex_m: number
   speed_m: number
   zomma_m: number
+  /** Dealer delta notional carried at this strike ($M), same sign convention
+   *  as GEX. 0 on a payload produced before DEX existed. */
+  call_dex_m: number
+  put_dex_m: number
+  net_dex_m: number
 }
 
 export interface TopographyState {
@@ -90,6 +95,14 @@ export interface MicrostructureRegimeSnapshot {
   net_gex_profile_m: number | null
   net_vex_m: number
   net_chex_m: number
+  /** Aggregate dealer delta notional ($M). Positive means dealers are long
+   *  delta and must sell into strength — overhead friction on a rally.
+   *  Negative means they are short delta and buy strength, the condition
+   *  behind a squeeze. Null (not 0) when the chain was not measurable: a
+   *  balanced book is a real zero and must stay distinct from "not measured". */
+  net_dex_m: number | null
+  call_dex_m: number | null
+  put_dex_m: number | null
   /** Null when the spot/IV velocities it needs were not measured. */
   hedging_flow_m: number | null
   zero_dte_charm_drift_m: number
@@ -283,4 +296,60 @@ export interface BacktestTearsheet {
    *  gamma logic was what produced these numbers. */
   gamma_conditioned?: boolean
   basis?: string
+}
+
+
+/** Execution-side gates from `/api/execution-gate`: the clock, the expiry
+ *  policy, today's opening range and the routed contract. Every section
+ *  carries its own measurability -- an absent reading is never a permissive
+ *  default. */
+export interface ExecutionGatePayload {
+  symbol: string
+  endpoint: string
+  asof: string
+  spot?: number
+  chain_source?: string
+  session: {
+    phase: string
+    may_enter: boolean
+    reason: string
+    must_be_flat: boolean
+    permitted_setups: string[]
+    exchange_time: string
+  }
+  expiry_policy: {
+    min_dte: number
+    max_dte: number
+    zero_dte_permitted: boolean
+    rationale: string
+  }
+  initial_balance: {
+    measurable: boolean
+    high?: number | null
+    low?: number | null
+    width?: number | null
+    bar_count?: number
+    session_date?: string | null
+    reason?: string | null
+  }
+  contract?: {
+    measurable: boolean
+    strike: number | null
+    right: string | null
+    expiry: string | null
+    delta: number | null
+    dte: number | null
+    considered: number
+    direction: string
+    reason: string | null
+    warnings: string[]
+    spread: {
+      measurable: boolean
+      ratio_pct: number | null
+      cap_pct: number
+      passes: boolean
+      mid: number | null
+      reason: string | null
+    } | null
+  }
 }

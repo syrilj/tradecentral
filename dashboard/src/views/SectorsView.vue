@@ -213,7 +213,7 @@ const expandedNames = computed(() => {
       <template #action>
         <HelpTip
           label="Sector rotation"
-          text="Flow score ranks sector ETFs by multi-horizon relative strength vs the benchmark. Right/green = accumulation (money in), left/red = distribution. Use this for which sleeve is leading — then open Market on the ETF or a watch name. This panel re-runs the daily sector scan on its own; it does not wait for a full Desk scan."
+          text="Flow score ranks sector ETFs by multi-horizon relative strength vs the benchmark. Right/green = accumulation (money in), left/red = distribution. Use this for which sleeve is leading, then open Market on the ETF or a watch name. This panel re-runs the daily sector scan on its own; it does not wait for a full Desk scan."
         />
         <button
           class="filter-btn label"
@@ -260,7 +260,7 @@ const expandedNames = computed(() => {
         />
       </div>
 
-      <!-- Single rotation visual — click a row to expand names under it -->
+      <!-- Single rotation visual: click a row to expand names under it -->
       <div v-if="sectors.length" class="rotation-strip">
         <template
           v-for="s in [...sectors].sort((a, b) => b.flow_score - a.flow_score)"
@@ -590,10 +590,10 @@ const expandedNames = computed(() => {
   color: var(--phosphor);
 }
 .name-chip.in {
-  border-left: 2px solid var(--long);
+  border-left: 1px solid var(--long);
 }
 .name-chip.out {
-  border-left: 2px solid var(--short);
+  border-left: 1px solid var(--short);
 }
 .name-chip .fig:first-child {
   font-weight: 700;
@@ -659,10 +659,10 @@ const expandedNames = computed(() => {
   transform: translateY(-1px);
 }
 .sector-card.card-in {
-  border-left: 3px solid var(--long);
+  border-left: 1px solid var(--long);
 }
 .sector-card.card-out {
-  border-left: 3px solid var(--short);
+  border-left: 1px solid var(--short);
 }
 
 .card-top {

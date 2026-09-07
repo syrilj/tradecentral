@@ -214,10 +214,10 @@ function finraLean(z: number | null | undefined, side: 'high' | 'low'): string {
 }
 
 const COT_HELP =
-  'Weekly CFTC futures books. Spec net = non-commercial long minus short. LONG = specs crowded long; SHORT = crowded short; BALANCED = near the 1y mean. Context only — not a stock entry.'
+  'Weekly CFTC futures books. Spec net = non-commercial long minus short. LONG = specs crowded long; SHORT = crowded short; BALANCED = near the 1y mean. Context only: not a stock entry.'
 
 const TICKER_HELP =
-  'Focus Pulse outliers and structure on one ticker. Insider Form 4 / 8-K / 13D/G live on the Insiders desk — not here.'
+  'Focus Pulse outliers and structure on one ticker. Insider Form 4 / 8-K / 13D/G live on the Insiders desk (not here).'
 </script>
 
 <template>
@@ -301,7 +301,7 @@ const TICKER_HELP =
               Desk composite
               <HelpTip
                 label="Composite"
-                text="Descriptive mix of structure sources only — not a trade call or probability."
+                text="Descriptive mix of structure sources only: not a trade call or probability."
               />
             </span>
             <div class="kpi-val-row">
@@ -351,7 +351,7 @@ const TICKER_HELP =
               FINRA short vol
               <HelpTip
                 label="FINRA short volume"
-                text="Short volume ÷ total volume on FINRA venues — not short interest (shares still short). High ratio + high z = unusually heavy short-side trading (bearish pressure lean). Low z = quieter shorting."
+                text="Short volume ÷ total volume on FINRA venues, not short interest (shares still short). High ratio + high z = unusually heavy short-side trading (bearish pressure lean). Low z = quieter shorting."
               />
             </span>
             <div class="kpi-val-row">
@@ -529,7 +529,7 @@ const TICKER_HELP =
 
         <Panel label="Insiders + filings" index="" :meta="symbol || 'open desk'" class="w-full">
           <p class="note pad">
-            Form 4 / 8-K / 13D/G live on the Insiders desk — Pulse keeps structure (vol, COT,
+            Form 4 / 8-K / 13D/G live on the Insiders desk; Pulse keeps structure (vol, COT,
             FINRA).
             <RouterLink :to="{ name: 'insiders', query: symbol ? { symbol } : {} }">
               Open Insiders{{ symbol ? ` · ${symbol}` : '' }} →
@@ -551,7 +551,7 @@ const TICKER_HELP =
             <span class="label kpi-label">
               Unified outliers
               <HelpTip
-                text="Names that cleared hard thresholds only. Empty means nothing cleared — not a calm market."
+                text="Names that cleared hard thresholds only. Empty means nothing cleared, not a calm market."
               />
             </span>
             <div class="kpi-val-row">

@@ -235,7 +235,7 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
       expect(html).toContain('class="sq bullish"')
       expect(html).toContain('78')
       expect(html).toContain('/100')
-      expect(html).toContain('IMMINENT')
+      expect(html).toContain('THEORY SCORE · NOT A FORECAST')
       expect(html).toContain('DISTANCE TO CALL WALL')
       expect(html).toContain('KEY LEVELS')
       expect(html).toContain('KEY FACTORS')

@@ -248,7 +248,7 @@ const charmSkipHint = computed(() => {
   const reasons = charmSummary.value?.skipped_reasons
   if (!reasons) return null
   if (reasons.expiring_within_one_day) {
-    return 'Charm is undefined at expiry — select a later expiry above.'
+    return 'Charm is undefined at expiry: select a later expiry above.'
   }
   if (reasons.missing_or_implausible_iv) {
     return 'The provider did not return usable implied vol for this chain.'
@@ -1148,7 +1148,7 @@ const charmChartKey = computed(
             refreshing && !loading
               ? 'Fetching updated data…'
               : spotStale
-                ? `Spot source: ${spotSource ?? 'unknown'} — spot may lag the live session`
+                ? `Spot source: ${spotSource ?? 'unknown'} (spot may lag the live session)`
                 : undefined
           "
           >{{ refreshing && !loading ? 'SYNCING…' : dataModeBadge }}</span
@@ -1361,7 +1361,7 @@ const charmChartKey = computed(
       <!-- Snapshot data notice -->
       <div v-if="isHistoryFallback" class="snapshot-notice label">
         <span class="snap-icon">⏸</span>
-        SNAPSHOT DATA — live feed unavailable for {{ symbol }}. Values reflect the last cached chain
+        SNAPSHOT DATA: live feed unavailable for {{ symbol }}. Values reflect the last cached chain
         ({{ asof ? shortDate(asof) : '—' }}). Cascade mechanics are correct for the snapshot; they
         update when a live feed reconnects.
       </div>
@@ -1470,7 +1470,7 @@ const charmChartKey = computed(
           <span class="ph-msg fault" :title="error">Unable to load the chain.</span>
         </div>
         <div v-else-if="!hasChain" class="placeholder">
-          <span class="ph-msg">No chain data for {{ symbol }} — try another symbol or expiry.</span>
+          <span class="ph-msg">No chain data for {{ symbol }}: try another symbol or expiry.</span>
         </div>
         <!--
           Chain arrived but nothing in it was measurable. Every strike would plot
@@ -1479,7 +1479,7 @@ const charmChartKey = computed(
         -->
         <div v-else-if="charmAllSkipped" class="placeholder">
           <span class="ph-msg">
-            Charm not measurable for {{ symbol }} — no contract in the chain met the model's inputs.
+            Charm not measurable for {{ symbol }}: no contract in the chain met the model's inputs.
           </span>
           <span v-if="charmSkipDetail" class="ph-sub label">{{ charmSkipDetail }}</span>
           <span v-if="charmSkipHint" class="ph-sub label">{{ charmSkipHint }}</span>
@@ -1506,7 +1506,7 @@ const charmChartKey = computed(
         >
           ⚠ {{ charmSummary?.contracts_skipped }} of
           {{ (charmSummary?.contracts_measured ?? 0) + (charmSummary?.contracts_skipped ?? 0) }}
-          contracts excluded — {{ charmSkipDetail }}. Those strikes are absent from the chart, not
+          contracts excluded: {{ charmSkipDetail }}. Those strikes are absent from the chart, not
           flat.
         </div>
       </div>
@@ -1521,7 +1521,7 @@ const charmChartKey = computed(
       <div class="chart-slot">
         <LoadingState v-if="loading" label="Building GEX profile…" />
         <div v-else-if="!gexRows.length" class="placeholder">
-          <span class="ph-msg">GEX unavailable — open interest missing for {{ symbol }}.</span>
+          <span class="ph-msg">GEX unavailable: open interest missing for {{ symbol }}.</span>
         </div>
         <GammaExposureMap
           v-else
@@ -1720,7 +1720,7 @@ const charmChartKey = computed(
                 {{
                   gexRegime === 'positive'
                     ? `Long Gamma dampening. BUY near $${num(putWall, 0)} Put Wall, SELL near $${num(callWall, 0)} Call Wall.`
-                    : `Short Gamma channel — use caution. Range boundaries are less reliable; pro-cyclical hedging can accelerate breakouts in either direction.`
+                    : `Short Gamma channel: use caution. Range boundaries are less reliable; pro-cyclical hedging can accelerate breakouts in either direction.`
                 }}
               </div>
               <div class="m-levels label">
@@ -2144,7 +2144,7 @@ const charmChartKey = computed(
   gap: var(--s6);
   padding: var(--s4) var(--s5);
   border: var(--hair) solid var(--rule);
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   border-radius: var(--r-md);
   background: var(--surface-base);
 }
@@ -2711,16 +2711,16 @@ h1 {
   background: var(--panel);
 }
 .factor-card.buying {
-  border-left: 2px solid var(--call);
+  border-left: 1px solid var(--call);
 }
 .factor-card.selling {
-  border-left: 2px solid var(--put);
+  border-left: 1px solid var(--put);
 }
 .factor-card.positive {
-  border-left: 2px solid var(--call);
+  border-left: 1px solid var(--call);
 }
 .factor-card.negative {
-  border-left: 2px solid var(--put);
+  border-left: 1px solid var(--put);
 }
 
 .factor-head {
@@ -2785,13 +2785,13 @@ h1 {
   background: var(--surface-base);
 }
 .assessment-box.buying {
-  border-left: 3px solid var(--call-hi);
+  border-left: 1px solid var(--call-hi);
 }
 .assessment-box.selling {
-  border-left: 3px solid var(--put-hi);
+  border-left: 1px solid var(--put-hi);
 }
 .assessment-box.balanced {
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
 }
 
 .assessment-header {
@@ -2869,10 +2869,10 @@ h1 {
   background: var(--surface-base);
 }
 .cascade-step.buying {
-  border-left: 3px solid var(--call-hi);
+  border-left: 1px solid var(--call-hi);
 }
 .cascade-step.selling {
-  border-left: 3px solid var(--put-hi);
+  border-left: 1px solid var(--put-hi);
 }
 
 .step-num {
@@ -2937,13 +2937,13 @@ h1 {
   background: var(--surface-base);
 }
 .primary-ticket.buying {
-  border-left: 4px solid var(--call-hi);
+  border-left: 1px solid var(--call-hi);
 }
 .primary-ticket.selling {
-  border-left: 4px solid var(--put-hi);
+  border-left: 1px solid var(--put-hi);
 }
 .primary-ticket.range {
-  border-left: 4px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
 }
 
 .ticket-head {
@@ -3265,13 +3265,13 @@ h1 {
   background: var(--panel-hi);
 }
 .matrix-card.bullish {
-  border-left: 3px solid var(--call);
+  border-left: 1px solid var(--call);
 }
 .matrix-card.channel {
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
 }
 .matrix-card.bearish {
-  border-left: 3px solid var(--put);
+  border-left: 1px solid var(--put);
 }
 
 .m-head {
@@ -3722,7 +3722,7 @@ h1 {
   padding: 8px 12px;
   margin-bottom: var(--s3);
   border: var(--hair) solid var(--rule);
-  border-left: 3px solid var(--warn);
+  border-left: 1px solid var(--warn);
   border-radius: var(--r-sm);
   background: var(--warn-wash);
   color: var(--ink-dim);

@@ -26,7 +26,7 @@ const SEGMENTS = [
   'a live model lab,',
   'and workspaces',
 ] as const
-const CLOSING = '— do it all with TradeCentral.'
+const CLOSING = 'all unified in TradeCentral.'
 const fullSentence = `${SEGMENTS.join(' ')} ${CLOSING}`
 
 const sectionRef = ref<HTMLElement | null>(null)
@@ -88,7 +88,7 @@ onUnmounted(() => {
         <span class="hl-part">research governance, </span>
         <span class="hl-part">a live model lab, </span>
         <span class="hl-part">and workspaces</span>
-        <span class="hl-closing"> — do it all with TradeCentral.</span>
+        <span class="hl-closing"> all unified in TradeCentral.</span>
       </h2>
     </div>
   </section>

@@ -392,7 +392,7 @@ td {
 
 .table-row.selected {
   background: var(--panel-raise);
-  border-left: 2px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
 }
 
 .ticker-identity {

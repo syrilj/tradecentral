@@ -273,6 +273,22 @@ def _get_np():
     return _np
 
 
+_yf = None
+
+
+def _get_yf():
+    """Lazy load yfinance; None when it is not installed."""
+    global _yf
+    if _yf is None:
+        try:
+            import yfinance as yf
+
+            _yf = yf
+        except Exception:
+            return None
+    return _yf
+
+
 def _get_pd():
     """Lazy load pandas to defer import cost until first use."""
     global _pd
@@ -457,6 +473,10 @@ from edge.research.kalman_trend import (  # noqa: E402
     kalman_trend,
     position_state as kalman_position_state,
 )
+from edge.research.zero_dte import (  # noqa: E402
+    EXCHANGE_TZ as _EXCHANGE_TZ,
+    compute_zero_dte_tape,
+)
 from edge.research.microstructure_regime import (  # noqa: E402
     OptionGreeks,
     StrikeExposure,
@@ -476,6 +496,12 @@ from edge.research.state_estimation import (  # noqa: E402
     derive_session_boundaries,
 )
 from edge.research.vpa_levels import find_pivots  # noqa: E402
+from edge.research.execution_gates import (  # noqa: E402
+    initial_balance,
+    expiry_policy,
+    select_contract,
+    session_gate,
+)
 from edge.research.systematic_execution import (  # noqa: E402
     ExecutionSignal,
     SimulatedTrade,
@@ -5564,6 +5590,435 @@ def _attach_realised_vol(symbol: str, summary: dict) -> None:
     summary["hv_30d"] = _realised_vol_pct(closes, 30)
 
 
+# ---------------------------------------------------------------------------
+# /api/zero-dte -- same-day expiry magnets read against the actual intraday bars
+
+_ZERO_DTE_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_ZERO_DTE_LOCK = threading.Lock()
+_ZERO_DTE_CACHE_TTL_S = 30.0
+
+# Timeframes the candle feed actually serves. 1m comes from the vault route,
+# the rest from the ISO candle tables.
+_ZERO_DTE_TIMEFRAMES = {"1m": 1.0, "5m": 5.0, "15m": 15.0}
+
+
+def _lse_intraday_bars(symbol: str, timeframe: str, *, days: int = 6) -> list[dict[str, Any]]:
+    """Intraday OHLCV from the LSE candle feed, as plain dicts.
+
+    Same import dance as the flow tape: the provider and its key live in the
+    sibling TradingWork checkout, not here.
+    """
+    provider_src = ROOT / "TradingWork" / "src"
+    if str(provider_src) not in sys.path:
+        sys.path.insert(0, str(provider_src))
+    from lse_provider import fetch_lse_candles  # type: ignore[import-not-found]
+
+    end = datetime.now(timezone.utc).replace(tzinfo=None)
+    frame = fetch_lse_candles(
+        symbol.upper(),
+        end - timedelta(days=days),
+        end,
+        timeframe=timeframe,
+        use_cache=True,
+    )
+    if frame is None or getattr(frame, "empty", True):
+        ticker = _INDEX_TICKERS.get(symbol.upper())
+        return _yahoo_intraday_bars(ticker, timeframe) if ticker else []
+    return [
+        {
+            "ts": ts,
+            "open": float(row.open),
+            "high": float(row.high),
+            "low": float(row.low),
+            "close": float(row.close),
+            "volume": float(row.volume or 0.0),
+        }
+        for ts, row in frame.iterrows()
+    ]
+
+
+def _front_expiry_slice(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The nearest not-yet-past expiry and its contracts.
+
+    The feed ships a `dte` field but it is computed against the provider's own
+    snapshot date, so on a Monday it can still read as it did the previous
+    Wednesday. Expiry dates are unambiguous; the day count is derived here.
+    """
+    today = datetime.now(timezone.utc).astimezone(_EXCHANGE_TZ).date()
+    by_expiry: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        raw = r.get("expiry") or r.get("expiration") or r.get("expiration_date")
+        if not raw:
+            continue
+        key = str(raw)[:10]
+        by_expiry.setdefault(key, []).append(dict(r))
+    if not by_expiry:
+        return [], None
+    future = sorted(k for k in by_expiry if date.fromisoformat(k) >= today)
+    front = future[0] if future else sorted(by_expiry)[-1]
+    return by_expiry[front], front
+
+
+def _bars_as_utc(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stamp this feed's naive bar timestamps as UTC, leaving aware ones alone.
+
+    Only the timestamp is touched; every other field is passed through by
+    reference, so this is cheap on a 5,000-bar pull.
+    """
+    out: list[dict[str, Any]] = []
+    for bar in bars:
+        ts = bar.get("ts")
+        moment = getattr(ts, "to_pydatetime", lambda: ts)()
+        if isinstance(moment, datetime) and moment.tzinfo is None:
+            out.append({**bar, "ts": moment.replace(tzinfo=timezone.utc)})
+        else:
+            out.append(bar)
+    return out
+
+
+def _execution_gate_payload(symbol: str, query: dict) -> tuple[dict, int]:
+    """Clock, expiry policy, opening range and routed contract for one symbol.
+
+    The structural side of the model (walls, flip, net GEX/DEX) already has its
+    own endpoint. This is the execution side: whether the session permits an
+    entry at all right now, which expiry this symbol may be traded at, where
+    the Initial Balance sits, and which contract the delta corridor routes to.
+
+    Every section reports its own measurability. A missing opening range or an
+    unroutable chain is returned as such with a reason, never as a permissive
+    default -- the failure this endpoint exists to prevent is a trade being
+    sized against a gate nobody actually evaluated.
+    """
+    endpoint = "/api/execution-gate"
+    sym = symbol.strip().upper()
+    now = datetime.now(timezone.utc).astimezone(_EXCHANGE_TZ)
+
+    gate = session_gate(now)
+    policy = expiry_policy(sym, now)
+
+    payload: dict[str, Any] = {
+        "symbol": sym,
+        "endpoint": endpoint,
+        "asof": now.isoformat(),
+        "session": {
+            "phase": gate.phase,
+            "may_enter": gate.may_enter,
+            "reason": gate.reason,
+            "must_be_flat": gate.must_be_flat,
+            "permitted_setups": sorted(gate.permitted_setups),
+            "exchange_time": gate.exchange_time,
+        },
+        "expiry_policy": {
+            "min_dte": policy.min_dte,
+            "max_dte": policy.max_dte,
+            "zero_dte_permitted": policy.zero_dte_permitted,
+            "rationale": policy.rationale,
+        },
+    }
+
+    # Initial Balance, off the same 1m bars the 0DTE tape uses.
+    try:
+        bars = _lse_intraday_bars(sym, "1m")
+    except Exception as exc:
+        payload["initial_balance"] = {
+            "measurable": False,
+            "reason": f"intraday bars unavailable for {sym}: {_provider_note(exc)}",
+        }
+        bars = []
+    else:
+        # This feed stamps bars naive, in UTC -- the same convention
+        # `zero_dte._as_utc` documents, and confirmed against the tape: bar
+        # volume steps up an order of magnitude at naive hour 13 and collapses
+        # after 20, which is RTH 09:30-16:00 ET expressed in UTC.
+        # `initial_balance` refuses naive input by design, so the convention is
+        # applied here, where the feed is known, rather than guessed at inside
+        # the library.
+        ib = initial_balance(_bars_as_utc(bars))
+        payload["initial_balance"] = {
+            "measurable": ib.measurable,
+            "high": ib.high,
+            "low": ib.low,
+            "width": ib.width,
+            "bar_count": ib.bar_count,
+            "session_date": ib.session_date,
+            "reason": ib.reason,
+        }
+
+    # Contract routing needs a spot and a chain. Spot comes from the last bar
+    # rather than a separate quote call so the routed delta and the opening
+    # range are read off the same tape.
+    spot = None
+    for bar in reversed(bars):
+        close = bar.get("close")
+        if close:
+            spot = float(close)
+            break
+
+    direction = (query.get("direction", ["long"])[0] or "long").lower()
+    if spot is None:
+        payload["contract"] = {
+            "measurable": False,
+            "reason": f"no intraday close for {sym}, so no spot to route a delta against",
+        }
+        return payload, 200
+
+    payload["spot"] = round(spot, 4)
+
+    # The chain comes from /api/options, the same source the regime endpoint
+    # reads, so the routed contract and the walls it is being routed against
+    # are solved off one snapshot. The 0DTE fetch was the obvious choice and
+    # the wrong one: it returns nothing for SPY whenever the LSE ISO chain is
+    # unavailable, while this payload still resolves.
+    chain_rows: list = []
+    chain_source = "options"
+    try:
+        opt_payload, opt_status = _options_payload(sym, {})
+    except Exception as exc:
+        payload["contract"] = {
+            "measurable": False,
+            "reason": f"option chain unavailable for {sym}: {_provider_note(exc)}",
+        }
+        return payload, 200
+    if opt_status == 200 and isinstance(opt_payload, dict):
+        chain_rows = (
+            opt_payload.get("chain_by_strike") or opt_payload.get("chain_rows") or []
+        )
+        chain_spot = (opt_payload.get("summary") or {}).get("spot")
+        if chain_spot:
+            # Route the delta against the chain's own spot, not the bar close.
+            # A delta measured off one price and a strike ladder priced off
+            # another silently shifts which contract sits in the corridor.
+            spot = float(chain_spot)
+            payload["spot"] = round(spot, 4)
+
+    # require_spread is off because neither chain path carries bid/ask today.
+    # The SpreadCheck still travels with the answer saying so, so an unchecked
+    # fill cost stays visible instead of being quietly assumed to be zero.
+    choice = select_contract(
+        symbol=sym,
+        direction=direction,
+        chain_rows=chain_rows,
+        spot=spot,
+        moment=now,
+        require_spread=False,
+    )
+    payload["chain_source"] = chain_source
+    payload["contract"] = {
+        "measurable": choice.measurable,
+        "strike": choice.strike,
+        "right": choice.right,
+        "expiry": choice.expiry,
+        "delta": choice.delta,
+        "dte": choice.dte,
+        "considered": choice.considered,
+        "direction": direction,
+        "reason": choice.reason,
+        "warnings": choice.warnings,
+        "spread": None
+        if choice.spread is None
+        else {
+            "measurable": choice.spread.measurable,
+            "ratio_pct": choice.spread.ratio_pct,
+            "cap_pct": choice.spread.cap_pct,
+            "passes": choice.spread.passes,
+            "mid": choice.spread.mid,
+            "reason": choice.spread.reason,
+        },
+    }
+    return payload, 200
+
+
+def _zero_dte_payload_impl(symbol: str, query: dict, *, force: bool = False) -> tuple[dict, int]:
+    """0DTE tape: the session's real bars plus the same-day expiry's magnets."""
+    sym = symbol.strip().upper()
+    tf_raw = (query.get("tf", ["1m"])[0] or "1m").lower()
+    tf = tf_raw if tf_raw in _ZERO_DTE_TIMEFRAMES else "1m"
+    endpoint = "/api/zero-dte"
+
+    try:
+        chain_rows, chain_source = _fetch_zero_dte_chain(sym)
+    except Exception as exc:  # provider down, bad key, unknown symbol
+        return {
+            "symbol": sym,
+            "measurable": False,
+            "endpoint": endpoint,
+            "reason": f"option chain unavailable for {sym}: {_provider_note(exc)}",
+        }, 200
+
+    if not chain_rows:
+        # Cash indices (SPX, NDX, RUT) are not on this feed at all -- neither
+        # chain nor candles. Say that rather than quietly serving the ETF and
+        # letting it read as the index.
+        return {
+            "symbol": sym,
+            "measurable": False,
+            "endpoint": endpoint,
+            "reason": (
+                f"No option chain for {sym} from either feed. Try the liquid "
+                "names (SPY, QQQ, IWM) or an index (SPX, NDX, RUT)."
+            ),
+        }, 200
+
+    slice_rows, expiry = _front_expiry_slice(chain_rows)
+    if not slice_rows or expiry is None:
+        return {
+            "symbol": sym,
+            "measurable": False,
+            "endpoint": endpoint,
+            "reason": f"chain for {sym} carried no dated expiries",
+        }, 200
+
+    try:
+        bars = _lse_intraday_bars(sym, tf)
+    except Exception as exc:
+        return {
+            "symbol": sym,
+            "measurable": False,
+            "endpoint": endpoint,
+            "reason": f"intraday bars unavailable for {sym}: {_provider_note(exc)}",
+        }, 200
+
+    payload = compute_zero_dte_tape(
+        sym,
+        bars,
+        slice_rows,
+        expiry=expiry,
+        bar_minutes=_ZERO_DTE_TIMEFRAMES[tf],
+    )
+
+    today = datetime.now(timezone.utc).astimezone(_EXCHANGE_TZ).date()
+    exp_date = date.fromisoformat(expiry)
+    payload["endpoint"] = endpoint
+    payload["timeframe"] = tf
+    payload["chain_source"] = chain_source
+    payload["is_true_0dte"] = exp_date == today
+    payload["days_to_expiry"] = (exp_date - today).days
+    if not payload["is_true_0dte"]:
+        payload.setdefault("warnings", []).append(
+            f"The front expiry is {expiry}, {(exp_date - today).days} session-day(s) out, "
+            f"not today ({today}). These are the nearest-expiry magnets, not 0DTE."
+        )
+    return payload, 200
+
+
+def _zero_dte_payload(symbol: str, query: dict, *, force: bool = False) -> tuple[dict, int]:
+    """TTL cache around the 0DTE tape; the chain pull is the expensive half."""
+    sym = symbol.strip().upper()
+    tf = (query.get("tf", ["1m"])[0] or "1m").lower()
+    key = (sym, tf if tf in _ZERO_DTE_TIMEFRAMES else "1m")
+    now = time.time()
+    if not force:
+        with _ZERO_DTE_LOCK:
+            cached = _ZERO_DTE_CACHE.get(key)
+            if cached is not None and (now - cached[0]) < _ZERO_DTE_CACHE_TTL_S:
+                res = dict(cached[1])
+                res["cache"] = {"hit": True, "age_seconds": round(now - cached[0], 2)}
+                return res, 200
+
+    payload, status = _zero_dte_payload_impl(sym, query, force=force)
+    if status == 200:
+        with _ZERO_DTE_LOCK:
+            _ZERO_DTE_CACHE[key] = (now, payload)
+            if len(_ZERO_DTE_CACHE) > 64:
+                oldest = min(_ZERO_DTE_CACHE, key=lambda k: _ZERO_DTE_CACHE[k][0])
+                _ZERO_DTE_CACHE.pop(oldest, None)
+    res = dict(payload)
+    res["cache"] = {"hit": False, "age_seconds": 0.0}
+    return res, status
+
+
+# Cash indices are not on the LSE feed at all -- neither chain nor candles --
+# but they are exactly what a 0DTE trader asks for by name, so they get a
+# second source rather than a refusal. Yahoo's ticker for each:
+_INDEX_TICKERS = {
+    "SPX": "^SPX",
+    "NDX": "^NDX",
+    "RUT": "^RUT",
+    "VIX": "^VIX",
+    "DJX": "^DJI",
+}
+
+
+def _fetch_zero_dte_chain(symbol: str) -> tuple[list[dict[str, Any]], str]:
+    """Live chain rows and the feed they came from.
+
+    LSE first (it carries same-day volume, which is the weight that matters for
+    a 0DTE expiry). Indices fall through to Yahoo, whose chain carries open
+    interest and volume but quotes a broken implied vol on one side of the
+    book -- the engine's expiry-level IV fallback is what makes that usable.
+    """
+    provider_src = ROOT / "TradingWork" / "src"
+    if str(provider_src) not in sys.path:
+        sys.path.insert(0, str(provider_src))
+    try:
+        from lse_provider import fetch_lse_options_chain  # type: ignore[import-not-found]
+
+        rows = list(fetch_lse_options_chain(symbol.upper()) or [])
+        if rows:
+            return rows, "lse"
+    except Exception:
+        pass
+
+    ticker = _INDEX_TICKERS.get(symbol.upper())
+    if ticker is None:
+        return [], "lse"
+    return _yahoo_front_expiry_chain(ticker), "yahoo"
+
+
+def _yahoo_front_expiry_chain(ticker: str) -> list[dict[str, Any]]:
+    """The nearest not-yet-past expiry from Yahoo, both rights, as chain rows."""
+    yf = _get_yf()
+    if yf is None:
+        return []
+    t = yf.Ticker(ticker)
+    expiries = [e for e in (t.options or [])]
+    if not expiries:
+        return []
+    today = datetime.now(timezone.utc).astimezone(_EXCHANGE_TZ).date()
+    future = [e for e in expiries if date.fromisoformat(e) >= today]
+    front = future[0] if future else expiries[-1]
+    chain = t.option_chain(front)
+
+    rows: list[dict[str, Any]] = []
+    for right, frame in (("call", chain.calls), ("put", chain.puts)):
+        for rec in frame.to_dict("records"):
+            rows.append(
+                {
+                    "strike": rec.get("strike"),
+                    "right": right,
+                    "volume": rec.get("volume") or 0.0,
+                    "openInterest": rec.get("openInterest") or 0.0,
+                    "impliedVolatility": rec.get("impliedVolatility") or 0.0,
+                    "expiry": front,
+                }
+            )
+    return rows
+
+
+def _yahoo_intraday_bars(ticker: str, timeframe: str) -> list[dict[str, Any]]:
+    """Intraday OHLCV from Yahoo, for the symbols the LSE candle feed lacks."""
+    yf = _get_yf()
+    if yf is None:
+        return []
+    frame = yf.Ticker(ticker).history(period="5d", interval=timeframe)
+    if frame is None or getattr(frame, "empty", True):
+        return []
+    return [
+        {
+            "ts": ts.to_pydatetime(),
+            "open": float(r["Open"]),
+            "high": float(r["High"]),
+            "low": float(r["Low"]),
+            "close": float(r["Close"]),
+            "volume": float(r.get("Volume") or 0.0),
+        }
+        for ts, r in frame.iterrows()
+        if r["High"] == r["High"]  # drop NaN rows
+    ]
+
+
 def _price_attractors_payload_impl(
     symbol: str,
     query: dict | None = None,
@@ -8948,6 +9403,15 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 payload, status = _market_regime_payload(sym_or_err, query, force=force)
                 self._send_json(payload, status=status)
 
+            elif path == "/api/zero-dte":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", ["SPY"])[0] or "SPY")
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                payload, status = _zero_dte_payload(sym_or_err, query, force=force)
+                self._send_json(payload, status=status)
+
             elif path == "/api/price-attractors":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
                 if not ok:
@@ -9257,6 +9721,15 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         in {"1h", "intraday"},
                     )
                 )
+
+            elif path == "/api/execution-gate":
+                raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload, status = _execution_gate_payload(sym_or_err, query)
+                self._send_json(payload, status=status)
 
             elif path == "/api/microstructure-regime":
                 raw_sym = (query.get("symbol", ["SPY"])[0] or "SPY").strip()

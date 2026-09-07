@@ -432,7 +432,9 @@ function onSvgMouseLeave(): void {
 
     <!-- Main Responsive SVG Canvas -->
     <div class="svg-canvas-wrapper">
-      <svg role="img" aria-label="Causal Nadaraya-Watson price envelope with band boundaries."
+      <svg
+        role="img"
+        aria-label="Causal Nadaraya-Watson price envelope with band boundaries."
         :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
         class="chart-svg"
         preserveAspectRatio="xMidYMid meet"

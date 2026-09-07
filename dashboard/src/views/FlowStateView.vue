@@ -356,7 +356,7 @@ const impactChart = computed(() => {
 
 const staleReason = computed(() =>
   isStale.value
-    ? `Artifact is ${staleDays.value}d old — rebuild with tools/build_flow_state.py.`
+    ? `Artifact is ${staleDays.value}d old (rebuild with tools/build_flow_state.py).`
     : null,
 )
 </script>
@@ -398,7 +398,7 @@ const staleReason = computed(() =>
           </span>
           <HelpTip
             label="Continuation score"
-            text="S = |flow_z| × max(impact_beta_z, 0) × persistence × exp(−d_barrier/τ). Built from daily-bar proxies (no true OFI/L2). Rank and inspect — never a trade authorization. Bottoms require ABSORB/FADE evidence that has not cleared sample size yet."
+            text="S = |flow_z| × max(impact_beta_z, 0) × persistence × exp(−d_barrier/τ). Built from daily-bar proxies (no true OFI/L2). Rank and inspect; never a trade authorization. Bottoms require ABSORB/FADE evidence that has not cleared sample size yet."
           />
         </div>
 
@@ -418,7 +418,7 @@ const staleReason = computed(() =>
           <Readout
             label="As of"
             :value="data?.as_of ?? DASH"
-            :sub="isStale ? `${staleDays}d old — stale` : 'current'"
+            :sub="isStale ? `${staleDays}d old · stale` : 'current'"
             :tone="isStale ? 'neg' : 'flat'"
           />
           <Readout label="Symbols" :value="num(sortedStates.length, 0)" sub="in this run" />
@@ -428,7 +428,7 @@ const staleReason = computed(() =>
 
       <div v-else class="empty-state">
         <p class="state label">
-          No flow-state artifact yet{{ data?.reason ? ` — ${data.reason}` : '' }}.
+          No flow-state artifact yet{{ data?.reason ? `: ${data.reason}` : '' }}.
         </p>
         <ul class="cmds">
           <li>
@@ -445,10 +445,8 @@ const staleReason = computed(() =>
     <template v-if="available">
       <!-- 2. Validation / phenomenon panel -->
       <Panel
-        label="Validation — matched-control phenomenon"
-        index="—"
+        label="Validation: Matched-control phenomenon"
         meta="Phase 2 statistical test, not ML"
-        :delay="30"
       >
         <template v-if="phenomenon?.tested">
           <div class="readout-grid">
@@ -512,7 +510,7 @@ const staleReason = computed(() =>
           </div>
           <p class="chart-caption label">
             Bootstrap CI whisker for Δ terminal return, event vs matched controls (date-block
-            bootstrap, 95%). Descriptive of the study result — not a forecast.
+            bootstrap, 95%). Descriptive of the study result; not a forecast.
           </p>
         </template>
         <div v-else class="empty-state">
@@ -528,7 +526,7 @@ const staleReason = computed(() =>
         <div class="gate-block">
           <p class="gate-title label">Development gate (Phase 3)</p>
           <p v-if="!gate?.evaluated" class="gate-pending label">
-            Not yet evaluated — Phase 3 (cascade/fade models) does not exist yet. Expected checks
+            Not yet evaluated: Phase 3 (cascade/fade models) does not exist yet. Expected checks
             once it does:
           </p>
           <ul class="checks">
@@ -544,7 +542,6 @@ const staleReason = computed(() =>
       <!-- 3. State board -->
       <Panel
         label="Barrier sleeve board"
-        index="—"
         :meta="`${sortedStates.length} symbols · ranked by continuation_score`"
         flush
         :delay="50"
@@ -563,7 +560,7 @@ const staleReason = computed(() =>
                   Cont. S {{ sortArrow('continuation_score') }}
                   <HelpTip
                     label="Continuation score"
-                    text="|flow_z| × max(impact_beta_z,0) × persistence × barrier proximity. High S means persistent abnormal pressure with elevated impact near a structural barrier — the continuation candidate, not a fade/bottom signal."
+                    text="|flow_z| × max(impact_beta_z,0) × persistence × barrier proximity. High S means persistent abnormal pressure with elevated impact near a structural barrier: the continuation candidate, not a fade/bottom signal."
                   />
                 </th>
                 <th class="label">Dir</th>
@@ -571,7 +568,7 @@ const staleReason = computed(() =>
                   Flow z {{ sortArrow('flow_z') }}
                   <HelpTip
                     label="Flow z"
-                    text="Robust z-score of the CLV × volume signed-flow proxy on daily bars — a descriptive proxy, not measured order flow. No true order-flow imbalance/L2 data exists in this repo."
+                    text="Robust z-score of the CLV × volume signed-flow proxy on daily bars: a descriptive proxy, not measured order flow. No true order-flow imbalance/L2 data exists in this repo."
                   />
                 </th>
                 <th class="num sortable" @click="setSort('impact_beta_z')">
@@ -592,7 +589,7 @@ const staleReason = computed(() =>
                   Rank {{ sortArrow('stress_rank') }}
                   <HelpTip
                     label="Stress rank"
-                    text="Ordinal rank across the symbols in this run (1 = highest continuation_score) — never a probability or expected value."
+                    text="Ordinal rank across the symbols in this run (1 = highest continuation_score): never a probability or expected value."
                   />
                 </th>
               </tr>
@@ -647,8 +644,7 @@ const staleReason = computed(() =>
 
       <!-- 4. State timeline strip -->
       <Panel
-        :label="effectiveSymbol ? `State timeline — ${effectiveSymbol}` : 'State timeline'"
-        index="—"
+        :label="effectiveSymbol ? `State timeline: ${effectiveSymbol}` : 'State timeline'"
         :meta="`${timelineTotalDays} sessions`"
         :delay="70"
       >
@@ -687,8 +683,7 @@ const staleReason = computed(() =>
 
       <!-- 5. Barrier-field chart -->
       <Panel
-        :label="effectiveSymbol ? `Barrier field — ${effectiveSymbol}` : 'Barrier field'"
-        index="—"
+        :label="effectiveSymbol ? `Barrier field: ${effectiveSymbol}` : 'Barrier field'"
         meta="B(p) density profile"
         :delay="90"
       >
@@ -752,7 +747,6 @@ const staleReason = computed(() =>
       <!-- 6. Event table -->
       <Panel
         label="Events"
-        index="—"
         :meta="`${visibleEvents.length}/${filteredEvents.length} filtered · ${data?.events.length ?? 0} total`"
         flush
         :delay="110"
@@ -821,7 +815,6 @@ const staleReason = computed(() =>
       <!-- 7. Impact response panel -->
       <Panel
         label="Impact response"
-        index="—"
         meta="event-study, pooled across symbols"
         :delay="130"
       >
@@ -850,13 +843,13 @@ const staleReason = computed(() =>
         <p v-else class="state label dim">No impact-curve samples in this run.</p>
         <p class="chart-caption label">
           Mean cumulative return at lags 1–10 sessions after a SHOCK, with a normal-approximation
-          95% band, pooled sample-size-weighted across symbols. Descriptive event-study curve — not
+          95% band, pooled sample-size-weighted across symbols. Descriptive event-study curve, not
           a causal impact estimate.
         </p>
       </Panel>
 
       <!-- 8. Model / EV panel — permanently locked while tier < 2 -->
-      <Panel label="Model / EV" index="—" meta="locked" :delay="150">
+      <Panel label="Model / EV" meta="locked" :delay="150">
         <div class="locked-panel">
           <span class="lock-glyph" aria-hidden="true">🔒</span>
           <p class="state label">
@@ -864,13 +857,13 @@ const staleReason = computed(() =>
           </p>
           <p class="subnote label">
             P(Cascade), P(Fade|Cascade), calibration, ablation, and per-event EV all require Phase-3
-            models, which do not exist yet — models is always null at tier &lt; 2.
+            models, which do not exist yet; models is always null at tier &lt; 2.
           </p>
         </div>
       </Panel>
 
       <!-- caveats -->
-      <Panel label="Caveats" index="—" :delay="170">
+      <Panel label="Caveats" :delay="170">
         <ul class="caveats-list">
           <li v-for="(c, i) in data?.caveats ?? []" :key="i" class="label">{{ c }}</li>
         </ul>

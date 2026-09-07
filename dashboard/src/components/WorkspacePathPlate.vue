@@ -21,7 +21,7 @@ const STOPS = [
 <template>
   <figure
     class="path-plate"
-    aria-label="Five workspaces on one research path — Desk, Market, Options, Flow, Research — each answering a single question and handing its context to the next."
+    aria-label="Five workspaces on one research path: Desk, Market, Options, Flow, Research; each answering a single question and handing its context to the next."
   >
     <figcaption>
       <span>RESEARCH PATH</span>

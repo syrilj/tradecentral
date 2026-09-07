@@ -3267,7 +3267,7 @@ function downloadHistoryTapeCsv(): void {
                       @keydown.enter="setTapeSort('time')"
                     >
                       <span class="th-content">
-                        <span>Time UTC</span>
+                        <span>Time</span>
                         <span class="sort-indicator">{{ tapeSortArrow('time') }}</span>
                       </span>
                     </th>
@@ -3324,7 +3324,7 @@ function downloadHistoryTapeCsv(): void {
                       @keydown.enter="setTapeSort('expiry')"
                     >
                       <span class="th-content">
-                        <span>Expiry / distance</span>
+                        <span>Expiry</span>
                         <span class="sort-indicator">{{ tapeSortArrow('expiry') }}</span>
                       </span>
                     </th>
@@ -3343,7 +3343,7 @@ function downloadHistoryTapeCsv(): void {
                       @keydown.enter="setTapeSort('fill')"
                     >
                       <span class="th-content">
-                        <span>Fill × contracts</span>
+                        <span>Fill</span>
                         <span class="sort-indicator">{{ tapeSortArrow('fill') }}</span>
                       </span>
                     </th>
@@ -3386,7 +3386,7 @@ function downloadHistoryTapeCsv(): void {
                       @keydown.enter="setTapeSort('vol_oi')"
                     >
                       <span class="th-content">
-                        <span>Vol / OI</span>
+                        <span>V/OI</span>
                         <HelpTip
                           label="Vol / OI Ratio"
                           text="Volume to Open Interest ratio: >1.0 indicates new opening position activity rather than closing existing contracts."
@@ -3453,7 +3453,7 @@ function downloadHistoryTapeCsv(): void {
                       @keydown.enter="setTapeSort('percentile')"
                     >
                       <span class="th-content">
-                        <span>Sample %ile</span>
+                        <span>%ile</span>
                         <HelpTip
                           label="Sample Percentile"
                           text="Relative premium percentile of this print compared to all prints in the current provider sample."
@@ -3477,7 +3477,7 @@ function downloadHistoryTapeCsv(): void {
                       @keydown.enter="setTapeSort('aggressor')"
                     >
                       <span class="th-content">
-                        <span>Aggressor</span>
+                        <span>Side</span>
                         <HelpTip
                           label="Aggressor Side"
                           text="Side taking liquidity: Ask (buyer aggressive), Bid (seller aggressive), Midpoint (neutral), or Multi-exchange."
@@ -4954,7 +4954,6 @@ button:disabled {
   padding: var(--s2) var(--s4);
   color: var(--short);
   border: var(--hair) solid var(--short);
-  border-left-width: 3px;
   background: var(--short-wash);
   font-size: var(--t-small);
 }
@@ -4994,7 +4993,6 @@ button:disabled {
   padding: var(--s5);
   color: var(--warn);
   border: var(--hair) solid var(--warn);
-  border-left-width: 3px;
   background: var(--surface-raised);
 }
 
@@ -5074,7 +5072,7 @@ button:disabled {
   padding: var(--s4) var(--s5);
   background: var(--surface-base);
   border-right: var(--hair) solid var(--border-subtle);
-  border-left: 3px solid var(--rule-hi);
+  border-left: 1px solid var(--rule-hi);
 }
 .sentiment-card.bullish {
   border-left-color: var(--long);
@@ -5798,7 +5796,7 @@ button:disabled {
   grid-template-columns: minmax(360px, 1.4fr) repeat(3, minmax(190px, 1fr));
   min-width: 0;
   border: var(--hair) solid var(--rule);
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   border-radius: var(--r-xl);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 44px),
@@ -5867,7 +5865,7 @@ button:disabled {
   padding: var(--s4);
   color: var(--text-secondary);
   border-left: var(--hair) solid var(--border-subtle);
-  border-top: 3px solid var(--rule-hi);
+  border-top: var(--hair) solid var(--rule-hi);
   text-align: left;
   background: var(--surface-raised);
   cursor: pointer;
@@ -6908,14 +6906,15 @@ button.major-symbol:hover {
 }
 
 .tape-table {
-  min-width: 1172px;
+  min-width: 100%;
+  width: 100%;
   table-layout: fixed;
   font-size: var(--t-tiny);
   border-collapse: separate;
   border-spacing: 0;
 }
 .tape-table th {
-  padding: var(--s2) var(--s3);
+  padding: 7px 8px;
   color: var(--ink-dim);
   background: var(--surface-overlay);
   box-shadow: inset 0 -1px 0 var(--border-strong);
@@ -6923,11 +6922,11 @@ button.major-symbol:hover {
   top: 0;
   z-index: 2;
   font-weight: 750;
-  font-size: var(--t-micro);
+  font-size: var(--t-nano);
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  overflow: visible;
-  text-overflow: clip;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tape-table td {
@@ -7027,35 +7026,25 @@ button.major-symbol:hover {
 /* Non-pinned columns keep balanced readable floors so content is never crushed */
 .tape-table th,
 .tape-table td {
-  min-width: 88px;
+  min-width: 0;
 }
 .tape-table th:nth-child(4),
-.tape-table td:nth-child(4) {
-  min-width: 135px;
-}
+.tape-table td:nth-child(4),
 .tape-table th:nth-child(5),
-.tape-table td:nth-child(5) {
-  min-width: 125px;
-}
+.tape-table td:nth-child(5),
 .tape-table th:nth-child(6),
-.tape-table td:nth-child(6) {
-  min-width: 115px;
-}
+.tape-table td:nth-child(6),
 .tape-table th:nth-child(7),
-.tape-table td:nth-child(7) {
-  min-width: 100px;
-}
+.tape-table td:nth-child(7),
 .tape-table th:nth-child(8),
-.tape-table td:nth-child(8) {
-  min-width: 120px;
-}
+.tape-table td:nth-child(8),
 .tape-table th:nth-child(9),
-.tape-table td:nth-child(9) {
-  min-width: 100px;
-}
+.tape-table td:nth-child(9),
 .tape-table th:nth-child(10),
-.tape-table td:nth-child(10) {
-  min-width: 105px;
+.tape-table td:nth-child(10),
+.tape-table th:nth-child(11),
+.tape-table td:nth-child(11) {
+  min-width: 0;
 }
 
 /* `col` tracks own the layout rather than the longest visible print. This
@@ -7346,9 +7335,12 @@ th.sortable:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   white-space: nowrap;
   font-family: var(--font-data);
-  font-size: var(--t-micro);
+  font-size: var(--t-nano);
   font-weight: 750;
   letter-spacing: var(--track-label);
   text-transform: uppercase;
@@ -7846,10 +7838,11 @@ th.sortable:hover {
 }
 
 .realtime-tape-card .tape-scroll {
-  max-height: 520px;
+  max-height: min(440px, 52vh);
   overflow-y: auto;
   overflow-x: auto;
   scrollbar-width: thin;
+  border-top: var(--hair) solid var(--rule);
 }
 
 .tape-table tbody tr {

@@ -327,7 +327,9 @@ function isNodeConnected(symbol: string): boolean {
     </div>
 
     <div class="graph-scroll-surface">
-      <svg role="img" aria-label="Value chain graph: suppliers, the company, and its customers as linked nodes."
+      <svg
+        role="img"
+        aria-label="Value chain graph: suppliers, the company, and its customers as linked nodes."
         class="graph-svg"
         :style="{ height: `${totalHeight}px` }"
         :viewBox="`0 0 1020 ${totalHeight}`"
@@ -726,7 +728,7 @@ function isNodeConnected(symbol: string): boolean {
 }
 
 .node-card.focal {
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
 }
 
 .node-card-top {

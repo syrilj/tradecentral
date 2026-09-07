@@ -64,6 +64,9 @@ function strikes(): StrikeExposure[] {
     net_chex_m: 0.1,
     speed_m: 0.2,
     zomma_m: 0.1,
+    call_dex_m: 0,
+    put_dex_m: 0,
+    net_dex_m: 0,
   }))
 }
 

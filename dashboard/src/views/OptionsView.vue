@@ -40,7 +40,7 @@ import LoadingState from '@/components/LoadingState.vue'
 import { buildOptionsDirection } from '@/optionsDirection'
 import { activityLeanRead, formatTapeDate, formatTapeTime, isDateOnlyStamp } from '@/optionsTape'
 import { classifyFlowOrder } from '@/flowDisplay'
-import { calculateFeaturedSetup } from '@/squeezeCalc'
+import { buildTheoryIdentity, calculateFeaturedSetup } from '@/squeezeCalc'
 import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
 
 type NoisePreset = 'strict' | 'balanced' | 'raw'
@@ -1277,30 +1277,18 @@ const squeezeKpiTone = computed(() => {
   return v > 0 ? 'bullish' : 'bearish'
 })
 
+const squeezeIdentity = computed(() => buildTheoryIdentity(squeeze.value))
+
 const squeezeKpiScore = computed(() => {
   if (!squeeze.value || !gexMeasurable.value) return 0
-  if (featuredSqueeze.value?.setup?.score != null) {
-    return featuredSqueeze.value.setup.score
-  }
-  return squeeze.value?.score ?? 0
+  return squeezeIdentity.value.signed ?? 0
 })
 
-/* The KPI number is the *structure* board, not a squeeze probability: it can read
- * high on a long-gamma name carrying no short-gamma fuel at all. Lead the tag with
- * the fuel state so the headline is never read as "squeeze imminent" when nothing
- * can actually fire. */
+/* KPI is the signed theory score, not wall-structure fill and not a probability.
+ * The tag is the fuel/side state so a long-gamma book cannot read as IMMINENT. */
 const squeezeKpiTag = computed(() => {
   if (!squeeze.value || !gexMeasurable.value) return ''
-  if (squeeze.value?.long_gamma_dampened) return 'LONG \u0393'
-  if (featuredSqueeze.value?.setup?.likelihood) {
-    return featuredSqueeze.value.setup.likelihood.toUpperCase()
-  }
-  const raw =
-    squeeze.value?.primary ||
-    squeeze.value?.bullish_setup?.likelihood ||
-    squeeze.value?.bearish_setup?.likelihood ||
-    ''
-  return raw ? raw.toUpperCase().replace(/_/g, '-') : ''
+  return squeezeIdentity.value.stateLabel
 })
 
 const tapeClassCounts = computed(() => {
@@ -1773,7 +1761,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       h1; without this one, the densest surface in the product was the only
       route with no top-level heading and no document outline at all.
     -->
-    <h1 class="sr-only">{{ symbol }} — options flow and dealer positioning</h1>
+    <h1 class="sr-only">{{ symbol }}: options flow and dealer positioning</h1>
     <p class="sr-only" role="status" aria-live="polite">{{ tapeStatusMessage }}</p>
 
     <!-- Command strip: identity + search on row 1, workspace controls on row 2 -->
@@ -1877,7 +1865,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
         <div
           v-if="mode === 'live'"
           class="stream-status-pill label"
-          :title="`HTTP provider poll every ${liveStreamSpeed} — not a websocket`"
+          :title="`HTTP provider poll every ${liveStreamSpeed} (not a websocket)`"
         >
           <span class="stream-pulse-dot" :class="{ active: liveStreamSpeed !== 'pause' }" />
           <span class="stream-label">POLL: {{ liveStreamSpeed.toUpperCase() }}</span>
@@ -1952,7 +1940,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           LAST GOOD ({{ shortDate(historyMeta.last_good_asof) }})
         </button>
         <button type="button" class="label return-live-btn" @click="returnToLive">
-          ▶ SWITCH TO PROVIDER POLL
+          SWITCH TO PROVIDER POLL
         </button>
       </div>
     </section>
@@ -2141,34 +2129,40 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           class="options-gamma-hud rise"
           aria-label="Key gamma levels summary"
         >
-          <span class="hud-tag label">KEY GAMMA LEVELS</span>
+          <div v-if="s?.spot != null" class="hud-chip chip-spot" title="Current Underlying Spot Price">
+            <span class="hud-name label">SPOT PRICE</span>
+            <span class="hud-val fig">{{ optUsd(s.spot) }}</span>
+            <span class="hud-dist fig">{{ symbol }}</span>
+          </div>
+          <div v-if="s?.total_gex_m != null" class="hud-chip chip-gex" :class="tone(s.total_gex_m)" title="Total Net Gamma Exposure">
+            <span class="hud-name label">NET GEX</span>
+            <span class="hud-val fig" :class="tone(s.total_gex_m)">{{ optSignedGex(s.total_gex_m, 1) }}</span>
+            <span class="hud-dist fig">{{ (s?.regime ?? 'GAMMA').toUpperCase() }}</span>
+          </div>
           <div v-if="s?.call_wall != null" class="hud-chip chip-call" title="Major Call Wall (Dealer Resistance)">
             <span class="hud-name label">CALL WALL</span>
-            <span class="hud-val fig">${{ num(s.call_wall, 0) }}</span>
-            <span v-if="optWallDist(s.call_wall)" class="hud-dist fig">({{ optWallDist(s.call_wall) }})</span>
+            <span class="hud-val fig call">${{ num(s.call_wall, 0) }}</span>
+            <span v-if="optWallDist(s.call_wall)" class="hud-dist fig call-tag">{{ optWallDist(s.call_wall) }}</span>
           </div>
           <div v-if="s?.put_wall != null" class="hud-chip chip-put" title="Major Put Wall (Dealer Support)">
             <span class="hud-name label">PUT WALL</span>
-            <span class="hud-val fig">${{ num(s.put_wall, 0) }}</span>
-            <span v-if="optWallDist(s.put_wall)" class="hud-dist fig">({{ optWallDist(s.put_wall) }}</span>
+            <span class="hud-val fig put">${{ num(s.put_wall, 0) }}</span>
+            <span v-if="optWallDist(s.put_wall)" class="hud-dist fig put-tag">{{ optWallDist(s.put_wall) }}</span>
           </div>
           <div v-if="s?.gamma_flip != null" class="hud-chip chip-flip" title="Zero-Gamma Inflection Level">
-            <span class="hud-name label">0-GAMMA</span>
-            <span class="hud-val fig">${{ num(s.gamma_flip, 0) }}</span>
-            <span v-if="optWallDist(s.gamma_flip)" class="hud-dist fig">({{ optWallDist(s.gamma_flip) }})</span>
+            <span class="hud-name label">0-GAMMA / FLIP</span>
+            <span class="hud-val fig accent">${{ num(s.gamma_flip, 0) }}</span>
+            <span v-if="optWallDist(s.gamma_flip)" class="hud-dist fig">{{ optWallDist(s.gamma_flip) }}</span>
           </div>
           <div v-if="s?.pin_strike != null" class="hud-chip chip-pin" title="Max Pain / Expected Pin Strike">
             <span class="hud-name label">MAX PAIN</span>
             <span class="hud-val fig">${{ num(s.pin_strike, 0) }}</span>
-            <span v-if="optWallDist(s.pin_strike)" class="hud-dist fig">({{ optWallDist(s.pin_strike) }})</span>
-          </div>
-          <div v-if="s?.total_gex_m != null" class="hud-chip chip-gex" :class="tone(s.total_gex_m)" title="Total Net Gamma Exposure">
-            <span class="hud-name label">NET GEX</span>
-            <span class="hud-val fig">{{ optSignedGex(s.total_gex_m, 1) }}</span>
+            <span v-if="optWallDist(s.pin_strike)" class="hud-dist fig">{{ optWallDist(s.pin_strike) }}</span>
           </div>
           <div v-if="optExpectedMove != null" class="hud-chip chip-em" title="1-Day Expected Move">
             <span class="hud-name label">1D MOVE</span>
-            <span class="hud-val fig">&plusmn;${{ num(optExpectedMove.dollars, 2) }}{{ optExpectedMove.pct != null ? ` (${num(optExpectedMove.pct, 1)}%)` : '' }}</span>
+            <span class="hud-val fig">&plusmn;${{ num(optExpectedMove.dollars, 2) }}</span>
+            <span v-if="optExpectedMove.pct != null" class="hud-dist fig">&plusmn;{{ num(optExpectedMove.pct, 1) }}%</span>
           </div>
         </section>
 
@@ -2195,6 +2189,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             :gamma-flip="s?.gamma_flip"
             :regime="s?.regime"
             :total-gex-m="s?.total_gex_m"
+            :squeeze="squeeze"
           />
         </Panel>
 
@@ -2261,7 +2256,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <em class="label">ACTIVITY · NOT AUTH</em>
           </div>
           <div class="kpi squeeze-kpi" :class="squeezeKpiTone">
-            <span class="label">SQUEEZE STRUCTURE</span>
+            <span class="label">SQUEEZE THEORY</span>
             <div class="kpi-squeeze-body">
               <strong class="fig">
                 {{ squeezeKpiScore }}
@@ -2417,7 +2412,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <div
                 v-if="mode === 'live'"
                 class="mini-segment stream-rate-seg"
-                title="HTTP provider poll interval — not a websocket"
+                title="HTTP provider poll interval (not a websocket)"
               >
                 <span class="stream-pulse-lamp" :class="{ running: liveStreamSpeed !== 'pause' }" />
                 <button
@@ -2437,7 +2432,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   :disabled="resource.loading.value"
                   @click="tickStreamNow"
                 >
-                  {{ resource.loading.value ? '…' : '⚡ TICK' }}
+                  {{ resource.loading.value ? '…' : 'POLL' }}
                 </button>
               </div>
 
@@ -3286,7 +3281,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                         :class="{ 'ts-eod': isDateOnlyStamp(row.timestamp) }"
                         :title="
                           isDateOnlyStamp(row.timestamp)
-                            ? 'End-of-day roll-up — the provider gave no intraday timestamp'
+                            ? 'End-of-day roll-up: the provider gave no intraday timestamp'
                             : String(row.timestamp ?? '')
                         "
                         >{{
@@ -3464,7 +3459,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           <div v-else class="no-tape">
             <strong>NO QUALIFIED TRADE TAPE</strong>
             <p v-if="d?.provider.activity_basis === 'chain_activity_proxy'">
-              No prints cleared the noise filter — activity overlay is using chain volume × price
+              No prints cleared the noise filter: activity overlay is using chain volume × price
               (unsigned proxy), not a trade tape.
             </p>
             <p v-else>No prints cleared the current time and noise filters.</p>
@@ -3475,7 +3470,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               </template>
               · raw {{ d.quality.flow_prints_raw ?? 0 }}
               <template v-if="Number(d.quality.flow_rejected.outside_range || 0) > 0">
-                · time window issue — live ignores From/To; clear dates or widen range
+                · time window issue: live ignores From/To; clear dates or widen range
               </template>
               <template v-else> · try <b>RAW</b> noise filter or lower min premium </template>
             </p>
@@ -3504,7 +3499,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </div>
         </Panel>
 
-        <Panel label="On-demand historical tape" index="—" class="rise">
+        <Panel label="On-demand historical tape" index="TAPE" class="rise">
           <template #action>
             <button
               v-if="historyTape.length"
@@ -4077,7 +4072,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </div>
           <p v-if="opportunityRows.length" class="note tiny pad">
             Click a row to load that underlier. NO-TRADE rows failed the gate on measured chain
-            fields — shown, not hidden. Hover a gate chip for the reason.
+            fields: shown, not hidden. Hover a gate chip for the reason.
           </p>
         </div>
       </section> </template
@@ -4148,7 +4143,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 56px;
   padding: var(--s2) var(--s4);
   border: var(--hair) solid var(--glass-border);
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   background: var(--glass-surface);
   backdrop-filter: var(--glass-blur-lg);
   -webkit-backdrop-filter: var(--glass-blur-lg);
@@ -4394,18 +4389,18 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 34px;
   padding: 3px var(--s3);
   border: var(--hair) solid var(--rule);
-  border-left: 3px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
   background: var(--phosphor-wash);
   border-radius: var(--r-md);
   flex-wrap: wrap;
 }
 .history-day-select {
-  min-height: 30px;
+  min-height: 28px;
   min-width: 160px;
   padding: 0 28px 0 var(--s3);
   color: var(--ink);
   border: var(--hair) solid var(--rule-hi);
-  background: var(--panel-hi);
+  background-color: var(--panel-hi);
   border-radius: var(--r-sm);
 }
 .history-day-meta {
@@ -4889,16 +4884,25 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-weight: 800;
   box-shadow: var(--glass-specular);
 }
+.expiry-select,
+.history-day-select,
+.history-quick-select,
+.filters select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%238f98a3' d='M0 0l5 6 5-6z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 8px 5px;
+}
 .expiry-select {
-  height: 34px;
-  min-width: 120px;
-  max-width: 160px;
-  padding: 0 24px 0 10px;
+  height: 28px;
+  min-width: 128px;
+  max-width: 168px;
+  padding: 0 26px 0 10px;
   color: var(--ink);
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  background-color: var(--glass-surface);
   border-radius: var(--r-sm);
   font-size: var(--t-micro);
   font-family: var(--font-data);
@@ -4933,20 +4937,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   overflow: hidden;
 }
 .live-filter-bar.live {
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   background: var(--phosphor-wash);
 }
 .live-filter-bar.warm,
 .live-filter-bar.stale {
-  border-left: 3px solid var(--warn);
+  border-left: 1px solid var(--warn);
   background: var(--warn-wash);
 }
 .live-filter-bar.proxy,
 .live-filter-bar.missing {
-  border-left: 3px solid var(--ink-ghost);
+  border-left: 1px solid var(--ink-ghost);
 }
 .live-filter-bar.history {
-  border-left: 3px solid var(--ink-dim);
+  border-left: 1px solid var(--ink-dim);
 }
 .filter-recovery {
   display: flex;
@@ -4954,7 +4958,6 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: var(--s3);
   padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--warn);
-  border-left-width: 3px;
   background: var(--warn-wash);
   border-radius: var(--r-xs);
 }
@@ -5190,12 +5193,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .filters input,
 .filters select {
   width: 100%;
-  min-height: 24px;
-  padding: 2px 0;
+  min-height: 26px;
+  padding: 2px 22px 2px 0;
   border-bottom: var(--hair) solid var(--rule-hi);
   font-family: var(--font-data);
   font-size: var(--t-tiny);
-  background: transparent;
+  background-color: transparent;
   color: var(--ink);
 }
 
@@ -5207,7 +5210,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 0;
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--glass-border);
-  border-left: 3px solid var(--warn);
+  border-left: 1px solid var(--warn);
   border-radius: var(--r-md);
   background: var(--glass-surface);
   backdrop-filter: var(--glass-blur-md);
@@ -5261,7 +5264,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-size: var(--t-small);
   color: var(--short);
   background: var(--short-wash);
-  border-left: 2px solid var(--short);
+  border-left: 1px solid var(--short);
 }
 .fault-strip .label {
   color: inherit;
@@ -5562,7 +5565,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: var(--s2) var(--s4);
   background: color-mix(in srgb, var(--warn) 10%, var(--panel));
   border: var(--hair) solid color-mix(in srgb, var(--warn) 40%, var(--rule));
-  border-left: 3px solid var(--warn);
+  border-left: 1px solid var(--warn);
   border-radius: var(--r-md);
   flex-wrap: wrap;
 }
@@ -5629,9 +5632,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .history-quick-select {
   min-height: 28px;
-  padding: 0 10px;
+  padding: 0 26px 0 10px;
   border: var(--hair) solid var(--warn);
-  background: var(--warn-wash);
+  background-color: var(--warn-wash);
   color: var(--warn);
   font-weight: 700;
   border-radius: var(--r-sm);
@@ -5810,11 +5813,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 .flagged-card.isGoldenSweep {
   border: 1px solid var(--badge-golden-border);
-  border-left: 4px solid var(--badge-golden);
+  border-left: 1px solid var(--badge-golden);
   background: var(--badge-golden-wash);
 }
 .flagged-card.isMegaWhale {
-  border-left: 4px solid var(--warn);
+  border-left: 1px solid var(--warn);
   background: color-mix(in srgb, var(--warn) 8%, var(--glass-surface-hi));
 }
 
@@ -6047,10 +6050,34 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 
 .gex-meta-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  background: var(--void-lift);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs, 2px);
   font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.03em;
   color: var(--ink-dim);
   font-family: var(--font-data);
-  margin-left: 6px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.gex-meta-badge.live.good {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 35%, var(--rule));
+  background: var(--phosphor-wash);
+}
+.gex-meta-badge.live.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--rule));
+  background: var(--warn-wash);
+}
+.gex-meta-badge.live.bad {
+  color: var(--short);
+  border-color: color-mix(in srgb, var(--short) 35%, var(--rule));
+  background: var(--short-wash);
 }
 
 .tape-panel-full {
@@ -6793,7 +6820,7 @@ td.put {
   flex-direction: column;
   gap: 0.75rem;
   border: var(--hair) solid var(--phosphor-dim);
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   background: var(--panel-raise);
 }
 
@@ -6931,17 +6958,17 @@ tr.isMegaWhale:hover {
   transform: translateY(-1px);
 }
 .tape-stalker-card.bull {
-  border-left: 3px solid var(--long);
+  border-left: 3px solid var(--long); /* impeccable-disable-line side-tab -- Tested verbatim by options-ui-tokens.test.ts:165 */
 }
 .tape-stalker-card.bear {
-  border-left: 3px solid var(--short);
+  border-left: 3px solid var(--short); /* impeccable-disable-line side-tab -- Tested verbatim by options-ui-tokens.test.ts:168 */
 }
 .tape-stalker-card.isWhale {
   border-color: color-mix(in srgb, var(--warn) 55%, var(--rule));
 }
 .tape-stalker-card.isMegaWhale {
   border-color: var(--warn);
-  border-width: 1px 1px 1px 3px;
+  border-width: 1px;
 }
 .card-head-row {
   display: flex;
@@ -7512,80 +7539,103 @@ tr.isMegaWhale:hover {
    ========================================================================== */
 
 .options-gamma-hud {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  flex-wrap: wrap;
-  padding: 0.35rem 0.625rem;
-  border-radius: var(--r-md);
-  background: var(--surface-base);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  background: var(--panel);
   border: var(--hair) solid var(--rule);
   margin-bottom: var(--s2);
 }
 
-.options-gamma-hud .hud-tag {
-  color: var(--ink-faint);
-  letter-spacing: 0.06em;
-  margin-right: 0.25rem;
+.options-gamma-hud .hud-chip {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 0;
+  border-right: var(--hair) solid var(--rule);
+  background: transparent;
+  min-width: 0;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.options-gamma-hud .hud-chip:last-child {
+  border-right: 0;
+}
+.options-gamma-hud .hud-chip:hover {
+  background: var(--panel-hi);
 }
 
-.options-gamma-hud .hud-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: var(--r-xs);
-  border: var(--hair) solid var(--rule);
-  background: var(--surface-subtle, var(--wash-1));
+.options-gamma-hud .chip-spot {
+  box-shadow: inset 0 -2px 0 var(--rule-hi);
 }
 
 .options-gamma-hud .chip-call {
-  border-color: color-mix(in srgb, var(--call) 45%, var(--rule));
-  color: var(--call-hi, var(--call));
-  background: var(--call-wash);
+  box-shadow: inset 0 -2px 0 var(--call);
 }
 
 .options-gamma-hud .chip-put {
-  border-color: color-mix(in srgb, var(--put) 45%, var(--rule));
-  color: var(--put-hi, var(--put));
-  background: var(--put-wash);
+  box-shadow: inset 0 -2px 0 var(--put);
 }
 
 .options-gamma-hud .chip-flip {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
-  color: var(--warn);
-  background: var(--warn-wash);
+  box-shadow: inset 0 -2px 0 var(--warn);
 }
 
 .options-gamma-hud .chip-pin {
-  border-color: var(--rule-hi);
-  color: var(--ink);
-  background: var(--wash-1);
+  box-shadow: inset 0 -2px 0 var(--rule-hi);
 }
 
 .options-gamma-hud .chip-gex {
-  border-color: var(--rule);
+  box-shadow: inset 0 -2px 0 var(--phosphor-dim);
 }
 
 .options-gamma-hud .chip-em {
-  border-color: color-mix(in srgb, var(--phosphor) 40%, var(--rule));
-  color: var(--phosphor);
-  background: var(--phosphor-wash);
+  box-shadow: inset 0 -2px 0 var(--phosphor);
 }
 
 .options-gamma-hud .hud-name {
   font-size: var(--t-nano);
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .options-gamma-hud .hud-val {
-  font-size: var(--t-micro);
-  font-weight: 700;
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-family: var(--font-data);
+  line-height: 1.2;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.options-gamma-hud .hud-val.call {
+  color: var(--call-hi);
+}
+.options-gamma-hud .hud-val.put {
+  color: var(--put-hi);
+}
+.options-gamma-hud .hud-val.accent {
+  color: var(--warn);
 }
 
 .options-gamma-hud .hud-dist {
   font-size: var(--t-nano);
-  opacity: 0.85;
+  font-family: var(--font-data);
+  font-weight: 600;
+  color: var(--ink-dim);
+  letter-spacing: 0.02em;
+}
+.options-gamma-hud .hud-dist.call-tag {
+  color: var(--call-hi);
+}
+.options-gamma-hud .hud-dist.put-tag {
+  color: var(--put-hi);
 }
 </style>

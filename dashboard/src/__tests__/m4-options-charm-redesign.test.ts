@@ -82,7 +82,7 @@ describe('Milestone 4: Options Chain & Charm / Greeks Positioning Overhaul (R3)'
       expect(content).toContain('CALL WALL')
       expect(content).toContain('PUT WALL')
       expect(content).toContain('FLIP')
-      expect(content).toContain('SQUEEZE STRUCTURE')
+      expect(content).toContain('SQUEEZE THEORY')
       expect(content).toContain('C/P PREM')
     })
   })

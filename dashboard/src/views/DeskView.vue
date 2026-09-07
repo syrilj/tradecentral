@@ -2030,16 +2030,16 @@ function navTo(name: string): void {
   outline-offset: 2px;
 }
 .kpi-card.armed {
-  border-left: 2px solid var(--long);
+  border-left: 1px solid var(--long);
 }
 .kpi-card.held {
-  border-left: 2px solid var(--warn);
+  border-left: 1px solid var(--warn);
 }
 .kpi-breadth-card {
-  border-left: 2px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
 }
 .kpi-regime-card {
-  border-left: 2px solid var(--cat-2);
+  border-left: 1px solid var(--cat-2);
   cursor: pointer;
   text-align: left;
 }
@@ -2055,7 +2055,7 @@ function navTo(name: string): void {
   text-align: left;
   font: inherit;
   cursor: pointer;
-  border-left: 2px solid var(--call);
+  border-left: 1px solid var(--call);
 }
 .kpi-nav-card:hover {
   border-color: var(--rule-hi);
@@ -2186,7 +2186,7 @@ function navTo(name: string): void {
 /* ── High-Confidence Authorization Queue ─────────────────────────────────── */
 .confidence-queue {
   border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   border-radius: var(--r-md);
   background: var(--panel);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
@@ -2329,7 +2329,7 @@ function navTo(name: string): void {
 .scan-console {
   position: relative;
   border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--phosphor);
+  border-left: var(--hair) solid var(--phosphor);
 }
 
 .scan-console-head {
@@ -2535,7 +2535,6 @@ function navTo(name: string): void {
   display: block;
   height: 100%;
   background: var(--phosphor);
-  transition: width var(--dur) ease;
 }
 
 .scan-explain {
@@ -2806,7 +2805,7 @@ function navTo(name: string): void {
   gap: var(--s4) var(--s5);
   padding: var(--s4) var(--s5);
   border: var(--hair) solid var(--rule-hi);
-  border-left: 3px solid var(--warn);
+  border-left: 1px solid var(--warn);
   background: var(--panel);
 }
 .contract-kicker-row {

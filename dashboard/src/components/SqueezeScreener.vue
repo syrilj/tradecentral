@@ -1,14 +1,10 @@
 <script setup lang="ts">
 /**
- * Gamma Squeeze Screener — primary-side probability board with circular score,
- * factor breakdown, a real price ladder, and takeaways.
+ * Gamma squeeze board — theory identity, factor breakdown, price ladder.
  *
- * Every figure here is a measured chain quantity or a value derived from one.
- * Nothing defaults to zero: an unmeasured wall renders as an em-dash, an
- * unscored setup renders as UNSCORED rather than a confident 0/100, and the
- * provenance strip names the feed, the snapshot and its age — so any number on
- * the board can be traced back to the chain that produced it before it is
- * traded against.
+ * The headline number is the signed theory score (fuel × signed flow/momentum),
+ * not a probability a squeeze fires. Structure meters stay secondary. Unmeasured
+ * inputs render as an em-dash, never a fake zero.
  */
 import { computed } from 'vue'
 import type { OptionsSqueeze, SqueezeFactor } from '@/api'
@@ -26,6 +22,7 @@ import {
   formatAge,
   isSetupMeasured,
   formatSignedScore,
+  buildTheoryIdentity,
   RING_CIRCUMFERENCE,
 } from '@/squeezeCalc'
 
@@ -48,10 +45,6 @@ const bear = computed(() => props.squeeze?.bearish_setup)
 const signedScore = computed(() => props.squeeze?.score ?? null)
 const levels = computed(() => props.squeeze?.key_levels)
 const dampened = computed(() => Boolean(props.squeeze?.long_gamma_dampened))
-const fuel = computed(() => {
-  const v = props.squeeze?.negative_fuel
-  return typeof v === 'number' ? v : null
-})
 
 /** Featured setup: highest structure score, with primary bias as tie-break. */
 const featured = computed(() =>
@@ -64,15 +57,14 @@ const featured = computed(() =>
  * confident negative where the honest answer is "not measured".
  */
 const measured = computed(() => isSetupMeasured(featured.value.setup))
-const boardScore = computed(() => (measured.value ? (featured.value.setup?.score ?? 0) : null))
-const likelihood = computed(() =>
-  measured.value ? (featured.value.setup?.likelihood ?? null) : null,
+const theory = computed(() => buildTheoryIdentity(props.squeeze))
+/** Signed theory score drives the ring. Structure fill is a separate meter. */
+const boardScore = computed(() => (measured.value ? theory.value.signed : null))
+const structureScore = computed(() =>
+  measured.value ? (featured.value.setup?.score ?? null) : null,
 )
 const factors = computed(() => featured.value.setup?.factors ?? [])
 const analysis = computed(() => featured.value.setup?.setup_analysis ?? [])
-const spectrumPct = computed(() =>
-  boardScore.value == null ? 0 : Math.max(0, Math.min(100, Math.abs(boardScore.value))),
-)
 
 /** Full ring: circumference of r=42 → 2πr ≈ 263.9 */
 const RING_C = RING_CIRCUMFERENCE
@@ -210,9 +202,13 @@ function factorTheme(f: SqueezeFactor): string {
   const lbl = (f.label || '').toLowerCase()
   if (id.includes('call') || lbl.includes('call') || id.includes('bull')) return 'bullish'
   if (id.includes('put') || lbl.includes('put') || id.includes('bear')) return 'bearish'
-  if (id.includes('fuel') || id.includes('gamma') || id.includes('skew')) return 'warn'
+  if (id.includes('fuel') || id.includes('gamma') || id.includes('regime')) return 'warn'
   return 'accent'
 }
+
+const driverLabels = computed(() =>
+  (props.squeeze?.drivers ?? []).map((d) => d.replace(/_/g, ' ').toUpperCase()),
+)
 
 /** Signed percent from a fraction. Placeholder when the distance is unmeasured. */
 function distPct(pct: number | null | undefined): string {
@@ -249,55 +245,13 @@ const otherSide = computed(() => {
 <template>
   <div v-if="squeeze && featured.setup" class="sq" :class="featured.side">
     <section class="hero">
-      <div class="hero-top-row">
-        <div class="score-lockup">
-          <strong class="score-num fig" :class="scoreCls(boardScore)">{{
-            boardScore == null ? DASH : boardScore
-          }}</strong>
-          <span class="score-denom label">{{ boardScore == null ? 'UNSCORED' : '/100' }}</span>
-        </div>
-        <div class="lik-row">
-          <span class="likelihood-badge label" :class="likelihood ?? 'unscored'">
-            {{ likelihood ? likelihood.toUpperCase() : 'UNSCORED' }}
-          </span>
-        </div>
-      </div>
-
-      <!-- 3-Segment Conviction Gauge: LOW | MODERATE | HIGH -->
-      <div class="prob-track">
-        <div class="prob-zones" :class="[likelihood ?? 'unscored', featured.side]">
-          <span
-            class="zone"
-            :class="{ active: likelihood === 'unlikely' || (boardScore ?? 0) < 40 }"
-            >LOW</span
-          >
-          <span
-            class="zone"
-            :class="{
-              active:
-                likelihood === 'possible' ||
-                likelihood === 'likely' ||
-                ((boardScore ?? 0) >= 40 && (boardScore ?? 0) < 75),
-            }"
-            >MODERATE</span
-          >
-          <span
-            class="zone"
-            :class="{ active: likelihood === 'imminent' || (boardScore ?? 0) >= 75 }"
-            >HIGH</span
-          >
-          <i
-            v-if="boardScore != null"
-            class="prob-thumb"
-            :class="featured.side"
-            :style="{ left: `${spectrumPct}%` }"
-          />
-        </div>
-      </div>
-
-      <!-- Hidden ring wrap to preserve radial math test contracts -->
-      <div class="ring-wrap visually-hidden" aria-hidden="true">
-        <svg role="img" aria-label="Gamma squeeze probability ring." class="ring-svg" viewBox="0 0 108 108">
+      <div class="ring-wrap">
+        <svg
+          role="img"
+          aria-label="Gamma squeeze theory-score ring."
+          class="ring-svg"
+          viewBox="0 0 108 108"
+        >
           <circle class="ring-track" cx="54" cy="54" r="42" />
           <circle
             class="ring-fill"
@@ -309,16 +263,60 @@ const otherSide = computed(() => {
             :stroke-dashoffset="ringOffset"
           />
         </svg>
+        <div class="ring-center">
+          <strong class="score-num fig" :class="scoreCls(boardScore)">{{
+            boardScore == null ? DASH : formatSignedScore(boardScore)
+          }}</strong>
+          <span class="score-denom label">{{ boardScore == null ? 'UNSCORED' : '/100' }}</span>
+        </div>
       </div>
 
-      <!-- Retain semantic hook for signed score and regime audit -->
-      <div class="signed-block label visually-hidden" aria-hidden="true">
-        <span class="signed-key">SIGNED</span>
-        <strong class="fig">{{ formatSignedScore(signedScore) }}</strong>
-        <span v-if="levels?.near_spot_net_gex_m != null">{{
-          formatNearSpotGex(levels.near_spot_net_gex_m)
-        }}</span>
-        <span :class="regimeCopy.tone">{{ regimeCopy.text }} {{ fuel }}</span>
+      <div class="hero-copy">
+        <div class="setup-header-row">
+          <div class="setup-title-group">
+            <i class="side-dot" :class="featured.side === 'bullish' ? 'call' : 'put'" />
+            <strong class="setup-name">GAMMA SQUEEZE</strong>
+          </div>
+          <span class="likelihood-badge label" :class="theory.state">{{ theory.stateLabel }}</span>
+        </div>
+        <span class="score-label label">
+          THEORY SCORE · NOT A FORECAST
+          <HelpTip
+            label="Squeeze formula"
+            align="right"
+            :text="theory.formula"
+          />
+        </span>
+        <div class="leg-row">
+          <span class="leg bull"
+            >BULL <b class="fig">{{ theory.bullUi == null ? DASH : theory.bullUi.toFixed(1) }}</b></span
+          >
+          <span class="leg bear"
+            >BEAR <b class="fig">{{ theory.bearUi == null ? DASH : theory.bearUi.toFixed(1) }}</b></span
+          >
+          <span class="leg fuel"
+            >FUEL
+            <b class="fig">{{
+              theory.fuelUi == null ? DASH : `${Math.round(theory.fuelUi * 100)}%`
+            }}</b></span
+          >
+        </div>
+        <div class="signed-block">
+          <span class="signed-cell">
+            <span class="signed-key">SIGNED</span>
+            <strong class="fig" :class="featured.side === 'bullish' ? 'call' : 'put'">{{
+              formatSignedScore(signedScore)
+            }}</strong>
+          </span>
+          <span v-if="levels?.near_spot_net_gex_m != null" class="signed-cell">
+            <span class="signed-key">NEAR-SPOT GEX</span>
+            <span class="fig">{{ formatNearSpotGex(levels.near_spot_net_gex_m) }}</span>
+          </span>
+          <span class="signed-cell" :class="regimeCopy.tone">
+            <span class="signed-key">REGIME</span>
+            <span class="fig">{{ regimeCopy.text }}</span>
+          </span>
+        </div>
       </div>
     </section>
 
@@ -332,7 +330,7 @@ const otherSide = computed(() => {
           <HelpTip
             label="Key levels"
             align="right"
-            text="Dealer gamma levels from this chain snapshot, ordered by price. Distances are measured against the same spot the score was computed from. A level the chain could not produce shows an em-dash — it is never defaulted to zero."
+            text="Dealer gamma levels from this chain snapshot, ordered by price. Distances are measured against the same spot the score was computed from. A level the chain could not produce shows a dash; it is never defaulted to zero."
           />
         </div>
 
@@ -387,9 +385,42 @@ const otherSide = computed(() => {
         </p>
       </section>
 
-      <!-- Factors -->
+      <!-- Factors: theory identity first, wall structure second -->
       <section class="block factors-block">
-        <div class="block-hdr label">KEY FACTORS</div>
+        <div class="block-hdr label">
+          KEY FACTORS
+          <HelpTip
+            label="Squeeze identity"
+            align="right"
+            text="SR = |GEX⁻_1%| / ADV × e^{−0.05 T} × ATM share. Score = tanh(40·SR) × (0.5·signed flow + 0.5·5d momentum). Fuel is unsigned; direction is additive. This is a gamma-structure diagnostic — walk-forward 1d hit rate has not beaten a momentum baseline, so the number is not a probability a squeeze fires. Dealer inventory is assumed customer-long / dealer-short premium (q = −OI)."
+          />
+        </div>
+        <p class="quiet identity-caveat">
+          Dealer-gamma fuel × signed flow and 5-session momentum. Diagnostic only — not a
+          calibrated directional forecast. Short interest is not on this chain.
+        </p>
+        <div class="factors-list theory-terms">
+          <div v-for="term in theory.terms" :key="term.id" class="factor-row">
+            <span class="factor-title label">{{ term.label }}</span>
+            <div class="factor-track" :title="term.detail">
+              <i
+                class="factor-fill"
+                :class="term.tone"
+                :style="{ width: `${Math.round(term.fill01 * 100)}%` }"
+              />
+            </div>
+            <span class="factor-score fig">{{ term.display }}</span>
+          </div>
+        </div>
+        <div v-if="driverLabels.length" class="driver-row">
+          <span v-for="d in driverLabels" :key="d" class="driver-chip label">{{ d }}</span>
+        </div>
+        <div class="block-hdr label structure-hdr">
+          WALL STRUCTURE
+          <span v-if="structureScore != null" class="fig structure-score"
+            >{{ structureScore }}/100</span
+          >
+        </div>
         <div v-if="displayFactors.length" class="factors-list">
           <div v-for="f in displayFactors" :key="f.id || f.label" class="factor-row">
             <span class="factor-title label">{{ f.label }}</span>
@@ -403,14 +434,7 @@ const otherSide = computed(() => {
             <span class="factor-score fig">{{ f.score }}/{{ f.max }}</span>
           </div>
         </div>
-        <p v-else class="quiet label">No factor scores on this chain yet.</p>
-      </section>
-
-      <section class="block float-cover-block">
-        <div class="block-hdr label">SHORT INTEREST</div>
-        <p class="quiet label">
-          Not on this chain payload — squeeze fuel below is dealer gamma only, not trapped shorts.
-        </p>
+        <p v-else class="quiet label">No wall-structure meters on this chain yet.</p>
       </section>
 
       <!-- Takeaways -->
@@ -443,9 +467,7 @@ const otherSide = computed(() => {
         <span class="fig">{{
           otherSide.setup.score == null ? DASH : `${otherSide.setup.score}/100`
         }}</span>
-        <span class="lik label">{{
-          otherSide.setup.likelihood ? otherSide.setup.likelihood.toUpperCase() : 'UNSCORED'
-        }}</span>
+        <span class="lik label">STRUCTURE</span>
         <div class="otrack">
           <i
             :class="otherSide.side"
@@ -495,30 +517,16 @@ const otherSide = computed(() => {
 .sq {
   display: flex;
   flex-direction: column;
-  gap: var(--s4);
+  gap: var(--s3);
   min-width: 0;
   min-height: 0;
   height: 100%;
-  padding: var(--s4);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
-  border-radius: var(--r-lg);
-  border: var(--hair) solid var(--glass-border);
-  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  padding: 0 0 0 10px;
+  background: transparent;
   position: relative;
   overflow: hidden;
 }
-/* Side-tinted personality — a subtle vertical wash that keys the whole
-   panel to the featured direction without resorting to glow. The tint is a
-   flat translucent overlay keyed to the featured side, not a gradient. */
-.sq.bullish {
-  background: color-mix(in srgb, var(--call-wash) 50%, var(--glass-surface));
-}
-.sq.bearish {
-  background: color-mix(in srgb, var(--put-wash) 50%, var(--glass-surface));
-}
-/* Left accent edge — solid, not a shadow. */
+/* Left accent edge — solid rail, not a wash. */
 .sq.bullish::before {
   content: '';
   position: absolute;
@@ -585,13 +593,77 @@ const otherSide = computed(() => {
 /* ---- hero --------------------------------------------------------------- */
 .hero {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--s4);
-  align-items: center;
-  padding: 0 0 var(--s4);
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: start;
+  padding: 0 0 var(--s3);
   background: transparent;
-  border-bottom: var(--hair) solid var(--glass-border);
+  border-bottom: var(--hair) solid var(--rule);
   flex: 0 0 auto;
+}
+@media (max-width: 420px) {
+  .hero {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+}
+
+.hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.setup-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.setup-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.setup-name {
+  font: 800 var(--t-tiny) var(--font-display);
+  letter-spacing: 0.1em;
+  color: var(--ink);
+}
+.score-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-nano);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+.leg-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+.leg b {
+  margin-left: 4px;
+  font-family: var(--font-data);
+  font-weight: 700;
+  color: var(--ink);
+}
+.leg.bull b {
+  color: var(--call-hi);
+}
+.leg.bear b {
+  color: var(--put-hi);
+}
+.leg.fuel b {
+  color: var(--phosphor);
 }
 
 .ring-block {
@@ -603,8 +675,8 @@ const otherSide = computed(() => {
 }
 .ring-wrap {
   position: relative;
-  width: 104px;
-  height: 104px;
+  width: 88px;
+  height: 88px;
   flex: 0 0 auto;
 }
 /* Background disc gives the dial visual mass even at score 0. */
@@ -653,19 +725,22 @@ const otherSide = computed(() => {
   line-height: 1;
   z-index: 2;
 }
+.score-lockup {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
 .score-num {
-  font-size: 1.75rem;
+  font-size: 1.28rem;
   font-weight: 800;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
   font-family: var(--font-data);
   letter-spacing: -0.04em;
+  line-height: 1;
 }
-.sq.bullish .score-num {
-  color: var(--call-hi);
-}
-.sq.bearish .score-num {
-  color: var(--put-hi);
+.score-num.hot {
+  color: var(--ink);
 }
 .sq.bullish .score-num.hot {
   color: var(--call-hi);
@@ -674,11 +749,10 @@ const otherSide = computed(() => {
   color: var(--put-hi);
 }
 .score-num.elev {
-  color: inherit;
+  color: var(--ink);
 }
 .score-num.mid {
-  color: inherit;
-  opacity: 0.9;
+  color: var(--ink-dim);
 }
 .score-num.low {
   color: var(--ink-faint);
@@ -686,8 +760,8 @@ const otherSide = computed(() => {
 .score-denom {
   font-size: var(--t-micro);
   color: var(--ink-faint);
-  margin-top: 1px;
   font-weight: 600;
+  font-family: var(--font-data);
 }
 
 .bias-lock {
@@ -835,30 +909,37 @@ const otherSide = computed(() => {
 }
 
 .likelihood-badge {
-  padding: 4px 10px;
-  border: var(--hair) solid var(--glass-border);
-  border-radius: var(--r-xs);
-  font: 800 var(--t-micro) var(--font-display);
-  letter-spacing: 0.12em;
+  flex: 0 1 auto;
+  max-width: 46%;
+  padding: 3px 7px;
+  border: var(--hair) solid var(--rule);
+  font: 800 var(--t-nano) var(--font-display);
+  letter-spacing: 0.06em;
   color: var(--ink-dim);
-  background: var(--glass-base);
-  box-shadow: var(--glass-specular-subtle);
+  background: var(--void-lift);
+  white-space: normal;
+  text-align: right;
+  line-height: 1.25;
 }
-.likelihood-badge.possible {
-  color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 55%, var(--rule));
-  background: var(--warn-wash);
-}
-.likelihood-badge.likely {
+.likelihood-badge.bull_lean {
   color: var(--call-hi);
   border-color: color-mix(in srgb, var(--call) 55%, var(--rule));
   background: var(--call-wash);
 }
-.likelihood-badge.imminent {
+.likelihood-badge.bear_lean {
   color: var(--put-hi);
-  border-color: var(--put);
+  border-color: color-mix(in srgb, var(--put) 55%, var(--rule));
   background: var(--put-wash);
 }
+.likelihood-badge.two_way,
+.likelihood-badge.fuel_only {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--rule));
+  background: var(--warn-wash);
+}
+.likelihood-badge.dampened,
+.likelihood-badge.no_fuel,
+.likelihood-badge.unmeasured,
 .likelihood-badge.unscored {
   color: var(--ink-faint);
   border-style: dashed;
@@ -913,106 +994,56 @@ const otherSide = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 0;
+  width: 100%;
 }
-.prob-track-head {
+.prob-zones-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  color: var(--ink-faint);
-  letter-spacing: 0.1em;
-}
-.prob-track-head .fig {
-  color: var(--ink);
-  font-size: var(--t-small);
+  font-size: var(--t-nano);
   font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-data);
-}
-
-/* Zone-segmented spectrum: 4 equal zones with the active one highlighted.
-   Each zone is a machined slot — bar on top, label below — with the active
-   zone filled in the side accent and the marker thumb sliding across. */
-.prob-zones {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 3px;
-  padding-top: 10px;
-}
-.prob-zones .zone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--t-micro);
   letter-spacing: 0.04em;
   color: var(--ink-faint);
-  font-weight: 600;
-  font-family: var(--font-display);
-  text-align: center;
 }
-.prob-zones .zone > i {
-  display: block;
-  width: 100%;
-  height: 6px;
-  background: var(--glass-base);
-  border: var(--hair) solid var(--glass-border);
-  border-radius: var(--r-xs);
-  order: -1;
+.prob-zones-header .zone-label {
+  color: var(--ink-faint);
+  transition: color var(--dur-fast) var(--ease-out);
 }
-/* Active zone: label lifts to ink, segment fills with the side accent. */
-.prob-zones.unlikely .zone[data-zone='unlikely'],
-.prob-zones.possible .zone[data-zone='possible'],
-.prob-zones.likely .zone[data-zone='likely'],
-.prob-zones.imminent .zone[data-zone='imminent'] {
+.prob-zones-header .zone-label.active {
   color: var(--ink);
   font-weight: 800;
 }
-.prob-zones.unlikely .zone[data-zone='unlikely'] > i {
-  background: var(--ink-faint);
-  border-color: var(--rule-hi);
+.prob-track-bar {
+  position: relative;
+  height: 6px;
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: 3px;
+  overflow: visible;
 }
-.prob-zones.possible .zone[data-zone='possible'] > i {
-  background: var(--warn);
-  border-color: var(--warn);
+.prob-track-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--phosphor);
+  transition: width 0.4s var(--ease-out);
 }
-.prob-zones.likely .zone[data-zone='likely'] > i {
-  background: var(--warn);
-  border-color: var(--warn);
-}
-.prob-zones.imminent .zone[data-zone='imminent'] > i {
-  background: var(--put);
-  border-color: var(--put);
-}
-/* Side-tinted fill for the featured direction on the active segment. */
-.prob-zones.bullish .zone[data-zone='likely'] > i,
-.prob-zones.bullish .zone[data-zone='imminent'] > i {
+.prob-track-fill.bullish {
   background: var(--call-hi);
-  border-color: var(--call);
 }
-.prob-zones.bearish .zone[data-zone='likely'] > i,
-.prob-zones.bearish .zone[data-zone='imminent'] > i {
+.prob-track-fill.bearish {
   background: var(--put-hi);
-  border-color: var(--put);
 }
-/* Marker thumb that slides across the zone track to the score position. */
+
+/* Marker thumb that slides across the track to the score position */
 .prob-thumb {
   position: absolute;
-  top: 7px;
+  top: 50%;
   width: 10px;
   height: 10px;
   border-radius: 50%;
   background: var(--ink);
   border: 2px solid var(--panel);
-  transform: translate(-50%, 0);
+  transform: translate(-50%, -50%);
   pointer-events: none;
-  outline: var(--hair) solid var(--rule-hi);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  /* `left` is the honest property here: the marker is positioned as a
-     percentage of the track, and a percentage translate would resolve against
-     the marker's own width instead. One element, once per payload — not worth
-     restructuring the track to save a layout pass. */
   transition: left var(--dur) var(--ease-out);
 }
 .prob-thumb.bullish {
@@ -1022,16 +1053,31 @@ const otherSide = computed(() => {
   background: var(--put-hi);
 }
 
-/* Signed block: stacked so the figure and the near-spot GEX never collide. */
+/* Signed block: one audit row under the identity. */
 .signed-block {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+  padding: 6px 0 0;
+  border-top: var(--hair) solid var(--rule);
+}
+.signed-cell {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: var(--s2) var(--s3);
-  border-radius: var(--r-sm);
-  background: var(--glass-surface-hi);
-  border: var(--hair) solid var(--glass-border);
-  box-shadow: var(--glass-specular-subtle);
+  gap: 2px;
+  min-width: 0;
+}
+.signed-cell .signed-key {
+  font-size: var(--t-nano);
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+.signed-cell .fig {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  color: var(--ink);
+  white-space: normal;
+  line-height: 1.25;
 }
 .signed-line {
   display: flex;
@@ -1093,21 +1139,17 @@ const otherSide = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 8px var(--s3);
-  border-radius: var(--r-sm);
-  background: var(--glass-surface-hi);
-  border: var(--hair) solid var(--glass-border);
-  border-left: 3px solid var(--rule-hi);
-  box-shadow: var(--glass-specular-subtle);
+  padding: 8px 0 8px 8px;
+  background: transparent;
+  border-left: 2px solid var(--rule-hi);
   min-width: 0;
 }
 .pocket-tag {
   display: inline-block;
   margin-left: 6px;
-  padding: 1px 5px;
-  background: var(--void-lift);
-  border: var(--hair) solid var(--glass-border);
-  border-radius: var(--r-xs);
+  padding: 0;
+  background: transparent;
+  border: 0;
   color: var(--ink-soft);
   font: 700 var(--t-micro) var(--font-data);
 }
@@ -1120,11 +1162,11 @@ const otherSide = computed(() => {
 .trig-key {
   color: var(--ink-faint);
   font-size: var(--t-micro);
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.35;
 }
 .trig-figs {
   display: flex;
@@ -1167,10 +1209,8 @@ const otherSide = computed(() => {
   container-type: inline-size;
   display: flex;
   flex-direction: column;
-  border-radius: var(--r-md);
   overflow: hidden;
-  border: var(--hair) solid var(--glass-border);
-  box-shadow: var(--glass-shadow-sm);
+  border: var(--hair) solid var(--rule);
 }
 .ladder-head {
   display: none;
@@ -1400,45 +1440,85 @@ const otherSide = computed(() => {
 }
 .factor-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) auto;
-  gap: var(--s2);
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title score'
+    'track track';
+  gap: 3px 8px;
+  align-items: baseline;
   min-width: 0;
 }
 .factor-title {
+  grid-area: title;
   color: var(--ink-soft);
   font: 600 var(--t-micro) var(--font-display);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
   letter-spacing: 0.02em;
+  line-height: 1.3;
 }
 .factor-track {
-  height: 8px;
-  background: var(--glass-base);
-  border: var(--hair) solid var(--glass-border);
-  border-radius: 9999px;
+  grid-area: track;
+  height: 6px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
   overflow: hidden;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 .factor-fill {
   display: block;
   height: 100%;
   background: var(--ink-dim);
-  border-radius: 9999px;
-  transition: width var(--dur) var(--ease-out);
 }
-.factor-fill.bullish {
+.factor-fill.bullish,
+.factor-fill.bull {
   background: var(--call);
 }
-.factor-fill.bearish {
+.factor-fill.bearish,
+.factor-fill.bear {
   background: var(--put);
 }
 .factor-fill.warn {
   background: var(--warn);
 }
-.factor-fill.accent {
+.factor-fill.accent,
+.factor-fill.fuel,
+.factor-fill.ink {
   background: var(--phosphor);
+}
+.factor-fill.flow {
+  background: var(--ink);
+}
+.factor-fill.mom {
+  background: var(--phosphor-dim);
+}
+.identity-caveat {
+  line-height: 1.4;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+.structure-hdr {
+  margin-top: var(--s3);
+}
+.structure-score {
+  margin-left: auto;
+  color: var(--ink-dim);
+  font-family: var(--font-data);
+  letter-spacing: 0;
+}
+.driver-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.driver-chip {
+  padding: 2px 6px;
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-xs);
+  color: var(--ink-dim);
+  background: var(--glass-base);
+  letter-spacing: 0.06em;
+  font-size: var(--t-nano);
 }
 .factor-fill.hot {
   opacity: 1;
@@ -1453,6 +1533,7 @@ const otherSide = computed(() => {
   opacity: 0.5;
 }
 .factor-score {
+  grid-area: score;
   font: 700 var(--t-micro) var(--font-data);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -1516,7 +1597,7 @@ const otherSide = computed(() => {
   color: var(--ink-dim);
   font-size: var(--t-tiny);
   line-height: 1.45;
-  border-left: 3px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-specular-subtle);
 }
@@ -1612,7 +1693,7 @@ const otherSide = computed(() => {
   padding: var(--s3);
   background: var(--glass-surface-hi);
   border: var(--hair) solid var(--glass-border);
-  border-left: 3px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
   border-radius: var(--r-sm);
   margin: var(--s2) 0;
   box-shadow: var(--glass-specular-subtle);

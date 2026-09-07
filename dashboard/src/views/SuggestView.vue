@@ -648,7 +648,7 @@ const meta = computed(() => {
                 >
               </div>
               <small v-if="suggestion.contract_plan.play.vol_source === 'unmeasured'"
-                >IV unmeasured — expiry P/L only, no Greeks.</small
+                >IV unmeasured: expiry P/L only, no Greeks.</small
               >
             </div>
           </div>
@@ -1061,7 +1061,6 @@ const meta = computed(() => {
   padding: var(--s3);
   color: var(--call-hi);
   border: var(--hair) solid var(--call);
-  border-left-width: 3px;
   background: var(--call-wash);
   box-shadow: inset 8px 0 0 color-mix(in srgb, var(--call) 18%, transparent);
 }
@@ -1079,7 +1078,6 @@ const meta = computed(() => {
   gap: 4px;
   padding: var(--s3);
   border: var(--hair) solid var(--warn);
-  border-left-width: 3px;
   background: var(--warn-wash);
 }
 .completeness.complete {
@@ -1158,14 +1156,14 @@ const meta = computed(() => {
 .bias-watch {
   padding: var(--s2);
   color: var(--warn);
-  border-left: 2px solid var(--warn);
+  border-left: 1px solid var(--warn);
   background: var(--warn-wash);
 }
 .stability-banner {
   margin: 0;
   padding: var(--s2);
   color: var(--warn);
-  border-left: 2px solid var(--warn);
+  border-left: 1px solid var(--warn);
   background: var(--warn-wash);
 }
 .stability-banner.stable {

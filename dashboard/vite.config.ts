@@ -53,7 +53,13 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5178,
       proxy: {
-        '/api': { target: 'http://localhost:8787', changeOrigin: true },
+        // Overridable so a second checkout or a second agent session can point
+        // at its own backend instead of fighting over 8787. Unset, the target
+        // is unchanged.
+        '/api': {
+          target: process.env.EDGE_API_TARGET || 'http://localhost:8787',
+          changeOrigin: true,
+        },
       },
     },
     test: {

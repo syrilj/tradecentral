@@ -822,19 +822,19 @@ const pivotLadder = computed(() => {
 }
 
 .tactical-banner.bullish {
-  border-left: 4px solid var(--long);
+  border-left: 1px solid var(--long);
 }
 
 .tactical-banner.bearish {
-  border-left: 4px solid var(--short);
+  border-left: 1px solid var(--short);
 }
 
 .tactical-banner.squeeze {
-  border-left: 4px solid var(--warn);
+  border-left: 1px solid var(--warn);
 }
 
 .tactical-banner.transition {
-  border-left: 4px solid var(--rule-hi);
+  border-left: 1px solid var(--rule-hi);
 }
 
 .tactical-header {

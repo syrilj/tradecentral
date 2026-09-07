@@ -136,7 +136,7 @@ const quotaMessage = computed(() => {
 
 function friendlySliceError(err: string | undefined): string {
   if (!err) return 'No rows'
-  if (/quota|429|weight limit/i.test(err)) return 'Quota exceeded — slice unavailable this month'
+  if (/quota|429|weight limit/i.test(err)) return 'Quota exceeded: slice unavailable this month'
   return err.length > 120 ? err.slice(0, 117) + '…' : err
 }
 
@@ -198,7 +198,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
         <h1 class="title lab">FINTEL STREAM</h1>
         <HelpTip
           label="Fintel Public Data API"
-          text="Short interest, borrow fees, 13F owners, insiders, and unusual options flow via Fintel. Key stays server-side (FINTEL_API_KEY → X-API-KEY). Analysis attention only — never a live order path."
+          text="Short interest, borrow fees, 13F owners, insiders, and unusual options flow via Fintel. Key stays server-side (FINTEL_API_KEY → X-API-KEY). Analysis attention only: never a live order path."
         />
       </div>
       <div class="mast-right">
@@ -220,7 +220,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
       <ul class="notes">
         <li>This is a Fintel plan limit, not an EDGE bug. Key is valid; weight budget is empty.</li>
         <li>
-          Owners / insiders / options use more weight — default symbol depth is now
+          Owners, insiders, and options use more weight: default symbol depth is now
           <code>core</code> only (price, short %, borrow).
         </li>
         <li>
@@ -236,7 +236,7 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
 
     <Panel
       v-if="status.data.value && !configured"
-      label="Setup — FINTEL_API_KEY"
+      label="Setup: FINTEL_API_KEY"
       index="00"
       meta="required once"
       class="setup"

@@ -486,12 +486,12 @@ const strikeColumns = [
   /* Clears the interpret card below it — at 92px the two boxes overlapped by
      ~10px and the tag's last line was hidden behind the card. */
   top: 56px;
-  border-left: 3px solid var(--blue);
+  border-left: 1px solid var(--blue);
 }
 .flow-tag-put {
   left: 18px;
   bottom: 24px;
-  border-left: 3px solid var(--orange);
+  border-left: 1px solid var(--orange);
 }
 
 /* ── Interpret Sequence Box ─────────────────────────────────────────────── */
@@ -504,7 +504,7 @@ const strikeColumns = [
   padding: 12px 14px;
   color: var(--ink);
   border: 1px solid var(--rule-hi);
-  border-left: 3px solid var(--ink-soft);
+  border-left: 1px solid var(--ink-soft);
   background: var(--panel-hi);
   box-shadow: 0 1px 0 rgba(24, 24, 27, 0.06);
 }

@@ -1348,7 +1348,7 @@ function signedPctLabel(v: number | null): string {
   padding: 5px var(--s2);
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.018);
-  border-left: 2px solid var(--rule-hi);
+  border-left: 1px solid var(--rule-hi);
   font-size: 11px;
   cursor: default;
   transition: background 0.12s ease;

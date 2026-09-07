@@ -174,7 +174,7 @@ function level(v: number | null | undefined): string {
 .provisional-note {
   padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--warn, var(--rule));
+  border-left: 1px solid var(--warn, var(--rule));
   color: var(--ink-dim);
   font-size: var(--t-micro);
   line-height: 1.5;

@@ -57,15 +57,15 @@ echarts.use([
 const props = withDefaults(
   defineProps<{
     levels: MergedLevel[]
-    spot: number | null
-    fairValue: FairValue | null
-    matrix: AbsorptionMatrix | null
+    spot?: number | null
+    fairValue?: FairValue | null
+    matrix?: AbsorptionMatrix | null
     /** 1-day expected move in dollars, the frame's natural unit. Without it
      *  the zoom presets fall back to fixed percentages of spot. */
     em1dDollars?: number | null
     /** Stated beside every probability. Null hides the probability lane
      *  rather than printing unlabelled numbers. */
-    horizonLabel: string | null
+    horizonLabel?: string | null
   }>(),
   { spot: null, fairValue: null, matrix: null, em1dDollars: null, horizonLabel: null },
 )

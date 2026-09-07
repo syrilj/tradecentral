@@ -4,11 +4,11 @@ import { num, DASH } from '@/format'
 
 const props = withDefaults(
   defineProps<{
-    spot: number | null
-    maxPain: number | null
-    vwap: number | null
-    resistance: number | null
-    support: number | null
+    spot?: number | null
+    maxPain?: number | null
+    vwap?: number | null
+    resistance?: number | null
+    support?: number | null
     gammaFlip?: number | null
   }>(),
   {

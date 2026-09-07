@@ -71,6 +71,9 @@ function strikes(): StrikeExposure[] {
     net_chex_m: 0.1,
     speed_m: 0.2,
     zomma_m: 0.1,
+    call_dex_m: 0,
+    put_dex_m: 0,
+    net_dex_m: 0,
   }))
 }
 
@@ -105,6 +108,9 @@ function snapshot(): MicrostructureRegimeSnapshot {
     net_gex_profile_m: -373.1,
     net_vex_m: 68.98,
     net_chex_m: 205.94,
+    net_dex_m: 0,
+    call_dex_m: 0,
+    put_dex_m: 0,
     hedging_flow_m: null,
     zero_dte_charm_drift_m: 290.38,
     gamma_flip: 770.47,

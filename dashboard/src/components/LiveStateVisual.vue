@@ -309,7 +309,7 @@ figcaption {
   position: absolute;
   min-width: 150px;
   padding: 10px 12px;
-  border-left: 2px solid var(--call);
+  border-left: 1px solid var(--call);
   background: var(--panel-hi);
 }
 .state-node dt {

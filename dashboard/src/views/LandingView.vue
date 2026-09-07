@@ -224,7 +224,7 @@ const flowFeatures = [
     kind: 'gex' as const,
     idx: '01 · GEX PROFILE',
     title: 'Where dealers are pinned',
-    copy: 'Gamma concentration by strike, with the sign flip marked — the level above which hedging damps a move and below which it feeds one.',
+    copy: 'Gamma concentration by strike, with the sign flip marked: the level above which hedging damps a move and below which it feeds one.',
   },
   {
     kind: 'signed' as const,
@@ -251,7 +251,7 @@ const principles = [
     index: 'B',
     kind: 'typed' as const,
     title: 'Evidence keeps its type',
-    copy: 'A strong ordinal reading is shown as a strong ordinal reading — never dressed up as a calibrated probability or a green light to trade.',
+    copy: 'A strong ordinal reading is shown as a strong ordinal reading, never dressed up as a calibrated probability or a green light to trade.',
   },
   {
     index: 'C',
@@ -303,7 +303,7 @@ const pipelineSteps = [
 const boundaryColumns = [
   {
     title: 'Research only',
-    copy: 'The checked-in pipeline is a decision-support instrument. Outputs are research evidence with explicit provenance — never a recommendation.',
+    copy: 'The checked-in pipeline is a decision-support instrument. Outputs are research evidence with explicit provenance, never a recommendation.',
   },
   {
     title: 'No execution',
@@ -668,7 +668,7 @@ onUnmounted(() => {
                 >{{ word }}</span
               >
             </span>
-            — with the source and the age of every figure on screen. One workstation for the tape,
+            with the source and the age of every figure on screen. One workstation for the tape,
             the surface, and the research behind them.
           </p>
 
@@ -740,7 +740,7 @@ onUnmounted(() => {
             <span><strong>Research only.</strong> No order routing. No performance promises.</span>
           </div>
           <p class="hero-warn-note">
-            Stale or missing data is shown as stale or missing — never as a fake zero.
+            Stale or missing data is shown as stale or missing, never as a fake zero.
           </p>
         </div>
 
@@ -874,7 +874,7 @@ onUnmounted(() => {
           <h2>One terminal. Every critical telemetry layer.</h2>
           <p class="section-lede">
             From institutional options sweep detection and dealer gamma flip boundaries to 3D
-            implied volatility geometry and kinematic price magnet levels—unified in one
+            implied volatility geometry and kinematic price magnet levels, unified in one
             high-density, zero-guesswork operator desk.
           </p>
         </header>
@@ -978,7 +978,7 @@ onUnmounted(() => {
                 </div>
               </div>
               <p class="readiness-note" :class="{ warn: !cleared }">
-                Readiness is measured, not claimed — the local API reports it every visit.
+                Readiness is measured, not claimed: the local API reports it every visit.
               </p>
             </div>
           </div>
@@ -1101,7 +1101,7 @@ onUnmounted(() => {
             <ModelLabPlate />
             <p class="bento-copy">
               Drag volatility, expiry, and the strike and watch the Greeks respond. The closed forms
-              run on your machine — nothing here is a pre-rendered picture of a chart.
+              run on your machine; nothing here is a pre-rendered picture of a chart.
             </p>
             <a class="bento-jump" href="#lab">Try the lab<i aria-hidden="true">↓</i></a>
           </article>
@@ -1348,7 +1348,7 @@ onUnmounted(() => {
           <h2>Read the options surface.</h2>
           <p class="section-lede">
             The same parametric volatility model behind the hero simulation, rendered live in WebGL.
-            Drag to orbit it — the put skew steepens as expiry shortens and the smile wings widen.
+            Drag to orbit: the put skew steepens as expiry shortens and the smile wings widen.
             Structural parameters only; live per-symbol surfaces appear after sign-in.
           </p>
           <div class="surface-params" aria-label="Model parameters">
@@ -1395,11 +1395,11 @@ onUnmounted(() => {
       <section id="lab" class="lab-section section-pad">
         <header class="section-head gsap-reveal">
           <p class="section-eyebrow"><i class="eyebrow-tick" aria-hidden="true" />Model lab</p>
-          <h2>Every figure is a formula. Go ahead — move it.</h2>
+          <h2>Every figure is a formula. Go ahead, move it.</h2>
           <p class="section-lede">
             This is the actual Black-Scholes engine, running in your browser. Drag volatility and
             expiry, switch between value and the Greeks, drag the strike marker on the chart. The
-            readouts recompute from the closed forms — nothing here is pre-rendered theatre.
+            readouts recompute from the closed forms; nothing here is pre-rendered theatre.
           </p>
         </header>
 
@@ -1876,12 +1876,14 @@ onUnmounted(() => {
   left: 0;
   bottom: -3px;
   height: 1px;
-  width: 0;
+  width: calc(100% - 30px);
   background: currentColor;
-  transition: width var(--dur-slow) var(--ease-out);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--dur-slow) var(--ease-out);
 }
 .px-link:hover::after {
-  width: calc(100% - 30px);
+  transform: scaleX(1);
 }
 
 .chip-row {
@@ -2033,6 +2035,20 @@ onUnmounted(() => {
   border-bottom: var(--hair) solid var(--rule);
   background: var(--void-lift);
   overflow: hidden;
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 28px,
+    #000 calc(100% - 28px),
+    transparent
+  );
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 28px,
+    #000 calc(100% - 28px),
+    transparent
+  );
 }
 .ticker-track {
   display: flex;
@@ -2909,8 +2925,9 @@ onUnmounted(() => {
 /* ── Closing CTA ──────────────────────────────────────────────────────────── */
 .final-cta {
   position: relative;
-  padding-block: clamp(80px, 10vw, 160px);
+  padding-block: clamp(56px, 7vw, 104px);
   text-align: center;
+  border-top: 3px solid var(--tc-orange, #ff5229);
 }
 .cta-pixels {
   display: block;
@@ -2949,9 +2966,16 @@ onUnmounted(() => {
 
 /* ── Footer ───────────────────────────────────────────────────────────────── */
 .landing-footer {
+  --void: #151524;
+  --rule: rgba(250, 250, 244, 0.14);
+  --rule-hi: rgba(250, 250, 244, 0.3);
+  --ink: #fafaf4;
+  --ink-dim: #c0c0c8;
+  --ink-faint: #9a9aa4;
   position: relative;
-  border-top: var(--hair) solid var(--rule);
-  background: var(--void);
+  border-top: var(--hair) solid rgba(250, 250, 244, 0.14);
+  background: #151524;
+  color: #fafaf4;
   overflow: hidden;
 }
 .footer-frame {
@@ -3011,8 +3035,8 @@ onUnmounted(() => {
   right: clamp(8px, 3vw, 40px);
   bottom: 34px;
   width: clamp(200px, 22vw, 340px);
-  color: var(--tc-navy);
-  opacity: 0.055;
+  color: #fafaf4;
+  opacity: 0.06;
   pointer-events: none;
 }
 .footer-base {

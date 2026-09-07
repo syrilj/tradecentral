@@ -584,7 +584,7 @@ function rotBarWidth(score: number | undefined): string {
   gap: var(--s5);
   padding: var(--s4) var(--s5);
   border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
   border-radius: var(--r-xl);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 48px),

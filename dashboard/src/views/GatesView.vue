@@ -80,7 +80,7 @@ function metricValue(v: number | string): string {
           </div>
           <p class="t-note">
             Every gate specification was pre-registered before model execution. A status here
-            reflects immutable backtest artifacts recorded on disk — never re-computed or
+            reflects immutable backtest artifacts recorded on disk; never re-computed or
             retroactively altered.
           </p>
         </div>
@@ -90,7 +90,6 @@ function metricValue(v: number | string): string {
     <!-- ── 02 Gate Strategy Leaderboard ───────────────────────────────── -->
     <Panel
       label="Pre-Registered Strategy Leaderboard"
-      index="—"
       :meta="`${board.length} strategies registered`"
       class="w-full"
       flush

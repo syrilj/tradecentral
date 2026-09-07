@@ -581,8 +581,7 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
 
     <!-- 2. Symbol detail (drill-down) -->
     <Panel
-      :label="selectedSymbol ? `Absorption Detail — ${selectedSymbol}` : 'Absorption Detail'"
-      index="—"
+      :label="selectedSymbol ? `Absorption Detail: ${selectedSymbol}` : 'Absorption Detail'"
       :meta="selectedSymbol ? `analyzing ${selectedSymbol}` : 'select a row, or search a symbol'"
       class="w-full"
       :live="!detail.error.value"
@@ -1283,7 +1282,7 @@ function btTone(v: number | null | undefined, flip = false): 'pos' | 'neg' | 'fl
   gap: 6px;
   align-items: stretch;
   height: 14px;
-  border-left: 2px solid transparent;
+  border-left: 1px solid transparent;
 }
 .mx-va {
   border-left-color: var(--phosphor-dim);

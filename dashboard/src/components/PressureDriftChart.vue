@@ -374,7 +374,7 @@ function onMove(e: MouseEvent): void {
       </div>
       <div v-else-if="noData" class="scale-note label">
         chain returned strikes but Black-Scholes charm could not be computed (missing/implausible IV
-        or OI) — no usable flow data
+        or OI): no usable flow data
       </div>
       <div v-else class="scale-note label">
         shares/day · hover any strike bar to inspect dealer hedge flow
@@ -390,8 +390,8 @@ function onMove(e: MouseEvent): void {
         role="img"
         :aria-label="
           noData
-            ? `${symbol} charm flow by strike — no usable data, chain missing IV or OI`
-            : `${symbol} charm flow by strike — selling pressure above zero, buying pressure below`
+            ? `${symbol} charm flow by strike: no usable data, chain missing IV or OI`
+            : `${symbol} charm flow by strike: selling pressure above zero, buying pressure below`
         "
         preserveAspectRatio="xMidYMid meet"
         @mousemove="onMove"

@@ -366,7 +366,7 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
     </Panel>
 
     <div v-if="available" class="split">
-      <Panel label="Chord map" index="—" :meta="`${placed.length} placed`" :delay="40" flush>
+      <Panel label="Chord map" :meta="`${placed.length} placed`" :delay="40" flush>
         <div class="stage">
           <svg
             :viewBox="`0 0 ${SIZE} ${SIZE}`"
@@ -442,7 +442,6 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
       <div class="side">
         <Panel
           label="Communities"
-          index="—"
           :meta="
             collapsed
               ? `top ${TOP_COMMUNITIES} of ${rawCommunities.length}`
@@ -487,7 +486,6 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
 
         <Panel
           label="Inspector"
-          index="—"
           :meta="focusNode ? focusNode.kind : 'nothing selected'"
           :delay="120"
         >

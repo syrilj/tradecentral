@@ -89,7 +89,7 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
         <div class="banner">
           <span class="pill">RESEARCH ONLY</span>
           <span class="banner-text">
-            Fitness never uses the sealed terminal holdout. Survivors are not live signals — promote
+            Fitness never uses the sealed terminal holdout. Survivors are not live signals: promote
             only through Gates / shadow.
           </span>
         </div>
@@ -114,7 +114,6 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
     <div class="split">
       <Panel
         label="Run archive"
-        index="—"
         :meta="`${runs.length} run${runs.length === 1 ? '' : 's'}`"
         :delay="40"
         flush
@@ -162,12 +161,11 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
 
       <Panel
         label="Fitness trajectory"
-        index="—"
         :meta="detail?.run_id ? detail.run_id : 'no run selected'"
         :delay="80"
         class="chart-panel"
       >
-        <svg role="img" aria-label="Strategy evolution over time." v-if="spark" class="spark" viewBox="0 0 280 56" preserveAspectRatio="none">
+        <svg v-if="spark" role="img" aria-label="Strategy evolution over time." class="spark" viewBox="0 0 280 56" preserveAspectRatio="none">
           <path :d="spark" fill="none" stroke="currentColor" stroke-width="1.5" />
         </svg>
         <p v-else class="note">Run an evolution job to plot best-fitness by generation.</p>
@@ -182,7 +180,6 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
 
     <Panel
       label="In-sample elites"
-      index="—"
       :meta="`${elites.length} survivors`"
       :delay="100"
       flush
@@ -217,7 +214,6 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
 
     <Panel
       label="Confirmation window"
-      index="—"
       :meta="'out-of-sample re-score (not sealed holdout)'"
       :delay="140"
       flush
@@ -247,10 +243,10 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
           </tr>
         </tbody>
       </table>
-      <p v-else class="note pad">Confirmation block empty — re-run with confirmation enabled.</p>
+      <p v-else class="note pad">Confirmation block empty: re-run with confirmation enabled.</p>
     </Panel>
 
-    <Panel label="How to run" index="—" :delay="180" class="w-full">
+    <Panel label="How to run" :delay="180" class="w-full">
       <ul class="cmds">
         <li>
           <code>python edge/tools/run_ga_evolve.py --smoke</code>

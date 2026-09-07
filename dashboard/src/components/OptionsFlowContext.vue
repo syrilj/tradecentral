@@ -191,7 +191,7 @@ const deskAction = computed(() => {
 </script>
 
 <template>
-  <div class="flow-context flow-evidence-bar" :class="premium.tone">
+  <div class="flow-context flow-evidence-bar">
     <section class="flow-hero">
       <div class="flow-hero-copy">
         <span class="label eyebrow">{{
@@ -199,7 +199,7 @@ const deskAction = computed(() => {
         }}</span>
         <strong class="fig dominant" :class="premium.tone">{{ premium.label }}</strong>
         <small class="label identity-note"
-          >CALL = EMERALD · PUT = CRIMSON · IDENTITY, NOT DIRECTION</small
+          >CONTRACT MIX · NOT SIGNED DIRECTION · IDENTITY, NOT DIRECTION</small
         >
       </div>
       <div class="flow-hero-badges">
@@ -342,7 +342,7 @@ const deskAction = computed(() => {
   gap: 4px;
   min-width: 0;
   padding: 6px 12px;
-  border-left: 3px solid var(--flow-tone);
+  border-left: var(--hair) solid var(--glass-border);
   background: var(--glass-surface-hi);
 }
 .flow-hero-copy {
@@ -365,12 +365,18 @@ const deskAction = computed(() => {
   white-space: normal;
 }
 .dominant {
-  color: var(--flow-tone);
+  color: var(--ink);
   font-size: var(--t-small);
   line-height: 1.2;
   letter-spacing: -0.02em;
   white-space: normal;
   font-weight: 750;
+}
+.dominant.call {
+  color: var(--call-hi);
+}
+.dominant.put {
+  color: var(--put-hi);
 }
 .feed-state {
   display: inline-flex;
@@ -521,7 +527,7 @@ const deskAction = computed(() => {
   justify-content: center;
   gap: 2px;
   padding: 6px 12px;
-  border-left: 3px solid var(--action-tone);
+  border-left: 1px solid var(--action-tone);
   background: var(--glass-surface-hi);
 }
 .desk-action.bullish {

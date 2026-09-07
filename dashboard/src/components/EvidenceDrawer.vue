@@ -376,7 +376,7 @@ function nav(viewName: string) {
   color: var(--ink);
   background: rgba(0, 0, 0, 0.2);
   padding: 0.5rem;
-  border-left: 2px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
 }
 
 .quote-context {

@@ -348,7 +348,7 @@ function isEngineTicket(play: PlaysDecision): boolean {
           directional setups, and live option-chain validation gates every ticket. When the
           calibrated-model path has no actionable ticket, the technical-screen engine contributes
           chart-plus-flow candidates with exact contracts from the latest chain snapshots. Every
-          ticket shows its evidence, quote age, and failure reasons. Fail-closed — a NO PLAY result
+          ticket shows its evidence, quote age, and failure reasons. Fail-closed: a NO PLAY result
           is the honest outcome, not an empty screen.
         </p>
       </div>
@@ -879,7 +879,7 @@ function isEngineTicket(play: PlaysDecision): boolean {
   align-items: flex-start;
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--rule);
-  border-left: 2px solid var(--phosphor-dim);
+  border-left: 1px solid var(--phosphor-dim);
   border-radius: var(--r-md);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   background: var(--panel);
@@ -1068,7 +1068,6 @@ function isEngineTicket(play: PlaysDecision): boolean {
   display: block;
   height: 100%;
   background: var(--phosphor);
-  transition: width var(--dur) var(--ease-out);
 }
 
 .run-explain {
@@ -1234,7 +1233,6 @@ function isEngineTicket(play: PlaysDecision): boolean {
   gap: var(--s3);
   padding: var(--s3);
   border: var(--hair) solid var(--phosphor-dim);
-  border-left-width: 3px;
   border-radius: var(--r-md);
   background: var(--phosphor-wash);
 }
@@ -1359,7 +1357,6 @@ function isEngineTicket(play: PlaysDecision): boolean {
 .empty-state {
   padding: var(--s4);
   border: var(--hair) solid var(--warn);
-  border-left-width: 3px;
   border-radius: var(--r-md);
   background: var(--warn-wash);
 }

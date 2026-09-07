@@ -207,7 +207,7 @@ const queue = [
 .brief-copy {
   padding: 12px 13px;
   border: 1px solid var(--mock-rule);
-  border-left: 3px solid var(--mock-orange);
+  border-left: 1px solid var(--mock-orange);
   background: var(--mock-panel);
 }
 .brief-copy p {

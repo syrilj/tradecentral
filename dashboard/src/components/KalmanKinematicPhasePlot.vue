@@ -193,7 +193,9 @@ function onSvgMouseLeave(): void {
 
     <!-- Velocity Time Series SVG Chart -->
     <div class="chart-wrapper">
-      <svg role="img" aria-label="Kalman kinematic phase plot: velocity against price level."
+      <svg
+        role="img"
+        aria-label="Kalman kinematic phase plot: velocity against price level."
         :viewBox="`0 0 ${width} ${height}`"
         class="velocity-svg"
         preserveAspectRatio="xMidYMid meet"

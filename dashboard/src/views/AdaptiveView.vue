@@ -336,7 +336,7 @@ const weightBars = computed(() => {
             </tbody>
           </table>
         </div>
-        <p v-if="!board.length" class="lab empty pad">No board rows — check local daily bars.</p>
+        <p v-if="!board.length" class="lab empty pad">No board rows: check local daily bars.</p>
       </Panel>
 
       <div class="grid-top">

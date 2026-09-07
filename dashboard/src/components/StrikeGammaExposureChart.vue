@@ -8,7 +8,7 @@ import { useChartSize } from '@/composables/useChartSize'
 const props = withDefaults(
   defineProps<{
     rows: GexStrikeRow[]
-    spot: number | null
+    spot?: number | null
     totalGexM?: number | null
     gammaFlip?: number | null
     callWall?: number | null

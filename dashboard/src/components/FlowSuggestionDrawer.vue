@@ -785,7 +785,6 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   padding: var(--s4);
   color: var(--call-hi);
   border: var(--hair) solid var(--call);
-  border-left-width: 3px;
   background: var(--call-wash);
   box-shadow: inset 8px 0 0 color-mix(in srgb, var(--call) 18%, transparent);
 }
@@ -839,7 +838,6 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .completeness {
   padding: var(--s3);
   border: var(--hair) solid var(--warn);
-  border-left-width: 3px;
   background: var(--warn-wash);
 }
 .completeness.complete {
@@ -1002,7 +1000,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 
 .checks {
   padding: var(--s3);
-  border-left: 2px solid var(--warn);
+  border-left: 1px solid var(--warn);
   background: var(--warn-wash);
 }
 .checks summary {

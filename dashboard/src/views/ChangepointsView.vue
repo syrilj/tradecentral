@@ -633,16 +633,16 @@ const symbolInsight = computed(() => {
         <p v-if="boardData?.source" class="dims">{{ boardData.source }}</p>
         <p v-if="boardStale" class="note stale-board">
           Cross-section artifact is {{ boardAgeDays }}d old (asof {{ boardData?.asof }}).
-          Selected-symbol detail below is live BOCPD on current bars — not this board.
+          Selected-symbol detail below is live BOCPD on current bars, not this board.
         </p>
         <p v-if="skippedInfo" class="dims skipped-note" :title="skippedInfo.reasons">
-          {{ skippedInfo.n }} symbol{{ skippedInfo.n === 1 ? '' : 's' }} skipped — hover for reasons
+          {{ skippedInfo.n }} symbol{{ skippedInfo.n === 1 ? '' : 's' }} skipped (hover for reasons)
         </p>
       </template>
 
       <div v-else class="empty">
         <p class="note">
-          No changepoint artifact yet{{ boardData?.reason ? ` — ${boardData.reason}` : '' }}. Build
+          No changepoint artifact yet{{ boardData?.reason ? `: ${boardData.reason}` : '' }}. Build
           one:
         </p>
         <ul class="cmds">
@@ -655,8 +655,7 @@ const symbolInsight = computed(() => {
     </Panel>
 
     <Panel
-      :label="symbol ? `Run-length posterior — ${symbol}` : 'Run-length posterior'"
-      index="—"
+      :label="symbol ? `Run-length posterior: ${symbol}` : 'Run-length posterior'"
       meta="Fig. 3 · returns + predictive vol · P(r_t | x_1:t)"
       flush
       :delay="40"
@@ -962,7 +961,6 @@ const symbolInsight = computed(() => {
 
     <Panel
       label="Cross-section"
-      index="—"
       :meta="`${tableRows.length}/${boardData?.symbols?.length ?? 0} names`"
       :delay="80"
     >
@@ -974,7 +972,7 @@ const symbolInsight = computed(() => {
       <p v-else-if="board.error.value" class="err">{{ board.error.value }}</p>
       <div v-else-if="!boardAvailable" class="empty">
         <p class="note">
-          No cross-section available{{ boardData?.reason ? ` — ${boardData.reason}` : '' }}.
+          No cross-section available{{ boardData?.reason ? `: ${boardData.reason}` : '' }}.
         </p>
       </div>
 

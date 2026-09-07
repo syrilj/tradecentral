@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { SqueezeSetup } from '@/api'
+import type { OptionsSqueeze, SqueezeSetup } from '@/api'
 import {
   calculateFeaturedSetup,
   calculateRingOffset,
   formatNearSpotGex,
   calculateTrackWidthPct,
   buildTakeaways,
+  buildTheoryIdentity,
   RING_CIRCUMFERENCE,
   RING_RADIUS,
 } from '@/squeezeCalc'
@@ -337,5 +338,101 @@ describe('Squeeze Screener Calculation Suite', () => {
       expect(vueSrc).toContain('v-else-if="squeeze"')
       expect(vueSrc).toContain('Structure unmeasured')
     })
+
+    it('labels the dial as a theory score, not a squeeze probability', () => {
+      expect(vueSrc).toContain('THEORY SCORE · NOT A FORECAST')
+      expect(vueSrc).toContain('buildTheoryIdentity')
+      expect(vueSrc).not.toContain('PROBABILITY SCORE')
+      expect(vueSrc).not.toContain('Imminent')
+    })
+  })
+})
+
+describe('7. Theory identity — fuel × flow × momentum, not a coin-flip forecast', () => {
+  function squeeze(over: Partial<OptionsSqueeze> = {}): OptionsSqueeze {
+    return {
+      bullish: 0.12,
+      bearish: 0.04,
+      score: 8.1,
+      label: 'quiet',
+      primary: 'quiet',
+      drivers: ['short_premium_dealer_gamma'],
+      negative_fuel: 0.64,
+      theory: {
+        squeeze_risk: 0.021,
+        fuel_ui: 0.64,
+        bullish_ui: 12,
+        bearish_ui: 4,
+        adv_m: 850,
+        adv_available: true,
+        measurable: true,
+        directional_flow_imbalance: 0.4,
+        momentum: 0.018,
+        momentum_fresh: true,
+        short_premium_gex_m: { total_gex_m: -12, atm_share: 0.31, weighted_dte: 7 },
+      },
+      components: {
+        theory_liquidity_ratio: 0.014,
+        theory_atm_share: 0.31,
+        theory_weighted_dte: 7,
+        theory_conviction_bull: 0.34,
+        theory_conviction_bear: 0.06,
+        theory_directional_flow_imbalance: 0.4,
+        theory_momentum: 0.018,
+        theory_momentum_fresh: true,
+      },
+      ...over,
+    }
+  }
+
+  it('unpacks every term in the shipped identity', () => {
+    const id = buildTheoryIdentity(squeeze())
+    expect(id.formula).toContain('tanh(40·SR)')
+    expect(id.fuelUi).toBeCloseTo(0.64, 4)
+    expect(id.atmShare).toBeCloseTo(0.31, 4)
+    expect(id.flowImbalance).toBeCloseTo(0.4, 4)
+    expect(id.momentum).toBeCloseTo(0.018, 4)
+    expect(id.terms.map((t) => t.id)).toEqual([
+      'liquidity',
+      'atm',
+      'urgency',
+      'fuel',
+      'flow',
+      'mom',
+      'bull',
+      'bear',
+    ])
+    expect(id.terms.find((t) => t.id === 'mom')?.display).toBe('1.80%')
+  })
+
+  it('does not call a quiet book a squeeze, and stale momentum is not a side', () => {
+    expect(buildTheoryIdentity(squeeze()).state).toBe('fuel_only')
+    expect(buildTheoryIdentity(squeeze({ score: 42, primary: 'bullish' })).state).toBe('bull_lean')
+    expect(buildTheoryIdentity(squeeze({ score: -44, primary: 'bearish' })).state).toBe(
+      'bear_lean',
+    )
+    const stale = buildTheoryIdentity(
+      squeeze({
+        theory: {
+          squeeze_risk: 0.02,
+          fuel_ui: 0.5,
+          bullish_ui: 10,
+          bearish_ui: 2,
+          measurable: true,
+          momentum: 0.08,
+          momentum_fresh: false,
+        },
+      }),
+    )
+    expect(stale.terms.find((t) => t.id === 'mom')?.display).toBe('STALE')
+    expect(stale.terms.find((t) => t.id === 'mom')?.tone).toBe('warn')
+  })
+
+  it('marks long-gamma dampening and missing payload as unmeasured, never imminent', () => {
+    expect(buildTheoryIdentity(null).state).toBe('unmeasured')
+    expect(buildTheoryIdentity(squeeze({ long_gamma_dampened: true })).state).toBe('dampened')
+    expect(buildTheoryIdentity(squeeze({ long_gamma_dampened: true })).stateLabel).not.toMatch(
+      /IMMINENT|LIKELY/,
+    )
   })
 })

@@ -133,7 +133,6 @@ function kindClass(kind: string): string {
 
     <Panel
       label="Unified Anomaly Feed"
-      index="—"
       :meta="`${unified.length} events`"
       class="w-full"
       flush
@@ -196,7 +195,6 @@ function kindClass(kind: string): string {
 
     <Panel
       label="Price & Volume Extremes"
-      index="—"
       :meta="d?.price_volume?.source || ''"
       class="w-half"
       flush
@@ -236,7 +234,6 @@ function kindClass(kind: string): string {
 
     <Panel
       label="FINRA Short-Volume Extremes"
-      index="—"
       :meta="String((d?.finra_short_extremes as any)?.source || '')"
       class="w-half"
       flush
@@ -268,7 +265,6 @@ function kindClass(kind: string): string {
 
     <Panel
       label="Options P/C OI Extremes"
-      index="—"
       :meta="String((d?.options_extremes as any)?.source || '')"
       class="w-half"
       flush
@@ -298,7 +294,6 @@ function kindClass(kind: string): string {
 
     <Panel
       label="SEC Filing Activity (sample universe)"
-      index="—"
       :meta="String((d?.sec_activity as any)?.source || '')"
       class="w-half"
       flush
@@ -332,7 +327,7 @@ function kindClass(kind: string): string {
       </div>
     </Panel>
 
-    <Panel v-if="focus" label="Symbol Focus" index="—" :meta="focus.symbol" class="w-full">
+    <Panel v-if="focus" label="Symbol Focus" :meta="focus.symbol" class="w-full">
       <div class="mkt-readouts">
         <Readout
           label="Price row"

@@ -40,12 +40,14 @@ import type {
   TiltParams,
 } from '@/regimeContracts'
 import type {
+  ExecutionGatePayload,
   MicrostructureRegimeSnapshot,
   StateEstimationPayload,
   AnchoredVwapPayload,
   SystematicSignalsPayload,
   BacktestTearsheet,
 } from '@/microstructureContracts'
+import type { ZeroDteTapePayload } from '@/api'
 import { buildRegimeState } from '@/gammaRegime'
 import { availableSmileExpiries, buildSmile, riskNeutralDensity } from '@/riskNeutralDensity'
 import { applyTilt, deriveTilt, regimeProbabilities } from '@/gammaTilt'
@@ -71,10 +73,12 @@ import RegimeBreadthStrip from '@/components/RegimeBreadthStrip.vue'
 import MicrostructureTopographyCard from '@/components/MicrostructureTopographyCard.vue'
 import DealerGammaMap from '@/components/DealerGammaMap.vue'
 import DealerGreeksFlowCard from '@/components/DealerGreeksFlowCard.vue'
+import ExecutionGateCard from '@/components/ExecutionGateCard.vue'
 import SectorPairCorrelationCard from '@/components/SectorPairCorrelationCard.vue'
 import CausalEnvelopeChart from '@/components/CausalEnvelopeChart.vue'
 import KalmanKinematicPhasePlot from '@/components/KalmanKinematicPhasePlot.vue'
 import LevelMap from '@/components/LevelMap.vue'
+import ZeroDteTape from '@/components/ZeroDteTape.vue'
 import RegimeHeaderRibbon from '@/components/RegimeHeaderRibbon.vue'
 import MarketContextCard from '@/components/MarketContextCard.vue'
 import KeyLevelsCard from '@/components/KeyLevelsCard.vue'
@@ -493,7 +497,7 @@ const playbook = computed<PlaybookLine[]>(() => {
   if (densityUnreliable.value) {
     out.push({
       kind: 'watch',
-      text: 'Probabilities are withheld today (noisy smile), so the direction and trigger levels above stand but nothing here sizes a move — treat conviction as unquantified.',
+      text: 'Probabilities are withheld today (noisy smile), so the direction and trigger levels above stand but nothing here sizes a move: treat conviction as unquantified.',
     })
   }
   return out
@@ -504,6 +508,15 @@ const playbook = computed<PlaybookLine[]>(() => {
 const microRegimeRes = useResource<MicrostructureRegimeSnapshot>(
   () => api.microstructureRegime(symbol.value),
   { intervalMs: 30_000, immediate: false, enabled: () => activated.value },
+)
+
+/* The execution-side gates: session phase, expiry policy, opening range and
+   the routed contract. Polled faster than the regime read because its lead
+   value is the clock, and a phase boundary that lands 30s late is a boundary
+   the operator can trade through. */
+const executionGateRes = useResource<ExecutionGatePayload>(
+  () => api.executionGate(symbol.value),
+  { intervalMs: 15_000, immediate: false, enabled: () => activated.value },
 )
 
 const stateRes = useResource<StateEstimationPayload>(
@@ -517,6 +530,25 @@ const stateRes = useResource<StateEstimationPayload>(
     }),
   { intervalMs: 60_000, immediate: false, enabled: () => activated.value },
 )
+
+/**
+ * 0DTE tape — the same-day expiry's magnets against the session's real bars.
+ *
+ * Polls faster than the rest of the page on purpose: a 0DTE magnet moves with
+ * the clock, not just with the chain, because time-to-expiry is an input to
+ * every gamma number behind it.
+ */
+const zeroDteTf = ref<'1m' | '5m' | '15m'>('5m')
+const zeroDteRes = useResource<ZeroDteTapePayload>(
+  () => api.zeroDte(symbol.value, { tf: zeroDteTf.value }),
+  { intervalMs: 30_000, immediate: false, enabled: () => activated.value },
+)
+
+function setZeroDteTimeframe(tf: '1m' | '5m' | '15m') {
+  if (tf === zeroDteTf.value) return
+  zeroDteTf.value = tf
+  void zeroDteRes.refresh()
+}
 
 const vwapRes = useResource<AnchoredVwapPayload>(
   () => api.anchoredVwap(symbol.value, { window: lookbackWindow.value, bars: barsMode.value }),
@@ -1386,11 +1418,13 @@ function goLive(): void {
   void optionsRes.refresh()
   void spotRes.refresh()
   void microRegimeRes.refresh()
+  void executionGateRes.refresh()
   void marketRegimeRes.refresh()
   void stateRes.refresh()
   void vwapRes.refresh()
   void signalsRes.refresh()
   void absorptionRes.refresh()
+  void zeroDteRes.refresh()
   void runBacktest()
 }
 
@@ -1406,11 +1440,13 @@ function applySymbol(): void {
     void optionsRes.refresh({ clear: true })
     void spotRes.refresh({ clear: true })
     void microRegimeRes.refresh({ clear: true })
+    void executionGateRes.refresh({ clear: true })
     void marketRegimeRes.refresh({ clear: true })
     void stateRes.refresh({ clear: true })
     void vwapRes.refresh({ clear: true })
     void signalsRes.refresh({ clear: true })
     void absorptionRes.refresh({ clear: true })
+    void zeroDteRes.refresh({ clear: true })
     void runBacktest()
   }
 }
@@ -1432,11 +1468,13 @@ watch(
       void optionsRes.refresh({ clear: true })
       void spotRes.refresh({ clear: true })
       void microRegimeRes.refresh({ clear: true })
+      void executionGateRes.refresh({ clear: true })
       void marketRegimeRes.refresh({ clear: true })
       void stateRes.refresh({ clear: true })
       void vwapRes.refresh({ clear: true })
       void signalsRes.refresh({ clear: true })
       void absorptionRes.refresh({ clear: true })
+    void zeroDteRes.refresh({ clear: true })
       void runBacktest()
     }
   },
@@ -2011,6 +2049,16 @@ function onBreadthActivate(): void {
                how likely each is to be reached, what the tape did there, and
                where the mean is pulling. Placed above the analytics grid because
                it is the read an operator acts on; everything below explains it. -->
+          <Panel label="0DTE tape · bars and their magnets" index="00" :live="activated">
+            <LoadingState v-if="zeroDteRes.loading.value && !zeroDteRes.data.value" />
+            <ZeroDteTape
+              v-else
+              :payload="zeroDteRes.data.value"
+              :loading="zeroDteRes.loading.value"
+              @timeframe="setZeroDteTimeframe"
+            />
+          </Panel>
+
           <Panel label="Levels · probability · order flow" index="01" :live="activated">
             <template #action>
               <span class="label">
@@ -2214,6 +2262,10 @@ function onBreadthActivate(): void {
               :pin-strike="regimeRead.pinStrike"
               :regime="regimeRead.side"
             />
+          </Panel>
+
+          <Panel label="Execution gate · clock, expiry, opening range, routed contract" index="EG">
+            <ExecutionGateCard :gate="executionGateRes.data.value" />
           </Panel>
 
           <!-- 2. Hero 2-Column Analytics Grid: Greeks Flow, Topography, Sector Correlation -->
@@ -2609,7 +2661,7 @@ function onBreadthActivate(): void {
                   class="unmeasurable-note"
                   role="status"
                 >
-                  Regime not measurable for {{ symbol }} — no open interest observed. Withholding
+                  Regime not measurable for {{ symbol }}: no open interest observed. Withholding
                   every downstream claim rather than rendering a neutral-looking read.
                 </p>
                 <p v-else class="verdict-text">{{ unifiedVerdictText }}</p>
@@ -2670,11 +2722,11 @@ function onBreadthActivate(): void {
                 <p v-if="smileBlended" class="unmeasurable-note" role="status">
                   This chain payload carries no per-expiry smile, only the surface blended across
                   every expiry. A blended smile is not any traded expiry's, so a density built from
-                  it is mostly clipping artifact — no probability is stated rather than one that
+                  it is mostly clipping artifact: no probability is stated rather than one that
                   looks precise and is not.
                 </p>
                 <p v-else-if="densityUnreliable" class="unmeasurable-note" role="status">
-                  Density not usable — {{ pctFrac(withheldMassPct) }} of its mass was negative
+                  Density not usable: {{ pctFrac(withheldMassPct) }} of its mass was negative
                   before clipping, so the shape is artifact rather than a distribution. Usually a
                   put/call step at the money on a very short expiry; try a later expiry above.
                 </p>
@@ -2736,7 +2788,7 @@ function onBreadthActivate(): void {
                   class="clipped-warning"
                   role="alert"
                 >
-                  {{ pctFrac(withheldMassPct) }} of density mass was negative before clipping — the
+                  {{ pctFrac(withheldMassPct) }} of density mass was negative before clipping; the
                   smile is noisy here, so read these as approximate. They are shown rather than
                   hidden because a labelled approximation beats a blank panel.
                 </p>
@@ -3022,19 +3074,19 @@ function onBreadthActivate(): void {
 }
 
 .tactical-banner.bullish {
-  border-left: 4px solid var(--long);
+  border-left: 1px solid var(--long);
 }
 
 .tactical-banner.bearish {
-  border-left: 4px solid var(--short);
+  border-left: 1px solid var(--short);
 }
 
 .tactical-banner.squeeze {
-  border-left: 4px solid var(--warn);
+  border-left: 1px solid var(--warn);
 }
 
 .tactical-banner.transition {
-  border-left: 4px solid var(--rule-hi);
+  border-left: 1px solid var(--rule-hi);
 }
 
 .tactical-header {
@@ -3640,7 +3692,6 @@ function onBreadthActivate(): void {
 }
 .fv-block {
   border: 1px solid var(--rule);
-  border-left-width: 3px;
   border-left-color: var(--ink-faint);
   background: var(--panel-raise);
   padding: 10px 12px;
@@ -3694,7 +3745,6 @@ function onBreadthActivate(): void {
 }
 .flow-read {
   border: 1px solid var(--rule);
-  border-left-width: 3px;
   border-left-color: var(--ink-faint);
   background: var(--panel-raise);
   padding: 10px 12px;

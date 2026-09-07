@@ -31,7 +31,7 @@ const fromSetup = computed(() => Boolean(symbol.value || strike.value || premium
       <span class="label">Options toolkit</span>
       <h1>Portfolio calculator</h1>
       <p>
-        The book lives here — not on the Options tape. Each contract is a row. Setups open this page
+        The book lives here, not on the Options tape. Each contract is a row. Setups open this page
         with the exact contract prefilled. Closed-form P/L and Greeks. No live order path.
       </p>
       <p v-if="fromSetup" class="from-setup label">

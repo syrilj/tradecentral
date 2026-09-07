@@ -47,6 +47,10 @@ const snap = computed(() => {
 const isNetGexPositive = computed(() => (snap.value?.net_gex_m ?? 0) >= 0)
 const isNetVexPositive = computed(() => (snap.value?.net_vex_m ?? 0) >= 0)
 const isNetChexPositive = computed(() => (snap.value?.net_chex_m ?? 0) >= 0)
+/** Net DEX is null, not 0, when the chain could not be measured -- so the
+ *  presence test comes first and the sign test is only meaningful under it. */
+const hasNetDex = computed(() => snap.value?.net_dex_m != null)
+const isNetDexPositive = computed(() => (snap.value?.net_dex_m ?? 0) >= 0)
 
 /** Null-aware: a withheld hedging flow gets neither tone nor a direction
  *  sentence. `?? 0` would have painted "positive" onto an absent number. */
@@ -214,7 +218,46 @@ const callGexRatio = computed(() => {
         </div>
       </div>
 
-      <!-- 3. Net CHEX / 0DTE Charm -->
+      <!-- 3. Net DEX. Unlike the boxes either side, this one has a real
+           "not measured" state: net_dex_m is null on an unmeasurable chain,
+           and a balanced book is a genuine zero. So the sign classes hang off
+           hasNetDex rather than a `?? 0`, which would paint an absent reading
+           as dealers-are-flat-and-neutral. -->
+      <div
+        class="greek-box"
+        :class="{
+          positive: hasNetDex && isNetDexPositive,
+          negative: hasNetDex && !isNetDexPositive,
+        }"
+      >
+        <div class="box-top">
+          <span class="greek-label">NET DELTA (DEX)</span>
+          <span v-if="hasNetDex" class="state-pill" :class="isNetDexPositive ? 'pos' : 'neg'">
+            {{ isNetDexPositive ? 'SELLS RALLIES' : 'BUYS RALLIES' }}
+          </span>
+        </div>
+        <div class="greek-val font-mono">
+          {{ hasNetDex ? `${optSigned(snap.net_dex_m, 2)}M` : DASH }}
+        </div>
+        <div class="greek-sub">
+          <template v-if="hasNetDex">
+            Calls: {{ snap.call_dex_m != null ? `${optSigned(snap.call_dex_m, 1)}M` : DASH }} |
+            Puts: {{ snap.put_dex_m != null ? `${optSigned(snap.put_dex_m, 1)}M` : DASH }}
+          </template>
+          <template v-else>Not measured on this chain</template>
+        </div>
+        <div class="greek-sub">
+          <template v-if="hasNetDex">
+            {{
+              isNetDexPositive
+                ? 'Dealers long delta -> supply into strength (overhead friction)'
+                : 'Dealers short delta -> buy strength (squeeze fuel)'
+            }}
+          </template>
+        </div>
+      </div>
+
+      <!-- 4. Net CHEX / 0DTE Charm -->
       <div class="greek-box" :class="{ positive: isNetChexPositive, negative: !isNetChexPositive }">
         <div class="box-top">
           <span class="greek-label">NET CHARM (CHEX)</span>
@@ -426,11 +469,11 @@ const callGexRatio = computed(() => {
 }
 
 .greek-box.positive {
-  border-left: 3px solid var(--long);
+  border-left: 1px solid var(--long);
 }
 
 .greek-box.negative {
-  border-left: 3px solid var(--short);
+  border-left: 1px solid var(--short);
 }
 
 .greek-box.total-flow {

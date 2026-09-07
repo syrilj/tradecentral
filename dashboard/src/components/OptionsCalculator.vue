@@ -1215,7 +1215,7 @@ watch(
   padding: 6px var(--s3);
   background: var(--void-lift);
   border: var(--hair) solid var(--rule-hi);
-  border-left: 3px solid var(--phosphor);
+  border-left: 1px solid var(--phosphor);
   font-size: var(--t-tiny);
   margin-top: 2px;
 }
@@ -1370,13 +1370,11 @@ watch(
 .alloc-bar .call-seg {
   background: var(--call);
   height: 100%;
-  transition: width 0.15s ease;
 }
 
 .alloc-bar .put-seg {
   background: var(--put);
   height: 100%;
-  transition: width 0.15s ease;
 }
 
 .alloc-grid {

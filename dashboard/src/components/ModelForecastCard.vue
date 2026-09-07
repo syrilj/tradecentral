@@ -161,8 +161,8 @@ function fromSpot(price: number | null): string | null {
 
     <p class="mf-note">
       Earnings the filings imply, faded toward a long-run rate, plus the multiple that growth
-      deserves by the horizon — not last year's run-rate extrapolated. Distinct from Street
-      consensus. Research only — not an ENTER authorization.
+      deserves by the horizon, not last year's run-rate extrapolated. Distinct from Street
+      consensus. Research only: not an ENTER authorization.
     </p>
 
     <div class="mf-metrics">

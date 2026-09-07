@@ -514,7 +514,6 @@ function levelDeltaPct(level: number | null): string {
   height: 100%;
   background: var(--phosphor);
   border-radius: var(--r-capsule);
-  transition: width var(--dur-slow) var(--ease-out);
 }
 
 .band-high .conf-fill {
@@ -608,7 +607,6 @@ function levelDeltaPct(level: number | null): string {
   align-items: center;
   justify-content: center;
   height: 100%;
-  transition: width var(--dur) var(--ease-out);
 }
 
 .seg-bull {
