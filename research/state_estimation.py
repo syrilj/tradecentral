@@ -411,6 +411,31 @@ class AnchoredVWAPResult:
     upper_2sd: np.ndarray
     lower_2sd: np.ndarray
 
+    @property
+    def sigma(self) -> np.ndarray:
+        """The running volume-weighted dispersion itself.
+
+        Recovered from the 1sd band rather than stored separately so there is
+        exactly one place the dispersion is computed (`_weighted_vwap_segment`,
+        with West's incremental update) and no chance of the stored bands and a
+        stored sigma drifting apart. NaN wherever the VWAP is NaN, which is the
+        honest state before the anchor has seen positive volume.
+        """
+        return self.upper_1sd - self.vwap
+
+    def band(self, n: float) -> tuple[np.ndarray, np.ndarray]:
+        """The (upper, lower) envelope at `n` standard deviations.
+
+        The stored 1sd and 2sd series cover the containment and overextension
+        tests; `n = 3` is the exhaustion test that the intraday model's
+        mean-reversion setup fires on, and any fractional n works the same way.
+        Derived rather than stored because the dispersion is linear in n --
+        widening the dataclass for each new multiple would add fields that
+        carry no information the existing ones lack.
+        """
+        offset = self.sigma * float(n)
+        return self.vwap + offset, self.vwap - offset
+
 
 def _weighted_vwap_segment(
     p: np.ndarray, v: np.ndarray, start: int, end: int

@@ -222,6 +222,13 @@ class StrikeExposure:
     net_chex_m: float
     speed_m: float  # Speed ($M per 1% spot move / $ spot)
     zomma_m: float  # Zomma ($M per 1% spot move / 1% IV)
+    #: Dealer delta notional carried at this strike ($M). Defaulted so that
+    #: callers constructing a StrikeExposure from an older payload keep working
+    #: -- 0.0 here means "not computed", and the snapshot's `net_dex_m` is the
+    #: field to read for whether a real measurement exists.
+    call_dex_m: float = 0.0
+    put_dex_m: float = 0.0
+    net_dex_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -334,6 +341,17 @@ class MicrostructureRegimeSnapshot:
     strikes: list[StrikeExposure]
     gex_profile: list[dict[str, float]]  # Net dealer GEX ($M) evaluated across spot
     notes: list[str] = field(default_factory=list)
+    #: Aggregate dealer delta notional ($M). Positive means dealers carry long
+    #: delta, which they must sell into strength -- overhead friction on a
+    #: rally. Negative means they are short delta and buy strength, the
+    #: condition behind a short-squeeze acceleration.
+    #:
+    #: None, not 0.0, when the chain was not measurable: zero net DEX is a real
+    #: and meaningful reading (a balanced book), so it must not double as the
+    #: encoding for "not measured".
+    net_dex_m: float | None = None
+    call_dex_m: float | None = None
+    put_dex_m: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +370,27 @@ def calculate_contract_gex(
     if open_interest <= 0 or gamma <= 0 or spot <= 0:
         return 0.0
     return open_interest * multiplier * gamma * (spot**2) * 0.01
+
+
+def calculate_contract_dex(
+    *,
+    open_interest: float,
+    delta: float,
+    spot: float,
+    multiplier: float = 100.0,
+) -> float:
+    """Dollar Delta Exposure: OI * M * Delta * S.
+
+    Unlike GEX, this is not scaled to a 1% move -- delta exposure *is* the
+    notional the dealer is already carrying, not a sensitivity to a move that
+    has not happened. Note also that the guard here differs from
+    `calculate_contract_gex`: gamma is non-negative for a long option, so a
+    non-positive gamma is a bad input, but put delta is legitimately negative
+    and must be allowed straight through.
+    """
+    if open_interest <= 0 or spot <= 0:
+        return 0.0
+    return open_interest * multiplier * delta * spot
 
 
 def calculate_contract_vex(
@@ -749,6 +788,9 @@ def compute_microstructure_regime(
     total_call_gex = 0.0
     total_put_gex = 0.0
     total_net_gex = 0.0
+    total_call_dex = 0.0
+    total_put_dex = 0.0
+    total_net_dex = 0.0
     total_call_vex = 0.0
     total_put_vex = 0.0
     total_net_vex = 0.0
@@ -788,6 +830,21 @@ def compute_microstructure_regime(
         call_gex_m = (phi_call * call_gex_raw) / 1e6
         put_gex_m = (phi_put * put_gex_raw) / 1e6
         net_gex_m = call_gex_m + put_gex_m
+
+        # Dollar DEX ($M). Dealer delta carried at this strike, same sign
+        # convention as gamma: whatever the dealer is assumed to be long or
+        # short in gamma terms, they hold the matching delta against it.
+        call_delta = cg.delta if cg else 0.0
+        put_delta = pg.delta if pg else 0.0
+        call_dex_raw = calculate_contract_dex(
+            open_interest=entry["call_oi"], delta=call_delta, spot=spot
+        )
+        put_dex_raw = calculate_contract_dex(
+            open_interest=entry["put_oi"], delta=put_delta, spot=spot
+        )
+        call_dex_m = (phi_call * call_dex_raw) / 1e6
+        put_dex_m = (phi_put * put_dex_raw) / 1e6
+        net_dex_m = call_dex_m + put_dex_m
 
         # Vanna ($M)
         call_vanna = cg.vanna if cg else 0.0
@@ -838,6 +895,9 @@ def compute_microstructure_regime(
         total_call_gex += call_gex_m
         total_put_gex += put_gex_m
         total_net_gex += net_gex_m
+        total_call_dex += call_dex_m
+        total_put_dex += put_dex_m
+        total_net_dex += net_dex_m
         total_call_vex += call_vex_m
         total_put_vex += put_vex_m
         total_net_vex += net_vex_m
@@ -867,6 +927,9 @@ def compute_microstructure_regime(
                 net_chex_m=round(net_chex_m, 4),
                 speed_m=round(speed_m, 4),
                 zomma_m=round(zomma_m, 4),
+                call_dex_m=round(call_dex_m, 4),
+                put_dex_m=round(put_dex_m, 4),
+                net_dex_m=round(net_dex_m, 4),
             )
         )
 
@@ -1082,6 +1145,9 @@ def compute_microstructure_regime(
         regime=regime,
         regime_strength=strength,
         net_gex_m=round(total_net_gex, 4),
+        net_dex_m=round(total_net_dex, 4),
+        call_dex_m=round(total_call_dex, 4),
+        put_dex_m=round(total_put_dex, 4),
         call_gex_m=round(total_call_gex, 4),
         put_gex_m=round(total_put_gex, 4),
         net_gex_profile_m=round(net_gex_profile_m, 4) if net_gex_profile_m is not None else None,
