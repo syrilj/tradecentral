@@ -139,6 +139,8 @@ function getCellColorClass(val: number): string {
   display: flex;
   flex-direction: column;
   gap: var(--s3);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .agreement-head {
@@ -211,10 +213,15 @@ function getCellColorClass(val: number): string {
 .matrix-table-wrapper {
   overflow-x: auto;
   padding: 2px 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .matrix-table {
   width: 100%;
+  height: 100%;
   border-collapse: collapse;
   font-size: 0.75rem;
 }

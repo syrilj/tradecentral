@@ -917,6 +917,8 @@ function openFearGreed(): void {
           </button>
         </div>
 
+        <span class="rail-section-label label" aria-hidden="true">Workspaces</span>
+
         <ul class="nav">
           <li v-for="n in primaryNav" :key="n.name" :class="{ 'tab-dest-li': isTabDest(n) }">
             <RouterLink
@@ -1506,6 +1508,19 @@ function openFearGreed(): void {
   padding: 0 4px;
 }
 
+.rail-section-label {
+  display: block;
+  padding: var(--s2) 14px var(--s1);
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.rail.is-collapsed .rail-section-label {
+  display: none;
+}
+
 .rail-foot {
   flex: 0 0 auto;
   display: flex;
@@ -2016,6 +2031,8 @@ function openFearGreed(): void {
 .gauge-rot {
   flex: 1.8 1 268px;
   min-width: 228px;
+  padding-top: 4px;
+  padding-bottom: 4px;
   container: rot-cell / inline-size;
 }
 .gauge-fg {
@@ -2170,7 +2187,9 @@ function openFearGreed(): void {
 .rot-board {
   display: grid;
   grid-template-rows: auto auto;
-  gap: 1px;
+  /* Two IN/OUT leg rows have to live in the same 60px strip the other gauges
+     fill with one body row — tighten the board or the OUT leg clips. */
+  gap: 2px;
   min-width: 0;
   align-self: end;
   width: 100%;
@@ -2202,6 +2221,7 @@ function openFearGreed(): void {
   min-width: 0;
   flex: 0 1 auto;
   font-weight: 600;
+  line-height: 1.15;
   white-space: nowrap;
 }
 .rot-sym {

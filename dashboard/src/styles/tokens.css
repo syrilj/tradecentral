@@ -410,8 +410,12 @@
   white-space: nowrap;
 }
 
-.badge-golden-sweep,
-.golden-sweep {
+/* Flow order badges resolve through `badge-*` class names only (see
+   flowDisplay.ts). The bare `.golden-sweep` / `.sweep` / `.block` / `.split` /
+   `.multileg` aliases were removed: they matched structural container classes
+   elsewhere (e.g. SqueezeScreener's `.block` sections) and spray-painted red
+   borders and tan washes onto layouts that never asked for a badge. */
+.badge-golden-sweep {
   color: var(--badge-golden);
   border: var(--hair) solid var(--badge-golden-border);
   background: var(--badge-golden-wash);
@@ -426,32 +430,28 @@
   background: var(--warn);
 }
 
-.badge-sweep,
-.sweep {
+.badge-sweep {
   color: var(--badge-sweep);
   border: var(--hair) solid color-mix(in srgb, var(--call) 50%, var(--rule));
   background: var(--badge-sweep-wash);
   font-weight: 750;
 }
 
-.badge-block,
-.block {
+.badge-block {
   color: var(--put-hi);
   border: var(--hair) solid color-mix(in srgb, var(--put) 50%, var(--rule));
   background: var(--badge-block-wash);
   font-weight: 750;
 }
 
-.badge-split,
-.split {
+.badge-split {
   color: var(--badge-split);
   border: var(--hair) solid color-mix(in srgb, var(--cat-4) 45%, var(--rule));
   background: var(--badge-split-wash);
   font-weight: 750;
 }
 
-.badge-multileg,
-.multileg {
+.badge-multileg {
   color: var(--badge-multileg);
   border: var(--hair) solid color-mix(in srgb, var(--cat-5) 45%, var(--rule));
   background: var(--badge-multileg-wash);

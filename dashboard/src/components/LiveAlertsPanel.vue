@@ -95,12 +95,15 @@ const emit = defineEmits<{
   display: flex;
   flex-direction: column;
   gap: 0.625rem;
+  flex: 1 1 auto;
+  justify-content: space-evenly;
 }
 
 .empty-alerts {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: 1 1 auto;
   min-height: 90px;
   font-family: var(--font-ui);
   font-size: 0.8125rem;

@@ -20,6 +20,9 @@ import Readout from '@/components/Readout.vue'
 import ResearchLoopVisual from '@/components/ResearchLoopVisual.vue'
 import WorkspacePathPlate from '@/components/WorkspacePathPlate.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
+import DeskTelemetryPlate from '@/components/DeskTelemetryPlate.vue'
+import IcDecayPlate from '@/components/IcDecayPlate.vue'
+import PayoffPlate from '@/components/PayoffPlate.vue'
 // VolSurfaceCanvas statically imports three.js, so importing it here made the
 // 514 kB three chunk a hard dependency of `/` -- the public landing route, and
 // the heaviest page in the app to first paint -- for a decorative WebGL figure
@@ -793,18 +796,10 @@ onUnmounted(() => {
               />
             </div>
 
-            <div v-else class="hero-image-stage">
-              <picture>
-                <source srcset="/images/hero-workstation.webp" type="image/webp" />
-                <img
-                  src="/images/hero-workstation.jpg"
-                  alt="TradeCentral quantitative research workstation overview with options tape, volatility surface, dealer gamma exposure histogram, and kinematic price magnets"
-                  width="1376"
-                  height="768"
-                  loading="eager"
-                  decoding="async"
-                />
-              </picture>
+            <div v-else class="hero-desk-stage">
+              <!-- Live structural desk plate: every level on it is computed
+                   by structuralGexProfile, not painted. -->
+              <DeskTelemetryPlate />
             </div>
 
             <footer>
@@ -820,11 +815,11 @@ onUnmounted(() => {
                 >
               </template>
               <template v-else>
-                <span class="fig-legend"><i class="leg-path" />Tape Sweeps</span>
-                <span class="fig-legend"><i class="leg-hist" />Dealer GEX Flip</span>
-                <span class="fig-legend"><i class="leg-trace" />3D IV Surface</span>
-                <span class="fig-legend"><i class="leg-med" />Price Magnets</span>
-                <strong>TradeCentral Quantitative Research Workstation</strong>
+                <span class="fig-legend"><i class="leg-path" />Γ by strike</span>
+                <span class="fig-legend"><i class="leg-hist" />Flip boundary</span>
+                <span class="fig-legend"><i class="leg-trace" />Walls</span>
+                <span class="fig-legend"><i class="leg-med" />Regime ribbon</span>
+                <strong>STRUCTURAL · S₀=100 · σ=30% · computed in-browser</strong>
               </template>
             </footer>
           </figure>
@@ -1025,30 +1020,19 @@ onUnmounted(() => {
             >
               <figcaption>
                 <span class="fig-label">
-                  <i class="fig-tick" aria-hidden="true" />QUANTITATIVE RESEARCH &amp; GOVERNANCE
-                  TERMINAL
+                  <i class="fig-tick" aria-hidden="true" />SIGNAL DIAGNOSTICS · WALK-FORWARD IC
+                  DECAY
                 </span>
-                <span class="fig-state">PRE-REGISTERED GATES · SHADOW SESSIONS</span>
+                <span class="fig-state">PARAMETRIC MODEL · MEASURED LEDGERS AFTER SIGN-IN</span>
               </figcaption>
-              <div class="image-stage">
-                <picture>
-                  <source srcset="/images/research-governance.webp" type="image/webp" />
-                  <img
-                    src="/images/research-governance.jpg"
-                    alt="Quantitative research governance terminal with walk-forward information coefficient decay curves and pre-registered gate verdicts"
-                    class="banner-preview-img"
-                    width="1376"
-                    height="768"
-                    loading="lazy"
-                    decoding="async"
-                  />
-                </picture>
-              </div>
+              <IcDecayPlate />
               <footer>
-                <span class="fig-legend"><i class="leg-path" />Walk-Forward IC Decay</span>
-                <span class="fig-legend"><i class="leg-hist" />Pre-Registered Gate Log</span>
-                <span class="fig-legend"><i class="leg-med" />Shadow Session Ledger</span>
-                <strong>Fail-closed promotion · Zero black boxes · Reproducible ledgers</strong>
+                <span class="fig-legend"><i class="leg-trace" />IC curve</span>
+                <span class="fig-legend"><i class="leg-iv-low" />Horizon markers</span>
+                <span class="fig-legend"><i class="leg-med" />Zero reference</span>
+                <strong
+                  >ic(h) = ic₁·shape(h) · se = σ/√n · every cell derived, nothing painted</strong
+                >
               </footer>
             </figure>
           </div>
@@ -1416,30 +1400,19 @@ onUnmounted(() => {
         >
           <figcaption>
             <span class="fig-label"
-              ><i class="fig-tick" aria-hidden="true" />OPTIONS DESK WORKBENCH &amp; VOLATILITY
-              SURFACE</span
+              ><i class="fig-tick" aria-hidden="true" />OPTIONS DESK WORKBENCH · MULTI-LEG
+              PAYOFF</span
             >
-            <span class="fig-state">BLACK-SCHOLES GREEKS · PAYOFF PROFILE</span>
+            <span class="fig-state">BLACK-SCHOLES LEGS · DRAG SPOT · SWITCH STRUCTURE</span>
           </figcaption>
-          <div class="image-stage">
-            <picture>
-              <source srcset="/images/options-workbench.webp" type="image/webp" />
-              <img
-                src="/images/options-workbench.jpg"
-                alt="Options desk strategy workbench with interactive Black-Scholes Greeks matrix, 3D implied volatility surface, and multi-leg strategy payoff profile"
-                class="banner-preview-img"
-                width="1376"
-                height="768"
-                loading="lazy"
-                decoding="async"
-              />
-            </picture>
-          </div>
+          <PayoffPlate />
           <footer>
-            <span class="fig-legend"><i class="leg-path" />3D Implied Volatility Surface</span>
-            <span class="fig-legend"><i class="leg-hist" />Black-Scholes Greeks Matrix</span>
-            <span class="fig-legend"><i class="leg-med" />Multi-Leg Payoff Dynamics</span>
-            <strong>Integrated quantitative options modeling workbench</strong>
+            <span class="fig-legend"><i class="leg-iv-high" />Today value</span>
+            <span class="fig-legend"><i class="leg-trace" />Expiry P&amp;L</span>
+            <span class="fig-legend"><i class="leg-med" />Leg strikes</span>
+            <strong
+              >Long call · bull call spread · iron fly — legs summed from the closed forms</strong
+            >
           </footer>
         </figure>
       </section>
@@ -3193,9 +3166,11 @@ onUnmounted(() => {
   .hero-actions {
     display: grid;
   }
-  .hero-mc-stage,
-  .hero-image-stage {
+  .hero-mc-stage {
     height: 280px;
+  }
+  .hero-desk-stage {
+    height: 340px;
   }
   .stats-strip {
     grid-template-columns: 1fr;
@@ -3271,23 +3246,10 @@ onUnmounted(() => {
   background: var(--tc-cream);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
-.hero-image-stage {
-  width: 100%;
-  height: 340px;
+.hero-desk-stage {
+  height: 360px;
   overflow: hidden;
-  background: #09090f;
   border-bottom: var(--hair) solid var(--rule);
-}
-.hero-image-stage picture {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.hero-image-stage img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
 }
 
 .spotlight-section {

@@ -171,6 +171,8 @@ const levelsList = computed(() => {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
   width: 100%;
+  flex: 1 1 auto;
+  align-content: space-evenly;
 }
 
 .level-box {

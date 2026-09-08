@@ -1502,6 +1502,25 @@ h1 {
   min-width: 0;
 }
 
+/* Cards stretch to their row's height, set by the tallest sibling. Pin the
+   trailing block to the foot so the slack lands between lead content and the
+   summary stats instead of pooling under the last line. */
+.range-card .mini-figs,
+.target-card > :last-child {
+  margin-block-start: auto;
+}
+
+.prints,
+.worries {
+  flex: 1 1 auto;
+  justify-content: space-evenly;
+}
+
+.picks {
+  flex: 1 1 auto;
+  align-content: center;
+}
+
 .card {
   display: flex;
   flex-direction: column;
@@ -2116,6 +2135,9 @@ h1 {
 
 /* ── shared ─────────────────────────────────────────────────────────────*/
 .empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
   padding-block: var(--s3);
   color: var(--ink-faint);
   font-size: var(--t-small);

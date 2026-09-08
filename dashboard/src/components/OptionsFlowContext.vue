@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { OptionsIntelligence, OptionsTapeRow } from '@/api'
 import type { OptionsDirectionRead } from '@/optionsDirection'
-import { DASH, optCompact, pctFrac } from '@/format'
+import { DASH, num, optCompact, pctFrac } from '@/format'
 
 const props = defineProps<{
   summary: OptionsIntelligence['summary'] | null | undefined
@@ -78,6 +78,7 @@ const premium = computed(() => {
     call,
     put,
     total,
+    hasPrem,
     callPct,
     putPct,
     ratio,
@@ -87,6 +88,32 @@ const premium = computed(() => {
     tone,
     conviction,
     label,
+  }
+})
+
+const ratioBadge = computed(() => {
+  if (!premium.value.hasPrem || premium.value.total <= 0) {
+    return { text: 'NO FLOW', cls: 'balance-pill', title: 'No qualified premium measured' }
+  }
+  const { call, put, callPct, putPct } = premium.value
+  if (call > 0 && put <= 0) {
+    return { text: '100% CALLS', cls: 'call', title: 'Pure call activity — zero put prints' }
+  }
+  if (put > 0 && call <= 0) {
+    return { text: '100% PUTS', cls: 'put', title: 'Pure put activity — zero call prints' }
+  }
+  if (callPct >= 47 && callPct <= 53) {
+    return {
+      text: 'BALANCED',
+      cls: 'balanced',
+      title: `Balanced activity: ${callPct}% Call / ${putPct}% Put`,
+    }
+  }
+  const cpRatio = call / put
+  return {
+    text: `${num(cpRatio, 2)}x C/P`,
+    cls: callPct > 53 ? 'call' : 'put',
+    title: `Call/Put premium ratio: ${num(cpRatio, 2)}x (${callPct}% Call / ${putPct}% Put)`,
   }
 })
 
@@ -191,7 +218,15 @@ const deskAction = computed(() => {
 </script>
 
 <template>
-  <div class="flow-context flow-evidence-bar">
+  <div
+    class="flow-context flow-evidence-bar"
+    :class="[
+      premium.tone,
+      `skew-${premium.conviction.toLowerCase()}`,
+      deskAction.direction,
+      { 'has-flow': premium.total > 0 },
+    ]"
+  >
     <section class="flow-hero">
       <div class="flow-hero-copy">
         <span class="label eyebrow">{{
@@ -221,13 +256,31 @@ const deskAction = computed(() => {
         >
       </div>
       <div class="premium-track" aria-label="Call versus put premium split">
-        <i class="call-fill" :style="{ width: `${premium.callPct}%` }" />
-        <i class="put-fill" :style="{ width: `${premium.putPct}%` }" />
+        <i
+          class="call-fill"
+          :style="{ width: `${premium.callPct}%` }"
+          :title="`Call premium: $${optCompact(premium.call)} (${premium.callPct}%)`"
+        />
+        <span class="track-center-notch" title="50% balance point" aria-hidden="true" />
+        <i
+          class="put-fill"
+          :style="{ width: `${premium.putPct}%` }"
+          :title="`Put premium: $${optCompact(premium.put)} (${premium.putPct}%)`"
+        />
       </div>
       <div class="premium-values">
         <div class="premium-side call">
           <span class="label">CALL</span>
           <strong class="fig">{{ premium.callPct }}%</strong>
+        </div>
+        <div class="premium-center-ratio label">
+          <span
+            class="ratio-pill"
+            :class="ratioBadge.cls"
+            :title="ratioBadge.title"
+          >
+            {{ ratioBadge.text }}
+          </span>
         </div>
         <div class="premium-side put">
           <span class="label">PUT</span>
@@ -282,35 +335,49 @@ const deskAction = computed(() => {
 .flow-context {
   --flow-tone: var(--ink-dim);
   display: grid;
-  grid-template-columns: minmax(190px, 1.05fr) minmax(150px, 0.8fr) minmax(300px, 1.4fr) minmax(
+  grid-template-columns: minmax(190px, 1.05fr) minmax(165px, 0.9fr) minmax(300px, 1.4fr) minmax(
       210px,
       1.15fr
     );
   align-items: stretch;
-  min-height: 74px;
+  min-height: 76px;
   background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
   border-radius: var(--r-md);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   color: var(--ink);
+  transition: border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+  position: relative;
+  overflow: hidden;
 }
 .flow-context.call {
   --flow-tone: var(--call);
+  border-color: color-mix(in srgb, var(--call) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--call) 6%, var(--glass-surface));
 }
 .flow-context.put {
   --flow-tone: var(--put);
+  border-color: color-mix(in srgb, var(--put) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--put) 6%, var(--glass-surface));
 }
 .flow-context.bullish {
   --flow-tone: var(--long);
+  border-color: color-mix(in srgb, var(--long) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--long) 6%, var(--glass-surface));
 }
 .flow-context.bearish {
   --flow-tone: var(--short);
+  border-color: color-mix(in srgb, var(--short) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--short) 6%, var(--glass-surface));
 }
 .flow-context.mixed,
 .flow-context.neutral {
   --flow-tone: var(--ink);
+  background: var(--glass-surface);
 }
 .dominant.bullish {
   color: var(--long);
@@ -341,7 +408,7 @@ const deskAction = computed(() => {
   justify-content: center;
   gap: 4px;
   min-width: 0;
-  padding: 6px 12px;
+  padding: 8px 14px;
   border-left: var(--hair) solid var(--glass-border);
   background: var(--glass-surface-hi);
 }
@@ -367,10 +434,10 @@ const deskAction = computed(() => {
 .dominant {
   color: var(--ink);
   font-size: var(--t-small);
-  line-height: 1.2;
+  line-height: 1.25;
   letter-spacing: -0.02em;
   white-space: normal;
-  font-weight: 750;
+  font-weight: 800;
 }
 .dominant.call {
   color: var(--call-hi);
@@ -400,23 +467,24 @@ const deskAction = computed(() => {
   background: var(--warn);
 }
 .conviction {
-  padding: 1px 6px;
+  padding: 2px 8px;
   border: var(--hair) solid var(--glass-border);
   color: var(--ink-dim);
   background: var(--glass-base);
   font-size: var(--t-micro);
   white-space: nowrap;
   border-radius: 9999px;
-  font-weight: 700;
+  font-weight: 750;
+  letter-spacing: 0.04em;
 }
 .conviction.call {
   color: var(--call-hi);
-  border-color: color-mix(in srgb, var(--call) 50%, var(--rule));
+  border-color: color-mix(in srgb, var(--call) 55%, var(--rule));
   background: var(--call-wash);
 }
 .conviction.put {
   color: var(--put-hi);
-  border-color: color-mix(in srgb, var(--put) 50%, var(--rule));
+  border-color: color-mix(in srgb, var(--put) 55%, var(--rule));
   background: var(--put-wash);
 }
 
@@ -425,8 +493,8 @@ const deskAction = computed(() => {
   min-width: 0;
   flex-direction: column;
   justify-content: center;
-  gap: 3px;
-  padding: 6px 12px;
+  gap: 4px;
+  padding: 8px 14px;
   border-left: var(--hair) solid var(--glass-border);
 }
 .section-head {
@@ -440,26 +508,45 @@ const deskAction = computed(() => {
 .section-head b {
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 .premium-track {
   display: flex;
-  height: 7px;
+  position: relative;
+  height: 11px;
   overflow: hidden;
-  background: var(--glass-base);
+  background: var(--void);
   border: var(--hair) solid var(--glass-border);
   border-radius: 9999px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .premium-track i {
   height: 100%;
+  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
 }
 .call-fill {
-  background: var(--call);
+  background: var(--call-hi);
+  border-radius: 9999px 0 0 9999px;
 }
 .put-fill {
-  background: var(--put);
+  background: var(--put-hi);
+  border-radius: 0 9999px 9999px 0;
+}
+.track-center-notch {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.38);
+  z-index: 2;
+  pointer-events: none;
 }
 .premium-values {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
@@ -471,12 +558,50 @@ const deskAction = computed(() => {
 .premium-side strong {
   font-size: var(--t-small);
   font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  letter-spacing: -0.01em;
 }
 .premium-side.call strong {
   color: var(--call-hi);
 }
 .premium-side.put strong {
   color: var(--put-hi);
+}
+.premium-center-ratio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ratio-pill {
+  font-size: var(--t-micro);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: var(--r-capsule);
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink-dim);
+  transition: color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.ratio-pill.call {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call-hi) 45%, var(--rule));
+  background: var(--call-wash);
+}
+.ratio-pill.put {
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put-hi) 45%, var(--rule));
+  background: var(--put-wash);
+}
+.ratio-pill.balanced {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 40%, var(--rule));
+  background: var(--phosphor-wash);
+}
+.balance-pill {
+  color: var(--ink-faint);
 }
 
 .metric-grid {
@@ -492,8 +617,8 @@ const deskAction = computed(() => {
   min-width: 0;
   flex-direction: column;
   justify-content: center;
-  gap: 1px;
-  padding: 6px 8px;
+  gap: 2px;
+  padding: 8px 10px;
   background: var(--glass-surface);
 }
 .metric .label {
@@ -509,7 +634,13 @@ const deskAction = computed(() => {
   color: var(--ink-soft);
   font-size: var(--t-small);
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 750;
+}
+.metric strong.call {
+  color: var(--call-hi);
+}
+.metric strong.put {
+  color: var(--put-hi);
 }
 .metric small {
   color: var(--ink-faint);
@@ -525,9 +656,9 @@ const deskAction = computed(() => {
   min-width: 0;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
-  padding: 6px 12px;
-  border-left: 1px solid var(--action-tone);
+  gap: 3px;
+  padding: 8px 14px;
+  border-left: 3px solid var(--action-tone);
   background: var(--glass-surface-hi);
 }
 .desk-action.bullish {

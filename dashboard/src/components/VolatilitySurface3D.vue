@@ -446,7 +446,8 @@ function onPointerUp() {
 
 .canvas-container {
   width: 100%;
-  height: 220px;
+  flex: 1 1 auto;
+  min-height: 220px;
   cursor: grab;
   position: relative;
   touch-action: none;

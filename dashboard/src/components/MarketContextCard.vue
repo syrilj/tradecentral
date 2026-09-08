@@ -168,6 +168,9 @@ const tags = computed(() => {
   font-size: 0.875rem;
   color: var(--ink-soft);
   line-height: 1.5;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
 }
 
 .tags-row {

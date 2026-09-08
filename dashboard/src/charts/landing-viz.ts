@@ -371,3 +371,214 @@ export function greekCurves(
 
   return { call: toPoints(callRaw), put: toPoints(putRaw), strikes, domain: { lo, hi } }
 }
+
+/* ── Multi-leg option structures (options workbench plate) ──────────────────
+   The lab's structure figure sums real Black-Scholes legs — long/short signs
+   attached — so the payoff curve, today's value curve, and the Greeks strip
+   all come from one engine instead of a hand-drawn kinked line. */
+
+export interface OptionLeg {
+  kind: 'call' | 'put'
+  strike: number
+  /** +1 long, -1 short. */
+  dir: 1 | -1
+}
+
+/** Market environment shared by every leg of a structure (each leg has its own K). */
+export type SpotEnv = Omit<BSInputs, 'K'>
+
+/** Signed BS value of a single leg. */
+export function legValue(leg: OptionLeg, env: SpotEnv): number {
+  const p: BSInputs = { ...env, K: leg.strike }
+  return leg.dir * (leg.kind === 'call' ? bsCall(p) : bsPutPrice(p))
+}
+
+/** Intrinsic value of a single leg at expiry, signed. */
+export function legExpiryValue(leg: OptionLeg, S: number): number {
+  const intrinsic = leg.kind === 'call' ? Math.max(S - leg.strike, 0) : Math.max(leg.strike - S, 0)
+  return leg.dir * intrinsic
+}
+
+/**
+ * Net Greeks of the whole structure at the current spot, legs summed with
+ * their long/short signs. Delta is φ-based here (same closed form the lab's
+ * strike curves use), theta is the per-calendar-day carry from bsThetaDay.
+ */
+export function structureGreeks(
+  legs: OptionLeg[],
+  env: SpotEnv,
+): { value: number; delta: number; gamma: number; vega: number; thetaDay: number } {
+  let value = 0,
+    delta = 0,
+    gamma = 0,
+    vega = 0,
+    thetaDay = 0
+  for (const leg of legs) {
+    const p: BSInputs = { ...env, K: leg.strike }
+    const disc = Math.exp(-env.q * env.T)
+    const d1 = bsD1(p)
+    const d = leg.kind === 'call' ? disc * normCdf(d1) : -disc * normCdf(-d1)
+    value += leg.dir * (leg.kind === 'call' ? bsCall(p) : bsPutPrice(p))
+    delta += leg.dir * d
+    gamma += leg.dir * bsGamma(p)
+    vega += leg.dir * bsVega(p)
+    thetaDay += leg.dir * bsThetaDay(p, leg.kind)
+  }
+  return { value, delta, gamma, vega, thetaDay }
+}
+
+export interface PayoffColumns {
+  /** Spot ladder the curves were sampled on. */
+  spots: number[]
+  /** Today's structure value across the ladder (BS, signed). */
+  today: number[]
+  /** Expiry P&L across the ladder (intrinsic − entry premium). */
+  expiry: number[]
+  /** Net premium of the structure at the reference spot (positive = debit). */
+  premium: number
+}
+
+/** Sample today's value curve and the expiry P&L curve across a spot ladder. */
+export function payoffColumns(
+  legs: OptionLeg[],
+  env: SpotEnv,
+  sLow: number,
+  sHigh: number,
+  n: number,
+): PayoffColumns {
+  const premium = structureGreeks(legs, env).value
+  const spots: number[] = []
+  const today: number[] = []
+  const expiry: number[] = []
+  for (let i = 0; i < n; i++) {
+    const S = sLow + ((sHigh - sLow) * i) / (n - 1)
+    spots.push(S)
+    today.push(structureGreeks(legs, { ...env, S }).value - premium)
+    const intrinsic = legs.reduce((acc, leg) => acc + legExpiryValue(leg, S), 0)
+    expiry.push(intrinsic - premium)
+  }
+  return { spots, today, expiry, premium }
+}
+
+/* ── Walk-forward IC decay model (governance plate) ─────────────────────────
+   A parametric stand-in for the measured diagnostics: the desk's real signal
+   ledger lives behind sign-in, so the public page shows the *shape* the
+   measurement takes. Every cell is derived from (ic1d, sd, periods) through
+   the stated formulas — no decorative literals.
+
+     meanIc(h)  = ic1d · shape(h)            pinned decay curvature
+     se(h)      = sd / sqrt(periods(h))      daily-IC noise, periods shrink with h
+     nwT(h)     = meanIc(h) / se(h)          Newey-West-style t
+     icIr(h)    = nwT(h) · sqrt(252 / h)     annualised IC information ratio
+     pctPos(h)  = Φ(meanIc(h) / sd)          fraction of positive days
+*/
+
+export interface IcHorizonRow {
+  days: number
+  meanIc: number
+  nwT: number
+  icIr: number
+  pctPositive: number
+  periods: number
+}
+
+export interface IcDecayModel {
+  horizons: number[]
+  rows: IcHorizonRow[]
+  /** Mean IC at 1D. */
+  ic1d: number
+  /** Horizon where meanIc peaks. */
+  peakDays: number
+  /** First horizon where meanIc falls below half its peak (interpolated). */
+  halfLifeDays: number
+  /** Share of horizons whose mean IC keeps the 1D sign. */
+  signPersistence: number
+}
+
+/* ── Structural GEX profile (desk telemetry plate) ──────────────────────────
+   Gamma exposure concentrated at named walls: calls above the flip (net
+   long-gamma, dampening), puts below it (short-gamma, amplifying). The desk's
+   live profile is measured from chain OI after sign-in; this is the
+   parametric anatomy of the same figure. */
+
+export interface StructuralGex {
+  /** {K, gex} with gex normalised to ±1 (call side positive). */
+  points: { K: number; gex: number }[]
+  /** Sum of gex before normalisation — the sign drives the regime label. */
+  net: number
+  netMax: number
+}
+
+function gauss(x: number, mu: number, sd: number): number {
+  return Math.exp(-0.5 * ((x - mu) / sd) ** 2)
+}
+
+export function structuralGexProfile(opts: {
+  S: number
+  flipK: number
+  callWallK: number
+  putWallK: number
+  nStrikes: number
+  /** Half-width of the strike range as a fraction of spot. */
+  range: number
+}): StructuralGex {
+  const { S, flipK, callWallK, putWallK, nStrikes, range } = opts
+  const kLow = S * (1 - range)
+  const kHigh = S * (1 + range)
+  const wallSd = S * 0.045
+  const ambientSd = S * 0.11
+  const points: { K: number; gex: number }[] = []
+  let rawNet = 0
+  let maxAbs = 0
+  for (let i = 0; i < nStrikes; i++) {
+    const K = kLow + ((kHigh - kLow) * i) / (nStrikes - 1)
+    const calls = gauss(K, callWallK, wallSd)
+    const puts = gauss(K, putWallK, wallSd) * 0.8
+    const ambient = gauss(K, S, ambientSd) * 0.3 * (K >= flipK ? 1 : -1)
+    const gex = calls - puts + ambient
+    points.push({ K, gex })
+    rawNet += gex
+    if (Math.abs(gex) > maxAbs) maxAbs = Math.abs(gex)
+  }
+  const scale = maxAbs || 1
+  return {
+    points: points.map((p) => ({ K: p.K, gex: p.gex / scale })),
+    net: rawNet,
+    netMax: maxAbs * nStrikes,
+  }
+}
+
+export function icDecayModel(opts: {
+  ic1d: number
+  icSdDaily: number
+  periods1d: number
+  shape: readonly number[]
+}): IcDecayModel {
+  const horizons = [1, 2, 3, 5, 10, 20]
+  const rows: IcHorizonRow[] = horizons.map((h, i) => {
+    const meanIc = opts.ic1d * (opts.shape[i] ?? 0)
+    const periods = Math.max(1, opts.periods1d - h)
+    const se = opts.icSdDaily / Math.sqrt(periods)
+    const nwT = se > 0 ? meanIc / se : 0
+    const icIr = nwT * Math.sqrt(252 / h)
+    const pctPositive = normCdf(meanIc / opts.icSdDaily)
+    return { days: h, meanIc, nwT, icIr, pctPositive, periods }
+  })
+  const peak = rows.reduce((best, r) => (Math.abs(r.meanIc) > Math.abs(best.meanIc) ? r : best))
+  const target = Math.abs(peak.meanIc) / 2
+  let halfLifeDays = rows[rows.length - 1]!.days
+  for (let i = 1; i < rows.length; i++) {
+    const prev = rows[i - 1]!,
+      cur = rows[i]!
+    if (Math.abs(prev.meanIc) >= target && Math.abs(cur.meanIc) < target) {
+      const frac =
+        (Math.abs(prev.meanIc) - target) / (Math.abs(prev.meanIc) - Math.abs(cur.meanIc) || 1e-9) ||
+        0
+      halfLifeDays = prev.days + frac * (cur.days - prev.days)
+      break
+    }
+  }
+  const sign = Math.sign(opts.ic1d) || 1
+  const signPersistence = rows.filter((r) => r.meanIc * sign > 0).length / Math.max(rows.length, 1)
+  return { horizons, rows, ic1d: opts.ic1d, peakDays: peak.days, halfLifeDays, signPersistence }
+}

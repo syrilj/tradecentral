@@ -576,6 +576,9 @@ const otherSide = computed(() => {
   flex-direction: column;
   gap: var(--s4);
   padding-right: 2px;
+  /* clears the panel's bottom rule so the last block can be scrolled fully into
+     view instead of resting half-clipped against it */
+  padding-bottom: 10px;
   scrollbar-width: thin;
   scrollbar-color: var(--rule-hi) transparent;
 }
@@ -619,13 +622,16 @@ const otherSide = computed(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   min-width: 0;
 }
 .setup-title-group {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 .setup-name {
   font: 800 var(--t-tiny) var(--font-display);
@@ -910,7 +916,7 @@ const otherSide = computed(() => {
 
 .likelihood-badge {
   flex: 0 1 auto;
-  max-width: 46%;
+  min-width: 0;
   padding: 3px 7px;
   border: var(--hair) solid var(--rule);
   font: 800 var(--t-nano) var(--font-display);
@@ -1342,7 +1348,10 @@ const otherSide = computed(() => {
   color: var(--warn);
 }
 
-@container (min-width: 400px) {
+/* Single-line rows need room for price + both distances + a full role word
+   ("INVALIDATION" is 12 chars); below ~560px the two-line row keeps every
+   figure readable instead of truncating the role. */
+@container (min-width: 560px) {
   .ladder-head,
   .ladder-row {
     display: grid;
@@ -1436,16 +1445,16 @@ const otherSide = computed(() => {
 .factors-list {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 6px;
 }
+/* The meter is a contained 54px gauge between label and value, not a rail drawn
+   across the panel — a stack of full-bleed tracks reads as stray lines. */
 .factor-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    'title score'
-    'track track';
-  gap: 3px 8px;
-  align-items: baseline;
+  grid-template-columns: minmax(0, 1fr) 54px auto;
+  grid-template-areas: 'title track score';
+  gap: 0 10px;
+  align-items: center;
   min-width: 0;
 }
 .factor-title {
@@ -1459,10 +1468,21 @@ const otherSide = computed(() => {
 }
 .factor-track {
   grid-area: track;
-  height: 6px;
+  height: 5px;
   background: var(--void);
   border: var(--hair) solid var(--rule);
   overflow: hidden;
+}
+
+@media (max-width: 380px) {
+  .factor-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'title score'
+      'track track';
+    gap: 3px 8px;
+    align-items: baseline;
+  }
 }
 .factor-fill {
   display: block;
@@ -1532,14 +1552,17 @@ const otherSide = computed(() => {
 .factor-fill.low {
   opacity: 0.5;
 }
+/* One fixed value gutter across both lists so every 54px meter lands in the same
+   column down the panel. */
 .factor-score {
   grid-area: score;
   font: 700 var(--t-micro) var(--font-data);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
-  min-width: 4ch;
+  min-width: 84px;
   text-align: right;
   font-size: var(--t-tiny);
+  white-space: nowrap;
 }
 .quiet {
   color: var(--ink-dim);

@@ -217,20 +217,36 @@ const filteredHistoryTape = computed(() => {
   } else if (historyTypeFilter.value === 'anomalies') {
     list = list.filter((r) => r.is_unusual || (r.anomaly_flags && r.anomaly_flags.length > 0))
   }
-  const q = historySearchQuery.value.trim().toLowerCase()
-  if (q) {
+  const rawQ = historySearchQuery.value.trim().toLowerCase()
+  if (rawQ) {
+    const q = rawQ.startsWith('$') ? rawQ.slice(1).trim() : rawQ
     list = list.filter((r) => {
       const strikeStr = r.strike != null ? String(r.strike) : ''
+      const strikeWithDollar = r.strike != null ? `$${r.strike}` : ''
       const expStr = r.expiry ?? ''
+      const expFormatted = r.expiry ? shortDate(r.expiry).toLowerCase() : ''
+      const dteVal = computeRowDte(r)
+      const dteStr = dteVal != null ? `${dteVal}d` : ''
       const classStr = r.trade_class ?? ''
-      const rightStr = r.right ?? ''
+      const rightStr = (r.right || r.activity_side || '').toLowerCase()
       const occStr = r.occ_symbol ?? ''
+      const strikeRightCombo = `${strikeStr}${rightStr}`
+      const strikeRightComboShort = `${strikeStr}${rightStr ? rightStr[0] : ''}`
+      const isCallsSearch = q === 'calls' || q === 'call'
+      const isPutsSearch = q === 'puts' || q === 'put'
       return (
         strikeStr.includes(q) ||
+        strikeWithDollar.toLowerCase().includes(rawQ) ||
         expStr.toLowerCase().includes(q) ||
+        expFormatted.includes(q) ||
+        (dteStr.length > 0 && (q === dteStr || dteStr.includes(q))) ||
+        (isCallsSearch && rightStr === 'call') ||
+        (isPutsSearch && rightStr === 'put') ||
         classStr.toLowerCase().includes(q) ||
-        rightStr.toLowerCase().includes(q) ||
-        occStr.toLowerCase().includes(q)
+        rightStr.includes(q) ||
+        occStr.toLowerCase().includes(q) ||
+        strikeRightCombo.includes(q) ||
+        strikeRightComboShort.includes(q)
       )
     })
   }
@@ -1026,14 +1042,27 @@ function matchesStrikeBand(row: OptionsTapeRow): boolean {
   return true
 }
 
+function computeRowDte(row: OptionsTapeRow, now: Date = new Date()): number | null {
+  if (row.dte != null && Number.isFinite(row.dte)) return Math.max(0, Math.floor(row.dte))
+  if (!row.expiry) return null
+  const expClean = row.expiry.slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expClean)) {
+    const expDate = new Date(row.expiry)
+    if (isNaN(expDate.getTime())) return null
+    const diffMs = expDate.getTime() - now.getTime()
+    return Math.max(0, Math.ceil(diffMs / 86_400_000))
+  }
+  const [y, m, d] = expClean.split('-').map(Number)
+  const expUtc = Date.UTC(y, m - 1, d)
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  const diffDays = Math.round((expUtc - todayUtc) / 86_400_000)
+  return Math.max(0, diffDays)
+}
+
 function matchesDteBand(row: OptionsTapeRow): boolean {
   if (dteBand.value === 'all') return true
-  let dte = row.dte
-  if (dte == null && row.expiry) {
-    const expDate = new Date(row.expiry)
-    dte = Math.ceil((expDate.getTime() - Date.now()) / 86_400_000)
-  }
-  if (dte == null) return true
+  const dte = computeRowDte(row)
+  if (dte == null) return false
   if (dteBand.value === '0dte') return dte === 0
   if (dteBand.value === 'weekly') return dte >= 0 && dte <= 7
   if (dteBand.value === 'monthly') return dte >= 8 && dte <= 30
@@ -1068,25 +1097,60 @@ function matchesActiveFlag(row: OptionsTapeRow): boolean {
 }
 
 function matchesSearchQuery(row: OptionsTapeRow): boolean {
-  const q = tapeSearchQuery.value.trim().toLowerCase()
-  if (!q) return true
+  const rawQ = tapeSearchQuery.value.trim().toLowerCase()
+  if (!rawQ) return true
+  const q = rawQ.startsWith('$') ? rawQ.slice(1).trim() : rawQ
   const strikeStr = row.strike != null ? String(row.strike) : ''
+  const strikeWithDollar = row.strike != null ? `$${row.strike}` : ''
   const expStr = row.expiry ? row.expiry.toLowerCase() : ''
-  const rightStr = row.right ? row.right.toLowerCase() : ''
-  const classStr = row.trade_class ? row.trade_class.toLowerCase() : ''
-  const occStr = row.occ_symbol ? row.occ_symbol.toLowerCase() : ''
+  const expFormatted = row.expiry ? shortDate(row.expiry).toLowerCase() : ''
+  const dteVal = computeRowDte(row)
+  const dteStr = dteVal != null ? `${dteVal}d` : ''
+  const dteFull = dteVal != null ? `${dteVal}dte` : ''
+  const rightStr = (row.right || row.activity_side || '').toLowerCase()
+  const classStr = (row.trade_class || '').toLowerCase()
+  const occStr = (row.occ_symbol || '').toLowerCase()
   const lean = tapeLean(row).label.toLowerCase()
   const flags = (row.anomaly_flags ?? []).join(' ').toLowerCase()
   const classLabel = tradeClassLabel(row).toLowerCase()
+  const sym = symbol.value.toLowerCase()
+  const agg = (row.aggressor ?? '').toLowerCase()
+  const aggLabel = (row.aggressor_label ?? '').toLowerCase()
+  const money = moneynessInfo(row)?.text.toLowerCase() ?? ''
+
+  // Support strike + call/put searches: e.g. "200c", "200 call", "200 calls", "200p", "200 put", "200 puts"
+  const strikeRightCombo = `${strikeStr}${rightStr}`
+  const strikeRightComboShort = `${strikeStr}${rightStr ? rightStr[0] : ''}`
+  const strikeSpaceCombo = `${strikeStr} ${rightStr}`
+  const isCallsSearch = q === 'calls' || q === 'call' || q.endsWith('calls') || q.endsWith('call')
+  const isPutsSearch = q === 'puts' || q === 'put' || q.endsWith('puts') || q.endsWith('put')
+
   return (
     strikeStr.includes(q) ||
+    strikeWithDollar.toLowerCase().includes(rawQ) ||
     expStr.includes(q) ||
+    expFormatted.includes(q) ||
+    (dteStr.length > 0 && (q === dteStr || q === dteFull || dteStr.includes(q))) ||
+    (q === '0dte' && dteVal === 0) ||
+    (isCallsSearch && rightStr === 'call') ||
+    (isPutsSearch && rightStr === 'put') ||
     rightStr.includes(q) ||
     classStr.includes(q) ||
     occStr.includes(q) ||
     lean.includes(q) ||
     flags.includes(q) ||
-    classLabel.includes(q)
+    classLabel.includes(q) ||
+    sym.includes(q) ||
+    agg.includes(q) ||
+    aggLabel.includes(q) ||
+    money.includes(q) ||
+    strikeRightCombo.includes(q) ||
+    strikeRightComboShort.includes(q) ||
+    strikeSpaceCombo.includes(q) ||
+    (q === 'whale' && (row.premium ?? 0) >= 100_000) ||
+    (q === 'golden' && classifyFlowOrder(row).type === 'golden_sweep') ||
+    (q === 'sweep' && (tradeClassLabel(row) === 'SWEEP' || row.is_sweep === true)) ||
+    (q === 'block' && (tradeClassLabel(row) === 'BLOCK' || row.is_block === true))
   )
 }
 
@@ -1145,10 +1209,8 @@ const visibleTape = computed<OptionsTapeRow[]>(() => {
 
   /** True when the row's expiry falls within nearDteMax days from today. */
   function isNear(row: OptionsTapeRow): boolean {
-    if (!row.expiry) return false
-    const expDate = new Date(row.expiry)
-    const dteDays = Math.ceil((expDate.getTime() - now.getTime()) / 86_400_000)
-    return dteDays >= 0 && dteDays <= nearDteMax.value
+    const dte = computeRowDte(row, now)
+    return dte != null && dte >= 0 && dte <= nearDteMax.value
   }
 
   /** True when the row has an explicit buy/sell side (signed flow). */
@@ -1321,10 +1383,8 @@ const tapeClassCounts = computed(() => {
     if (r.is_unusual || (r.presets ?? []).includes('unusual')) unusual += 1
     if (r.is_momentum || (r.presets ?? []).includes('momentum')) momentum += 1
     if (r.is_moonshot || (r.presets ?? []).includes('moonshot')) moonshot += 1
-    if (r.expiry) {
-      const dteDays = Math.ceil((new Date(r.expiry).getTime() - now.getTime()) / 86_400_000)
-      if (dteDays >= 0 && dteDays <= nearDteMax.value) near += 1
-    }
+    const dte = computeRowDte(r, now)
+    if (dte != null && dte >= 0 && dte <= nearDteMax.value) near += 1
   }
   return {
     all: rows.length,
@@ -1487,10 +1547,14 @@ function premiumTierLabel(premium: number): string {
   return 'STD'
 }
 
+function contractsOf(row: OptionsTapeRow): number {
+  return row.contracts != null && row.contracts > 0 ? row.contracts : (row.volume ?? 0)
+}
+
 /** Vol/OI ratio tier for the vol-oi-pill */
 function volOiRatio(row: OptionsTapeRow): number | null {
   const oi = row.open_interest
-  const vol = row.volume ?? row.contracts ?? 0
+  const vol = contractsOf(row)
   if (!oi || oi <= 0 || vol <= 0) return null
   return vol / oi
 }
@@ -1511,14 +1575,12 @@ function volOiLabel(ratio: number | null): string {
   return `${ratio.toFixed(1)}x`
 }
 
-function contractsOf(row: OptionsTapeRow): number {
-  return row.contracts ?? row.volume ?? 0
-}
-
 function pricePaid(row: OptionsTapeRow): number | null {
   if (row.price != null && Number.isFinite(row.price)) return row.price
   const n = contractsOf(row)
-  if (n > 0 && row.premium > 0) return row.premium / (n * 100)
+  const mult =
+    row.contract_multiplier && row.contract_multiplier > 0 ? row.contract_multiplier : 100
+  if (n > 0 && row.premium > 0) return row.premium / (n * mult)
   return null
 }
 
@@ -3250,7 +3312,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <th class="label tape-col-group">Lean</th>
                   <th class="label">Class</th>
                   <th class="label tape-col-group">Expiry</th>
-                  <th class="label num-col">Strike</th>
+                  <th class="label num-col strike-head">Strike · Type</th>
                   <th class="label num-col tape-col-group stock-head">Spot</th>
                   <th class="label num-col tape-col-group">Fill</th>
                   <th class="label num-col">Contracts</th>
@@ -3300,10 +3362,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     </td>
                     <td>
                       <div class="class-cell-lockup">
-                        <span
-                          v-if="tradeClassLabel(row) !== 'SINGLE'"
-                          :class="tradeClassTokenCls(tradeClassLabel(row))"
-                        >
+                        <span :class="tradeClassTokenCls(tradeClassLabel(row))">
                           {{ tradeClassLabel(row) }}
                         </span>
                         <button
@@ -3320,10 +3379,20 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                       </div>
                     </td>
                     <td class="fig dim tape-col-group expiry-cell">
-                      {{ row.expiry ? shortDate(row.expiry) : 'N/A' }}
-                      <small v-if="row.dte != null" class="dte-sub"> {{ row.dte }}d</small>
+                      {{ row.expiry ? shortDate(row.expiry) : '—' }}
+                      <small v-if="computeRowDte(row) != null" class="dte-sub"> {{ computeRowDte(row) }}d</small>
                     </td>
-                    <td class="fig num-col strike-cell">{{ optUsd(row.strike) }}</td>
+                    <td class="fig num-col strike-cell">
+                      <div class="strike-lockup">
+                        <span class="strike-val">{{ optUsd(row.strike) }}</span>
+                        <span
+                          class="type-chip label"
+                          :class="(row.right || row.activity_side || '').toLowerCase()"
+                        >
+                          {{ (row.right || row.activity_side) ? (row.right || row.activity_side)!.toUpperCase() : '—' }}
+                        </span>
+                      </div>
+                    </td>
                     <td class="fig num-col tape-col-group stock-cell">
                       <div class="stock-lockup">
                         <span
@@ -3451,13 +3520,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           </div>
           <div v-else-if="d?.flow_tape.length" class="no-tape compact-empty">
             <strong>NO PRINTS MATCH THIS TABLE VIEW</strong>
-            <p>The source tape is loaded. Reset the local view to show the qualified prints.</p>
-            <button type="button" class="label raw-btn" @click="selectTapeView('all')">
-              SHOW ALL {{ d.flow_tape.length }}
+            <p>The source tape is loaded. Reset active filters to show the qualified prints.</p>
+            <button type="button" class="label raw-btn" @click="resetAllFilters">
+              RESET ALL FILTERS (SHOW ALL {{ d.flow_tape.length }})
             </button>
           </div>
           <div v-else class="no-tape">
             <strong>NO QUALIFIED TRADE TAPE</strong>
+            <p v-if="Number(d?.quality?.flow_prints_raw ?? 0) === 0" class="reject-hint label">
+              The feed returned zero prints — the session is closed or the provider is idle. The
+              tape fills when prints resume; this is an absent feed, not rejected data.
+            </p>
             <p v-if="d?.provider.activity_basis === 'chain_activity_proxy'">
               No prints cleared the noise filter: activity overlay is using chain volume × price
               (unsigned proxy), not a trade tape.
@@ -3722,7 +3795,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     </td>
                     <td class="fig">
                       {{ row.expiry ? shortDate(row.expiry) : '—' }}
-                      <span v-if="row.dte != null" class="dte-tag">({{ row.dte }}d)</span>
+                      <span v-if="computeRowDte(row) != null" class="dte-tag">({{ computeRowDte(row) }}d)</span>
                     </td>
                     <td class="fig num">{{ row.strike != null ? optUsd(row.strike) : '—' }}</td>
                     <td class="fig num">
@@ -6468,6 +6541,7 @@ tr.isGoldenSweep td {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
+  white-space: nowrap;
 }
 .moneyness-tag {
   display: inline-block;
@@ -6678,6 +6752,10 @@ td.put {
   max-width: 60ch;
   color: var(--ink-faint);
   line-height: 1.5;
+  /* .label clips to a single line; these hints are multi-line explanations. */
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 .reject-hint b {
   color: var(--warn);
@@ -6916,8 +6994,23 @@ tr.isMegaWhale:hover {
 .whale-prem {
   font-weight: 700;
 }
+.strike-head {
+  white-space: nowrap;
+  min-width: 110px;
+}
 .strike-cell {
   font-weight: 600;
+  white-space: nowrap;
+}
+.strike-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+.strike-val {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Tape Stalker Cards View */

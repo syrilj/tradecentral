@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 
 /**
  * Measure a chart host box with ResizeObserver (width + height).
@@ -31,19 +31,28 @@ export function useChartSize(
     })
   }
 
-  onMounted(() => {
-    const el = hostRef.value
+  function observe(el: HTMLElement | null) {
+    ro?.disconnect()
     if (!el) return
     const box = el.getBoundingClientRect()
     apply(box.width, box.height)
     if (typeof ResizeObserver === 'undefined') return
-    ro = new ResizeObserver((entries) => {
-      const cr = entries[0]?.contentRect
-      if (!cr) return
-      schedule(cr.width, cr.height)
-    })
+    if (!ro) {
+      ro = new ResizeObserver((entries) => {
+        const cr = entries[0]?.contentRect
+        if (!cr) return
+        schedule(cr.width, cr.height)
+      })
+    }
     ro.observe(el)
-  })
+  }
+
+  onMounted(() => observe(hostRef.value))
+
+  /* A v-if can swap the host element out from under us. Without re-observing,
+     the chart keeps sizing itself from the detached box — the viewBox stops
+     matching the container and the drawing letterboxes inside dead gutters. */
+  watch(hostRef, (el) => observe(el))
 
   onBeforeUnmount(() => {
     if (raf) cancelAnimationFrame(raf)

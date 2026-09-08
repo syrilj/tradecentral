@@ -447,8 +447,15 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
       expect(appContent).toContain('border-right: var(--hair) solid var(--glass-border);')
     })
 
-    it('verifies responsive breakpoints (1320px, 1180px, 1080px, 780px) in App.vue styles', () => {
-      expect(appContent).toContain('@media (max-width: 1320px)')
+    it('verifies responsive breakpoints (1320px, 1180px, 1080px, 780px) across shell and workspace styles', () => {
+      /* The 1320px dense-layout breakpoint moved into the flow workspace's own
+         styles; the shell keeps the rail/strip breakpoints. */
+      const flowDashboardContent = readFileSync(
+        resolve(DASHBOARD_DIR, 'src/components/FlowDashboard.vue'),
+        'utf-8',
+      )
+      const shellOrWorkspace = `${appContent}\n${flowDashboardContent}`
+      expect(shellOrWorkspace).toContain('@media (max-width: 1320px)')
       expect(appContent).toContain('@media (max-width: 1180px)')
       expect(appContent).toContain('@media (max-width: 1080px)')
       expect(appContent).toContain('@media (max-width: 780px)')

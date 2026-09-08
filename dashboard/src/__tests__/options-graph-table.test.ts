@@ -120,10 +120,48 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
       expect(gexSrc).toContain('class="tag-badge flip"')
     })
 
-    it('renders micro net exposure progress meters in table rows', () => {
-      expect(gexSrc).toContain('class="net-micro-meter"')
-      expect(gexSrc).toContain('meter-pos')
-      expect(gexSrc).toContain('meter-neg')
+    // The net column used to carry a full-width micro-meter. A rail drawn across
+    // every row reads as a stray line through the table, so the magnitude is a
+    // share-of-peak subline now — same information, no rule.
+    it('states net exposure as a share of peak instead of a full-width rail', () => {
+      expect(gexSrc).not.toContain('net-micro-meter')
+      expect(gexSrc).not.toContain('meter-pos')
+      expect(gexSrc).not.toContain('meter-neg')
+      expect(gexSrc).toContain('netShareLabel(bar.net)')
+      expect(gexSrc).toContain('% OF PEAK')
+    })
+
+    it('sorts on every column and shows a caret on each header', () => {
+      for (const key of ['strike', 'winner', 'call', 'put', 'net', 'dist']) {
+        expect(gexSrc).toContain(`setTableSort('${key}')`)
+        expect(gexSrc).toContain(`sortArrow('${key}')`)
+      }
+      expect(gexSrc).toMatch(/\.sort-arr\.idle\s*\{/)
+    })
+
+    // In OI mode the value IS the open interest, so the "OI n" subline repeated
+    // the number it sat under.
+    it('drops the open-interest subline when the metric is already OI', () => {
+      expect(gexSrc).toContain(`<small v-if="metric === 'gex'" class="sub-num"`)
+    })
+  })
+
+  describe('3b. Strike window controls tell the truth', () => {
+    const gexSrc = readFileSync(join(root, 'components', 'GammaExposureMap.vue'), 'utf8')
+
+    // A ±6% window on a wide-strike name yields fewer than six strikes. The old
+    // guard fell back to props.rows, so ATM silently handed you the full chain.
+    it('narrows to the nearest strikes rather than falling back to the whole chain', () => {
+      expect(gexSrc).not.toContain('filtered.length >= 6 ? filtered : props.rows')
+      expect(gexSrc).toContain('if (filtered.length >= 3) return filtered')
+      expect(gexSrc).toContain('Math.min(7, props.rows.length)')
+    })
+
+    // viewBox height must equal the measured host height; anything taller and
+    // preserveAspectRatio="meet" shrinks the drawing into two dead gutters.
+    it('keeps the viewBox height equal to the host box in every layout mode', () => {
+      expect(gexSrc).not.toContain('(hostH.value || 340) * 0.55')
+      expect(gexSrc).toContain('const H = computed(() => Math.max(160, hostH.value || 340))')
     })
   })
 
@@ -242,6 +280,29 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
       expect(html).toContain('KEY TAKEAWAYS')
       expect(html).toContain('AGE 15s')
       expect(html).toContain('450 CONTRACTS')
+    })
+  })
+
+  describe('5. Squeeze panel meters are contained, not drawn across the panel', () => {
+    const squeezeSrc = readFileSync(join(root, 'components', 'SqueezeScreener.vue'), 'utf8')
+    const chartSizeSrc = readFileSync(join(root, 'composables', 'useChartSize.ts'), 'utf8')
+
+    it('lays each factor out on one row with a fixed-width meter', () => {
+      expect(squeezeSrc).toContain("grid-template-areas: 'title track score'")
+      expect(squeezeSrc).toContain('grid-template-columns: minmax(0, 1fr) 54px auto')
+      // the stacked full-bleed track only survives at the narrow breakpoint
+      const stacked = squeezeSrc.match(/'title score'\s*\n\s*'track track'/g) ?? []
+      expect(stacked).toHaveLength(1)
+    })
+
+    it('gives every factor value the same gutter so the meters share one column', () => {
+      expect(squeezeSrc).toMatch(/\.factor-score\s*\{[^}]*min-width:\s*84px/)
+      expect(squeezeSrc).not.toContain('.theory-terms .factor-score')
+    })
+
+    it('re-observes the chart host when a v-if swaps the element', () => {
+      expect(chartSizeSrc).toContain('watch(hostRef, (el) => observe(el))')
+      expect(chartSizeSrc).toContain('ro?.disconnect()')
     })
   })
 })

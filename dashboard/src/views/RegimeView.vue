@@ -3418,6 +3418,22 @@ function onBreadthActivate(): void {
   gap: 1rem;
 }
 
+/* Both panels stretch to one row height; let each side's table rows absorb
+   the slack instead of leaving a dead band under the shorter table. */
+.table-wrap,
+.backtest-summary,
+.regime-table-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.signals-table,
+.regime-perf-table {
+  height: 100%;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -3552,7 +3568,7 @@ function onBreadthActivate(): void {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: var(--s4);
-  align-items: start;
+  align-items: stretch;
   min-width: 0;
 }
 
@@ -3571,6 +3587,19 @@ function onBreadthActivate(): void {
   gap: var(--s2);
   min-height: 480px;
   min-width: 0;
+}
+
+/* The verdict rail sets the row height; the trailing chart card absorbs the
+   difference instead of stranding it as a void above the breadth strip. The
+   first child is held to content height: its internal chart measures its own
+   host, and a stretched height:100% chain there feeds back into the observer
+   and inflates the svg without bound. */
+.surface-col > :first-child {
+  height: auto;
+}
+
+.surface-col > :last-child {
+  flex: 1 1 auto;
 }
 
 .error-copy {

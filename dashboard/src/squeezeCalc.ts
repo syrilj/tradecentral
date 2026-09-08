@@ -395,13 +395,7 @@ function finiteNum(value: unknown): number | null {
 }
 
 export type TheoryState =
-  | 'unmeasured'
-  | 'dampened'
-  | 'no_fuel'
-  | 'fuel_only'
-  | 'bull_lean'
-  | 'bear_lean'
-  | 'two_way'
+  'unmeasured' | 'dampened' | 'no_fuel' | 'fuel_only' | 'bull_lean' | 'bear_lean' | 'two_way'
 
 export type TheoryTermTone = 'fuel' | 'flow' | 'mom' | 'bull' | 'bear' | 'warn' | 'ink'
 
@@ -466,9 +460,7 @@ const MOM_REF = 0.03
  * map the 0–100 board onto Unlikely / Likely / Imminent — walk-forward 1d
  * hit rate on the fired score has not beaten a momentum baseline.
  */
-export function buildTheoryIdentity(
-  squeeze: OptionsSqueeze | null | undefined,
-): TheoryIdentity {
+export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined): TheoryIdentity {
   const c = squeeze?.components ?? {}
   const t = squeeze?.theory ?? {}
   const gex = t.short_premium_gex_m ?? {}
@@ -485,15 +477,21 @@ export function buildTheoryIdentity(
   const atmShare = finiteNum(c.theory_atm_share) ?? finiteNum(gex.atm_share)
   const weightedDte = finiteNum(c.theory_weighted_dte) ?? finiteNum(gex.weighted_dte)
   const urgency = weightedDte == null ? null : Math.exp(-URGENCY_C * weightedDte)
-  const flowImbalance =
+  const flowImbalanceRaw =
     finiteNum(t.directional_flow_imbalance) ?? finiteNum(c.theory_directional_flow_imbalance)
+  // A 0.0 with zero confidence is not a measurement — the tape carried no
+  // buy/sell side, so the honest value is "unmeasured", not a flat zero.
+  const flowConfidence = finiteNum(c.theory_imbalance_confidence)
+  const flowImbalance = flowImbalanceRaw != null && flowConfidence === 0 ? null : flowImbalanceRaw
   const flowWeight = finiteNum(c.flow_weight) ?? DEFAULT_FLOW_WEIGHT
   const momentum = finiteNum(t.momentum) ?? finiteNum(c.theory_momentum)
   const momentumFresh = Boolean(t.momentum_fresh ?? c.theory_momentum_fresh)
   const convictionBull = finiteNum(c.theory_conviction_bull)
   const convictionBear = finiteNum(c.theory_conviction_bear)
-  const bullUi = finiteNum(t.bullish_ui) ?? (squeeze?.bullish != null ? squeeze.bullish * 100 : null)
-  const bearUi = finiteNum(t.bearish_ui) ?? (squeeze?.bearish != null ? squeeze.bearish * 100 : null)
+  const bullRaw = finiteNum(squeeze?.bullish)
+  const bearRaw = finiteNum(squeeze?.bearish)
+  const bullUi = finiteNum(t.bullish_ui) ?? (bullRaw != null ? bullRaw * 100 : null)
+  const bearUi = finiteNum(t.bearish_ui) ?? (bearRaw != null ? bearRaw * 100 : null)
   const signed = finiteNum(squeeze?.score)
   const advM = finiteNum(t.adv_m)
   const advAvailable = t.adv_available !== false && (advM == null || advM > 0)
@@ -517,7 +515,9 @@ export function buildTheoryIdentity(
   }
 
   const momGate =
-    momentum == null || !momentumFresh ? null : Math.max(0, Math.min(1, Math.abs(momentum) / MOM_REF))
+    momentum == null || !momentumFresh
+      ? null
+      : Math.max(0, Math.min(1, Math.abs(momentum) / MOM_REF))
   const flowGate = flowImbalance == null ? null : Math.max(0, Math.min(1, Math.abs(flowImbalance)))
 
   const terms: TheoryTerm[] = [
@@ -526,7 +526,8 @@ export function buildTheoryIdentity(
       label: '|GEX⁻| / ADV',
       display: liquidityRatio == null ? '—' : liquidityRatio.toFixed(3),
       fill01: liquidityRatio == null ? 0 : Math.max(0, Math.min(1, liquidityRatio)),
-      detail: 'Short-premium dealer gamma for a 1% move, as a fraction of average daily dollar volume.',
+      detail:
+        'Short-premium dealer gamma for a 1% move, as a fraction of average daily dollar volume.',
       tone: 'fuel',
     },
     {
@@ -543,7 +544,7 @@ export function buildTheoryIdentity(
       display:
         weightedDte == null
           ? '—'
-          : `${weightedDte.toFixed(1)}D · e^{-cT}=${urgency == null ? '—' : urgency.toFixed(2)}`,
+          : `${weightedDte.toFixed(1)}D · ${urgency == null ? '—' : urgency.toFixed(2)}`,
       fill01: urgency == null ? 0 : Math.max(0, Math.min(1, urgency)),
       detail: `e^{−${URGENCY_C} · weighted DTE}. Near-dated gamma is more urgent; 45D is ~0.11.`,
       tone: 'fuel',

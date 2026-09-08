@@ -160,6 +160,8 @@ const hedgingImpactIv = computed<number | null>(() => {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  flex: 1 1 auto;
+  justify-content: space-evenly;
 }
 
 .metric-row {

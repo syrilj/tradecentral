@@ -53,6 +53,9 @@ const PAPER_FILES = new Set<string>([
   'src/components/FlowSignatureDiagram.vue',
   'src/components/ModelLabPlate.vue',
   'src/components/WorkspacePathPlate.vue',
+  'src/components/DeskTelemetryPlate.vue',
+  'src/components/IcDecayPlate.vue',
+  'src/components/PayoffPlate.vue',
 ])
 
 /** tokens.css IS allowed to define hex/rgb/rgba/hsl literals — it is the palette. */

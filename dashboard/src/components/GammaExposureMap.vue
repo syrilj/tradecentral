@@ -160,18 +160,22 @@ const visible = computed(() => {
   const filtered = props.rows.filter(
     (r) => r.strike >= props.spot * (1 - ratio) && r.strike <= props.spot * (1 + ratio),
   )
-  return filtered.length >= 6 ? filtered : props.rows
+  if (filtered.length >= 3) return filtered
+  /* A window too tight to draw used to fall back to the whole chain, so picking
+     ATM on a wide-strike name silently handed you all 78 strikes. Widen to the
+     nearest strikes around spot instead — the control has to mean what it says. */
+  return [...props.rows]
+    .sort((a, b) => Math.abs(a.strike - props.spot) - Math.abs(b.strike - props.spot))
+    .slice(0, Math.min(7, props.rows.length))
 })
 
 const orderedRows = computed(() => [...visible.value].sort((a, b) => a.strike - b.strike))
 const colCount = computed(() => Math.max(orderedRows.value.length, 1))
 
-const H = computed(() => {
-  if (layoutMode.value === 'split') {
-    return Math.max(180, Math.min(260, (hostH.value || 340) * 0.55))
-  }
-  return Math.max(160, hostH.value || 340)
-})
+/* The viewBox height has to equal the host box height. Anything taller and
+   preserveAspectRatio="meet" scales the whole drawing down to fit, parking it in
+   the middle of two dead gutters — which is what split view used to do. */
+const H = computed(() => Math.max(160, hostH.value || 340))
 const plotInnerH = computed(() => Math.max(80, H.value - top - bottom))
 const plotBottom = computed(() => top + plotInnerH.value)
 const zeroY = computed(() => top + plotInnerH.value / 2)
@@ -386,6 +390,23 @@ const wallLabels = computed<WallLabel[]>(() => {
   return out
 })
 
+/* Share of the largest |net| in view. Replaces the old micro-meter rule: the
+   number carries the magnitude, so the row does not need a rail drawn across it. */
+function netShareLabel(net: number): string {
+  const peak = maxAbs.value || 0
+  if (!peak || !Number.isFinite(net)) return '—'
+  return `${Math.min(100, Math.round((Math.abs(net) / peak) * 100))}% OF PEAK`
+}
+
+type TableSortKey = 'strike' | 'winner' | 'call' | 'put' | 'net' | 'dist'
+
+/* Every column is sortable, so every header carries a caret. The inactive ones
+   sit at low opacity — the affordance is visible before you hover. */
+function sortArrow(key: TableSortKey): string {
+  if (tableSortKey.value !== key) return '▾'
+  return tableSortDir.value === 'asc' ? '▲' : '▼'
+}
+
 function setTableSort(key: 'strike' | 'winner' | 'call' | 'put' | 'net' | 'dist'): void {
   if (tableSortKey.value === key) {
     tableSortDir.value = tableSortDir.value === 'asc' ? 'desc' : 'asc'
@@ -452,6 +473,11 @@ function xOfPrice(price: number): number | null {
 
 const lockX = computed(() => (props.focusStrike != null ? xOfPrice(props.focusStrike) : null))
 const flipX = computed(() => (props.gammaFlip != null ? xOfPrice(props.gammaFlip) : null))
+
+/** Which gamma regime spot is actually sitting in — the one worth naming. */
+const spotAboveFlip = computed(
+  () => props.gammaFlip != null && props.spot != null && props.spot >= props.gammaFlip,
+)
 
 /**
  * Estimate the rendered pixel width of a level badge label.
@@ -1100,19 +1126,26 @@ watch(
             :width="Math.max(0, left + plotInnerW - Math.max(flipX, left))"
             :height="plotInnerH"
           />
-          <text v-if="flipX > left + 110" :x="left + 8" :y="top + 14" class="regime-label neg halo">
-            SHORT GAMMA · VOLATILITY AMPLIFIED
-          </text>
-          <text
-            v-if="flipX < left + plotInnerW - 110"
-            :x="left + plotInnerW - 8"
-            :y="top + 14"
-            text-anchor="end"
-            class="regime-label pos halo"
-          >
-            LONG GAMMA · VOLATILITY DAMPENED
-          </text>
         </g>
+
+        <!-- One banner, on the caption row rather than inside the plot. Two of
+             them shouting from inside the frame collided with the peak-bar value
+             labels, which sit in exactly the same corner. Kept outside the zone
+             group because that group is clipped to the plot rect. -->
+        <text
+          v-if="showRegimes && flipX != null && rows.length"
+          :x="left + plotInnerW"
+          :y="14"
+          text-anchor="end"
+          class="regime-label"
+          :class="spotAboveFlip ? 'pos' : 'neg'"
+        >
+          {{
+            spotAboveFlip
+              ? 'LONG GAMMA · VOLATILITY DAMPENED'
+              : 'SHORT GAMMA · VOLATILITY AMPLIFIED'
+          }}
+        </text>
 
         <!-- Y Grid Lines (hairline, recessive) + vertical strike guides -->
         <g v-if="rows.length" class="grid" clip-path="url(#gex-plot-clip)">
@@ -1451,34 +1484,34 @@ watch(
             <tr>
               <th :class="{ active: tableSortKey === 'strike' }" @click="setTableSort('strike')">
                 STRIKE
-                <span class="sort-arr">{{
-                  tableSortKey === 'strike' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                <span class="sort-arr" :class="{ idle: tableSortKey !== 'strike' }">{{
+                  sortArrow('strike')
                 }}</span>
               </th>
               <th :class="{ active: tableSortKey === 'winner' }" @click="setTableSort('winner')">
                 WINNER / BIAS
-                <span class="sort-arr">{{
-                  tableSortKey === 'winner' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                <span class="sort-arr" :class="{ idle: tableSortKey !== 'winner' }">{{
+                  sortArrow('winner')
                 }}</span>
               </th>
               <th
-                class="num-col"
+                class="num-col call-head"
                 :class="{ active: tableSortKey === 'call' }"
                 @click="setTableSort('call')"
               >
                 CALL {{ metric.toUpperCase() }}
-                <span class="sort-arr">{{
-                  tableSortKey === 'call' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                <span class="sort-arr" :class="{ idle: tableSortKey !== 'call' }">{{
+                  sortArrow('call')
                 }}</span>
               </th>
               <th
-                class="num-col"
+                class="num-col put-head"
                 :class="{ active: tableSortKey === 'put' }"
                 @click="setTableSort('put')"
               >
                 PUT {{ metric.toUpperCase() }}
-                <span class="sort-arr">{{
-                  tableSortKey === 'put' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                <span class="sort-arr" :class="{ idle: tableSortKey !== 'put' }">{{
+                  sortArrow('put')
                 }}</span>
               </th>
               <th
@@ -1487,8 +1520,8 @@ watch(
                 @click="setTableSort('net')"
               >
                 NET {{ metric.toUpperCase() }}
-                <span class="sort-arr">{{
-                  tableSortKey === 'net' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                <span class="sort-arr" :class="{ idle: tableSortKey !== 'net' }">{{
+                  sortArrow('net')
                 }}</span>
               </th>
               <th
@@ -1497,8 +1530,8 @@ watch(
                 @click="setTableSort('dist')"
               >
                 SPOT DISTANCE
-                <span class="sort-arr">{{
-                  tableSortKey === 'dist' ? (tableSortDir === 'asc' ? '▲' : '▼') : ''
+                <span class="sort-arr" :class="{ idle: tableSortKey !== 'dist' }">{{
+                  sortArrow('dist')
                 }}</span>
               </th>
             </tr>
@@ -1535,22 +1568,17 @@ watch(
               </td>
               <td class="num-col call-num">
                 {{ metricValue(bar.callVal) }}
-                <small class="sub-num">OI {{ compact(bar.call_oi) }}</small>
+                <small v-if="metric === 'gex'" class="sub-num"
+                  >OI {{ compact(bar.call_oi) }}</small
+                >
               </td>
               <td class="num-col put-num">
                 {{ metricValue(bar.putVal) }}
-                <small class="sub-num">OI {{ compact(bar.put_oi) }}</small>
+                <small v-if="metric === 'gex'" class="sub-num">OI {{ compact(bar.put_oi) }}</small>
               </td>
               <td class="num-col net-num" :class="bar.net >= 0 ? 'positive' : 'negative'">
                 <span class="net-val">{{ metricValue(bar.net, true) }}</span>
-                <div class="net-micro-meter">
-                  <i
-                    :class="bar.net >= 0 ? 'meter-pos' : 'meter-neg'"
-                    :style="{
-                      width: `${Math.min(100, (Math.abs(bar.net) / (maxAbs || 1)) * 100)}%`,
-                    }"
-                  />
-                </div>
+                <small class="sub-num">{{ netShareLabel(bar.net) }}</small>
               </td>
               <td class="num-col dist-num">
                 {{ distanceLabel(bar.strike) }}
@@ -1796,8 +1824,7 @@ watch(
 
 .exposure-head {
   display: flex;
-  min-height: 36px;
-  max-height: 38px;
+  min-height: 54px;
   background: var(--void-lift);
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-md);
@@ -1816,46 +1843,51 @@ watch(
   background: var(--rule);
 }
 
+/* Stacked ledger cells: the label rides above the figure so the number always
+   gets the cell's full width and is never ellipsized at workbench widths. */
 .exposure-total {
   min-width: 0;
-  min-height: 34px;
-  padding: 3px 10px;
+  padding: 7px 14px 7px 13px;
   background: var(--void-lift);
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
   position: relative;
   overflow: hidden;
 }
 
+/* Side semantics read as a machined tick, not a highlighter strip. */
 .exposure-total::after {
   content: '';
   position: absolute;
-  inset: auto 0 0;
-  height: 2px;
+  inset: 9px auto 9px 0;
+  width: 3px;
   background: currentColor;
+  opacity: 0.85;
 }
 
 .exposure-total .label {
   color: var(--ink-dim);
   font: 700 var(--t-micro) var(--font-display);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.07em;
   flex: 0 0 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
 }
 
 .exposure-total strong {
-  font: 700 0.875rem var(--font-data);
-  line-height: 1.15;
+  font: 800 1.1rem var(--font-data);
+  letter-spacing: -0.01em;
+  line-height: 1.1;
   color: inherit;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: right;
+  max-width: 100%;
 }
 
 .exposure-total.call {
@@ -1904,7 +1936,8 @@ watch(
 }
 
 .focus-strike > strong {
-  font: 700 0.875rem var(--font-data);
+  font: 800 1rem var(--font-data);
+  letter-spacing: -0.01em;
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1921,7 +1954,8 @@ watch(
 
 .focus-metric strong {
   overflow: hidden;
-  font: 700 var(--t-micro) var(--font-data);
+  font: 800 0.9rem var(--font-data);
+  letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1959,6 +1993,13 @@ watch(
   flex: 1 1 0;
   min-height: 0;
   background: var(--void);
+}
+
+/* Split view shares the panel with the strike table. Both get a floor so neither
+   collapses — a chart box shorter than its own minimum viewBox letterboxes. */
+.plot-scroll.split-view {
+  flex: 1 1 44%;
+  min-height: 172px;
 }
 
 .plot-scroll::-webkit-scrollbar {
@@ -2334,6 +2375,7 @@ line.level-connector {
    OPTIONS STRIKE MATRIX TABLE (GRAPH TABLE)
    ========================================================================= */
 .gex-table-wrap {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -2350,8 +2392,8 @@ line.level-connector {
 }
 
 .gex-table-wrap:not(.full-view) {
-  flex: 1 1 200px;
-  max-height: 48%;
+  flex: 1 1 56%;
+  min-height: 186px;
 }
 
 .gex-table-toolbar {
@@ -2410,6 +2452,10 @@ line.level-connector {
   min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
+  /* clears the bottom fade so the final row can be scrolled fully into view */
+  padding-bottom: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-hi) transparent;
 }
 
 .gex-table-scroll::-webkit-scrollbar {
@@ -2457,7 +2503,17 @@ line.level-connector {
 
 .sort-arr {
   font-size: var(--t-micro);
-  margin-left: 2px;
+  margin-left: 3px;
+  color: var(--phosphor);
+}
+
+.sort-arr.idle {
+  color: var(--ink-faint);
+  opacity: 0.45;
+}
+
+.gex-strike-table thead th:hover .sort-arr.idle {
+  opacity: 0.9;
 }
 
 .gex-strike-table tbody tr {
@@ -2480,10 +2536,15 @@ line.level-connector {
 }
 
 .gex-strike-table tbody td {
-  padding: 4px 8px;
+  padding: 5px 10px;
   font: 500 var(--t-micro) var(--font-data);
   color: var(--ink);
   white-space: nowrap;
+  vertical-align: top;
+}
+
+.gex-strike-table thead th {
+  padding-inline: 10px;
 }
 
 .strike-cell {
@@ -2524,31 +2585,27 @@ line.level-connector {
   color: var(--warn);
 }
 
+/* One filled pill per row turns the whole column into candy. The dot carries the
+   side; the text carries the number. Fill is reserved for the tag badges, which
+   are rare enough to earn it. */
 .winner-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 6px;
-  border-radius: 9999px;
+  gap: 5px;
+  padding: 1px 0;
   font: 700 var(--t-micro) var(--font-display);
   letter-spacing: 0.03em;
 }
 
 .winner-pill.call {
-  background: var(--call-wash);
-  border: var(--hair) solid var(--call);
   color: var(--call-hi);
 }
 
 .winner-pill.put {
-  background: var(--put-wash);
-  border: var(--hair) solid var(--put);
   color: var(--put-hi);
 }
 
 .winner-pill.flat {
-  background: var(--void-lift);
-  border: var(--hair) solid var(--rule);
   color: var(--ink-dim);
 }
 
@@ -2569,12 +2626,25 @@ line.level-connector {
   color: var(--ink-faint);
 }
 
-.call-num {
+/* Colour is reserved for sign and for flagged strikes. The call and put columns
+   are already named by their headers, so their magnitudes read as plain ink —
+   otherwise every cell in the table is shouting and nothing is legible. */
+.call-num,
+.put-num {
+  color: var(--ink);
+}
+
+.gex-strike-table thead th.call-head {
   color: var(--call-hi);
 }
 
-.put-num {
+.gex-strike-table thead th.put-head {
   color: var(--put-hi);
+}
+
+.gex-strike-table thead th.call-head.active,
+.gex-strike-table thead th.put-head.active {
+  color: var(--phosphor);
 }
 
 .net-num {
@@ -2588,26 +2658,8 @@ line.level-connector {
   color: var(--put-hi);
 }
 
-.net-micro-meter {
-  width: 100%;
-  height: 2px;
-  background: var(--rule-faint);
-  margin-top: 2px;
-  position: relative;
-  overflow: hidden;
-}
-
-.meter-pos {
-  display: block;
-  height: 100%;
-  background: var(--call);
-}
-
-.meter-neg {
-  display: block;
-  height: 100%;
-  background: var(--put);
-  margin-left: auto;
+.net-num .net-val {
+  font-weight: 700;
 }
 
 .dist-num {
