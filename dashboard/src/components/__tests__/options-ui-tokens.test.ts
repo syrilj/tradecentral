@@ -89,8 +89,8 @@ describe('Options UI token gate (shipped SFCs)', () => {
     const flow = readSrc('components/OptionsFlowContext.vue')
     expect(view).toMatch(/OptionsFlowContext/)
     expect(flow).toMatch(/class="premium-track"/)
-    expect(flow).toMatch(/\.call-fill\s*\{\s*background:\s*var\(--call\)/)
-    expect(flow).toMatch(/\.put-fill\s*\{\s*background:\s*var\(--put\)/)
+    expect(flow).toMatch(/\.call-fill\s*\{\s*background:\s*var\(--call-hi\)/)
+    expect(flow).toMatch(/\.put-fill\s*\{\s*background:\s*var\(--put-hi\)/)
     expect(flow).toMatch(/\.flow-context\.call\s*\{[^}]*--flow-tone:\s*var\(--call\)/s)
     // The gamma map owns the workbench; the squeeze board keeps a 320px floor
     // so it stays a readable peer rather than collapsing to a strip.
@@ -258,8 +258,7 @@ describe('Options UI token gate (shipped SFCs)', () => {
       if (!m) throw new Error(`token ${name} not found or not a 6-digit hex`)
       return m[1]
     }
-    const rgb = (h: string): number[] =>
-      [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
+    const rgb = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
     const chan = (c: number): number => {
       const v = c / 255
       return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
@@ -320,7 +319,6 @@ const AURA_FORBIDDEN = [
 
 const AURA_SURFACES = [
   'views/FlowView.vue',
-  'components/SearchPalette.vue',
   'components/TrajectoryChart.vue',
   'views/DeskView.vue',
   'views/AdaptiveView.vue',
@@ -344,10 +342,17 @@ describe('Aura-farming instrument shell gate', () => {
     expect(src).toMatch(/\.overlay\.ema21\s*\{\s*stroke:\s*var\(--put\)/)
   })
 
-  it('SearchPalette uses a solid scrim, not frosted glass', () => {
+  it('SearchPalette floats as glass chrome over a lightened, readable scrim', () => {
     const src = readSrc('components/SearchPalette.vue')
-    expect(src).not.toContain('backdrop-filter')
+    // The palette is floating functional chrome: the one surface class allowed
+    // backdrop blur under the two-layer material model.
+    expect(src).toContain('background: var(--glass-overlay);')
+    expect(src).toContain('backdrop-filter: var(--glass-blur-lg);')
+    expect(src).toContain('-webkit-backdrop-filter: var(--glass-blur-lg);')
+    // Scrim is a veil, not a near-opaque wall: content peeks through.
     expect(src).toMatch(/\.scrim\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--void\)/s)
+    // Glass never nests: the field child of the glass palette is solid.
+    expect(src).toMatch(/\.field\s*\{[^}]*background:\s*var\(--void-lift\)/s)
   })
 
   it('FlowView standalone market-tape shell stays flat and instrument-like', () => {

@@ -325,7 +325,7 @@ svg {
 .y-label,
 .x-label {
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   fill: var(--ink-faint);
   letter-spacing: 0.04em;
 }
@@ -345,7 +345,7 @@ svg {
 }
 .strike-label {
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: var(--t-nano);
   letter-spacing: 0.04em;
   fill: var(--ink-faint);
 }
@@ -388,7 +388,7 @@ svg {
   border-left: 0;
 }
 .g-label {
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -415,7 +415,7 @@ svg {
   padding: 10px 14px;
 }
 .sl-label {
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;

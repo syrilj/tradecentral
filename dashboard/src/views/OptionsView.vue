@@ -4297,7 +4297,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font: 700 var(--t-nano) var(--font-data);
   letter-spacing: 0.04em;
   cursor: pointer;
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
   box-shadow: var(--glass-specular-subtle);
   transition:
     color var(--dur-fast) var(--ease-out),
@@ -4338,7 +4338,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-dim);
   border: var(--hair) solid var(--glass-border);
   background: var(--glass-base);
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
   cursor: pointer;
   transition:
     color var(--dur-fast) var(--ease-out),
@@ -5182,7 +5182,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid var(--glass-border);
   color: var(--ink-dim);
   background: var(--panel-hi);
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
   font-size: var(--t-micro);
   font-weight: 700;
   cursor: pointer;
@@ -5626,7 +5626,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 28px;
   border: var(--hair) solid var(--glass-border);
   background: var(--glass-surface);
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
   font-size: var(--t-micro);
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -5841,7 +5841,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-dim);
   font-size: var(--t-nano);
   font-weight: 700;
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-out);
 }
@@ -5987,7 +5987,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--phosphor-wash);
   border: var(--hair) solid var(--phosphor-dim);
   padding: 1px 6px;
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
 }
 .reset-filter-btn {
   font-size: var(--t-nano);
@@ -6348,7 +6348,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-faint);
   font-size: var(--t-nano);
   font-weight: 750;
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
 }
 /* NEAR tab: slightly more prominent than the generic tabs — it's the actionable default */
 .tape-tabs .near-tab {
@@ -6384,7 +6384,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid var(--glass-border);
   color: var(--ink-faint);
   background: var(--glass-base);
-  border-radius: 9999px;
+  border-radius: var(--r-capsule);
   font-size: var(--t-micro);
   font-weight: 700;
   cursor: pointer;

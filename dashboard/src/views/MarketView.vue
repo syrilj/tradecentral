@@ -4882,7 +4882,7 @@ const finChartData = computed(() => {
 .breakdown-progress-track {
   height: 6px;
   background: var(--panel);
-  border-radius: 3px;
+  border-radius: var(--r-xs);
   overflow: hidden;
 }
 

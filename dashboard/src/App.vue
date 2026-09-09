@@ -2430,10 +2430,9 @@ function openFearGreed(): void {
   padding: 2px 12px;
   border-radius: var(--r-capsule);
   color: var(--ink-dim);
+  /* Solid button nested inside the glass strip — glass never nests. */
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-surface);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  background: var(--void-lift);
   box-shadow: var(--glass-specular-subtle);
   transition:
     color var(--dur-fast) var(--ease-out),
@@ -2481,10 +2480,8 @@ function openFearGreed(): void {
   padding: 2px 10px 2px 4px;
   border-radius: var(--r-capsule);
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-surface);
-  background: var(--glass-profile-btn-bg, var(--glass-surface));
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Solid button nested inside the glass strip — glass never nests. */
+  background: var(--glass-profile-btn-bg, var(--void-lift));
   box-shadow: var(--glass-specular-subtle);
   color: var(--ink-soft);
   cursor: pointer;

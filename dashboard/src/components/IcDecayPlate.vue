@@ -201,12 +201,12 @@ const horizonLabel = (h: number): string => `${h}d`
   padding: 2px 7px;
   background: var(--tc-yellow);
   color: var(--tc-navy);
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.1em;
 }
 .b-copy {
-  font-size: 9.5px;
+  font-size: var(--t-nano);
   letter-spacing: 0.03em;
   color: var(--ink-dim);
 }
@@ -227,7 +227,7 @@ const horizonLabel = (h: number): string => `${h}d`
   border-left: 0;
 }
 .k-label {
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -240,7 +240,7 @@ const horizonLabel = (h: number): string => `${h}d`
   color: var(--call);
 }
 .k-sub {
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
 }
@@ -262,7 +262,7 @@ const horizonLabel = (h: number): string => `${h}d`
   color: var(--ink-dim);
 }
 .z-meta {
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
 }
@@ -282,7 +282,7 @@ svg {
 .y-label,
 .x-label {
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: var(--t-nano);
   fill: var(--ink-faint);
   letter-spacing: 0.04em;
 }
@@ -319,7 +319,7 @@ svg {
 .ic-table th {
   padding: 8px 14px;
   text-align: left;
-  font-size: 9px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;

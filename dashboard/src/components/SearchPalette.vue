@@ -226,7 +226,9 @@ function commit(): void {
   position: fixed;
   inset: 0;
   z-index: var(--z-overlay);
-  background: color-mix(in srgb, var(--void) 88%, transparent);
+  /* Lightened so the content layer peeks through behind the floating palette
+     while staying dark enough to keep the modal readable. */
+  background: color-mix(in srgb, var(--void) 55%, transparent);
   display: flex;
   justify-content: center;
   padding-top: 12vh;
@@ -240,12 +242,26 @@ function commit(): void {
   border: var(--hair) solid var(--glass-border-hi);
   border-radius: var(--r-xl);
   padding: 0;
-  background: var(--panel);
+  /* Floating functional chrome: the one surface allowed glass. Children
+     (e.g. .field below) must stay solid — glass never nests. */
+  background: var(--glass-overlay);
+  backdrop-filter: var(--glass-blur-lg);
+  -webkit-backdrop-filter: var(--glass-blur-lg);
   box-shadow:
     0 24px 64px rgba(0, 0, 0, 0.85),
     var(--glass-specular);
   overflow: hidden;
   animation: rise var(--dur) var(--ease-out) both;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: var(--hair) solid var(--rule);
+  /* Solid child of the glass palette — no backdrop blur. */
+  background: var(--void-lift);
 }
 
 .field {

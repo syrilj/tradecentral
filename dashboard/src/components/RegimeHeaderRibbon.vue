@@ -421,13 +421,13 @@ function levelDist(lvl: number | null): string {
 }
 .spot-stale {
   margin-top: 0.15rem;
-  font-size: 0.58rem;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   color: var(--warn);
 }
 .chg-basis {
   margin-left: 0.3rem;
-  font-size: 0.56rem;
+  font-size: var(--t-nano);
   letter-spacing: 0.06em;
   color: var(--ink-faint);
 }

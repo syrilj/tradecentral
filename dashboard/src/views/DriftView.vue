@@ -2767,7 +2767,7 @@ h1 {
 }
 .conf-chip {
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--r-capsule);
   border: 1px solid currentColor;
   font-family: var(--font-data);
   font-size: var(--t-micro);

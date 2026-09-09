@@ -154,7 +154,7 @@ describe('Milestone 1 Challenger: Empirical Design Tokens & UI Primitives Verifi
       })
     }
 
-    it('ensures -webkit-backdrop-filter is paired with backdrop-filter across all glass utilities in base.css', () => {
+    it('ensures -webkit-backdrop-filter is paired with backdrop-filter across the remaining blurred utility in base.css', () => {
       const backdropMatches = baseContent.match(
         /(?<!-webkit-)backdrop-filter:\s*var\(--glass-blur-[a-z]+\);/g,
       )
@@ -164,8 +164,11 @@ describe('Milestone 1 Challenger: Empirical Design Tokens & UI Primitives Verifi
 
       expect(backdropMatches).toBeTruthy()
       expect(webkitMatches).toBeTruthy()
-      expect(backdropMatches?.length).toBe(6)
-      expect(webkitMatches?.length).toBe(6)
+      // The .glass-panel / .glass-panel-interactive / .glass-card / .glass-chip
+      // / .btn-glass utilities are solid content-layer surfaces now; only the
+      // .input-glass well still carries a (paired) backdrop blur.
+      expect(backdropMatches?.length).toBe(1)
+      expect(webkitMatches?.length).toBe(1)
     })
 
     it('verifies interactive hover/active/focus micro-interactions in base.css', () => {
@@ -188,13 +191,20 @@ describe('Milestone 1 Challenger: Empirical Design Tokens & UI Primitives Verifi
       expect(panelContent).toContain('.panel:hover')
     })
 
-    it('verifies SearchPalette.vue maintains solid scrim invariant (no forbidden backdrop-filter)', () => {
-      expect(searchContent).not.toContain('backdrop-filter')
+    it('verifies SearchPalette.vue floats as glass chrome over a lightened scrim with a solid field child', () => {
+      // The palette is floating functional chrome — the one surface class
+      // allowed backdrop blur under the two-layer material model.
+      expect(searchContent).toContain('background: var(--glass-overlay);')
+      expect(searchContent).toContain('backdrop-filter: var(--glass-blur-lg);')
+      expect(searchContent).toContain('-webkit-backdrop-filter: var(--glass-blur-lg);')
+      // Scrim is a veil, not a near-opaque wall: content peeks through.
       expect(searchContent).toContain(
-        'background: color-mix(in srgb, var(--void) 88%, transparent);',
+        'background: color-mix(in srgb, var(--void) 55%, transparent);',
       )
       expect(searchContent).toContain('var(--glass-border-hi)')
       expect(searchContent).toContain('var(--glass-specular)')
+      // Glass never nests: the field child of the glass palette is solid.
+      expect(searchContent).toContain('background: var(--void-lift);')
     })
 
     it('verifies VerdictChip.vue handles verdict codes and has frosted glass styling', () => {

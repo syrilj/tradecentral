@@ -4874,7 +4874,7 @@ function downloadHistoryTapeCsv(): void {
 
 .thresholds button:hover:not(.active) {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash-line);
 }
 
 .thresholds button.active {
@@ -5408,7 +5408,7 @@ button:disabled {
 
 .hub-tab-btn:hover:not(.active) {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash-line);
 }
 
 .hub-tab-btn.active {
@@ -5595,9 +5595,8 @@ button:disabled {
   padding: 0 var(--s3);
   color: var(--text-secondary);
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-surface);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Solid filter chip — no backdrop blur in the content layer. */
+  background: var(--panel-hi);
   box-shadow: var(--glass-specular-subtle);
   border-radius: var(--r-capsule);
   font-family: var(--font-display);
@@ -5619,14 +5618,6 @@ button:disabled {
   color: var(--phosphor);
   border-color: var(--phosphor-dim);
   background: var(--phosphor-wash);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .ticker-cats button {
-    background: var(--panel-hi);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
 }
 
 .symbol-tape {
