@@ -497,13 +497,29 @@ const deskAction = computed(() => {
   padding: 8px 14px;
   border-left: var(--hair) solid var(--glass-border);
 }
+/* Flex items default to min-width:auto, so "SESSION TOTAL $286.6M" refused to
+   shrink and spilled past the cell's left border — the trailing "M" was cut
+   off, which turns a $286.6M number into a $286.6 one. Let the caption
+   ellipsize and the figure wrap to its own line instead of overflowing. */
 .section-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: var(--s2);
+  gap: 2px var(--s2);
+  min-width: 0;
   color: var(--ink-faint);
   font-size: var(--t-micro);
   letter-spacing: 0.04em;
+}
+.section-head > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-head > span:last-child {
+  flex: none;
+  white-space: nowrap;
 }
 .section-head b {
   color: var(--ink-soft);

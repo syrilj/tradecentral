@@ -339,7 +339,7 @@ a:hover {
 }
 
 .grid tbody tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--wash-1);
 }
 
 /* Figures align on the decimal */
@@ -384,7 +384,7 @@ td.num {
   padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--wash-1);
   color: var(--ink-soft);
   font-family: var(--font-ui);
   font-size: var(--t-tiny);
@@ -456,55 +456,51 @@ td.num {
   border: var(--hair) solid var(--rule-hi) !important;
 }
 
-/* ---- Liquid Glass utility classes (functional layer only) ---------------- */
+/* ---- Solid elevated surface utilities (content layer) ----------------------
+   Despite the names, these are NOT glass: backdrop blur is reserved for
+   floating functional chrome (rail, strip, palette, drawers that float over
+   content). Cards, chips and buttons in the content layer get opaque panel
+   surfaces with border + shadow carrying the elevation instead. Glass must
+   also never nest — a component that keeps its own chrome-level glass (e.g.
+   ProfileDrawer's scoped surface) renders these as solid children. */
 
 .glass-panel {
-  background: var(--glass-surface);
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
 }
 
 .glass-panel-interactive {
-  background: var(--glass-surface);
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
   transition:
     background var(--dur-fast) ease,
     border-color var(--dur-fast) ease,
     box-shadow var(--dur-fast) ease;
 }
 .glass-panel-interactive:hover {
-  background: var(--glass-surface-hi);
+  background: var(--panel-raise);
   border-color: var(--glass-border-hi);
   box-shadow: var(--glass-shadow-md), var(--glass-specular);
 }
 
 .glass-card {
-  background: var(--glass-surface);
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border-subtle);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
 }
 
 .glass-chip {
-  background: var(--glass-surface);
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border-subtle);
   box-shadow: var(--glass-specular-subtle);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
 }
 
 .btn-glass {
-  background: var(--glass-surface);
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
   cursor: pointer;
   transition:
     background var(--dur-fast) ease,
@@ -512,12 +508,12 @@ td.num {
     transform var(--dur-fast) ease;
 }
 .btn-glass:hover:not(:disabled) {
-  background: var(--glass-surface-hi);
+  background: var(--panel-raise);
   border-color: var(--glass-border-hi);
 }
 .btn-glass:active:not(:disabled) {
   transform: scale(0.97);
-  background: var(--glass-base);
+  background: var(--void-lift);
 }
 
 .input-glass {
@@ -546,15 +542,8 @@ td.num {
    The settings that change the material (Apple: Reduce Transparency /
    Increase Contrast). Standard components adapt; ours must too. */
 @media (prefers-reduced-transparency: reduce) {
-  .glass-panel,
-  .glass-panel-interactive,
-  .glass-card,
-  .glass-chip,
-  .btn-glass {
-    background: var(--panel);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
+  /* The glass-* utilities are solid now; only the remaining blurred
+     .input-glass needs a reduced-transparency fallback. */
   .input-glass {
     background: var(--void-lift);
     backdrop-filter: none;

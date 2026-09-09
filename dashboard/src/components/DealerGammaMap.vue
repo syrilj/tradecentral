@@ -998,7 +998,7 @@ function signedPctLabel(v: number | null): string {
 .seg-btn:hover,
 .toggle:hover {
   color: var(--ink-soft);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--wash-2);
 }
 
 .seg-btn.on {
@@ -1347,7 +1347,7 @@ function signedPctLabel(v: number | null): string {
   gap: var(--s2);
   padding: 5px var(--s2);
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.018);
+  background: var(--wash-1);
   border-left: 1px solid var(--rule-hi);
   font-size: 11px;
   cursor: default;
@@ -1355,7 +1355,7 @@ function signedPctLabel(v: number | null): string {
 }
 
 .prio-item.on {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--wash-3);
 }
 
 .prio-item.tone-flip {

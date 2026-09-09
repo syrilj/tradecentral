@@ -80,6 +80,11 @@ const streamCountdown = ref<number>(10)
 const knownPrintKeys = ref<Set<string>>(new Set())
 const newPrintKeys = ref<Set<string>>(new Set())
 const showAllFlagged = ref<boolean>(false)
+/* The flag shelf repeats prints the tape below already lists, so leaving it
+   expanded spent ~400px of the fold restating the table's first rows and
+   pushed the tape itself off-screen. Collapsed by default; the header keeps
+   the count so nothing is hidden silently. */
+const flaggedOpen = ref<boolean>(false)
 const activeFlagFilter = ref<AnomalyFlagFilter>('all')
 const strikeBand = ref<StrikeBand>('all')
 const dteBand = ref<DteBand>('all')
@@ -1302,6 +1307,21 @@ const displayedFlaggedPrints = computed(() =>
   showAllFlagged.value ? flaggedPrints.value : flaggedPrints.value.slice(0, 4),
 )
 
+/* Without an aggressor the lean function degrades to the print's call/put
+   identity — which the "Strike · Type" column already shows — so the column
+   rendered a second copy of the same chip on every row and cost the tape a
+   full column of width. Show it only when the feed actually signed something.
+   See the "identity, not direction" caveat the API returns alongside. */
+const tapeHasLean = computed(() =>
+  renderedTape.value.some(
+    (row) =>
+      row.bias === 'bullish' ||
+      row.bias === 'bearish' ||
+      row.edge_label === 'BULL' ||
+      row.edge_label === 'BEAR',
+  ),
+)
+
 const tapeTruncated = computed(
   () => !tapeShowAll.value && visibleTape.value.length > TAPE_RENDER_CAP,
 )
@@ -1572,7 +1592,13 @@ function volOiLabel(ratio: number | null): string {
   // every print traded against a deep book, which is the opposite of the truth.
   if (ratio == null) return '—'
   if (ratio >= 10) return '>10x'
-  return `${ratio.toFixed(1)}x`
+  if (ratio >= 1) return `${ratio.toFixed(1)}x`
+  // A single print against a deep book is a genuinely small fraction: 265
+  // contracts into 60,306 OI is 0.0044. One decimal collapsed every such row
+  // to an identical "0.0x", so the column ranked nothing. Keep two decimals
+  // below 1x and name the floor rather than rounding it away to zero.
+  if (ratio >= 0.01) return `${ratio.toFixed(2)}x`
+  return '<0.01x'
 }
 
 function pricePaid(row: OptionsTapeRow): number | null {
@@ -2563,7 +2589,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   >Vendor golden flag · Whales ($100k+) · Clusters · Vol/OI surges — not ENTER</span
                 >
               </div>
-              <div class="flagged-quick-filters">
+              <div v-if="flaggedOpen" class="flagged-quick-filters">
                 <button
                   type="button"
                   class="flag-pill label"
@@ -2645,11 +2671,19 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   class="flag-toggle-btn label"
                   @click="showAllFlagged = !showAllFlagged"
                 >
-                  {{ showAllFlagged ? 'COLLAPSE' : `SHOW ALL (${flaggedPrints.length})` }}
+                  {{ showAllFlagged ? 'FEWER' : `EVERY FLAG (${flaggedPrints.length})` }}
                 </button>
               </div>
+              <button
+                type="button"
+                class="flag-shelf-toggle label"
+                :aria-expanded="flaggedOpen"
+                @click="flaggedOpen = !flaggedOpen"
+              >
+                {{ flaggedOpen ? 'HIDE CARDS' : 'SHOW CARDS' }}
+              </button>
             </div>
-            <div class="flagged-prints-grid">
+            <div v-if="flaggedOpen" class="flagged-prints-grid">
               <div
                 v-for="row in displayedFlaggedPrints"
                 :key="`flagged-${tapeRowKey(row)}`"
@@ -2741,8 +2775,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <div class="spec-cell">
                     <span class="spec-label label">EXPIRATION</span>
                     <span class="spec-val fig">
-                      {{ row.expiry ? shortDate(row.expiry) : '—' }}
-                      <small v-if="row.dte != null" class="dte-sub"> · {{ row.dte }}d</small>
+                      <span class="spec-date">{{ row.expiry ? shortDate(row.expiry) : '—' }}</span>
+                      <small v-if="row.dte != null" class="dte-sub">{{ row.dte }}d</small>
                     </span>
                   </div>
                   <div class="spec-cell">
@@ -3200,8 +3234,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <div class="spec-cell">
                     <span class="spec-label label">EXPIRATION</span>
                     <span class="spec-val fig">
-                      {{ row.expiry ? shortDate(row.expiry) : '—' }}
-                      <small v-if="row.dte != null" class="dte-sub"> · {{ row.dte }}d</small>
+                      <span class="spec-date">{{ row.expiry ? shortDate(row.expiry) : '—' }}</span>
+                      <small v-if="row.dte != null" class="dte-sub">{{ row.dte }}d</small>
                     </span>
                   </div>
                   <div class="spec-cell">
@@ -3309,8 +3343,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <thead>
                 <tr>
                   <th class="label">Date · Time UTC</th>
-                  <th class="label tape-col-group">Lean</th>
-                  <th class="label">Class</th>
+                  <th v-if="tapeHasLean" class="label tape-col-group">Lean</th>
+                  <th class="label class-col">Class</th>
                   <th class="label tape-col-group">Expiry</th>
                   <th class="label num-col strike-head">Strike · Type</th>
                   <th class="label num-col tape-col-group stock-head">Spot</th>
@@ -3351,7 +3385,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                         }}</span
                       >
                     </td>
-                    <td class="tape-col-group">
+                    <td v-if="tapeHasLean" class="tape-col-group">
                       <span
                         class="bias-chip label"
                         :class="tapeLean(row).cls"
@@ -3360,7 +3394,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                         {{ tapeLean(row).label }}
                       </span>
                     </td>
-                    <td>
+                    <td class="class-col">
                       <div class="class-cell-lockup">
                         <span :class="tradeClassTokenCls(tradeClassLabel(row))">
                           {{ tradeClassLabel(row) }}
@@ -3478,7 +3512,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     "
                     class="table-fills-subrow"
                   >
-                    <td colspan="11" class="fills-subrow-cell">
+                    <td :colspan="tapeHasLean ? 11 : 10" class="fills-subrow-cell">
                       <div class="fills-subrow-content">
                         <div class="subrow-title label">
                           INDIVIDUAL EXCHANGE FILLS IN THIS SWEEP ORDER ({{
@@ -3818,7 +3852,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                             (row.contracts || row.volume || 0) / row.open_interest >= 1.0,
                         }"
                       >
-                        {{ ((row.contracts || row.volume || 0) / row.open_interest).toFixed(1) }}x
+                        {{ volOiLabel(volOiRatio(row)) }}
                       </span>
                     </td>
                     <td
@@ -4217,9 +4251,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: var(--s2) var(--s4);
   border: var(--hair) solid var(--glass-border);
   border-left: 1px solid var(--phosphor);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-lg);
-  -webkit-backdrop-filter: var(--glass-blur-lg);
+  /* Content-layer command bar: solid panel, no backdrop blur (glass piles). */
+  background: var(--panel);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   border-radius: var(--r-chrome);
 }
@@ -4259,9 +4292,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 3px 9px;
   min-height: 32px;
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-base);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  background: var(--panel-hi);
   color: var(--ink-dim);
   font: 700 var(--t-nano) var(--font-data);
   letter-spacing: 0.04em;
@@ -4498,9 +4529,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-sm);
   overflow: hidden;
-  background: var(--glass-base);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  /* Recessed input well on the solid command bar: no backdrop blur. */
+  background: var(--void-lift);
   box-shadow:
     inset 0 1px 2px rgba(0, 0, 0, 0.4),
     var(--glass-specular-subtle);
@@ -4546,9 +4576,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 0;
   list-style: none;
   border: var(--hair) solid var(--glass-border-hi);
-  background: var(--glass-surface-hi);
-  backdrop-filter: var(--glass-blur-lg);
-  -webkit-backdrop-filter: var(--glass-blur-lg);
+  background: var(--panel-hi);
   border-radius: var(--r-md);
   box-shadow: var(--glass-shadow-lg), var(--glass-specular-subtle);
   max-height: 220px;
@@ -4921,9 +4949,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 2px;
   border: var(--hair) solid var(--glass-border);
   height: 34px;
-  background: var(--glass-base);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  /* Solid segmented-control well: no backdrop blur. */
+  background: var(--void-lift);
   border-radius: var(--r-sm);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
 }
@@ -5002,9 +5029,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   min-height: 48px;
   padding: var(--s2) var(--s3);
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
+  /* Content-layer filter bar: solid panel, no backdrop blur. */
+  background: var(--panel);
   border-radius: var(--r-lg);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   overflow: hidden;
@@ -5114,9 +5140,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   gap: 0;
   padding: 2px 8px;
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-base);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  background: var(--void-lift);
   border-radius: var(--r-xs);
   min-width: 52px;
 }
@@ -5157,9 +5181,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 0 10px;
   border: var(--hair) solid var(--glass-border);
   color: var(--ink-dim);
-  background: var(--glass-base);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  background: var(--panel-hi);
   border-radius: 9999px;
   font-size: var(--t-micro);
   font-weight: 700;
@@ -5192,9 +5214,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 
 .filter-deck {
   border: var(--hair) solid var(--glass-border-hi);
-  background: var(--glass-surface-hi);
-  backdrop-filter: var(--glass-blur-lg);
-  -webkit-backdrop-filter: var(--glass-blur-lg);
+  /* Content-layer filter deck: solid raised panel, no backdrop blur. */
+  background: var(--panel-hi);
   border-radius: var(--r-lg);
   box-shadow: var(--glass-shadow-lg), var(--glass-specular);
   padding: var(--s3) var(--s4);
@@ -5285,9 +5306,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border: var(--hair) solid var(--glass-border);
   border-left: 1px solid var(--warn);
   border-radius: var(--r-md);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
+  background: var(--panel);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
 }
 .recovery-copy {
@@ -5532,18 +5551,18 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 
 /* ---- workbench: flow bar, then squeeze + dominant GEX ------------------- */
+/* A pointer to another workspace is signage, not a finding. It used to be
+   dressed as a full glass panel, which spent a whole band of the fold on one
+   sentence and pushed the tape — the reason the page exists — further below
+   the fold. Demoted to a single quiet line. */
 .calc-handoff {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s3);
-  padding: var(--s3) var(--s4);
-  border: var(--hair) solid var(--glass-border);
-  border-radius: var(--r-md);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
-  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  align-items: baseline;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0 var(--s2);
+  color: var(--ink-dim);
 }
 .positioning-panel {
   width: 100%;
@@ -5779,9 +5798,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   flex-direction: column;
   gap: var(--s2);
   padding: var(--s3);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  background: var(--panel);
   border-bottom: var(--hair) solid var(--glass-border);
 }
 .flagged-prints-header {
@@ -5860,6 +5877,24 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   border-radius: var(--r-xs);
   cursor: pointer;
   margin-left: 4px;
+}
+.flag-shelf-toggle {
+  min-height: 22px;
+  padding: 0 10px;
+  margin-left: auto;
+  background: transparent;
+  border: var(--hair) solid var(--glass-border-hi);
+  color: var(--ink-soft);
+  font-size: var(--t-nano);
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.flag-shelf-toggle:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
 }
 .flagged-prints-grid {
   display: grid;
@@ -6168,8 +6203,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: var(--s2) var(--s3);
   min-height: 32px;
 }
+/* The tape is the point of this page, so it gets the vertical budget the
+   flag shelf and the calculator sign-post used to spend. 52vh showed seven
+   rows on a laptop while the panel below it sat half-empty. */
 .table-scroll-tall {
-  max-height: min(52vh, 520px) !important;
+  max-height: min(72vh, 820px) !important;
 }
 .tape-toolbar {
   display: flex;
@@ -6238,9 +6276,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   padding: 4px;
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-chrome);
-  background: var(--glass-overlay);
-  backdrop-filter: var(--chrome-optics-md);
-  -webkit-backdrop-filter: var(--chrome-optics-md);
+  /* In-page dropdown in the content layer: solid, no backdrop blur. */
+  background: var(--panel-raise);
   box-shadow: var(--glass-shadow-md), var(--glass-specular-subtle);
 }
 .tape-more-menu button {
@@ -6468,8 +6505,11 @@ td.num-col {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+/* A tape earns its keep by how many prints fit on screen. 8px block padding
+   on top of two-line date and spot cells put rows at 55px — ten prints on a
+   laptop out of the fifteen hundred the panel header advertises. */
 .tape-table td {
-  padding: var(--s2) var(--s3);
+  padding: 5px var(--s3);
   border-bottom: var(--hair) solid var(--border-subtle);
   vertical-align: middle;
 }
@@ -7032,9 +7072,7 @@ tr.isMegaWhale:hover {
   flex-direction: column;
   gap: var(--s2);
   padding: var(--s3);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
+  background: var(--panel);
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-md);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
@@ -7450,12 +7488,22 @@ tr.isMegaWhale:hover {
   text-transform: uppercase;
 }
 
+/* The expiry cell holds a date *and* a DTE badge. Held on one nowrap line it
+   ellipsized to "18 SEP 26…", hiding the DTE and clipping the date it was
+   meant to qualify. Let the badge drop to a second line; the date never
+   breaks. */
 .spec-val {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 5px;
   font: 700 12px var(--font-data);
   color: var(--ink);
-  white-space: nowrap;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+.spec-date {
+  white-space: nowrap;
 }
 
 .spec-val.strike-val {
@@ -7534,9 +7582,19 @@ tr.isMegaWhale:hover {
 }
 
 /* Table Enhancements */
+/* Auto table layout handed all the row's slack to Class — a 218px column for
+   a 60px "SINGLE" chip — while Premium, the figure the tape exists to rank
+   by, was squeezed to 96px. Cap the low-information columns so the width
+   lands on the numbers. */
+.tape-table th.class-col,
+.tape-table td.class-col {
+  width: 1%;
+  white-space: nowrap;
+}
 .class-cell-lockup {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
 }
 

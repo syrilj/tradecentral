@@ -9,6 +9,7 @@ from edge.daily_plays.opportunity_scanner import (
     build_suggestion,
     gex_relative_sell,
     qlib_rows_from_panel,
+    setup_inputs_from_rows,
     setup_level_model,
 )
 from edge.daily_plays.options_intelligence import OptionsFilters
@@ -1019,3 +1020,215 @@ class TestPlanTargetAndInvalidationSources:
         assert sug["invalidation_source"] == "resistance/support"
         if sug.get("plan_invalidation") is not None:
             assert sug["plan_invalidation_source"] is not None
+
+
+class TestRegimeClassPointsInSetupLevels:
+    """Measured Regime magnets (walls, flip, attractors/key levels) feed the shipped builder."""
+
+    def test_measured_regime_points_attribute_supports_invalidation_and_take_profit(self):
+        model = setup_level_model(
+            direction="long",
+            spot=100,
+            call_wall=110,
+            put_wall=94,
+            gamma_flip=98,
+            attractor_levels=[
+                {"id": "volume_poc", "price": 97, "direction": "below"},
+                {"id": "kinematic_drift", "price": 108, "direction": "above"},
+                {"id": "key_level", "price": 96, "direction": "below"},
+            ],
+        )
+        support_by_price = {item["price"]: item["source"] for item in model["supports"]}
+        zone_by_price = {item["price"]: item["source"] for item in model["take_profit_zones"]}
+        assert support_by_price[94.0] == "options GEX"
+        assert support_by_price[98.0] == "options GEX"
+        assert support_by_price[97.0] == "technical analysis"
+        assert support_by_price[96.0] == "resistance/support"
+        assert model["invalidation"] == pytest.approx(98.0)
+        assert model["invalidation_source"] == "options GEX"
+        assert zone_by_price[110.0] == "options GEX"
+        assert zone_by_price[108.0] == "technical analysis"
+        assert model["gex_target"] == pytest.approx(110.0)
+        assert model["gex_invalidation"] == pytest.approx(94.0)
+
+    def test_absent_null_and_wrong_side_regime_points_stay_unmeasured(self):
+        model = setup_level_model(
+            direction="long",
+            spot=100,
+            call_wall=90,
+            put_wall=112,
+            gamma_flip=None,
+            attractor_levels=[
+                {"id": "volume_poc", "price": 105, "direction": "below"},
+                {"id": "kinematic_drift", "price": 90, "direction": "above"},
+                {"id": "call_wall", "price": None, "direction": "above"},
+            ],
+        )
+        assert model["supports"] == []
+        assert model["take_profit_zones"] == []
+        assert model["invalidation"] is None
+        assert model["gex_target"] is None
+        assert model["gex_invalidation"] is None
+        assert model["complete"] is False
+        assert model["source_status"]["options GEX"] == "wrong-side"
+
+    def test_snapshot_on_board_row_populates_builder_without_live_ready(self):
+        snapshot = {
+            "levels": [
+                {"id": "call_wall", "price": 112, "direction": "above"},
+                {"id": "put_wall", "price": 94, "direction": "below"},
+                {"id": "gamma_flip", "price": 99, "direction": "below"},
+                {"id": "volume_poc", "price": 96, "direction": "below"},
+            ],
+            "primary_magnet": {"id": "call_wall", "price": 112, "direction": "above"},
+            "confluence_clusters": [
+                {"level": 95.5, "above_spot": False, "labels": ["Put Wall", "Volume POC"]},
+            ],
+        }
+        inputs = setup_inputs_from_rows(
+            {
+                "spot": 100,
+                "context_side": "long",
+                "call_wall": None,
+                "put_wall": None,
+                "gamma_flip": None,
+                "price_attractor_snapshot": snapshot,
+            },
+            None,
+            direction="long",
+        )
+        assert inputs["call_wall"] == pytest.approx(112)
+        assert inputs["put_wall"] == pytest.approx(94)
+        assert inputs["gamma_flip"] == pytest.approx(99)
+        model = setup_level_model(direction="long", **inputs)
+        support_prices = {item["price"] for item in model["supports"]}
+        zone_prices = {item["price"] for item in model["take_profit_zones"]}
+        assert {94.0, 99.0, 96.0, 95.5} <= support_prices
+        assert 112.0 in zone_prices
+
+        result = build_live_opportunities(
+            board_rows=[_board_row(
+                "AAA",
+                spot=100,
+                context_side="long",
+                call_wall=None,
+                put_wall=None,
+                gamma_flip=None,
+                price_attractor_snapshot=snapshot,
+            )],
+            flow_rows=[],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        sug = row["suggestion"]
+        assert {item["price"] for item in sug["supports"]} >= {94.0, 99.0, 96.0}
+        assert {item["price"] for item in sug["take_profit_zones"]} >= {112.0}
+        assert sug["invalidation"] is not None
+        assert row["live_ready"] is False
+        assert row["barriers"]["call_wall"] == pytest.approx(112)
+        assert row["barriers"]["put_wall"] == pytest.approx(94)
+        assert row["barriers"]["gamma_flip"] == pytest.approx(99)
+
+
+def _regime_snapshot(*, call_wall, put_wall, gamma_flip, volume_poc, kinematic):
+    return {
+        "quality": {"measurable": True},
+        "levels": [
+            {"id": "call_wall", "price": call_wall, "direction": "above"},
+            {"id": "put_wall", "price": put_wall, "direction": "below"},
+            {"id": "gamma_flip", "price": gamma_flip, "direction": "below"},
+            {"id": "volume_poc", "price": volume_poc, "direction": "below"},
+            {"id": "kinematic_drift", "price": kinematic, "direction": "above"},
+        ],
+        "primary_magnet": {"id": "call_wall", "price": call_wall, "direction": "above"},
+    }
+
+
+class TestAttachRegimeLevelsFromWhereRegimeStoresThem:
+    """_attach_regime_levels must read the cache RegimeView actually fills."""
+
+    def setup_method(self):
+        from tools import api_server
+
+        self.api = api_server
+        with api_server._PRICE_ATTRACTOR_LOCK:
+            api_server._PRICE_ATTRACTOR_CACHE.clear()
+        with api_server._OPTIONS_LOCK:
+            api_server._OPTIONS_CACHE.clear()
+
+    def teardown_method(self):
+        with self.api._PRICE_ATTRACTOR_LOCK:
+            self.api._PRICE_ATTRACTOR_CACHE.clear()
+        with self.api._OPTIONS_LOCK:
+            self.api._OPTIONS_CACHE.clear()
+
+    def test_options_cache_snapshot_attaches_and_populates_setup_levels(self):
+        call_wall, put_wall, gamma_flip = 112.0, 94.0, 99.0
+        volume_poc, kinematic = 96.0, 108.0
+        snapshot = _regime_snapshot(
+            call_wall=call_wall,
+            put_wall=put_wall,
+            gamma_flip=gamma_flip,
+            volume_poc=volume_poc,
+            kinematic=kinematic,
+        )
+        # RegimeView hits /api/options, which stores the snapshot here — not
+        # on _PRICE_ATTRACTOR_CACHE.
+        with self.api._OPTIONS_LOCK:
+            self.api._OPTIONS_CACHE[("AAA", "live")] = (
+                1.0,
+                {"price_attractor_snapshot": snapshot},
+            )
+        board = _board_row(
+            "AAA",
+            spot=100,
+            context_side="long",
+            call_wall=None,
+            put_wall=None,
+            gamma_flip=None,
+        )
+        assert "price_attractor_snapshot" not in board
+        attached = self.api._attach_regime_levels([board])
+        result = build_live_opportunities(
+            board_rows=attached,
+            flow_rows=[],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        sug = row["suggestion"]
+        support_prices = {item["price"] for item in sug["supports"]}
+        zone_prices = {item["price"] for item in sug["take_profit_zones"]}
+        assert {put_wall, gamma_flip, volume_poc} <= support_prices
+        assert {call_wall, kinematic} <= zone_prices
+        assert sug["invalidation"] is not None
+        assert row["live_ready"] is False
+        assert attached[0]["price_attractor_snapshot"]["levels"] == snapshot["levels"]
+
+    def test_empty_caches_stay_unmeasured_and_not_live_ready(self):
+        board = _board_row(
+            "BBB",
+            spot=100,
+            context_side="long",
+            call_wall=None,
+            put_wall=None,
+            gamma_flip=None,
+        )
+        attached = self.api._attach_regime_levels([board])
+        assert attached[0].get("price_attractor_snapshot") is None
+        result = build_live_opportunities(
+            board_rows=attached,
+            flow_rows=[],
+            filters=OptionsFilters(),
+            asof_utc=ASOF,
+        )
+        row = result["rows"][0]
+        sug = row["suggestion"]
+        assert not sug.get("supports")
+        assert not sug.get("take_profit_zones")
+        assert sug.get("invalidation") is None
+        assert row["live_ready"] is False
+        assert row["barriers"]["call_wall"] is None
+        assert row["barriers"]["put_wall"] is None
+        assert row["barriers"]["gamma_flip"] is None

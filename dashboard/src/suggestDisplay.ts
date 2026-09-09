@@ -259,9 +259,12 @@ export function suggestionStabilityCopy(
  */
 export function presentSetupRows(payload: { rows?: SetupRowLike[] | null } | null | undefined): {
   rows: SetupRowLike[]
-  coverage: SetupCoverage
+  coverage: SetupCoverage | null
 } {
-  const incoming = Array.isArray(payload?.rows) ? payload.rows : []
+  if (payload == null) {
+    return { rows: [], coverage: null }
+  }
+  const incoming = Array.isArray(payload.rows) ? payload.rows : []
   const ranked = incoming.map((row, index) => ({ row, index }))
   ranked.sort((a, b) => {
     const leftRank = Number(a.row.suggestion?.review_rank)

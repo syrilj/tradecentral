@@ -251,6 +251,116 @@ def _focus_contract_strike(focus: Any, right: str | None) -> float | None:
     return _level(focus.get("strike"))
 
 
+def _regime_level_identity(item: Mapping[str, Any]) -> str:
+    return str(
+        item.get("id") or item.get("type") or item.get("level_id") or item.get("label") or ""
+    ).strip().lower().replace(" ", "_")
+
+
+def _regime_level_source(ident: str) -> str:
+    token = ident.strip().lower()
+    if any(
+        name in token
+        for name in ("call_wall", "put_wall", "gamma_flip", "zero_gamma", "zero-gamma", "max_pain")
+    ) or token in {"pin", "pin_strike"}:
+        return LEVEL_SOURCE_GEX
+    if any(name in token for name in ("key_level", "confluence")) or token in {
+        "support", "resistance", "next_support", "next_resistance",
+    }:
+        return LEVEL_SOURCE_SUPPORT
+    return LEVEL_SOURCE_TA
+
+
+def _iter_priced_level_maps(value: Any) -> list[Mapping[str, Any]]:
+    """Walk a Regime snapshot, attractor list, or single priced magnet."""
+    found: list[Mapping[str, Any]] = []
+    if isinstance(value, Mapping):
+        for key in ("levels", "price_ladder", "attractors"):
+            bucket = value.get(key)
+            if isinstance(bucket, (list, tuple)):
+                found.extend(item for item in bucket if isinstance(item, Mapping))
+        primary = value.get("primary_magnet")
+        if isinstance(primary, Mapping):
+            found.append(primary)
+        clusters = value.get("confluence_clusters")
+        if isinstance(clusters, (list, tuple)):
+            for cluster in clusters:
+                if not isinstance(cluster, Mapping):
+                    continue
+                above = cluster.get("above_spot")
+                if above is True:
+                    side = "above"
+                elif above is False:
+                    side = "below"
+                else:
+                    side = None
+                found.append({
+                    "id": "key_level",
+                    "price": cluster.get("level"),
+                    "direction": side,
+                })
+        if (
+            value.get("price") is not None or value.get("level") is not None
+        ) and (
+            value.get("id") or value.get("type") or value.get("level_id") or value.get("label")
+        ):
+            found.append(value)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            found.extend(_iter_priced_level_maps(item))
+    return found
+
+
+def _named_regime_prices(levels: Any) -> dict[str, float]:
+    named: dict[str, float] = {}
+    for item in _iter_priced_level_maps(levels):
+        price = _level(item.get("price") if item.get("price") is not None else item.get("level"))
+        if price is None:
+            continue
+        ident = _regime_level_identity(item)
+        if "call_wall" in ident:
+            named.setdefault("call_wall", price)
+        elif "put_wall" in ident:
+            named.setdefault("put_wall", price)
+        elif "gamma_flip" in ident or "zero_gamma" in ident or "zero-gamma" in ident:
+            named.setdefault("gamma_flip", price)
+        elif "max_pain" in ident or ident in {"pin", "pin_strike"}:
+            named.setdefault("pin_strike", price)
+    return named
+
+
+def _collect_attractor_levels(*containers: Any) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    seen: set[tuple[float, str]] = set()
+    for container in containers:
+        for item in _iter_priced_level_maps(container):
+            price = _level(item.get("price") if item.get("price") is not None else item.get("level"))
+            if price is None:
+                continue
+            ident = _regime_level_identity(item)
+            key = (price, ident)
+            if key in seen:
+                continue
+            seen.add(key)
+            direction = str(item.get("direction") or "").strip().lower() or None
+            collected.append({"id": ident or None, "price": price, "direction": direction})
+    return collected
+
+
+def _nested_key_fields(*maps: Mapping[str, Any], field: str) -> list[Any]:
+    values: list[Any] = []
+    for mapping in maps:
+        nested = mapping.get("key_levels")
+        if isinstance(nested, Mapping):
+            values.append(nested.get(field))
+        snapshot = mapping.get("price_attractor_snapshot") or mapping.get("regime_snapshot")
+        if isinstance(snapshot, Mapping):
+            snap_keys = snapshot.get("key_levels")
+            if isinstance(snap_keys, Mapping):
+                values.append(snap_keys.get(field))
+    return values
+
+
 def _row_open_interest(row: Mapping[str, Any]) -> float | None:
     total = _finite(row.get("open_interest"))
     if total is not None and total > 0:
@@ -273,23 +383,50 @@ def setup_inputs_from_rows(
     *,
     direction: str | None,
 ) -> dict[str, Any]:
-    """Pull already-measured S/R, GEX, positions, and TA fields from board/flow."""
+    """Pull already-measured S/R, GEX, positions, TA, and Regime magnet fields."""
     board_map: Mapping[str, Any] = board or {}
     flow_map: Mapping[str, Any] = flow or {}
     right = "call" if direction == "long" else "put" if direction == "short" else None
+    attractor_levels = _collect_attractor_levels(
+        board_map.get("price_attractor_snapshot"),
+        board_map.get("regime_snapshot"),
+        board_map.get("attractor_levels"),
+        flow_map.get("price_attractor_snapshot"),
+        flow_map.get("regime_snapshot"),
+        flow_map.get("attractor_levels"),
+    )
+    named = _named_regime_prices(attractor_levels)
     return {
         "support": _first_level(
             board_map.get("support"), board_map.get("support_price"), board_map.get("next_support"),
             flow_map.get("support"), flow_map.get("support_price"), flow_map.get("next_support"),
+            *_nested_key_fields(board_map, flow_map, field="support"),
         ),
         "resistance": _first_level(
             board_map.get("resistance"), board_map.get("resistance_price"), board_map.get("next_resistance"),
             flow_map.get("resistance"), flow_map.get("resistance_price"), flow_map.get("next_resistance"),
+            *_nested_key_fields(board_map, flow_map, field="resistance"),
         ),
-        "call_wall": _first_level(board_map.get("call_wall"), flow_map.get("call_wall")),
-        "put_wall": _first_level(board_map.get("put_wall"), flow_map.get("put_wall")),
-        "gamma_flip": _first_level(board_map.get("gamma_flip"), flow_map.get("gamma_flip")),
-        "pin_strike": _first_level(board_map.get("pin_strike"), flow_map.get("pin_strike")),
+        "call_wall": _first_level(
+            board_map.get("call_wall"), flow_map.get("call_wall"),
+            *_nested_key_fields(board_map, flow_map, field="call_wall"),
+            named.get("call_wall"),
+        ),
+        "put_wall": _first_level(
+            board_map.get("put_wall"), flow_map.get("put_wall"),
+            *_nested_key_fields(board_map, flow_map, field="put_wall"),
+            named.get("put_wall"),
+        ),
+        "gamma_flip": _first_level(
+            board_map.get("gamma_flip"), flow_map.get("gamma_flip"),
+            *_nested_key_fields(board_map, flow_map, field="gamma_flip"),
+            named.get("gamma_flip"),
+        ),
+        "pin_strike": _first_level(
+            board_map.get("pin_strike"), flow_map.get("pin_strike"),
+            *_nested_key_fields(board_map, flow_map, field="pin_strike"),
+            named.get("pin_strike"),
+        ),
         "position_strike": _first_level(
             _focus_contract_strike(board_map.get("contract_focus"), right),
             _focus_contract_strike(flow_map.get("flow_focus"), right),
@@ -312,6 +449,7 @@ def setup_inputs_from_rows(
         ),
         "expected_move": _first_level(board_map.get("expected_move"), flow_map.get("expected_move")),
         "spot": _first_level(board_map.get("spot"), flow_map.get("spot")),
+        "attractor_levels": attractor_levels,
     }
 
 
@@ -330,14 +468,21 @@ def setup_level_model(
     ta_resistance: Any = None,
     gex_rows: Any = None,
     expected_move: Any = None,
+    attractor_levels: Any = None,
 ) -> dict[str, Any]:
     """Source-attributed strike, supports, invalidation, and take-profit zones.
 
-    Uses only already-measured resistance/support, options GEX, positions, and
-    technical analysis. Expected-move is accepted so callers can prove it never
-    fills a level. Missing or wrong-side inputs stay unmeasured.
+    Uses only already-measured resistance/support, options GEX, positions,
+    technical analysis, and Regime magnet/key levels. Expected-move is accepted
+    so callers can prove it never fills a level. Missing or wrong-side inputs
+    stay unmeasured.
     """
     del expected_move  # never a strike, support, invalidation, or take-profit zone
+    named = _named_regime_prices(attractor_levels)
+    call_wall = _first_level(call_wall, named.get("call_wall"))
+    put_wall = _first_level(put_wall, named.get("put_wall"))
+    gamma_flip = _first_level(gamma_flip, named.get("gamma_flip"))
+    pin_strike = _first_level(pin_strike, named.get("pin_strike"))
     spot_n = _level(spot)
     supports: list[dict[str, Any]] = []
     zones: list[dict[str, Any]] = []
@@ -351,6 +496,18 @@ def setup_level_model(
     _append_level(resistances, ta_resistance, LEVEL_SOURCE_TA, side="above", spot=spot_n)
     _append_level(supports, gamma_flip, LEVEL_SOURCE_GEX, side="below", spot=spot_n)
     _append_level(resistances, gamma_flip, LEVEL_SOURCE_GEX, side="above", spot=spot_n)
+    for item in _iter_priced_level_maps(attractor_levels):
+        ident = _regime_level_identity(item)
+        source = _regime_level_source(ident)
+        price = item.get("price") if item.get("price") is not None else item.get("level")
+        side_tag = str(item.get("direction") or "").strip().lower()
+        if side_tag == "below":
+            _append_level(supports, price, source, side="below", spot=spot_n)
+        elif side_tag == "above":
+            _append_level(resistances, price, source, side="above", spot=spot_n)
+        else:
+            _append_level(supports, price, source, side="below", spot=spot_n)
+            _append_level(resistances, price, source, side="above", spot=spot_n)
 
     best_oi_below: tuple[float, float] | None = None
     best_oi_above: tuple[float, float] | None = None
@@ -1217,9 +1374,13 @@ def build_live_opportunities(
         )
         costs = _cost_estimate(spread_pct, filters)
         setup_inputs = setup_inputs_from_rows(board_map, flow_map, direction=review_direction)
+        board_for_levels = dict(board_map)
+        for field in ("spot", "call_wall", "put_wall", "gamma_flip", "pin_strike"):
+            if board_for_levels.get(field) is None and setup_inputs.get(field) is not None:
+                board_for_levels[field] = setup_inputs[field]
         level_model = setup_level_model(direction=review_direction, **setup_inputs)
         playbook = _playbook(
-            board=board_map,
+            board=board_for_levels,
             direction=review_direction,
             direction_source=review_direction_source,
             gate_pass=gate_pass,
@@ -1235,9 +1396,11 @@ def build_live_opportunities(
             direction=direction,
             playbook_status=str(playbook.get("status") or ""),
             blockers=list(playbook.get("blockers") or []),
-            spot=board_map.get("spot") if board_map.get("spot") is not None else flow_map.get("spot"),
-            call_wall=board_map.get("call_wall"),
-            put_wall=board_map.get("put_wall"),
+            spot=setup_inputs.get("spot") if setup_inputs.get("spot") is not None else (
+                board_map.get("spot") if board_map.get("spot") is not None else flow_map.get("spot")
+            ),
+            call_wall=setup_inputs.get("call_wall") if setup_inputs.get("call_wall") is not None else board_map.get("call_wall"),
+            put_wall=setup_inputs.get("put_wall") if setup_inputs.get("put_wall") is not None else board_map.get("put_wall"),
             qlib=qlib_map,
             activity_lean=activity_lean,
             activity_lean_source=str(flow_map.get("activity_lean_source") or ""),
@@ -1255,20 +1418,20 @@ def build_live_opportunities(
         playbook_invalidation = _finite(playbook.get("invalidation"))
         if review_direction == "long":
             target_source = (
-                "call_wall" if playbook_target is not None and playbook_target == _finite(board_map.get("call_wall"))
+                "call_wall" if playbook_target is not None and playbook_target == _finite(board_for_levels.get("call_wall"))
                 else None
             )
             invalidation_source = (
-                "put_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_map.get("put_wall"))
+                "put_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_for_levels.get("put_wall"))
                 else None
             )
         elif review_direction == "short":
             target_source = (
-                "put_wall" if playbook_target is not None and playbook_target == _finite(board_map.get("put_wall"))
+                "put_wall" if playbook_target is not None and playbook_target == _finite(board_for_levels.get("put_wall"))
                 else None
             )
             invalidation_source = (
-                "call_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_map.get("call_wall"))
+                "call_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_for_levels.get("call_wall"))
                 else None
             )
         else:
@@ -1375,10 +1538,10 @@ def build_live_opportunities(
             "costs": costs,
             "suggestion": suggestion,
             "barriers": {
-                "spot": _level(board_map.get("spot")),
-                "call_wall": _level(board_map.get("call_wall")),
-                "put_wall": _level(board_map.get("put_wall")),
-                "gamma_flip": _level(board_map.get("gamma_flip")),
+                "spot": _level(setup_inputs.get("spot") or board_map.get("spot")),
+                "call_wall": _level(setup_inputs.get("call_wall") or board_map.get("call_wall")),
+                "put_wall": _level(setup_inputs.get("put_wall") or board_map.get("put_wall")),
+                "gamma_flip": _level(setup_inputs.get("gamma_flip") or board_map.get("gamma_flip")),
                 "expected_move": _level(board_map.get("expected_move")),
             },
             "playbook": playbook,

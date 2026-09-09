@@ -112,13 +112,13 @@ svg {
   height: 52px;
   display: grid;
   place-items: center;
-  color: #0f8a5f;
+  color: var(--go);
   border: 1px solid #c9c9c4;
 }
 .access-core small,
 .access-point small {
   margin-top: 12px;
-  color: #c93a10;
+  color: var(--no-go);
   font-family: var(--font-display);
   font-size: var(--t-nano);
   font-weight: 700;
@@ -178,10 +178,10 @@ svg {
 .point-flow {
   right: 4px;
   bottom: 58px;
-  border-color: #0f8a5f;
+  border-color: var(--go);
 }
 .point-flow > span {
-  color: #0f8a5f;
+  color: var(--go);
 }
 footer {
   position: absolute;

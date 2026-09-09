@@ -134,7 +134,6 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
         { name: 'plays', idx: 'D1', title: 'Plays' },
         { name: 'absorption', idx: 'D2', title: 'Absorption' },
         { name: 'livestack', idx: 'LS', title: 'Live Stack' },
-        { name: 'suggest', idx: 'D4', title: 'Setups' },
       ]
 
       for (const item of expectedDesk) {
@@ -142,6 +141,8 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
         expect(appContent).toContain("idx: '" + item.idx + "'")
         expect(appContent).toContain("title: '" + item.title + "'")
       }
+      const desk = appContent.match(/const deskTools = \[\s*([\s\S]*?)\] as const/)![1]
+      expect(desk).not.toContain("name: 'suggest'")
     })
 
     it('contains all 6 Market Analytics routes with exact titles and indexes', () => {
@@ -194,16 +195,16 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
         appContent.match(/researchTools\s*=\s*\[([\s\S]*?)\]\s*as const/)?.[1].match(/name:/g) || []
       ).length
 
-      // Regime and Drift were promoted from the Tools overflow into primaryNav.
-      // Each must live in exactly
-      // one group: overflowActiveItem matches on route name, so a duplicate
-      // would light the primary nav and mark Tools active at the same time.
-      // Brief was added as the first primary destination, taking the count to 8.
-      expect(primaryCount).toBe(8)
-      expect(deskCount).toBe(4)
+      // Regime, Drift, and Setups were promoted from the Tools overflow into
+      // primaryNav. Each must live in exactly one group: overflowActiveItem
+      // matches on route name, so a duplicate would light the primary nav and
+      // mark Tools active at the same time. Brief is the first primary
+      // destination; Crypto is the tenth.
+      expect(primaryCount).toBe(10)
+      expect(deskCount).toBe(3)
       expect(marketCount).toBe(6)
       expect(researchCount).toBe(8)
-      expect(primaryCount + deskCount + marketCount + researchCount).toBe(26)
+      expect(primaryCount + deskCount + marketCount + researchCount).toBe(27)
     })
   })
 

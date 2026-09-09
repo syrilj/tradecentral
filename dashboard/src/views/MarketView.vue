@@ -4221,9 +4221,8 @@ const finChartData = computed(() => {
   gap: 4px;
   min-height: 30px;
   padding: 5px 14px;
-  background: var(--glass-surface);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Content-layer action button: solid, no backdrop blur. */
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-specular-subtle);
   color: var(--ink-soft);
@@ -4280,9 +4279,8 @@ const finChartData = computed(() => {
   gap: var(--s2);
   min-height: 34px;
   padding: 4px 14px;
-  background: var(--glass-surface);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Content-layer search field: solid, no backdrop blur. */
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-specular-subtle);
   border-radius: var(--r-capsule);
@@ -4323,9 +4321,7 @@ const finChartData = computed(() => {
   top: calc(100% + 6px);
   left: 0;
   right: 0;
-  background: var(--glass-overlay);
-  backdrop-filter: var(--chrome-optics-lg);
-  -webkit-backdrop-filter: var(--chrome-optics-lg);
+  background: var(--panel-raise);
   border: var(--hair) solid var(--glass-border-hi);
   border-radius: var(--r-lg);
   box-shadow: var(--glass-shadow-md), var(--glass-specular);
@@ -4403,9 +4399,8 @@ const finChartData = computed(() => {
   padding: var(--s1);
   border-radius: var(--r-capsule);
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-base);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Content-layer tab track: solid, no backdrop blur. */
+  background: var(--void-lift);
   box-shadow: var(--glass-specular-subtle);
   scrollbar-width: none;
 }
@@ -5355,9 +5350,8 @@ const finChartData = computed(() => {
   gap: 4px;
   min-height: 26px;
   padding: 3px 12px;
-  background: var(--glass-surface);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Content-layer refresh button: solid, no backdrop blur. */
+  background: var(--panel-hi);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-specular-subtle);
   color: var(--ink-dim);
@@ -5394,9 +5388,8 @@ const finChartData = computed(() => {
 .seg {
   display: inline-flex;
   align-items: center;
-  background: var(--glass-base);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Content-layer segmented track: solid, no backdrop blur. */
+  background: var(--void-lift);
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-specular-subtle);
   border-radius: var(--r-capsule);

@@ -556,6 +556,16 @@ _COMPARE_REFRESH_LOCK = threading.Lock()
 
 load_project_environment(paths=(EDGE_DIR / ".env", ROOT / "TradingWork" / ".env"))
 
+# Count every provider request before anything can spend one. The account is
+# capped per UTC day, and when a background scan spends the allowance the desk
+# goes blank with no way to see who spent it -- see daily_plays/lse_budget.py.
+try:
+    from daily_plays.lse_budget import install as _install_lse_budget
+
+    _install_lse_budget()
+except Exception:  # never let observability block the server from booting
+    pass
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
@@ -1333,6 +1343,102 @@ def _attach_flow_state_levels(board_rows: list) -> list:
             copy["support_price"] = measured["support_price"]
         if copy.get("resistance_price") is None and measured.get("resistance_price") is not None:
             copy["resistance_price"] = measured["resistance_price"]
+        attached.append(copy)
+    return attached
+
+
+def _snapshot_usable(snapshot: Any) -> bool:
+    """True when a Regime attractor snapshot carries measured magnets.
+
+    Explicit measurable=False stays unused. Missing quality is allowed only
+    when priced level maps are already present — never a fake zero.
+    """
+    if not isinstance(snapshot, dict):
+        return False
+    quality = snapshot.get("quality")
+    if isinstance(quality, Mapping) and quality.get("measurable") is False:
+        return False
+    if isinstance(quality, Mapping) and quality.get("measurable") is True:
+        return True
+    levels = snapshot.get("levels") or snapshot.get("price_ladder")
+    return isinstance(levels, (list, tuple)) and any(isinstance(item, Mapping) for item in levels)
+
+
+def _store_regime_attractor_snapshot(symbol: str, snapshot: Any) -> None:
+    """Mirror a Regime-computed snapshot into the attractor cache. No compute."""
+    if not symbol or not _snapshot_usable(snapshot):
+        return
+    key = str(symbol).strip().upper()
+    if not key:
+        return
+    with _PRICE_ATTRACTOR_LOCK:
+        _PRICE_ATTRACTOR_CACHE[key] = (time.time(), dict(snapshot))
+        if len(_PRICE_ATTRACTOR_CACHE) > 256:
+            oldest = min(_PRICE_ATTRACTOR_CACHE, key=lambda k: _PRICE_ATTRACTOR_CACHE[k][0])
+            _PRICE_ATTRACTOR_CACHE.pop(oldest, None)
+
+
+def _options_cache_attractor_snapshot(symbol: str) -> dict | None:
+    """Read a snapshot Regime already stored on /api/options. Newest match wins."""
+    best: tuple[float, dict] | None = None
+    with _OPTIONS_LOCK:
+        items = list(_OPTIONS_CACHE.items())
+    for cache_key, entry in items:
+        if not isinstance(cache_key, tuple) or not cache_key:
+            continue
+        if str(cache_key[0]).strip().upper() != symbol:
+            continue
+        if not isinstance(entry, tuple) or len(entry) < 2:
+            continue
+        ts, payload = entry[0], entry[1]
+        if not isinstance(payload, dict):
+            continue
+        snap = payload.get("price_attractor_snapshot")
+        if not _snapshot_usable(snap):
+            continue
+        stamp = float(ts) if isinstance(ts, (int, float)) else 0.0
+        if best is None or stamp >= best[0]:
+            best = (stamp, dict(snap))
+    return None if best is None else best[1]
+
+
+def _cached_attractor_snapshot(symbol: str) -> dict | None:
+    if not symbol:
+        return None
+    with _PRICE_ATTRACTOR_LOCK:
+        entry = _PRICE_ATTRACTOR_CACHE.get(symbol)
+    if entry is not None:
+        payload = entry[1]
+        if _snapshot_usable(payload):
+            return dict(payload)
+    snap = _options_cache_attractor_snapshot(symbol)
+    if snap is not None:
+        _store_regime_attractor_snapshot(symbol, snap)
+    return snap
+
+
+def _attach_regime_levels(board_rows: list) -> list:
+    """Copy already-computed Regime attractor snapshots onto board rows.
+
+    Reads the attractor cache first, then the /api/options cache RegimeView
+    actually fills. Never invents a snapshot. Cache misses stay unmeasured.
+    """
+    attached: list = []
+    for row in board_rows:
+        if not isinstance(row, dict):
+            attached.append(row)
+            continue
+        existing = row.get("price_attractor_snapshot")
+        if _snapshot_usable(existing):
+            attached.append(row)
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        snap = _cached_attractor_snapshot(symbol)
+        if not isinstance(snap, dict):
+            attached.append(row)
+            continue
+        copy = dict(row)
+        copy["price_attractor_snapshot"] = snap
         attached.append(copy)
     return attached
 
@@ -2539,6 +2645,10 @@ def _systematic_signals_payload(symbol: str, query: dict) -> tuple[dict, int]:
 
     prices = win["close"].to_numpy(dtype=float)
     volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    # High/low drive the ATR that stops and targets are quoted in. Without them
+    # the engine falls back to close-to-close vol, which understates gap risk.
+    highs = win["high"].to_numpy(dtype=float) if "high" in win else None
+    lows = win["low"].to_numpy(dtype=float) if "low" in win else None
     dates = [
         idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx)
         for idx in win.index
@@ -2575,6 +2685,8 @@ def _systematic_signals_payload(symbol: str, query: dict) -> tuple[dict, int]:
         timestamps=dates,
         symbol=symbol,
         volumes=volumes,
+        highs=highs,
+        lows=lows,
         gamma_flip_series=flip_series,
         call_wall_series=cwall_series,
         put_wall_series=pwall_series,
@@ -2632,6 +2744,10 @@ def _systematic_backtest_payload(symbol: str, query: dict) -> tuple[dict, int]:
 
     prices = win["close"].to_numpy(dtype=float)
     volumes = win["volume"].to_numpy(dtype=float) if "volume" in win else np.ones(len(prices))
+    # High/low drive the ATR that stops and targets are quoted in. Without them
+    # the engine falls back to close-to-close vol, which understates gap risk.
+    highs = win["high"].to_numpy(dtype=float) if "high" in win else None
+    lows = win["low"].to_numpy(dtype=float) if "low" in win else None
     dates = [
         idx.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(idx, "strftime") else str(idx)
         for idx in win.index
@@ -2651,6 +2767,8 @@ def _systematic_backtest_payload(symbol: str, query: dict) -> tuple[dict, int]:
         timestamps=dates,
         symbol=symbol,
         volumes=volumes,
+        highs=highs,
+        lows=lows,
         gamma_flip_series=flip_series,
         call_wall_series=cwall_series,
         put_wall_series=pwall_series,
@@ -3474,6 +3592,10 @@ _MARKET_REGIME_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _MARKET_REGIME_LOCK = threading.Lock()
 _MARKET_REGIME_BUILD_LOCKS: dict[str, threading.Lock] = {}
 _MARKET_REGIME_CACHE_TTL_S = 60.0
+# Warm intervals outside regular trading. Overridable because how much of the
+# provider's daily allowance an idle desk may spend is an operator decision.
+_MARKET_REGIME_WARM_EXTENDED_S = float(os.environ.get("EDGE_REGIME_WARM_EXTENDED_S", "300") or 300)
+_MARKET_REGIME_WARM_CLOSED_S = float(os.environ.get("EDGE_REGIME_WARM_CLOSED_S", "1800") or 1800)
 
 
 def _symbol_path(symbol: str, tier: str) -> Path:
@@ -3626,7 +3748,8 @@ def _fetch_yfinance_ohlcv(symbol: str) -> "_get_pd().DataFrame" | None:
     # "VIX" is not a symbol -- Yahoo answers "possibly delisted", so the macro
     # strip has never had a VIX print and each load burns a network round trip.
     vendor_symbol = _YF_INDEX_ALIASES.get(symbol.upper(), symbol)
-    try:
+
+    def _download() -> "_get_pd().DataFrame" | None:
         # Without a timeout a hung Yahoo connection holds this handler thread
         # forever, and the server only has _DEFAULT_MAX_CONCURRENT_REQUESTS (32)
         # of them -- enough stuck lookups take the whole API down, not just
@@ -3637,23 +3760,30 @@ def _fetch_yfinance_ohlcv(symbol: str) -> "_get_pd().DataFrame" | None:
             progress=False,
             auto_adjust=True,
             threads=False,
-            timeout=10,
+            timeout=_YF_SPOT_TIMEOUT_S,
         )
+        if raw is None or raw.empty:
+            return None
+        if isinstance(raw.columns, _get_pd().MultiIndex):
+            # yfinance often returns (Price, Ticker) even for a single name.
+            try:
+                levels = [str(x).upper() for x in raw.columns.get_level_values(-1)]
+                if vendor_symbol.upper() in levels:
+                    raw = raw.xs(vendor_symbol, axis=1, level=-1, drop_level=True)
+                else:
+                    raw.columns = raw.columns.get_level_values(0)
+            except Exception:
+                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
+        return _normalize_ohlcv_df(raw)
+
+    _futures = _get_concurrent_futures()
+    pool = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="yf-ohlcv")
+    try:
+        return pool.submit(_download).result(timeout=_YF_SPOT_DEADLINE_S)
     except Exception:
         return None
-    if raw is None or raw.empty:
-        return None
-    if isinstance(raw.columns, _get_pd().MultiIndex):
-        # yfinance often returns (Price, Ticker) even for a single name.
-        try:
-            levels = [str(x).upper() for x in raw.columns.get_level_values(-1)]
-            if vendor_symbol.upper() in levels:
-                raw = raw.xs(vendor_symbol, axis=1, level=-1, drop_level=True)
-            else:
-                raw.columns = raw.columns.get_level_values(0)
-        except Exception:
-            raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
-    return _normalize_ohlcv_df(raw)
+    finally:
+        pool.shutdown(wait=False)
 
 
 def _frame_asof_date(frame: Any) -> str | None:
@@ -3673,6 +3803,37 @@ def _frame_age_days(frame: Any, *, now: datetime | None = None) -> int | None:
     observed = datetime.fromisoformat(asof).date()
     today = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
     return max(0, (today - observed).days)
+
+
+def _append_live_close(frame: Any, spot: float, asof: str | None) -> Any:
+    """Stamp a live last onto a daily OHLCV frame without inventing history."""
+    if frame is None or getattr(frame, "empty", True):
+        return frame
+    if not math.isfinite(spot) or spot <= 0:
+        return frame
+    pd = _get_pd()
+    try:
+        ts = pd.Timestamp(asof) if asof else pd.Timestamp(datetime.now(timezone.utc).date())
+    except (TypeError, ValueError):
+        ts = pd.Timestamp(datetime.now(timezone.utc).date())
+    if getattr(ts, "tzinfo", None) is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    ts = ts.normalize()
+    out = frame.copy()
+    last = pd.Timestamp(out.index[-1])
+    if getattr(last, "tzinfo", None) is not None:
+        last = last.tz_convert("UTC").tz_localize(None)
+    last = last.normalize()
+    if ts < last:
+        return out
+    out.loc[ts, ["open", "high", "low", "close", "volume"]] = [
+        float(spot),
+        float(spot),
+        float(spot),
+        float(spot),
+        0.0,
+    ]
+    return out
 
 
 def _refresh_stale_compare_frames(
@@ -3724,9 +3885,25 @@ def _refresh_stale_compare_frames(
             continue
         local_asof = _frame_asof_date(loaded.get(symbol)) or ""
         live_asof = _frame_asof_date(frame) or ""
-        if live_asof >= local_asof:
+        if live_asof > local_asof:
             loaded[symbol] = frame
             sources[symbol] = "yfinance_refresh"
+
+    still_stale = [
+        symbol
+        for symbol in stale
+        if _frame_age_days(loaded.get(symbol)) is None
+        or int(_frame_age_days(loaded.get(symbol)) or 0) > 3
+    ]
+    for symbol in still_stale:
+        spot, asof = _fetch_lse_equity_spot(symbol)
+        if spot is None:
+            continue
+        updated = _append_live_close(loaded.get(symbol), spot, asof)
+        if updated is None or getattr(updated, "empty", True):
+            continue
+        loaded[symbol] = updated
+        sources[symbol] = "lse_equity_candles"
 
 
 def _load_symbol_df(symbol: str) -> tuple["_get_pd().DataFrame | None, str | None"]:
@@ -4578,8 +4755,9 @@ def _fetch_lse_equity_spot(symbol: str) -> tuple[float | None, str | None]:
                     timeout=3,
                 )
             except Exception:  # noqa: BLE001
-                frame = None
-                break
+                # A 402/429 on 5m must not skip 1d; ISO quota exhaustion is
+                # per-route and the daily vault candle is often still there.
+                continue
             if frame is not None and not getattr(frame, "empty", True):
                 break
 
@@ -4949,17 +5127,26 @@ def _fetch_live_option_inputs(
             passes.append((1_000.0, 300))
 
         merged: dict[tuple[Any, ...], dict] = {}
+        first_error: Exception | None = None
         for floor, cap in passes:
             try:
                 rows = fetch_lse_options_flow(
                     symbol,
                     min_premium=floor,
                     limit=cap,
-                    timeout=12,
+                    # The provider falls back to the bulk vault route when the
+                    # metered /iso tables are exhausted, and that route ships
+                    # the whole result set rather than a trimmed projection —
+                    # a 2500-row pull is megabytes. At 12s the first pass
+                    # intermittently timed out and blanked the entire tape.
+                    timeout=30,
                 )
-            except Exception:  # noqa: BLE001 - one pass failing must not blank the tape
-                if not merged:
-                    raise
+            except Exception as exc:  # noqa: BLE001 - one pass failing must not blank the tape
+                # Raising here on the *first* pass threw away the later ones,
+                # so a single slow request cost the whole tape even when the
+                # remaining floors would have answered. Keep going; only a
+                # clean sweep of failures is a real outage.
+                first_error = first_error or exc
                 continue
             for row in rows or []:
                 if not isinstance(row, Mapping):
@@ -4972,6 +5159,8 @@ def _fetch_live_option_inputs(
                     row.get("size") or row.get("volume"),
                 )
                 merged.setdefault(key, dict(row))
+        if not merged and first_error is not None:
+            raise first_error
         return list(merged.values())
 
     # Chain, tape, and equity last are independent network reads. Overlap them
@@ -5117,8 +5306,15 @@ def _fetch_live_option_inputs(
             )
 
     if not flow_rows and not any(note.startswith("Live flow unavailable:") for note in warnings):
+        # The provider returns an empty list for a transport failure and for a
+        # genuinely quiet name alike, so this line used to blame the operator's
+        # filters for outages they could not fix — the LSE monthly byte quota
+        # answering 402 on every /iso read reads exactly like a quiet tape.
+        # Name the reachable causes instead of only the one the user can act on.
         warnings.append(
-            "No recent trade-tape prints from LSE — try RAW noise filter or a more liquid name."
+            "No trade-tape prints returned for this symbol. This is either a quiet tape "
+            "(try the RAW noise filter or a more liquid name) or the provider declining "
+            "the read — check the server log for an LSE options_flow error."
         )
     return chain_rows, flow_rows, spot, open_interest_source, warnings, spot_source
 
@@ -5274,7 +5470,10 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
     with _OPTIONS_LOCK:
         cached = _OPTIONS_CACHE.get(cache_key)
     if cached and time.time() - cached[0] < _OPTIONS_CACHE_TTL_S:
-        return cached[1], 200
+        payload = cached[1]
+        if isinstance(payload, dict):
+            _store_regime_attractor_snapshot(symbol, payload.get("price_attractor_snapshot"))
+        return payload, 200
 
     price_series, price_spot = _options_price_series(
         symbol,
@@ -5507,6 +5706,7 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
                 rate=filters.risk_free_rate,
             )
             payload["price_attractor_snapshot"] = attractor_snapshot.to_dict()
+            _store_regime_attractor_snapshot(symbol, payload["price_attractor_snapshot"])
         except Exception as exc:
             payload["price_attractor_snapshot"] = {
                 "symbol": symbol.upper(),
@@ -5782,9 +5982,7 @@ def _execution_gate_payload(symbol: str, query: dict) -> tuple[dict, int]:
         }
         return payload, 200
     if opt_status == 200 and isinstance(opt_payload, dict):
-        chain_rows = (
-            opt_payload.get("chain_by_strike") or opt_payload.get("chain_rows") or []
-        )
+        chain_rows = opt_payload.get("chain_by_strike") or opt_payload.get("chain_rows") or []
         chain_spot = (opt_payload.get("summary") or {}).get("spot")
         if chain_spot:
             # Route the delta against the chain's own spot, not the bar close.
@@ -7160,11 +7358,9 @@ def _unusual_flow_payload_impl(
     # UNAVAILABLE until the server was restarted.
     #
     # The lock bought nothing anyway: rebinding a module global is atomic
-    # under the GIL, and a reader that races us either sees the old payload
-    # (about to expire) or None (rebuild) -- both correct. Stamping the
-    # timestamp back to 0 keeps the TTL check honest even if a concurrent
-    # builder republishes between these two statements.
-    _LIVE_OPPORTUNITIES_CACHE = None
+    # under the GIL. Stamp the timestamp to 0 so the TTL check is honest even
+    # if a concurrent builder republishes between these two statements, but
+    # keep the last union so a Setups poll can serve it immediately.
     _LIVE_OPPORTUNITIES_CACHE_TS = 0.0
     return payload
 
@@ -7205,6 +7401,8 @@ _LIVE_OPPORTUNITIES_CACHE: dict | None = None
 _LIVE_OPPORTUNITIES_CACHE_TS: float = 0.0
 _LIVE_OPPORTUNITIES_TTL_S = 90.0
 _LIVE_OPPORTUNITIES_LOCK = threading.Lock()
+_LIVE_OPPORTUNITIES_STATE_PATH = RUNS_DIR / "live_opportunities_cache.json"
+_LIVE_OPPORTUNITIES_STATE_LOADED = False
 
 # A symbol opened directly from Flow deserves a symbol-specific chain read even
 # when it fell outside the broad board's top-25 routing budget. Keep these
@@ -7558,67 +7756,146 @@ def _stabilize_contract_plans(payload: dict) -> dict:
     return _rank_suggestion_rows(payload)
 
 
-def _live_opportunities_payload(*, force: bool = False) -> dict:
+def _live_opportunities_state_enabled() -> bool:
+    """Unit tests must not overwrite the operator's last Setups union."""
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        return True
+    return _LIVE_OPPORTUNITIES_STATE_PATH != RUNS_DIR / "live_opportunities_cache.json"
+
+
+def _hydrate_live_opportunities_cache() -> None:
+    """Load the last union after an API restart so Setups is not a cold 0."""
     global _LIVE_OPPORTUNITIES_CACHE, _LIVE_OPPORTUNITIES_CACHE_TS
-    now = time.time()
+    global _LIVE_OPPORTUNITIES_STATE_LOADED
+    if _LIVE_OPPORTUNITIES_STATE_LOADED:
+        return
+    _LIVE_OPPORTUNITIES_STATE_LOADED = True
+    if _LIVE_OPPORTUNITIES_CACHE is not None or not _live_opportunities_state_enabled():
+        return
+    try:
+        saved = json.loads(_LIVE_OPPORTUNITIES_STATE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        return
+    payload = saved.get("payload") if isinstance(saved, dict) else None
+    if not isinstance(payload, dict):
+        return
+    _LIVE_OPPORTUNITIES_CACHE = payload
+    _LIVE_OPPORTUNITIES_CACHE_TS = 0.0
+
+
+def _persist_live_opportunities_cache(payload: dict) -> None:
+    if not isinstance(payload, dict) or not payload.get("available"):
+        return
+    if not _live_opportunities_state_enabled():
+        return
+    try:
+        _LIVE_OPPORTUNITIES_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        pending = _LIVE_OPPORTUNITIES_STATE_PATH.with_suffix(".tmp")
+        pending.write_text(json.dumps({"payload": payload}, default=str), encoding="utf-8")
+        os.replace(pending, _LIVE_OPPORTUNITIES_STATE_PATH)
+    except OSError:
+        return
+
+
+def _live_opportunities_fresh(*, force: bool) -> dict | None:
+    cached = _LIVE_OPPORTUNITIES_CACHE
     if (
         not force
-        and _LIVE_OPPORTUNITIES_CACHE is not None
-        and (now - _LIVE_OPPORTUNITIES_CACHE_TS) < _LIVE_OPPORTUNITIES_TTL_S
+        and cached is not None
+        and (time.time() - _LIVE_OPPORTUNITIES_CACHE_TS) < _LIVE_OPPORTUNITIES_TTL_S
     ):
-        return _LIVE_OPPORTUNITIES_CACHE
+        return cached
+    return None
+
+
+def _rebuild_live_opportunities_body(*, force: bool) -> dict:
+    global _LIVE_OPPORTUNITIES_CACHE, _LIVE_OPPORTUNITIES_CACHE_TS
+    # Passive polling stays cache-friendly. Only an explicit force request
+    # cascades to vendors, matching the dashboard's "PULL LIVE DATA" action.
+    board = _options_board_payload(
+        limit=25,
+        depth=_ACTIVE_SCAN_DEPTH,
+        require_live_flow=False,
+        force=force,
+    )
+    flow = _unusual_flow_payload(limit=40, min_premium=25_000.0, force=force)
+    board_cache = board.get("cache") if isinstance(board.get("cache"), dict) else {}
+    flow_cache = flow.get("cache") if isinstance(flow.get("cache"), dict) else {}
+    qlib_panel = peek_shared_qlib_panel()
+    payload = build_live_opportunities(
+        board_rows=_attach_regime_levels(_attach_flow_state_levels(list(board.get("rows") or []))),
+        flow_rows=list(flow.get("rows") or []),
+        calibrated_rows=list(board.get("calibrated_signals") or []),
+        qlib_rows=qlib_rows_from_panel(qlib_panel),
+        filters=OptionsFilters(),
+        board_cache_age_seconds=float(board_cache.get("age_seconds") or 0.0),
+        flow_cache_age_seconds=float(flow_cache.get("age_seconds") or 0.0),
+    )
+    payload = _stabilize_contract_plans(payload)
+    if payload.get("available"):
+        payload["sources"] = {
+            "board": {
+                "cache": board_cache,
+                "asof_utc": board.get("asof_utc"),
+                "scan_asof": board.get("scan_asof"),
+            },
+            "flow": {
+                "cache": flow_cache,
+                "asof": flow.get("asof"),
+            },
+            "qlib": {
+                "published": qlib_panel is not None,
+                "asof": (qlib_panel or {}).get("asof"),
+                "source": (qlib_panel or {}).get("source"),
+                "n_symbols": len((qlib_panel or {}).get("by_symbol") or {}),
+            },
+            "scan_depth": _ACTIVE_SCAN_DEPTH,
+        }
+    _LIVE_OPPORTUNITIES_CACHE = payload
+    _LIVE_OPPORTUNITIES_CACHE_TS = time.time()
+    _persist_live_opportunities_cache(payload)
+    return payload
+
+
+def _rebuild_live_opportunities_bg() -> None:
+    try:
+        if _live_opportunities_fresh(force=False) is None:
+            _rebuild_live_opportunities_body(force=False)
+    except Exception:  # noqa: BLE001 - a background miss must not kill the desk
+        pass
+    finally:
+        _LIVE_OPPORTUNITIES_LOCK.release()
+
+
+def _kick_live_opportunities_rebuild() -> None:
+    if not _LIVE_OPPORTUNITIES_LOCK.acquire(blocking=False):
+        return
+    try:
+        threading.Thread(
+            target=_rebuild_live_opportunities_bg,
+            name="setups-rebuild",
+            daemon=True,
+        ).start()
+    except Exception:  # noqa: BLE001 - restore the lock if the thread never starts
+        _LIVE_OPPORTUNITIES_LOCK.release()
+
+
+def _live_opportunities_payload(*, force: bool = False) -> dict:
+    fresh = _live_opportunities_fresh(force=force)
+    if fresh is not None:
+        return fresh
+    cached = _LIVE_OPPORTUNITIES_CACHE
+    if not force and cached is not None:
+        # Last union stays on the wire while board/flow recombine. A TTL miss
+        # used to hold _LIVE_OPPORTUNITIES_LOCK across vendor work, so the
+        # 30s browser abort retried forever on an empty Setups tab.
+        _kick_live_opportunities_rebuild()
+        return cached
     with _LIVE_OPPORTUNITIES_LOCK:
-        now = time.time()
-        if (
-            not force
-            and _LIVE_OPPORTUNITIES_CACHE is not None
-            and (now - _LIVE_OPPORTUNITIES_CACHE_TS) < _LIVE_OPPORTUNITIES_TTL_S
-        ):
-            return _LIVE_OPPORTUNITIES_CACHE
-        # Passive polling stays cache-friendly. Only an explicit force request
-        # cascades to vendors, matching the dashboard's "PULL LIVE DATA" action.
-        board = _options_board_payload(
-            limit=25,
-            depth=_ACTIVE_SCAN_DEPTH,
-            require_live_flow=False,
-            force=force,
-        )
-        flow = _unusual_flow_payload(limit=40, min_premium=25_000.0, force=force)
-        board_cache = board.get("cache") if isinstance(board.get("cache"), dict) else {}
-        flow_cache = flow.get("cache") if isinstance(flow.get("cache"), dict) else {}
-        qlib_panel = peek_shared_qlib_panel()
-        payload = build_live_opportunities(
-            board_rows=_attach_flow_state_levels(list(board.get("rows") or [])),
-            flow_rows=list(flow.get("rows") or []),
-            calibrated_rows=list(board.get("calibrated_signals") or []),
-            qlib_rows=qlib_rows_from_panel(qlib_panel),
-            filters=OptionsFilters(),
-            board_cache_age_seconds=float(board_cache.get("age_seconds") or 0.0),
-            flow_cache_age_seconds=float(flow_cache.get("age_seconds") or 0.0),
-        )
-        payload = _stabilize_contract_plans(payload)
-        if payload.get("available"):
-            payload["sources"] = {
-                "board": {
-                    "cache": board_cache,
-                    "asof_utc": board.get("asof_utc"),
-                    "scan_asof": board.get("scan_asof"),
-                },
-                "flow": {
-                    "cache": flow_cache,
-                    "asof": flow.get("asof"),
-                },
-                "qlib": {
-                    "published": qlib_panel is not None,
-                    "asof": (qlib_panel or {}).get("asof"),
-                    "source": (qlib_panel or {}).get("source"),
-                    "n_symbols": len((qlib_panel or {}).get("by_symbol") or {}),
-                },
-                "scan_depth": _ACTIVE_SCAN_DEPTH,
-            }
-        _LIVE_OPPORTUNITIES_CACHE = payload
-        _LIVE_OPPORTUNITIES_CACHE_TS = time.time()
-        return payload
+        fresh = _live_opportunities_fresh(force=force)
+        if fresh is not None:
+            return fresh
+        return _rebuild_live_opportunities_body(force=force)
 
 
 def _flow_suggestion_payload_impl(symbol: str, *, force: bool = False) -> dict:
@@ -7670,7 +7947,7 @@ def _flow_suggestion_payload_impl(symbol: str, *, force: bool = False) -> dict:
     qlib_rows = [row for row in qlib_rows_from_panel(qlib_panel) if row.get("symbol") == symbol]
     flow_cache = flow_payload.get("cache") if isinstance(flow_payload.get("cache"), dict) else {}
     payload = build_live_opportunities(
-        board_rows=_attach_flow_state_levels([board_row]),
+        board_rows=_attach_regime_levels(_attach_flow_state_levels([board_row])),
         flow_rows=flow_rows,
         calibrated_rows=calibrated_rows,
         qlib_rows=qlib_rows,
@@ -9644,6 +9921,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         return
                     payload = _flow_suggestion_payload(symbol_or_error, force=force)
                 else:
+                    _hydrate_live_opportunities_cache()
                     payload = _live_opportunities_payload(force=force)
                 if limit and isinstance(payload.get("rows"), list):
                     payload = {**payload, "rows": payload["rows"][:limit]}
@@ -9778,6 +10056,17 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/flow-state":
                 self._send_json(_flow_state_payload())
+
+            elif path == "/api/lse-budget":
+                try:
+                    from daily_plays.lse_budget import snapshot as _lse_budget_snapshot
+
+                    self._send_json(_lse_budget_snapshot())
+                except Exception as exc:
+                    self._send_json(
+                        {"error": f"lse_budget_unavailable:{type(exc).__name__}", "endpoint": path},
+                        status=503,
+                    )
 
             elif path == "/api/adaptive-signal":
                 limit = _safe_int(query.get("limit", ["40"])[0], default=40, lo=5, hi=120)
@@ -10314,6 +10603,32 @@ def main():
 
     threading.Thread(target=_warm_status_cache, daemon=True, name="status-warm").start()
 
+    def _market_regime_warm_interval_s() -> float:
+        """Seconds to wait before the next regime warm, by market session.
+
+        Recomputing at 3/4 of the TTL keeps the page instant while the session
+        is live, but the chain does not move once trading stops. Warming SPY
+        every 45s around the clock priced the live chain ~1,900 times a day --
+        a per-expiry provider fan-out each time -- and spent the account's
+        15,000-request daily allowance before the next open, so the desk that
+        the warm exists to keep fast opened blank instead. Back off outside
+        regular hours; the first request after the open still warms within one
+        interval.
+        """
+        base = _MARKET_REGIME_CACHE_TTL_S * 0.75
+        try:
+            from daily_plays.clock import classify_session
+            from daily_plays.contracts import MarketSession
+
+            session = classify_session(datetime.now(timezone.utc))
+        except Exception:  # a clock problem must not stop the desk warming
+            return base
+        if session is MarketSession.REGULAR:
+            return base
+        if session in (MarketSession.PREMARKET, MarketSession.AFTER_HOURS):
+            return max(base, _MARKET_REGIME_WARM_EXTENDED_S)
+        return max(base, _MARKET_REGIME_WARM_CLOSED_S)
+
     def _warm_market_regime_cache():
         """Keep /api/market-regime?symbol=SPY perpetually warm.
 
@@ -10333,7 +10648,7 @@ def main():
                 )
             except Exception as e:  # noqa: BLE001
                 print(f"[api_server] market-regime warm failed: {e}", file=sys.stderr, flush=True)
-            time.sleep(_MARKET_REGIME_CACHE_TTL_S * 0.75)
+            time.sleep(_market_regime_warm_interval_s())
 
     threading.Thread(
         target=_warm_market_regime_cache, daemon=True, name="market-regime-warm"

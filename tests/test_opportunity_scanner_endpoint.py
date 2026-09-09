@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import threading
 import time
 
@@ -42,11 +43,107 @@ def _patch(monkeypatch, board_rows, flow_rows):
     return board_fn, flow_fn
 
 
+def test_restart_hydrates_last_setups_union_immediately(monkeypatch, tmp_path):
+    path = tmp_path / "live_opportunities_cache.json"
+    path.write_text(
+        json.dumps({"payload": {"available": True, "rows": [{"symbol": "HYDRATED"}]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_server, "_LIVE_OPPORTUNITIES_STATE_PATH", path)
+    api_server._LIVE_OPPORTUNITIES_CACHE = None
+    api_server._LIVE_OPPORTUNITIES_CACHE_TS = 0.0
+    api_server._LIVE_OPPORTUNITIES_STATE_LOADED = False
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_board(**_kwargs):
+        started.set()
+        assert release.wait(timeout=2)
+        return {"rows": [{"symbol": "NEW"}], "cache": {"age_seconds": 0.0}}
+
+    monkeypatch.setattr(api_server, "_options_board_payload", slow_board)
+    monkeypatch.setattr(
+        api_server,
+        "_unusual_flow_payload",
+        lambda **_: {"rows": [], "cache": {"age_seconds": 0.0}},
+    )
+
+    api_server._hydrate_live_opportunities_cache()
+    t0 = time.time()
+    served = api_server._live_opportunities_payload()
+    elapsed = time.time() - t0
+
+    assert elapsed < 0.5
+    assert served["rows"][0]["symbol"] == "HYDRATED"
+    assert started.wait(timeout=2)
+    release.set()
+    deadline = time.time() + 2
+    while api_server._LIVE_OPPORTUNITIES_LOCK.locked() and time.time() < deadline:
+        time.sleep(0.01)
+
+
+def test_expired_setups_cache_is_served_while_rebuild_is_slow(monkeypatch):
+    """A TTL miss must not block the tab on vendor work.
+
+    The browser aborts /api/options/suggest at 30s. Holding the recombination
+    lock across a vault/board rebuild made every retry wait on that lock, so
+    the Setups tab stayed on "UPDATING… / 0 names" even after a payload existed.
+    """
+    board_fn, flow_fn = _patch(
+        monkeypatch,
+        board_rows=[
+            {
+                "symbol": "AAA",
+                "squeeze_score": 1.0,
+                "spread_pct": 0.1,
+                "open_interest": 500,
+                "selected_dte": 10,
+            }
+        ],
+        flow_rows=[{"symbol": "AAA", "unusual_score": 50.0}],
+    )
+    first = api_server._live_opportunities_payload()
+    api_server._LIVE_OPPORTUNITIES_CACHE_TS = 0.0
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_board(**_kwargs):
+        started.set()
+        assert release.wait(timeout=2)
+        return {"rows": [{"symbol": "ZZZ"}], "cache": {"age_seconds": 0.0}}
+
+    monkeypatch.setattr(api_server, "_options_board_payload", slow_board)
+
+    t0 = time.time()
+    stale = api_server._live_opportunities_payload()
+    elapsed = time.time() - t0
+    again = api_server._live_opportunities_payload()
+
+    assert elapsed < 0.5
+    assert stale is first
+    assert again is first
+    assert started.wait(timeout=2)
+    release.set()
+    deadline = time.time() + 2
+    while api_server._LIVE_OPPORTUNITIES_LOCK.locked() and time.time() < deadline:
+        time.sleep(0.01)
+    assert first["rows"][0]["symbol"] == "AAA"
+
+
 def test_payload_reuses_cache_across_calls(monkeypatch):
     board_fn, flow_fn = _patch(
         monkeypatch,
-        board_rows=[{"symbol": "AAA", "squeeze_score": 1.0, "spread_pct": 0.1,
-                      "open_interest": 500, "selected_dte": 10}],
+        board_rows=[
+            {
+                "symbol": "AAA",
+                "squeeze_score": 1.0,
+                "spread_pct": 0.1,
+                "open_interest": 500,
+                "selected_dte": 10,
+            }
+        ],
         flow_rows=[{"symbol": "AAA", "unusual_score": 50.0}],
     )
 
@@ -83,8 +180,15 @@ def test_force_cascades_once_to_the_underlying_board_and_flow_fetches(monkeypatc
 def test_payload_shape_has_the_expected_top_level_keys(monkeypatch):
     _patch(
         monkeypatch,
-        board_rows=[{"symbol": "AAA", "squeeze_score": 2.0, "spread_pct": 0.05,
-                      "open_interest": 200, "selected_dte": 15}],
+        board_rows=[
+            {
+                "symbol": "AAA",
+                "squeeze_score": 2.0,
+                "spread_pct": 0.05,
+                "open_interest": 200,
+                "selected_dte": 15,
+            }
+        ],
         flow_rows=[],
     )
 
@@ -132,10 +236,15 @@ def test_flow_click_builds_the_exact_symbol_even_outside_the_broad_board(monkeyp
         api_server,
         "_unusual_flow_payload",
         lambda **_: {
-            "rows": [{
-                "symbol": "XYZ", "unusual_score": 8.0, "context_side": "long",
-                "live": True, "live_asof": "2026-08-14T01:00:00+00:00",
-            }],
+            "rows": [
+                {
+                    "symbol": "XYZ",
+                    "unusual_score": 8.0,
+                    "context_side": "long",
+                    "live": True,
+                    "live_asof": "2026-08-14T01:00:00+00:00",
+                }
+            ],
             "cache": {"age_seconds": 0},
             "asof": "2026-08-14T01:00:00+00:00",
         },
@@ -246,7 +355,10 @@ def test_cold_options_board_uses_lazy_thread_pool(monkeypatch):
     )
 
     payload = api_server._options_board_payload_impl(
-        limit=1, depth="quick", require_live_flow=False, force=True,
+        limit=1,
+        depth="quick",
+        require_live_flow=False,
+        force=True,
     )
 
     assert payload["rows"] == [{"available": True, "gex_measurable": True, "rank": 1}]
@@ -288,16 +400,23 @@ def test_payload_folds_published_qlib_without_rebuilding(monkeypatch):
     from edge.daily_plays.qlib_scan_score import clear_shared_qlib_panel, publish_shared_qlib_panel
 
     clear_shared_qlib_panel()
-    publish_shared_qlib_panel({
-        "quality": "ok",
-        "source": "qlib_scan_lgb_v2",
-        "score_kind": "ordinal_qlib_xs",
-        "asof": "2026-08-09",
-        "coverage": {"scored": 9},
-        "by_symbol": {
-            "AAA": {"symbol": "AAA", "qlib_score": 0.4, "qlib_rank": 2, "source": "qlib_scan_lgb_v2"},
-        },
-    })
+    publish_shared_qlib_panel(
+        {
+            "quality": "ok",
+            "source": "qlib_scan_lgb_v2",
+            "score_kind": "ordinal_qlib_xs",
+            "asof": "2026-08-09",
+            "coverage": {"scored": 9},
+            "by_symbol": {
+                "AAA": {
+                    "symbol": "AAA",
+                    "qlib_score": 0.4,
+                    "qlib_rank": 2,
+                    "source": "qlib_scan_lgb_v2",
+                },
+            },
+        }
+    )
     rebuilt = []
 
     def boom(*_args, **_kwargs):
@@ -307,11 +426,19 @@ def test_payload_folds_published_qlib_without_rebuilding(monkeypatch):
     monkeypatch.setattr("edge.daily_plays.qlib_scan_score.score_cross_section_asof", boom)
     _patch(
         monkeypatch,
-        board_rows=[{
-            "symbol": "AAA", "squeeze_score": 1.0, "spread_pct": 0.1,
-            "open_interest": 500, "selected_dte": 10, "context_side": "long",
-            "spot": 100, "call_wall": 108, "put_wall": 96,
-        }],
+        board_rows=[
+            {
+                "symbol": "AAA",
+                "squeeze_score": 1.0,
+                "spread_pct": 0.1,
+                "open_interest": 500,
+                "selected_dte": 10,
+                "context_side": "long",
+                "spot": 100,
+                "call_wall": 108,
+                "put_wall": 96,
+            }
+        ],
         flow_rows=[{"symbol": "AAA", "unusual_score": 50.0, "context_side": "long"}],
     )
 
@@ -483,12 +610,18 @@ class TestLiveOpportunitiesLockReentrancy:
             "/api/unusual-flow wedged behind a lock the Setups thread never released"
         )
 
-    def test_fresh_flow_actually_invalidates_the_live_opportunities_cache(self, monkeypatch):
-        """The invalidation must rebind the module global, not a local name."""
+    def test_fresh_flow_expires_setups_cache_without_dropping_last_payload(self, monkeypatch):
+        """Expire the TTL so the next recombination is fresh, keep last rows.
+
+        Dropping the payload to None forced every Flow refresh through a cold
+        Setups rebuild. The last union must survive so a TTL miss can be
+        served immediately.
+        """
         self._stub_sources(monkeypatch)
         api_server._LIVE_OPPORTUNITIES_CACHE = {"stale": True}
         api_server._LIVE_OPPORTUNITIES_CACHE_TS = time.time()
 
         api_server._unusual_flow_payload_impl(limit=40, min_premium=25_000.0, force=True)
 
-        assert api_server._LIVE_OPPORTUNITIES_CACHE is None
+        assert api_server._LIVE_OPPORTUNITIES_CACHE == {"stale": True}
+        assert api_server._LIVE_OPPORTUNITIES_CACHE_TS == 0.0

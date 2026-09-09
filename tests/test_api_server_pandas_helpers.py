@@ -71,7 +71,9 @@ def test_options_price_series_reads_one_symbol_and_preserves_volume(monkeypatch)
     monkeypatch.setattr(
         api_server,
         "_trajectory_payload",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trajectory should not run")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("trajectory should not run")
+        ),
     )
 
     series, spot = api_server._options_price_series("AAA", "1m")
@@ -121,7 +123,9 @@ def test_augment_price_series_appends_live_session_when_local_bars_lag():
         {"t": "2026-08-05T20:00:00+00:00", "close": 771.33, "volume": 1.0},
     ]
     out = api_server._augment_price_series_with_live(
-        series, 772.75, "2026-08-12T14:40:00+00:00",
+        series,
+        772.75,
+        "2026-08-12T14:40:00+00:00",
     )
     assert len(out) == 3
     assert out[-1]["close"] == 772.75
@@ -181,4 +185,47 @@ def test_stale_shell_benchmark_prefers_newer_bounded_refresh(monkeypatch):
     assert payload["stats"]["SPY"]["quality"] == "current"
     assert payload["stats"]["SPY"]["asof"] == live.index[-1].date().isoformat()
     assert payload["stats"]["SPY"]["last_price"] == live["close"].iloc[-1]
+    api_server._COMPARE_REFRESH_CACHE.clear()
+
+
+def test_same_date_yfinance_refresh_does_not_block_lse_spot(monkeypatch):
+    local = _prices().copy()
+    api_server._COMPARE_REFRESH_CACHE.clear()
+
+    monkeypatch.setattr(api_server, "_load_symbol_df", lambda _symbol: (local, "core"))
+    monkeypatch.setattr(api_server, "_fetch_yfinance_ohlcv", lambda _symbol: local.copy())
+    monkeypatch.setattr(
+        api_server,
+        "_fetch_lse_equity_spot",
+        lambda _symbol: (650.25, "2026-09-08T20:00:00+00:00"),
+    )
+    monkeypatch.setattr(api_server, "_frame_age_days", lambda frame, now=None: 10)
+
+    payload, status = api_server._compare_payload(["SPY"], "1m")
+
+    assert status == 200
+    assert payload["stats"]["SPY"]["source"] == "lse_equity_candles"
+    assert payload["stats"]["SPY"]["last_price"] == 650.25
+    api_server._COMPARE_REFRESH_CACHE.clear()
+
+
+def test_stale_shell_benchmark_falls_back_to_lse_spot_when_yfinance_misses(monkeypatch):
+    local = _prices().copy()
+    api_server._COMPARE_REFRESH_CACHE.clear()
+
+    monkeypatch.setattr(api_server, "_load_symbol_df", lambda _symbol: (local, "core"))
+    monkeypatch.setattr(api_server, "_fetch_yfinance_ohlcv", lambda _symbol: None)
+    monkeypatch.setattr(
+        api_server,
+        "_fetch_lse_equity_spot",
+        lambda _symbol: (650.25, "2026-09-08T20:00:00+00:00"),
+    )
+    monkeypatch.setattr(api_server, "_frame_age_days", lambda frame, now=None: 10)
+
+    payload, status = api_server._compare_payload(["SPY"], "1m")
+
+    assert status == 200
+    assert payload["stats"]["SPY"]["source"] == "lse_equity_candles"
+    assert payload["stats"]["SPY"]["last_price"] == 650.25
+    assert payload["stats"]["SPY"]["asof"] == "2026-09-08"
     api_server._COMPARE_REFRESH_CACHE.clear()

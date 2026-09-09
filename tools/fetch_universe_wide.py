@@ -267,11 +267,34 @@ def fetch_one_retry(symbol: str, max_retries: int = MAX_RETRIES) -> pd.DataFrame
 
 
 def maybe_write(path: Path, df: pd.DataFrame, force: bool) -> str:
+    """Merge the new pull into whatever is on disk, newest bar wins.
+
+    Same rule as `fetch_universe.maybe_write`, and for the same reason: row
+    count is not evidence of freshness. This fetcher's window is anchored at a
+    fixed START so its count does grow, but a chunked multi-symbol pull that
+    comes back short for one name would otherwise be silently discarded even
+    when it carried bars the file is missing.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if df is None or getattr(df, "empty", True):
+        return "kept_existing"
+
     if path.exists() and not force:
-        old = pd.read_parquet(path)
-        if len(df) <= len(old):
-            return "kept_existing"
+        try:
+            old = pd.read_parquet(path)
+        except Exception:
+            old = None
+        if old is not None and not old.empty and list(old.columns) == list(df.columns):
+            merged = pd.concat([old[~old.index.isin(df.index)], df]).sort_index()
+            merged = merged[~merged.index.duplicated(keep="last")]
+            if merged.equals(old):
+                return "kept_existing"
+            merged.to_parquet(path)
+            return "merged"
+        if old is not None and not old.empty and len(df) <= len(old):
+            if df.index.max() <= old.index.max():
+                return "kept_existing"
+
     df.to_parquet(path)
     return "wrote"
 

@@ -399,6 +399,12 @@ export function feedStatusCopy(status?: string | null): string {
   if (value === 'live') return 'PROVIDER SAMPLE'
   if (value === 'no_prints') return 'NO PRINTS IN SAMPLE'
   if (value === 'credential_missing') return 'CREDENTIAL MISSING'
+  // A configured key that the provider refuses or throttles is a different
+  // fault from a missing key, and it is fixed somewhere else entirely.
+  if (value === 'provider_rejected') return 'PROVIDER REFUSED KEY'
+  if (value === 'provider_throttled') return 'PROVIDER QUOTA REACHED'
+  if (value === 'provider_cooldown') return 'PROVIDER COOLDOWN'
+  if (value === 'provider_error') return 'PROVIDER ERROR'
   if (value === 'unavailable' || value === 'timeout') return 'FEED UNAVAILABLE'
   return value.replaceAll('_', ' ').toUpperCase()
 }

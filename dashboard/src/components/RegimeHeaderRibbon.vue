@@ -29,6 +29,11 @@ const props = withDefaults(
     pinStrike?: number | null
     em1dDollars?: number | null
     em1dPct?: number | null
+    /** Bar timestamp the quote came from — never the request time. */
+    quoteAsof?: string | null
+    /** 'live' when a real-time mark backed it; 'local' when the provider
+     *  failed and the last stored daily close was substituted. */
+    quoteQuality?: string | null
   }>(),
   {
     symbolsList: () => [],
@@ -54,8 +59,40 @@ const props = withDefaults(
     pinStrike: null,
     em1dDollars: null,
     em1dPct: null,
+    quoteAsof: null,
+    quoteQuality: null,
   },
 )
+
+/**
+ * The provider falls back to the last stored daily close whenever the LSE
+ * quota trips, and says so honestly in `quality`/`asof`. This ribbon used to
+ * discard both, so a six-day-old $164.75 close rendered exactly like a live
+ * mark and its close-to-close move printed as "-41.88 (-20.27%)" — the
+ * 09-01→09-02 session presented as today's tape.
+ */
+const quoteIsLive = computed(() => props.quoteQuality == null || props.quoteQuality === 'live')
+
+/** Calendar days between the quote's bar and now, or null when undatable. */
+const quoteAgeDays = computed<number | null>(() => {
+  if (!props.quoteAsof) return null
+  const t = Date.parse(props.quoteAsof)
+  if (Number.isNaN(t)) return null
+  return Math.floor((Date.now() - t) / 86_400_000)
+})
+
+const quoteAsofLabel = computed<string | null>(() =>
+  props.quoteAsof ? String(props.quoteAsof).slice(0, 10) : null,
+)
+
+/** Shown only when the mark is not live: a stale close is not "today". */
+const staleNote = computed<string | null>(() => {
+  if (quoteIsLive.value) return null
+  const age = quoteAgeDays.value
+  const asof = quoteAsofLabel.value
+  if (asof == null) return 'STALE MARK'
+  return age != null && age >= 1 ? `STALE · ${asof} (${age}d old)` : `STALE · ${asof}`
+})
 
 const emit = defineEmits<{
   'select-symbol': [symbol: string]
@@ -149,15 +186,21 @@ function levelDist(lvl: number | null): string {
       </div>
 
       <div class="spot-price-wrap">
-        <div class="spot-val font-mono font-bold">
+        <div class="spot-val font-mono font-bold" :class="{ 'is-stale': !quoteIsLive }">
           {{ spot != null ? `$${num(spot, 2)}` : DASH }}
         </div>
         <div class="spot-chg font-mono font-semibold" :class="`text-${changeTone}`">
           <template v-if="dayChangeDollar != null || dayChangePct != null">
             {{ dayChangeDollar != null ? optSigned(dayChangeDollar, 2) : DASH }}
             ({{ dayChangePct != null ? optSigned(dayChangePct, 2) : DASH }}%)
+            <!-- A stale mark's move is the last two stored closes, not today's
+                 session. Saying which it is costs three words. -->
+            <span v-if="!quoteIsLive" class="chg-basis font-mono">last 2 closes</span>
           </template>
           <template v-else>CHANGE UNMEASURED</template>
+        </div>
+        <div v-if="staleNote" class="spot-stale font-mono" :title="`Quote as of ${quoteAsofLabel}`">
+          {{ staleNote }}
         </div>
       </div>
 
@@ -252,8 +295,15 @@ function levelDist(lvl: number | null): string {
       </div>
       <div class="metric-pill">
         <span class="pill-label">Next Expiry</span>
-        <span class="pill-val font-mono font-bold text-ink">
-          {{ nextExpiryDte != null ? `${nextExpiryDte}D` : DASH }}
+        <span
+          class="pill-val font-mono font-bold"
+          :class="nextExpiryDte != null && nextExpiryDte < 0 ? 'text-warn' : 'text-ink'"
+        >
+          <!-- A negative DTE was clamped to 0, so a chain whose nearest expiry
+               had already passed advertised itself as a 0DTE board. -->
+          {{
+            nextExpiryDte == null ? DASH : nextExpiryDte < 0 ? `EXPIRED ${-nextExpiryDte}D` : `${nextExpiryDte}D`
+          }}
           <span class="pill-sub font-mono text-ink-dim">({{ nextExpiryDate || DASH }})</span>
         </span>
       </div>
@@ -366,6 +416,21 @@ function levelDist(lvl: number | null): string {
   font-size: 1.25rem;
 }
 
+.spot-val.is-stale {
+  color: var(--ink-dim);
+}
+.spot-stale {
+  margin-top: 0.15rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  color: var(--warn);
+}
+.chg-basis {
+  margin-left: 0.3rem;
+  font-size: 0.56rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
 .spot-chg {
   font-size: var(--t-micro);
 }
@@ -438,7 +503,7 @@ function levelDist(lvl: number | null): string {
 .regime-warn {
   background: var(--warn-wash);
   color: var(--warn);
-  border: 1px solid var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--rule));
 }
 
 .regime-neutral {
@@ -453,11 +518,16 @@ function levelDist(lvl: number | null): string {
 }
 
 .tf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  min-width: 28px;
   background: transparent;
   border: 1px solid var(--rule-faint);
   color: var(--ink-dim);
   font-size: var(--t-nano);
-  padding: 0.2rem 0.4rem;
+  padding: 0.1rem 0.4rem;
   border-radius: var(--r-xs);
   cursor: pointer;
 }

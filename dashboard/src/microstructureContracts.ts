@@ -201,6 +201,15 @@ export interface ExecutionSignal {
   call_wall: number | null
   put_wall: number | null
   gamma_flip: number | null
+  /** One-bar 1-sigma move in dollars. Every stop and target on the ticket is a
+   *  multiple of this, not of `sigma_local` (which is channel width, not risk). */
+  risk_unit: number
+  risk_unit_basis: 'implied_1bar' | 'atr' | 'close_to_close' | 'none'
+  /** |target - entry| / |entry - stop| for the quoted plan. */
+  risk_reward: number
+  target_1r: number
+  target_2r: number
+  target_3r: number
   notes: string[]
 }
 

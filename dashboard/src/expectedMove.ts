@@ -27,6 +27,14 @@ export interface ExpectedMoveMetrics {
   em1mLow: number
   em1mHigh: number
   vixRef?: number | null
+  /** Which volatility actually produced these numbers. The panel used to label
+   *  the corridor "(VIX / 16)" unconditionally while feeding it the symbol's
+   *  own ATM IV, so a name at 88% IV printed a 5.5% daily band under a caption
+   *  claiming it came from a 15.7 VIX -- a 5.6x discrepancy between the label
+   *  and the arithmetic. */
+  ivBasis: 'atm_iv' | 'vix_proxy'
+  /** Ready-to-render caption for the basis, e.g. "ATM IV 88.0% / 16". */
+  ivBasisLabel: string
 }
 
 export function computeRuleOf16ExpectedMove(
@@ -46,8 +54,13 @@ export function computeRuleOf16ExpectedMove(
     }
   }
 
+  const usedVixFallback = !Number.isFinite(Number(ivOrVix)) || Number(ivOrVix) <= 0
   const ivDec = rawIv > 1.5 ? rawIv / 100.0 : rawIv
   const ivAnnualPct = ivDec * 100.0
+  const ivBasis: 'atm_iv' | 'vix_proxy' = usedVixFallback ? 'vix_proxy' : 'atm_iv'
+  const ivBasisLabel = usedVixFallback
+    ? `VIX ${ivAnnualPct.toFixed(1)} / 16`
+    : `ATM IV ${ivAnnualPct.toFixed(1)}% / 16`
 
   // 1-Day Move (Rule of 16)
   const em1dDollars = spot * (ivDec / 16.0)
@@ -85,6 +98,8 @@ export function computeRuleOf16ExpectedMove(
     em1mLow,
     em1mHigh,
     vixRef,
+    ivBasis,
+    ivBasisLabel,
   }
 }
 

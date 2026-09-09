@@ -255,17 +255,19 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
         'flow',
         'options',
         'regime',
+        'suggest',
         'drift',
         'desk',
         'chain',
         'market',
+        'crypto',
       ])
 
       const deskToolsRegex = /const deskTools = \[\s*([\s\S]*?)\] as const/
       const deskMatch = appVueSrc.match(deskToolsRegex)
       expect(deskMatch).toBeTruthy()
       const deskNames = [...deskMatch![1].matchAll(/name:\s*'([^']+)'/g)].map((m) => m[1])
-      expect(deskNames).toEqual(['plays', 'absorption', 'livestack', 'suggest'])
+      expect(deskNames).toEqual(['plays', 'absorption', 'livestack'])
 
       // Market Analytics: 6 items
       const marketToolsRegex = /const marketTools = \[\s*([\s\S]*?)\] as const/

@@ -345,6 +345,11 @@ class TestOptionsEndpointAttractorEnrichment:
         assert snap["quality"]["measurable"] is True
         assert len(snap["levels"]) >= 2
         assert snap["primary_magnet"] is not None
+        with api_server._PRICE_ATTRACTOR_LOCK:
+            cached = api_server._PRICE_ATTRACTOR_CACHE.get("AAPL")
+        assert cached is not None
+        assert cached[1]["levels"] == snap["levels"]
+        assert cached[1]["quality"]["measurable"] is True
 
     def test_options_payload_unmeasurable_fallback_snapshot(self, monkeypatch):
         """When options chain has zero OI, price_attractor_snapshot flags measurable: false."""
@@ -360,6 +365,8 @@ class TestOptionsEndpointAttractorEnrichment:
         snap = payload["price_attractor_snapshot"]
         assert snap["quality"]["measurable"] is False
         assert snap["regime_state"] == "unmeasurable"
+        with api_server._PRICE_ATTRACTOR_LOCK:
+            assert "EMPTY" not in api_server._PRICE_ATTRACTOR_CACHE
 
 
 # ===========================================================================

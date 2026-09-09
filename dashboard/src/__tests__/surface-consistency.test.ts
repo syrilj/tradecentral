@@ -370,6 +370,12 @@ describe('causal envelope chart', () => {
       call_wall: null,
       put_wall: null,
       gamma_flip: null,
+      risk_unit: 12,
+      risk_unit_basis: 'atr',
+      risk_reward: 2,
+      target_1r: 618.35,
+      target_2r: 606.35,
+      target_3r: 594.35,
       notes: [],
     }
   }

@@ -238,7 +238,7 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
-/** Eight operator destinations. Everything else lives in Tools. */
+/** Ten operator destinations. Everything else lives in Tools. */
 const primaryNav = [
   {
     name: 'brief',
@@ -269,6 +269,12 @@ const primaryNav = [
     tab: true,
   },
   {
+    name: 'suggest',
+    title: 'Setups',
+    hint: 'Strike · levels · GEX plan',
+    icon: 'suggest',
+  },
+  {
     name: 'drift',
     title: 'Drift',
     hint: 'Charm · hedge pressure',
@@ -296,6 +302,13 @@ const primaryNav = [
     icon: 'market',
     tab: true,
   },
+  {
+    name: 'crypto',
+    title: 'Crypto',
+    hint: '24/7 coin tape · Kalman',
+    icon: 'crypto',
+    tab: true,
+  },
 ] as const
 
 const deskTools = [
@@ -320,7 +333,6 @@ const deskTools = [
     hint: 'All lenses, one tape',
     icon: 'stack',
   },
-  { name: 'suggest', idx: 'D4', title: 'Setups', hint: 'Call/put + GEX sell', icon: 'suggest' },
 ] as const
 
 const marketTools = [
@@ -933,7 +945,9 @@ function openFearGreed(): void {
                 navAlert(n.name) ? `${n.title} · ${n.hint} · attention` : `${n.title} · ${n.hint}`
               "
             >
-              <AppIcon class="nav-icon" :name="n.icon" :size="16" />
+              <span class="nav-icon">
+                <AppIcon :name="n.icon" :size="16" />
+              </span>
               <div class="nav-label-wrap">
                 <span class="nav-title label">{{ n.title }}</span>
                 <span class="nav-hint">{{ n.hint }}</span>
@@ -959,7 +973,9 @@ function openFearGreed(): void {
               @keydown.down.prevent="openToolsMenu('first')"
               @keydown.up.prevent="openToolsMenu('last')"
             >
-              <AppIcon class="nav-icon" name="more" :size="16" />
+              <span class="nav-icon">
+                <AppIcon name="more" :size="16" />
+              </span>
               <div class="nav-label-wrap">
                 <span class="nav-title label">Tools</span>
                 <span class="nav-hint">{{
@@ -1401,8 +1417,9 @@ function openFearGreed(): void {
   z-index: var(--z-toast);
   transform: translateY(-160%);
   padding: var(--s2) var(--s3);
-  color: var(--void);
-  background: var(--phosphor);
+  color: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+  background: var(--panel);
   font: 700 var(--t-small) var(--font-display);
   text-decoration: none;
 }
@@ -1469,7 +1486,7 @@ function openFearGreed(): void {
   padding: 0;
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-xs);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--wash-1);
   color: var(--ink-dim);
   cursor: pointer;
   flex: 0 0 auto;
@@ -1579,15 +1596,17 @@ function openFearGreed(): void {
 /* ---- nav ------------------------------------------------------------------ */
 
 .nav-item {
+  --nav-icon-size: 16px;
+  --nav-icon-well: 28px;
   position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 6px 8px;
   color: var(--ink-dim);
   border: var(--hair) solid transparent;
-  border-radius: var(--r-capsule);
+  border-radius: var(--r-sm);
   text-decoration: none;
   transition:
     color var(--dur-fast) var(--ease-out),
@@ -1599,6 +1618,7 @@ function openFearGreed(): void {
 .rail.is-collapsed .nav-item {
   flex-direction: column;
   justify-content: center;
+  align-items: center;
   min-height: 44px;
   padding: 4px 2px;
   gap: 2px;
@@ -1616,27 +1636,15 @@ function openFearGreed(): void {
 
 .nav-item.on {
   color: var(--ink);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
-  border: var(--hair) solid var(--glass-border);
-  box-shadow:
-    var(--glass-specular-subtle),
-    0 1px 4px rgba(0, 0, 0, 0.35);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
   font-weight: 600;
 }
 .nav-item.on .nav-icon {
   color: var(--phosphor);
-}
-
-/* The active marker is a phosphor capsule edge on the leading side */
-.nav-item.on::after {
-  content: '';
-  position: absolute;
-  left: -1px;
-  top: 22%;
-  bottom: 22%;
-  width: 3px;
-  border-radius: var(--r-capsule);
-  background: var(--phosphor);
+  background: var(--panel-hi);
+  border-color: var(--phosphor);
 }
 
 .nav-label-wrap {
@@ -1682,8 +1690,17 @@ function openFearGreed(): void {
 }
 
 .nav-icon {
+  /* Well is the icon box: 16px glyph + even padding, concentric in every rail mode. */
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: var(--nav-icon-well);
+  height: var(--nav-icon-well);
+  flex: 0 0 var(--nav-icon-well);
   color: currentColor;
-  flex: 0 0 auto;
+  border: var(--hair) solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
 }
 .nav-title {
   color: inherit;
@@ -1790,7 +1807,8 @@ function openFearGreed(): void {
   justify-content: center;
   gap: 3px;
   padding: 2px 6px;
-  min-height: 26px;
+  min-height: 28px;
+  min-width: 28px;
   margin-top: 0;
   margin-left: auto;
   color: var(--ink-dim);
@@ -2729,6 +2747,7 @@ function openFearGreed(): void {
     width: 100%;
     min-width: 0;
     flex-direction: column;
+    align-items: center;
     min-height: 64px;
     height: 64px;
     justify-content: center;
@@ -2742,14 +2761,6 @@ function openFearGreed(): void {
     width: 100%;
     min-width: 0;
     overflow: hidden;
-  }
-  .nav-item.on::after {
-    top: auto;
-    right: 18%;
-    bottom: 0;
-    left: 18%;
-    width: auto;
-    height: 2px;
   }
   .nav-pulse {
     top: 8px;

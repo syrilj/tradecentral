@@ -253,6 +253,11 @@ withDefaults(
         d="M12 3.5c2.4 2.2 3.7 5.2 3.7 8.5s-1.3 6.3-3.7 8.5c-2.4-2.2-3.7-5.2-3.7-8.5s1.3-6.3 3.7-8.5Z"
       />
     </template>
+    <template v-else-if="name === 'crypto'">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M10 7.5h4.1a2.15 2.15 0 0 1 0 4.3H10.2M10 11.8h4.4a2.1 2.1 0 0 1 0 4.2H10" />
+      <path d="M12.4 5.8v1.7M12.4 16.5v1.7" />
+    </template>
     <template v-else-if="name === 'amt'">
       <!-- Market profile on its side: a baseline plus horizontal bars whose
            length is longest at the middle rows, tapering top and bottom. -->

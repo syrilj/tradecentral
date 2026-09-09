@@ -293,7 +293,6 @@ describe('Options Table & Flow Bar Bug Fixes & Improvements', () => {
       const total = call + put
       const hasPrem = total > 0
       const callPct = hasPrem ? Math.round((call / total) * 100) : 0
-      const putPct = hasPrem ? 100 - callPct : 0
 
       if (!hasPrem || total <= 0) {
         return { text: 'NO FLOW', cls: 'balance-pill' }

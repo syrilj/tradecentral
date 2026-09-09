@@ -6,6 +6,7 @@ from typing import Any, Mapping
 _REASON_LABELS = {
     "lse_credential_missing": "live options feed unavailable (LSE_API_KEY is not configured)",
     "flow_lse_credential_missing": "live options-flow confirmation unavailable",
+    "flow_lse_provider_cooldown": "live options-flow confirmation unavailable (LSE provider in failure cooldown; the key is configured)",
     "kronos_same_session_artifact_missing": "same-session Kronos research artifact unavailable",
     "kronos_symbol_not_in_same_session_artifact": "some candidates lack same-session Kronos coverage",
     "setup_not_ready": "the promoted models produced no directional setup",

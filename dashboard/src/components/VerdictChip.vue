@@ -84,6 +84,6 @@ const tooltipText = computed(() => {
 }
 .unknown {
   color: var(--unknown);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--wash-1);
 }
 </style>

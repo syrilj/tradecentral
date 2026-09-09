@@ -454,13 +454,13 @@ watch(
   min-height: 46px;
   padding-inline: 13px;
   color: #1f201d;
-  border: 1px solid #76736a;
+  border: 1px solid #5e5b53;
   border-radius: 0;
   background: #fffefa;
   box-shadow: none;
 }
 .auth-panel :deep(.cl-formFieldInput::placeholder) {
-  color: #77746c;
+  color: #5e5b53;
   opacity: 1;
 }
 .auth-panel :deep(.cl-formFieldInput:focus) {
@@ -481,7 +481,7 @@ watch(
 .auth-panel :deep(.cl-socialButtonsBlockButton) {
   min-height: 46px;
   color: #292923;
-  border: 1px solid #76736a;
+  border: 1px solid #5e5b53;
   border-radius: 0;
   background: #fffefa;
   box-shadow: none;

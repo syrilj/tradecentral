@@ -210,10 +210,25 @@ describe('suggest display helpers (shipped)', () => {
     expect(symbols).toContain('ANET')
     expect(symbols).toContain('BKNG')
     expect(symbols.indexOf('CVS')).toBeLessThan(symbols.indexOf('BLK0'))
-    expect(view.coverage.union_symbols).toBe(payload.rows.length)
-    expect(view.coverage.suggested_put).toBe(2)
-    expect(view.coverage.suggested_call).toBe(2)
-    expect(view.coverage.suggested_blocked).toBe(42)
+    expect(view.coverage?.union_symbols).toBe(payload.rows.length)
+    expect(view.coverage?.suggested_put).toBe(2)
+    expect(view.coverage?.suggested_call).toBe(2)
+    expect(view.coverage?.suggested_blocked).toBe(42)
+  })
+
+  it('does not treat a missing payload as a completed zero-name scan', () => {
+    expect(presentSetupRows(null).coverage).toBeNull()
+    expect(presentSetupRows(undefined).coverage).toBeNull()
+    expect(presentSetupRows(null).rows).toEqual([])
+    const empty = presentSetupRows({ rows: [] })
+    expect(empty.coverage).toEqual({
+      union_symbols: 0,
+      suggested_call: 0,
+      suggested_put: 0,
+      suggested_watch: 0,
+      suggested_blocked: 0,
+      qlib_measured: 0,
+    })
   })
 })
 
@@ -262,9 +277,25 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
     expect(router).toContain("import('@/views/SuggestView.vue')")
     expect(app).toContain("name: 'suggest'")
     expect(app).toContain("title: 'Setups'")
-    expect(app).toMatch(/const deskTools = \[[^\]]*name: 'suggest'/s)
-    expect(app).not.toMatch(/const primaryNav = \[[^\]]*name: 'suggest'/s)
+    expect(app).toMatch(/const primaryNav = \[[^\]]*name: 'suggest'/s)
+    expect(app).not.toMatch(/const deskTools = \[[^\]]*name: 'suggest'/s)
     expect(app).not.toMatch(/const marketTools = \[[^\]]*name: 'suggest'/s)
+    expect(app).not.toMatch(/const researchTools = \[[^\]]*name: 'suggest'/s)
+    expect(app).not.toMatch(/const macroTools = \[[^\]]*name: 'suggest'/s)
+    const navArrays = [
+      app.match(/const primaryNav = \[\s*([\s\S]*?)\] as const/)?.[1] ?? '',
+      app.match(/const deskTools = \[\s*([\s\S]*?)\] as const/)?.[1] ?? '',
+      app.match(/const marketTools = \[\s*([\s\S]*?)\] as const/)?.[1] ?? '',
+      app.match(/const researchTools = \[\s*([\s\S]*?)\] as const/)?.[1] ?? '',
+      app.match(/const macroTools = \[\s*([\s\S]*?)\] as const/)?.[1] ?? '',
+    ].join('\n')
+    expect([...navArrays.matchAll(/name:\s*'suggest'/g)]).toHaveLength(1)
+    const primary = app.match(/const primaryNav = \[\s*([\s\S]*?)\] as const/)![1]
+    expect(primary).toContain("title: 'Setups'")
+    expect(primary).toContain("icon: 'suggest'")
+    expect(readFileSync(join(srcRoot, 'components', 'AppIcon.vue'), 'utf8')).toContain(
+      "name === 'suggest'",
+    )
   })
 
   it('consumes Flow-derived suggestion data and shared tokens', () => {
@@ -294,6 +325,8 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
     expect(view).toContain('Why live entry is not ready')
     expect(view).toContain('PAPER ACTION · UNSIZED')
     expect(view).toContain('PAPER BUY')
+    expect(view).toContain('READY')
+    expect(view).toContain('NOT LIVE READY')
     expect(risk).toContain('Debit / premium')
     expect(risk).toContain('referenceDebit')
     expect(view).toContain('Specific contract plan')
@@ -306,6 +339,8 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
     expect(risk).toContain('Max contracts')
     expect(risk).toContain('Planning size only')
     expect(api).toContain('/api/options/suggest')
+    expect(api).toMatch(/flowSuggestions:[\s\S]*?timeoutMs:\s*90_000/)
+    expect(api).toMatch(/liveOpportunities:[\s\S]*?timeoutMs:\s*90_000/)
     expect(drawer).toContain('label">Strike')
     expect(drawer).toContain('label">Supports')
     expect(drawer).toContain('label">Invalidation')

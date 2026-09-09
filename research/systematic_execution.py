@@ -72,6 +72,21 @@ class ExecutionSignal:
     call_wall: float | None
     put_wall: float | None
     gamma_flip: float | None
+    #: One-bar 1-sigma move in dollars -- the unit every stop and target below
+    #: is quoted in. Stops used to be multiples of ``sigma_local``, which is the
+    #: kernel-weighted dispersion of price *levels* over a 150-bar window, not a
+    #: per-bar volatility: on CRDO that is $29 against a $9 implied daily move,
+    #: so a "1.5 sigma" stop sat 26% away and the 3-sigma target implied a 52%
+    #: move by tomorrow. It priced the width of the trend, not the risk of the bar.
+    risk_unit: float = 0.0
+    #: "implied_1bar" | "atr" | "close_to_close" -- which measurement produced it.
+    risk_unit_basis: str = "none"
+    #: Reward-to-risk of the quoted plan, |target - entry| / |entry - stop|.
+    risk_reward: float = 0.0
+    #: Scale-out ladder at 1R/2R/3R off the same unit.
+    target_1r: float = 0.0
+    target_2r: float = 0.0
+    target_3r: float = 0.0
     notes: list[str] = field(default_factory=list)
 
 
@@ -151,6 +166,84 @@ class BacktestTearsheet:
     regime_breakdown: dict[str, RegimeMetrics]
 
 
+#: Hard ceiling on notional in a single name, as a percentage of capital.
+MAX_SINGLE_NAME_PCT = 10.0
+
+
+# ---------------------------------------------------------------------------
+# Bar Volatility Unit
+# ---------------------------------------------------------------------------
+
+def compute_bar_volatility_unit(
+    prices: Sequence[float] | np.ndarray,
+    *,
+    highs: Sequence[float] | np.ndarray | None = None,
+    lows: Sequence[float] | np.ndarray | None = None,
+    iv_series: Sequence[float] | np.ndarray | None = None,
+    atr_period: int = 14,
+    bars_per_year: float = 252.0,
+) -> tuple[np.ndarray, str]:
+    """One-bar 1-sigma move, in dollars, for sizing stops and targets.
+
+    This is deliberately *not* ``NadarayaWatsonEnvelopeResult.sigma_local``.
+    That quantity is the kernel-weighted standard deviation of price levels
+    around the causal trend over a long lookback -- it measures how wide the
+    trend channel is, and on a name that has travelled far it is several times
+    the size of one bar's actual range. Stops and targets need the risk of the
+    next bar, which is what this returns.
+
+    Basis, in order of preference:
+      1. ``implied_1bar``   -- S * IV / sqrt(bars_per_year). Forward-looking and
+         identical to the Rule-of-16 expected move the desk displays, so the
+         ticket and the expected-move corridor are quoted off one number.
+      2. ``atr``            -- Wilder ATR over true range. Needs highs/lows.
+      3. ``close_to_close`` -- EWMA standard deviation of log returns * price.
+
+    Returns:
+        (unit_series, basis_label). Every element is floored at 0.25% of price
+        so a flat stretch cannot produce a zero-width stop.
+    """
+    p = np.asarray(prices, dtype=float)
+    n = len(p)
+    if n == 0:
+        return np.array([], dtype=float), "none"
+
+    floor = 0.0025 * np.abs(p)
+
+    iv = np.asarray(iv_series, dtype=float) if iv_series is not None and len(iv_series) == n else None
+    if iv is not None and np.isfinite(iv).any() and np.nanmax(iv) > 0:
+        iv_dec = np.where(iv > 1.5, iv / 100.0, iv)  # accept 88.0 or 0.88
+        unit = np.abs(p) * iv_dec / math.sqrt(max(1.0, bars_per_year))
+        unit = np.where(np.isfinite(unit) & (unit > 0), unit, floor)
+        return np.maximum(unit, floor), "implied_1bar"
+
+    hi = np.asarray(highs, dtype=float) if highs is not None and len(highs) == n else None
+    lo = np.asarray(lows, dtype=float) if lows is not None and len(lows) == n else None
+    if hi is not None and lo is not None and np.isfinite(hi).all() and np.isfinite(lo).all():
+        prev_close = np.concatenate(([p[0]], p[:-1]))
+        tr = np.maximum(hi - lo, np.maximum(np.abs(hi - prev_close), np.abs(lo - prev_close)))
+        # Wilder smoothing, strictly causal.
+        atr = np.empty(n, dtype=float)
+        seed = min(atr_period, n)
+        atr[:seed] = np.cumsum(tr[:seed]) / np.arange(1, seed + 1)
+        for t in range(seed, n):
+            atr[t] = (atr[t - 1] * (atr_period - 1) + tr[t]) / atr_period
+        return np.maximum(atr, floor), "atr"
+
+    # Close-to-close fallback: EWMA of squared log returns (lambda = 0.94).
+    unit = np.empty(n, dtype=float)
+    if n < 2:
+        return floor, "close_to_close"
+    rets = np.diff(np.log(np.maximum(p, 1e-9)))
+    lam = 0.94
+    var = float(rets[0] ** 2)
+    unit[0] = unit[1] = math.sqrt(var) * abs(p[0])
+    for t in range(1, n - 1):
+        var = lam * var + (1.0 - lam) * float(rets[t] ** 2)
+        unit[t + 1] = math.sqrt(max(var, 1e-12)) * abs(p[t + 1])
+    return np.maximum(unit, floor), "close_to_close"
+
+
 # ---------------------------------------------------------------------------
 # Systematic Signal Generation Engine
 # ---------------------------------------------------------------------------
@@ -161,6 +254,8 @@ def generate_microstructure_signals(
     timestamps: Sequence[str] | None = None,
     symbol: str = "SPY",
     volumes: Sequence[float] | np.ndarray | None = None,
+    highs: Sequence[float] | np.ndarray | None = None,
+    lows: Sequence[float] | np.ndarray | None = None,
     gamma_flip_series: Sequence[float] | np.ndarray | None = None,
     call_wall_series: Sequence[float] | np.ndarray | None = None,
     put_wall_series: Sequence[float] | np.ndarray | None = None,
@@ -222,6 +317,13 @@ def generate_microstructure_signals(
         exhaustion_z=exhaustion_z,
     )
 
+    # Risk unit: the one-bar 1-sigma move that every stop and target is quoted
+    # in. Kept separate from the envelope's sigma_local, which measures channel
+    # width over a long lookback and is not a per-bar risk figure.
+    risk_units, risk_basis = compute_bar_volatility_unit(
+        p, highs=highs, lows=lows, iv_series=iv_series
+    )
+
     # Microstructure Anchored VWAP (anchors at bar 0 and whenever spot crosses gamma flip)
     flip_crossings = [0]
     if gamma_flip_series is not None and len(gamma_flip_series) == n:
@@ -280,6 +382,8 @@ def generate_microstructure_signals(
         v_z = kalman_res.velocity_zscore[t]
         v_prev_z = kalman_res.velocity_zscore[t - 1] if t > 0 else v_z
         sigma_loc = max(0.5, nw_res.sigma_local[t])
+        # Stops and targets are quoted in `u`, never in sigma_loc.
+        u = float(max(1e-6, risk_units[t]))
 
         # Trend estimation from causal kernel mean
         lag_k = max(0, t - 5)
@@ -306,6 +410,13 @@ def generate_microstructure_signals(
         conviction = 0.0
         stop_loss = 0.0
         take_profit = 0.0
+        tp_1r = 0.0
+        tp_2r = 0.0
+        tp_3r = 0.0
+        # "kernel" -> target the causal mean, clamped into the 1R-3R band.
+        # "r2"     -> target 2R. Set by whichever branch fires.
+        target_mode = "r2"
+        charm_extend = False
         invalidation = ""
         notes = []
 
@@ -349,8 +460,12 @@ def generate_microstructure_signals(
                 direction = "long"
                 setup_name = f"{gamma_tag}_LowerBand_Exhaustion"
                 conviction = min(0.95, 0.72 + max(0.0, lower_band - s_t) / max(1e-4, sigma_loc))
-                stop_loss = s_t - 1.2 * sigma_loc
-                take_profit = max(s_t + 1.5 * sigma_loc, k_mean + 0.2 * sigma_loc)
+                # Stop one bar-sigma beyond whichever is lower, spot or the band
+                # being reverted from. The mean-reversion target is the kernel
+                # mean, held inside the 1R-3R ladder so it stays a move the bar
+                # volatility can actually produce.
+                stop_loss = min(s_t, lower_band) - 1.0 * u
+                target_mode = "kernel"
                 invalidation = (
                     f"Spot closing below Gamma Flip ${flip:.2f} with negative acceleration"
                     if flip is not None
@@ -362,7 +477,7 @@ def generate_microstructure_signals(
                     else "Kinematic mean-reversion long at the lower envelope; no dealer-gamma read available"
                 )
                 if charm_melt_up_active:
-                    take_profit += 0.8 * sigma_loc
+                    charm_extend = True
                     notes.append("0DTE Charm melt-up active; extended take-profit target above standard VWAP")
 
             # Short Setup: Touch/penetrate upper band with upside stalling (and not strong bull trend)
@@ -374,8 +489,8 @@ def generate_microstructure_signals(
                     direction = "short"
                     setup_name = f"{gamma_tag}_UpperBand_Deceleration"
                     conviction = min(0.95, 0.72 + max(0.0, s_t - upper_band) / max(1e-4, sigma_loc))
-                    stop_loss = s_t + 1.2 * sigma_loc
-                    take_profit = min(s_t - 1.5 * sigma_loc, k_mean - 0.2 * sigma_loc)
+                    stop_loss = max(s_t, upper_band) + 1.0 * u
+                    target_mode = "kernel"
                     invalidation = (
                         f"Spot breaking above Call Wall ${c_wall:.2f} on accelerating volume"
                         if c_wall is not None
@@ -403,8 +518,11 @@ def generate_microstructure_signals(
                 direction = "short"
                 setup_name = f"{gamma_tag}_PutWall_Cascade" if p_wall is not None else f"{gamma_tag}_LowerBreak_Cascade"
                 conviction = min(0.98, 0.75 + (abs(v_z) - breakout_z) * 0.1)
-                stop_loss = s_t + 1.5 * sigma_loc
-                take_profit = s_t - 3.0 * sigma_loc
+                # Breakdown: the risk is a reclaim of the level that broke,
+                # capped at one bar-sigma so the stop stays a volatility
+                # distance rather than a channel width. Target is 2R.
+                stop_loss = min(s_t + 1.0 * u, max(s_t, lower_band) + 0.5 * u)
+                target_mode = "r2"
                 invalidation = (
                     f"False breakdown: Spot re-crossing above Gamma Flip ${flip:.2f}"
                     if flip is not None
@@ -423,8 +541,8 @@ def generate_microstructure_signals(
                 direction = "long"
                 setup_name = f"{gamma_tag}_CallWall_ShortSqueeze" if c_wall is not None else f"{gamma_tag}_UpperBreak_Expansion"
                 conviction = min(0.98, 0.75 + (v_z - breakout_z) * 0.1)
-                stop_loss = s_t - 1.5 * sigma_loc
-                take_profit = s_t + 3.0 * sigma_loc
+                stop_loss = max(s_t - 1.0 * u, min(s_t, upper_band) - 0.5 * u)
+                target_mode = "r2"
                 invalidation = (
                     f"False breakout: Spot re-crossing below Call Wall ${c_wall:.2f}"
                     if c_wall is not None
@@ -438,6 +556,48 @@ def generate_microstructure_signals(
         else:
             topography_quadrant = "transition_zone"
 
+        # One R is the distance to the stop actually quoted on this ticket --
+        # the standard definition -- so "2R" on the ladder is genuinely twice
+        # what the trade loses if it is wrong, and risk_reward below is exact
+        # rather than an approximation of a sigma multiple.
+        stop_dist = abs(s_t - stop_loss) if action in {"ENTER_LONG", "ENTER_SHORT"} else 0.0
+        if stop_dist > 1e-9:
+            sign = 1.0 if direction == "long" else -1.0
+            tp_1r = s_t + sign * stop_dist
+            tp_2r = s_t + sign * 2.0 * stop_dist
+            tp_3r = s_t + sign * 3.0 * stop_dist
+            if target_mode == "kernel":
+                # Revert to the causal mean, but never book a target the bar
+                # volatility cannot reach, nor one inside 1R.
+                take_profit = (
+                    min(max(k_mean, tp_1r), tp_3r) if direction == "long"
+                    else max(min(k_mean, tp_1r), tp_3r)
+                )
+            else:
+                take_profit = tp_2r
+            if charm_extend:
+                take_profit = (
+                    min(take_profit + 0.5 * u, tp_3r) if direction == "long"
+                    else max(take_profit - 0.5 * u, tp_3r)
+                )
+
+        # Position size is solved from the stop, not scaled off conviction.
+        # `conviction * 10` put 8.4% of capital behind an 84%-conviction ticket
+        # no matter how far the stop was, so an unusually wide stop silently
+        # multiplied the loss it was sized against. Conviction now sets the risk
+        # budget (0.25%-1.00% of capital) and the stop distance decides how much
+        # notional that budget buys.
+        if stop_dist > 1e-9 and s_t > 0:
+            risk_budget_pct = 0.25 + 0.75 * conviction
+            # MAX_SINGLE_NAME_PCT caps concentration: a very tight stop would
+            # otherwise solve to a position larger than the book should hold in
+            # one name, however small the loss at the stop.
+            size_pct = min(MAX_SINGLE_NAME_PCT, risk_budget_pct * s_t / stop_dist)
+            reward_risk = abs(take_profit - s_t) / stop_dist
+        else:
+            size_pct = 0.0
+            reward_risk = 0.0
+
         sig = ExecutionSignal(
             bar_index=t,
             timestamp=ts,
@@ -449,7 +609,7 @@ def generate_microstructure_signals(
             topography_quadrant=topography_quadrant,
             setup_name=setup_name,
             conviction=round(conviction, 3),
-            suggested_size_pct=round(conviction * 10.0, 1),
+            suggested_size_pct=round(size_pct, 1),
             entry_price=round(s_t, 2),
             stop_loss=round(stop_loss, 2),
             take_profit=round(take_profit, 2),
@@ -463,6 +623,12 @@ def generate_microstructure_signals(
             call_wall=round(c_wall, 2) if c_wall is not None else None,
             put_wall=round(p_wall, 2) if p_wall is not None else None,
             gamma_flip=round(flip, 2) if flip is not None else None,
+            risk_unit=round(u, 4),
+            risk_unit_basis=risk_basis,
+            risk_reward=round(reward_risk, 2),
+            target_1r=round(tp_1r, 2),
+            target_2r=round(tp_2r, 2),
+            target_3r=round(tp_3r, 2),
             notes=notes,
         )
         signals.append(sig)
@@ -480,6 +646,8 @@ def run_microstructure_backtest(
     timestamps: Sequence[str] | None = None,
     symbol: str = "SPY",
     volumes: Sequence[float] | np.ndarray | None = None,
+    highs: Sequence[float] | np.ndarray | None = None,
+    lows: Sequence[float] | np.ndarray | None = None,
     gamma_flip_series: Sequence[float] | np.ndarray | None = None,
     call_wall_series: Sequence[float] | np.ndarray | None = None,
     put_wall_series: Sequence[float] | np.ndarray | None = None,
@@ -521,6 +689,8 @@ def run_microstructure_backtest(
         timestamps=timestamps,
         symbol=symbol,
         volumes=volumes,
+        highs=highs,
+        lows=lows,
         gamma_flip_series=gamma_flip_series,
         call_wall_series=call_wall_series,
         put_wall_series=put_wall_series,

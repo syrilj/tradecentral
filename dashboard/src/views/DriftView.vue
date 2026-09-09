@@ -333,6 +333,10 @@ interface PressureChannelRow {
   weight: number
   detail: string
   tone: 'buying' | 'selling' | 'balanced' | 'na'
+  /** True when this channel's data is stale and should be visually deprioritized. */
+  stale: boolean
+  /** Freshness rank: 1 = highest quality (live), 3 = lowest quality (OHLCV proxy). */
+  freshnessRank: 1 | 2 | 3
 }
 
 /** One row per voting channel: what it read, how much it weighs, and why it may have abstained. */
@@ -348,6 +352,7 @@ const pressureChannelRows = computed<PressureChannelRow[]>(() => {
   const charmSkipped = charmSummary.value?.contracts_skipped ?? 0
   const tape = tapeChannel.value
   const und = underlyingChannel.value
+  const undStale = und?.stale === true
   return [
     {
       key: 'charm',
@@ -359,6 +364,8 @@ const pressureChannelRows = computed<PressureChannelRow[]>(() => {
           ? 'no measurable charm flow'
           : `${signed(p.components.net_charm_flow, 0)} sh/d · ${charmMeasured}/${charmMeasured + charmSkipped} contracts · model proxy`,
       tone: tone(p.channels.charm),
+      stale: false,
+      freshnessRank: 2,
     },
     {
       key: 'tape',
@@ -369,6 +376,8 @@ const pressureChannelRows = computed<PressureChannelRow[]>(() => {
         ? `${tape.n_signed}/${tape.n_total} prints sided · ${Math.round(tape.coverage * 100)}% of premium · ${tapeSideMixText.value}`
         : 'no flow prints available',
       tone: tone(p.channels.tape),
+      stale: false,
+      freshnessRank: 1,
     },
     {
       key: 'underlying',
@@ -376,12 +385,20 @@ const pressureChannelRows = computed<PressureChannelRow[]>(() => {
       ratio: p.channels.underlying,
       weight: p.weights.underlying,
       detail: und
-        ? `${und.bars_used} × ${und.timeframe ?? '?'} bars · rvol ${und.rvol != null ? und.rvol.toFixed(2) + '×' : 'n/a'} · close-location proxy${und.stale ? ' · STALE' : ''}`
+        ? `${und.bars_used} × ${und.timeframe ?? '?'} bars · rvol ${und.rvol != null ? und.rvol.toFixed(2) + '×' : 'n/a'} · close-location proxy${undStale ? ' · STALE — excluded from blend' : ''}`
         : 'no underlying bars supplied',
-      tone: tone(p.channels.underlying),
+      tone: undStale ? 'na' : tone(p.channels.underlying),
+      stale: undStale,
+      freshnessRank: 3,
     },
   ]
 })
+
+/** True when the underlying channel is flagged stale by the server. */
+const isUnderlyingStale = computed(
+  () => pressureChannelRows.value.find((r) => r.key === 'underlying')?.stale === true,
+)
+
 
 const dataModeBadge = computed(() => {
   if (loading.value) return 'SYNC'
@@ -414,16 +431,52 @@ const microstructureAssessment = computed(() => {
   const cw = callWall.value
   const pw = putWall.value
   const flip = gammaFlip.value
+  const em = expectedMove.value ?? (spotVal ? spotVal * 0.035 : null)
+
+  // Helper: build a per-channel conflict explanation when channels disagree.
+  const buildConflictExplanation = (): string => {
+    const conflicts = pressure.value?.conflicts ?? []
+    if (!conflicts.length) return ''
+    const channelLabels: Record<string, string> = {
+      tape: 'Tape (live prints)',
+      charm: 'Charm (structural/mechanical)',
+      underlying: 'Underlying vol (OHLCV proxy)',
+    }
+    return conflicts
+      .map((c) => {
+        const label = channelLabels[c.channel] ?? c.channel
+        return `${label}: ${c.note}`
+      })
+      .join('; ')
+  }
+
+  // Helper: specific price-level confirmation trigger to avoid vague "WAIT".
+  const buildConfirmationTrigger = (lean: 'buying' | 'selling'): string => {
+    if (lean === 'buying') {
+      if (pw != null && spotVal != null) {
+        const targetLevel = num(spotVal + (em ?? spotVal * 0.02), 2)
+        return `Wait for an hourly close above $${targetLevel} on above-average volume, or for the tape to show ≥60% buyer-sided prints, before entering long.`
+      }
+      return 'Wait for an hourly close above the nearest resistance on above-average volume, or for the live tape to show ≥60% buyer-sided prints.'
+    } else {
+      if (cw != null && spotVal != null) {
+        const targetLevel = num(spotVal - (em ?? spotVal * 0.02), 2)
+        return `Wait for an hourly close below $${targetLevel} on above-average volume, or for the tape to show ≥60% seller-sided prints, before entering short.`
+      }
+      return 'Wait for an hourly close below the nearest support on above-average volume, or for the live tape to show ≥60% seller-sided prints.'
+    }
+  }
 
   // 1. Breakout Above Resistance / Flip
   if (cw != null && spotVal != null && spotVal >= cw) {
+    const targetUp = em != null ? `$${num(spotVal + em, 2)} (+${num(em, 1)} EM)` : 'next resistance'
     return {
       title: 'Bullish Breakout Above Call Wall Resistance',
       direction: 'LONG BIAS (BREAKOUT CONTINUATION)',
       action: 'UPWARD VOLATILITY EXPANSION',
       tone: 'buying',
-      body: `Spot ($${num(spotVal, 2)}) has breached above Call Wall ($${num(cw, 0)}). Dealer call gamma flips and dealer inventory short-covering accelerates upside continuation.`,
-      implication: `Ride bullish expansion momentum with trailing stops below Call Wall ($${num(cw, 0)}). Target +1 EM move.`,
+      body: `Spot ($${num(spotVal, 2)}) has breached above Call Wall ($${num(cw, 0)}). Dealer call gamma flips and dealer inventory short-covering accelerates upside continuation. Scenario: if spot holds above $${num(cw, 0)}, target ${targetUp}; if spot falls back below $${num(cw, 0)}, breakout has failed — exit.`,
+      implication: `Ride bullish expansion momentum. Entry: breakout retest of $${num(cw, 0)}. Target: ${targetUp}. Stop: hourly close below Call Wall $${num(cw, 0)}.`,
     }
   }
 
@@ -432,88 +485,123 @@ const microstructureAssessment = computed(() => {
     (pw != null && spotVal != null && spotVal <= pw) ||
     (flip != null && spotVal != null && spotVal < flip && regimeStr === 'negative')
   ) {
+    const supportLevel = pw ?? flip
+    const targetDn =
+      em != null && spotVal != null
+        ? `$${num(spotVal - em, 2)} (-${num(em, 1)} EM)`
+        : 'next major support'
     return {
       title: 'Bearish Breakdown Below Key Structural Support',
       direction: 'SHORT BIAS (SELLING HEADWIND)',
       action: 'DOWNSIDE VOLATILITY CASCADE',
       tone: 'selling',
-      body: `Spot ($${num(spotVal, 2)}) is trading below key structural support (Put Wall $${num(pw, 0)} / Flip $${num(flip, 0)}). Dealer pro-cyclical short hedging accelerates downward slip.`,
-      implication: `Favors Bear Put Spreads and fading counter-trend bounces with invalidation on reclaim above $${num(pw ?? flip, 0)}.`,
+      body: `Spot ($${num(spotVal, 2)}) is trading below key structural support (Put Wall $${num(pw, 0)} / Flip $${num(flip, 0)}). Dealer pro-cyclical short hedging accelerates downward slip. Scenario: if spot stays below $${num(supportLevel, 0)}, target ${targetDn}; reclaim above $${num(supportLevel, 0)} invalidates the short.`,
+      implication: `Favors Bear Put Spreads and fading counter-trend bounces. Entry: bounce fade near $${num(supportLevel, 0)}. Target: ${targetDn}. Stop: hourly close above $${num(supportLevel, 0)}.`,
     }
   }
 
-  // 3. A directional lean the server could not confirm. This used to be
-  // promoted straight to "Strong Structural Buying/Selling Pressure" off the
-  // gauge sign alone; now the read says it is unconfirmed and why — a charm
-  // positioning proxy with no tape or underlying corroboration is a watch
-  // item, not a trade.
+  // 3. A directional lean the server could not confirm. Explain why channels
+  // conflict — Tape measures live order flow while Charm is a mechanical model
+  // output; they can disagree for legitimate structural reasons.
   const actionable = pressure.value.actionable === true
   const band = pressure.value.confidence?.band ?? 'unmeasurable'
   if (!actionable && (Math.abs(imb) > 0.25 || Math.abs(ratio) >= CHARM_ONE_SIDED)) {
     const lean = imb > 0.25 ? 'buying' : imb < -0.25 ? 'selling' : ratio < 0 ? 'buying' : 'selling'
-    const conflictText = pressure.value.conflicts.map((c) => c.note).join('; ')
+    const conflictExplanation = buildConflictExplanation()
     const active = pressure.value.confidence?.channels_active ?? 0
+    const tapeTone = pressureChannelRows.value.find((r) => r.key === 'tape')?.tone
+    const charmTone = pressureChannelRows.value.find((r) => r.key === 'charm')?.tone
+
+    // Explain the conflict in human terms when tape vs charm disagree
+    let conflictBody: string
+    if (conflictExplanation) {
+      conflictBody = `The evidence disagrees: ${conflictExplanation}.`
+      if (tapeTone && charmTone && tapeTone !== 'na' && charmTone !== 'na' && tapeTone !== charmTone) {
+        const tapeDir = tapeTone === 'buying' ? 'buying' : tapeTone === 'selling' ? 'selling' : 'neutral'
+        const charmDir = charmTone === 'buying' ? 'buying tailwind' : charmTone === 'selling' ? 'selling headwind' : 'neutral'
+        conflictBody += ` Note: Tape shows live ${tapeDir} flow (real-time order fill data); Charm shows mechanical ${charmDir} (time-decay model output) — these measure different dynamics and can legitimately diverge.`
+      }
+      if (isUnderlyingStale.value) {
+        conflictBody += ' Underlying volume bar is STALE and has been excluded from the blend.'
+      }
+    } else {
+      conflictBody = `The ${lean} read rests on ${active} directional channel${active === 1 ? '' : 's'} and is not corroborated by the tape or the underlying.`
+      if (isUnderlyingStale.value) {
+        conflictBody += ' Underlying volume bar is STALE — it was excluded from this blend.'
+      }
+    }
+
+    const trigger = buildConfirmationTrigger(lean)
+    const spotVsWalls =
+      spotVal != null && pw != null && cw != null
+        ? `Spot ($${num(spotVal, 2)}) is ${spotVal >= pw && spotVal <= cw ? `inside the channel [$${num(pw, 0)} – $${num(cw, 0)}]` : spotVal < pw ? `below Put Wall ($${num(pw, 0)})` : `above Call Wall ($${num(cw, 0)})`}.`
+        : ''
+
     return {
       title: `Unconfirmed ${lean === 'buying' ? 'Buying' : 'Selling'} Lean`,
       direction: 'NO TRADE · WAIT FOR CONFIRMATION',
       action: `${band.toUpperCase()} CONFIDENCE`,
       tone: 'balanced',
-      body: conflictText
-        ? `The evidence disagrees: ${conflictText}.`
-        : `The ${lean} read rests on ${active} directional channel${active === 1 ? '' : 's'} and is not corroborated by the tape or the underlying.`,
-      implication:
-        pressure.value.reasons.slice(0, 3).join(' · ') ||
-        'Wait for side-resolved tape flow or the underlying to confirm the positioning read.',
+      body: conflictBody,
+      implication: `${spotVsWalls} ${trigger}`.trim(),
     }
   }
 
   // 4. Charm Buying Tailwind — only when the blended read is confirmed.
   if (actionable && imb > 0.25) {
+    const spotPos =
+      spotVal != null && pw != null && cw != null
+        ? `Spot ($${num(spotVal, 2)}) is ${spotVal >= pw ? `above Put Wall ($${num(pw, 0)})` : `at Put Wall ($${num(pw, 0)})`} — scenario if support holds: target Call Wall $${num(cw, 0)}. If Put Wall breaks: revert to watching for breakdown.`
+        : ''
     return {
       title: 'Strong Structural Buying Pressure',
       direction: 'LONG BIAS (BUYING TAILWIND)',
       action: 'BUYING EQUILIBRIUM',
       tone: 'buying',
-      body: `Dealers are net short decaying OTM put contracts. As time passes without a downward move, put deltas decay toward zero, forcing dealers to systematically BUY back their short equity hedges (${compact(Math.abs(flowVal))} shares/day).`,
+      body: `Dealers are net short decaying OTM put contracts. As time passes without a downward move, put deltas decay toward zero, forcing dealers to systematically BUY back their short equity hedges (${compact(Math.abs(flowVal))} shares/day). ${isUnderlyingStale.value ? 'Note: underlying volume signal is STALE and was excluded from this read.' : ''}`,
       implication:
-        'Mechanical tailwind supporting price; dips into the Put Wall ($' +
-        num(summary.value.put_wall, 0) +
-        ') find rapid absorption. Favors Long Call Spreads and buying pullback support.',
+        `Mechanical tailwind supporting price; dips into Put Wall ($${num(summary.value.put_wall, 0)}) find rapid absorption. ${spotPos} Favors Long Call Spreads or buying pullback into Put Wall support. Stop: hourly close below Put Wall.`.trim(),
     }
   }
 
   // 5. Charm Selling Headwind — same guard as branch 4, mirrored.
   if (actionable && imb < -0.25) {
+    const spotPos =
+      spotVal != null && pw != null && cw != null
+        ? `Spot ($${num(spotVal, 2)}) is ${spotVal <= cw ? `below Call Wall ($${num(cw, 0)})` : `at Call Wall ($${num(cw, 0)})`} — scenario if resistance holds: target Put Wall $${num(pw, 0)}. If Call Wall breaks: revert to watching for breakout.`
+        : ''
     return {
       title: 'Strong Structural Selling Pressure',
       direction: 'SHORT BIAS (SELLING HEADWIND)',
       action: 'SELLING OVERHANG',
       tone: 'selling',
-      body: `Long call gamma/delta decay dominates dealer inventory. As call deltas decay over time, dealers are forced to SELL underlying stock to remain delta-neutral (${compact(Math.abs(flowVal))} shares/day).`,
+      body: `Long call gamma/delta decay dominates dealer inventory. As call deltas decay over time, dealers are forced to SELL underlying stock to remain delta-neutral (${compact(Math.abs(flowVal))} shares/day). ${isUnderlyingStale.value ? 'Note: underlying volume signal is STALE and was excluded from this read.' : ''}`,
       implication:
-        'Mechanical headwind capping upside; rallies toward the Call Wall ($' +
-        num(summary.value.call_wall, 0) +
-        ') face persistent dealer inventory supply. Favors selling rips or Long Put Spreads.',
+        `Mechanical headwind capping upside; rallies toward Call Wall ($${num(summary.value.call_wall, 0)}) face persistent dealer inventory supply. ${spotPos} Favors selling rips or Long Put Spreads. Stop: hourly close above Call Wall.`.trim(),
     }
   }
 
-  // 5. Range Mean-Reversion in Positive Gamma Channel
+  // 6. Range Mean-Reversion in Positive Gamma Channel
   if (
     regimeStr === 'positive' ||
     (spotVal != null && pw != null && cw != null && spotVal >= pw && spotVal <= cw)
   ) {
+    const spotPos =
+      spotVal != null && pw != null && cw != null
+        ? `Spot ($${num(spotVal, 2)}) is inside [$${num(pw, 0)} – $${num(cw, 0)}].`
+        : ''
     return {
       title: 'Balanced Flow in Positive Gamma Channel',
       direction: 'RANGE MEAN-REVERSION (BUY LOW / SELL HIGH)',
       action: 'VOLATILITY DAMPENING',
       tone: 'range',
-      body: `Dealer positioning is Net Long Gamma ($${compact(summary.value.total_gex_m ?? 0)}M GEX). Dealers hedge counter-cyclically (buying dips, selling rips), compressing realized volatility between Put Wall ($${num(summary.value.put_wall, 0)}) and Call Wall ($${num(summary.value.call_wall, 0)}).`,
+      body: `Dealer positioning is Net Long Gamma ($${compact(summary.value.total_gex_m ?? 0)}M GEX). Dealers hedge counter-cyclically (buying dips, selling rips), compressing realized volatility between Put Wall ($${num(summary.value.put_wall, 0)}) and Call Wall ($${num(summary.value.call_wall, 0)}). ${spotPos}`,
       implication:
-        'High probability of range-bound mean-reversion. Fade range extremes (buy support at Put Wall, take profit at Call Wall); breakout follow-through is low.',
+        `High probability of range-bound mean-reversion. Scenario if support holds: buy near Put Wall $${num(pw, 0)}, take profit near Call Wall $${num(cw, 0)}. Scenario if Put Wall breaks: wait for hourly close below $${num(pw, 0)} to switch to short bias. Breakout follow-through above $${num(cw, 0)} would invalidate range.`,
     }
   }
 
-  // 6. Neutral Consolidation
+  // 7. Neutral Consolidation
   return {
     title: 'Neutral / Transitory Market Equilibrium',
     direction: 'NEUTRAL PIVOT WATCH',
@@ -521,9 +609,12 @@ const microstructureAssessment = computed(() => {
     tone: 'balanced',
     body: `Charm drift and directional options flow are evenly matched. The key structural pivot to monitor is the Gamma Flip point at $${num(summary.value.gamma_flip, 0)}.`,
     implication:
-      'Monitor live flow tape for directional sweeps or sudden volume imbalances across near-the-money strikes.',
+      flip != null && spotVal != null
+        ? `Scenario if Spot stays above Gamma Flip ($${num(flip, 0)}): mean-reversion bias — buy dips. Scenario if Spot breaks below $${num(flip, 0)}: trending / cascade bias — wait for hourly close confirmation before fading. Monitor live tape for directional sweeps near ATM strikes.`
+        : 'Monitor live flow tape for directional sweeps or sudden volume imbalances across near-the-money strikes.',
   }
 })
+
 
 /** Strike table: pair call/put rows per strike, sorted by strike. */
 interface StrikeTableRow {
@@ -1218,12 +1309,30 @@ const charmChartKey = computed(
               </span>
             </div>
             <div class="channel-list">
+              <!-- Signal freshness ranking header -->
+              <span class="label channel-freshness-hdr" colspan="3">
+                SIGNAL QUALITY RANK: Tape (live) &gt; Charm (structural) &gt; Underlying vol (OHLCV proxy)
+              </span>
               <template v-for="row in pressureChannelRows" :key="row.key">
-                <span class="label channel-name">{{ row.name }}</span>
-                <span class="fig channel-ratio" :class="row.tone">{{ channelText(row.ratio) }}</span>
-                <span class="label channel-detail">w {{ row.weight }} · {{ row.detail }}</span>
+                <span
+                  class="label channel-name"
+                  :class="{ 'channel-stale': row.stale }"
+                  :title="row.stale ? 'Stale data — excluded from blend' : undefined"
+                >
+                  {{ row.name }}
+                  <span v-if="row.stale" class="stale-badge label">STALE · EXCLUDED</span>
+                </span>
+                <span
+                  class="fig channel-ratio"
+                  :class="[row.tone, { 'channel-stale': row.stale }]"
+                >{{ channelText(row.ratio) }}</span>
+                <span
+                  class="label channel-detail"
+                  :class="{ 'channel-stale': row.stale }"
+                >w {{ row.weight }} · {{ row.detail }}</span>
               </template>
             </div>
+
             <p class="gauge-note label">
               Context (not votes) · call/put mix {{ channelText(pressure.context.call_put_mix) }} · GEX
               {{ signed(pressure.components.net_gex_m, 1) }}M {{ pressure.context.gex_regime }} —
@@ -1310,18 +1419,31 @@ const charmChartKey = computed(
             </p>
           </div>
 
-          <div class="factor-card" :class="pressureChannelRows[2]?.tone">
+          <div
+            class="factor-card"
+            :class="[pressureChannelRows[2]?.stale ? 'stale-channel' : pressureChannelRows[2]?.tone]"
+          >
             <div class="factor-head">
-              <span class="label">4. UNDERLYING VOLUME READ</span>
-              <span class="factor-badge label" :class="pressureChannelRows[2]?.tone">
+              <span class="label">4. UNDERLYING VOLUME READ <small class="freshness-rank-label">(quality 3/3 — lowest)</small></span>
+              <span v-if="isUnderlyingStale" class="factor-badge label stale-excluded">
+                STALE · EXCLUDED FROM BLEND
+              </span>
+              <span v-else class="factor-badge label" :class="pressureChannelRows[2]?.tone">
                 {{ pressureChannelRows[2]?.tone === 'na' ? 'ABSTAINS' : (pressureChannelRows[2]?.tone ?? 'n/a').toUpperCase() }}
               </span>
             </div>
-            <div class="factor-metric fig" :class="pressureChannelRows[2]?.tone">
-              {{ channelText(pressure.channels.underlying) }}
-              <small v-if="underlyingChannel">rvol {{ underlyingChannel.rvol != null ? underlyingChannel.rvol.toFixed(2) + '×' : 'n/a' }}</small>
+            <div
+              class="factor-metric fig"
+              :class="isUnderlyingStale ? 'stale-metric' : pressureChannelRows[2]?.tone"
+            >
+              <s v-if="isUnderlyingStale">{{ channelText(pressure.channels.underlying) }}</s>
+              <template v-else>{{ channelText(pressure.channels.underlying) }}</template>
+              <small v-if="underlyingChannel"> rvol {{ underlyingChannel.rvol != null ? underlyingChannel.rvol.toFixed(2) + '×' : 'n/a' }}</small>
             </div>
-            <p class="factor-desc">
+            <p v-if="isUnderlyingStale" class="factor-desc stale-desc">
+              ⏸ Underlying OHLCV bars are STALE (not from the current session). This channel was <b>excluded from the blend</b> and did not vote on the pressure verdict. Verdict above is based on Tape + Charm only.
+            </p>
+            <p v-else class="factor-desc">
               {{
                 underlyingChannel
                   ? `Closes ${underlyingChannel.ratio > 0.25 ? 'near the highs' : underlyingChannel.ratio < -0.25 ? 'near the lows' : 'mid-range'} on volume over the last ${underlyingChannel.bars_used} × ${underlyingChannel.timeframe ?? '?'} bars (${signed(underlyingChannel.close_change_pct ?? 0, 2)}%). ${underlyingChannel.note}`
@@ -1329,6 +1451,7 @@ const charmChartKey = computed(
               }}
             </p>
           </div>
+
         </div>
 
         <!-- Microstructure Interpretation Banner with Directional Action -->
@@ -1343,12 +1466,23 @@ const charmChartKey = computed(
             <span class="badge assess-dir-badge label" :class="microstructureAssessment.tone">
               {{ microstructureAssessment.direction }}
             </span>
+            <span v-if="isUnderlyingStale" class="badge assess-stale-note label">
+              ⏸ UNDERLYING STALE · EXCLUDED
+            </span>
           </div>
           <p class="assess-body">{{ microstructureAssessment.body }}</p>
-          <div class="assess-footer label">
-            <b>Actionable Strategy:</b> {{ microstructureAssessment.implication }}
+          <div
+            class="assess-footer label"
+            :class="microstructureAssessment.direction.startsWith('NO TRADE') ? 'no-trade-footer' : ''"
+          >
+            <b v-if="microstructureAssessment.direction.startsWith('NO TRADE')">
+              ⚠ Confirmation Required:
+            </b>
+            <b v-else>Actionable Decision Tree:</b>
+            {{ microstructureAssessment.implication }}
           </div>
         </div>
+
       </div>
     </Panel>
 
@@ -2679,6 +2813,65 @@ h1 {
   font-family: var(--font-data);
   font-size: var(--t-micro);
 }
+/* Freshness hierarchy header row spanning all 3 grid columns */
+.channel-freshness-hdr {
+  grid-column: 1 / -1;
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
+  padding-bottom: 3px;
+  border-bottom: var(--hair) solid var(--rule-faint);
+  margin-bottom: 2px;
+  letter-spacing: 0.04em;
+}
+/* Stale channel rows: desaturated, reduced opacity */
+.channel-stale {
+  opacity: 0.45;
+  text-decoration: line-through;
+  text-decoration-color: var(--put-hi);
+}
+.stale-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--put-hi) 12%, transparent);
+  color: var(--put-hi);
+  font-size: var(--t-nano);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  vertical-align: middle;
+}
+/* Stale factor card: muted border and background */
+.factor-card.stale-channel {
+  border-color: var(--rule-faint);
+  background: var(--panel);
+  opacity: 0.7;
+}
+/* Stale metric value: struck-through in muted colour */
+.stale-metric {
+  color: var(--ink-faint);
+}
+/* Stale description paragraph */
+.stale-desc {
+  color: var(--put-hi);
+  opacity: 0.85;
+  font-size: var(--t-micro);
+}
+/* Stale badge in the factor card header */
+.stale-excluded {
+  color: var(--put-hi);
+  background: color-mix(in srgb, var(--put-hi) 10%, transparent);
+  border: var(--hair) solid color-mix(in srgb, var(--put-hi) 30%, transparent);
+}
+/* Small quality rank label inside factor head */
+.freshness-rank-label {
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
 .reason-list {
   margin: 0;
   padding-left: 1.1em;
@@ -2843,6 +3036,30 @@ h1 {
 .assess-footer b {
   color: var(--phosphor);
 }
+/* NO TRADE confirmation footer: amber tint to signal "wait" state */
+.assess-footer.no-trade-footer {
+  background: color-mix(in srgb, var(--put-hi) 6%, transparent);
+  border-top-color: color-mix(in srgb, var(--put-hi) 25%, transparent);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  padding: 6px var(--s2) var(--s2);
+  margin-top: 4px;
+  color: var(--ink);
+}
+.assess-footer.no-trade-footer b {
+  color: var(--put-hi);
+}
+/* Stale underlying note badge in the assessment header */
+.assess-stale-note {
+  background: color-mix(in srgb, var(--put-hi) 10%, transparent);
+  border: var(--hair) solid color-mix(in srgb, var(--put-hi) 30%, transparent);
+  color: var(--put-hi);
+  font-size: var(--t-nano);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 
 /* Flow Cascade Diagram */
 .flow-cascade-container {

@@ -30,6 +30,7 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'sectors', title: 'Sectors', idx: '03', hint: 'Sector rotation & flow' },
   { name: 'sentiment', title: 'Pulse', idx: '04', hint: 'Structure · COT · outliers' },
   { name: 'macro', title: 'Macro', idx: '04', hint: 'Cross-asset regime board' },
+  { name: 'crypto', title: 'Crypto', idx: '07', hint: '24/7 coin tape · Kalman · BTC COT' },
   { name: 'options', title: 'Options', idx: '05', hint: 'Flow · gamma · density' },
   { name: 'drift', title: 'Drift', idx: '05', hint: 'Buying vs selling pressure' },
   { name: 'regime', title: 'Regime', idx: '05', hint: 'Dealer-gamma surface & density' },

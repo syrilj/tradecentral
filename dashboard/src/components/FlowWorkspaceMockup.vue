@@ -135,7 +135,7 @@ const queue = [
   flex-direction: column;
   gap: 4px;
   padding: 12px 8px;
-  color: #9a9891;
+  color: var(--mock-dim);
   border-right: 1px solid var(--mock-rule);
   background: #0d0e0d;
   font-family: var(--font-display);
@@ -194,7 +194,7 @@ const queue = [
   background: var(--mock-green);
 }
 .muted {
-  color: #75736c;
+  color: var(--mock-dim);
 }
 
 .brief {
@@ -248,7 +248,7 @@ const queue = [
   background: #131413;
 }
 .queue small {
-  color: #7d7b74;
+  color: var(--mock-dim);
   font-family: var(--font-display);
   font-size: var(--t-nano);
   letter-spacing: 0.08em;
@@ -261,7 +261,7 @@ const queue = [
   font-weight: 500;
 }
 .queue em {
-  color: #8f8d85;
+  color: var(--mock-dim);
   font-family: var(--font-ui);
   font-size: 10px;
   font-style: normal;
@@ -303,7 +303,7 @@ const queue = [
   margin-top: 12px;
 }
 .majors dt {
-  color: #75736c;
+  color: var(--mock-dim);
   font-family: var(--font-display);
   font-size: var(--t-nano);
   letter-spacing: 0.08em;
@@ -317,7 +317,7 @@ const queue = [
 }
 .majors p {
   margin-top: 10px;
-  color: #8a8880;
+  color: var(--mock-dim);
   font-family: var(--font-ui);
   font-size: 10px;
 }
@@ -338,7 +338,7 @@ const queue = [
 
 figcaption {
   margin-top: 10px;
-  color: #8d8a82;
+  color: var(--mock-dim);
   font-family: var(--font-display);
   font-size: var(--t-nano);
   letter-spacing: 0.08em;

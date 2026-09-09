@@ -118,11 +118,48 @@ def fetch_one(symbol: str, interval: str) -> pd.DataFrame:
 
 
 def maybe_write(path: Path, df: pd.DataFrame, force: bool) -> str:
+    """Merge the new pull into whatever is on disk, newest bar wins.
+
+    The guard here used to be ``len(df) <= len(old) -> kept_existing``. Yahoo is
+    asked for ``period="10y"``, which is a ROLLING window: once a symbol has ten
+    years of history the row count saturates and every later pull returns the
+    same 2512 rows, just shifted forward. Row count therefore stopped being
+    evidence of freshness, and the file froze permanently while the script kept
+    printing "OK ... 2016-09-09->2026-09-08 (kept_existing)" -- reporting the
+    span of the pull it had just discarded. SPY sat at a 2026-09-01 close for a
+    week that way; only young listings like CRDO, still short of the window,
+    ever updated.
+
+    Merging is strictly safer than either branch of the old test: no historical
+    bar is ever dropped by a short pull, and no fresh bar is ever ignored by a
+    saturated one. Overlapping timestamps take the new value, so restated
+    adjusted closes propagate.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if df is None or getattr(df, "empty", True):
+        return "kept_existing"
+
     if path.exists() and not force:
-        old = pd.read_parquet(path)
-        if len(df) <= len(old):
-            return "kept_existing"
+        try:
+            old = pd.read_parquet(path)
+        except Exception:
+            old = None
+        if old is not None and not old.empty and list(old.columns) == list(df.columns):
+            merged = pd.concat([old[~old.index.isin(df.index)], df]).sort_index()
+            merged = merged[~merged.index.duplicated(keep="last")]
+            # Compare content, not just the span. Yahoo restates adjusted
+            # closes after splits and dividends, and an index-only test would
+            # discard those the same way the row-count test discarded new bars.
+            if merged.equals(old):
+                return "kept_existing"
+            merged.to_parquet(path)
+            return "merged"
+        if old is not None and not old.empty and len(df) <= len(old):
+            # Columns disagree, so a merge would be guesswork. Fall back to the
+            # old rule, but let a strictly newer last bar through.
+            if df.index.max() <= old.index.max():
+                return "kept_existing"
+
     df.to_parquet(path)
     return "wrote"
 

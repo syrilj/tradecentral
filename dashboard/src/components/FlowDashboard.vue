@@ -1239,6 +1239,17 @@ const providerFreshnessState = computed(() => {
   return props.payload?.feed_status === 'live' ? 'live' : (props.payload?.feed_status ?? 'unknown')
 })
 
+// The vault is the unmetered legacy route the adapter falls back to when /iso
+// is quota- or entitlement-blocked. It carries a thinner window, so a light
+// tape means something different there and the operator has to be told which
+// route produced the sample.
+const providerRouteCopy = computed(() => {
+  const route = String(props.payload?.coverage?.provider_route || '').toLowerCase()
+  if (route === 'vault') return ' · VAULT FALLBACK'
+  if (route === 'iso') return ' · ISO WINDOW'
+  return ''
+})
+
 const feedStatusLabel = computed(() => {
   if (!props.payload) return 'WAITING'
   if (providerFreshnessState.value === 'stale') return 'STALE SAMPLE'
@@ -2330,7 +2341,7 @@ function downloadHistoryTapeCsv(): void {
         </span>
         <span>{{
           payload
-            ? `PROVIDER ${providerFreshness} · SNAPSHOT ${snapshotFreshness} · ${cacheCopy}`
+            ? `PROVIDER ${providerFreshness}${providerRouteCopy} · SNAPSHOT ${snapshotFreshness} · ${cacheCopy}`
             : 'NO SNAPSHOT'
         }}</span>
       </div>
@@ -4755,9 +4766,9 @@ function downloadHistoryTapeCsv(): void {
 }
 
 /* ── 01 Control Rail ───────────────────────────────────────────────────────
-   The one true floating toolbar of the Flow view: Liquid Glass functional
-   chrome (translucent fill + saturate/blur + specular edge), capsule
-   geometry, monochromatic controls with a single prominent action. */
+   An in-page content toolbar of the Flow view: solid panel surface (no
+   backdrop blur — content never blurs content), capsule geometry,
+   monochromatic controls with a single prominent action. */
 .control-rail {
   display: flex;
   align-items: center;
@@ -4768,21 +4779,9 @@ function downloadHistoryTapeCsv(): void {
   padding: var(--s3) var(--s5);
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-xl);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 70%),
-    var(--glass-surface);
-  backdrop-filter: var(--chrome-optics-md);
-  -webkit-backdrop-filter: var(--chrome-optics-md);
+  background: var(--panel-hi);
   box-shadow: var(--glass-specular-subtle), var(--glass-shadow-sm);
   flex-wrap: wrap;
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .control-rail {
-    background: var(--panel);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
 }
 
 .control-identity {
@@ -4852,18 +4851,9 @@ function downloadHistoryTapeCsv(): void {
   padding: 2px;
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-capsule);
-  background: var(--glass-base);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Solid segmented track on the content toolbar — no backdrop blur. */
+  background: var(--void-lift);
   box-shadow: var(--glass-specular-subtle);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .thresholds {
-    background: var(--panel-hi);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
 }
 
 .thresholds button {
@@ -4888,9 +4878,9 @@ function downloadHistoryTapeCsv(): void {
 }
 
 .thresholds button.active {
-  color: var(--void);
-  background: var(--phosphor);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  box-shadow: inset 0 0 0 var(--hair) var(--phosphor-dim);
   font-weight: 800;
 }
 
@@ -5039,8 +5029,8 @@ button:disabled {
   border-radius: var(--r-xs);
 }
 .empty-action:hover {
-  color: var(--void);
-  background: var(--phosphor);
+  border-color: var(--phosphor);
+  background: var(--phosphor-glow);
 }
 
 .section-kicker {
@@ -5142,7 +5132,7 @@ button:disabled {
 /* Ticker-focus reset chip — the class was referenced in the hero header but
    never defined, so the button rendered as a bare browser-default control. */
 .clear-symbol-btn {
-  min-height: 20px;
+  min-height: 28px;
   padding: 0 8px;
   color: var(--ink-dim);
   border: var(--hair) solid var(--glass-border);
@@ -5393,18 +5383,9 @@ button:disabled {
   padding: 2px;
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-capsule);
-  background: var(--glass-base);
-  backdrop-filter: var(--chrome-optics-sm);
-  -webkit-backdrop-filter: var(--chrome-optics-sm);
+  /* Solid tab track — no backdrop blur in the content layer. */
+  background: var(--void-lift);
   box-shadow: var(--glass-specular-subtle);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .hub-tabs {
-    background: var(--panel-hi);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
 }
 
 .hub-tab-btn {
@@ -5431,9 +5412,9 @@ button:disabled {
 }
 
 .hub-tab-btn.active {
-  color: var(--void);
-  background: var(--phosphor);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  box-shadow: inset 0 0 0 var(--hair) var(--phosphor-dim);
   font-weight: 800;
 }
 
@@ -5635,9 +5616,9 @@ button:disabled {
   border-color: var(--glass-border-hi);
 }
 .ticker-cats button.active {
-  color: var(--void);
-  border-color: var(--phosphor);
-  background: var(--phosphor);
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -5729,7 +5710,8 @@ button:disabled {
 
 .book-pin {
   margin-left: 6px;
-  min-height: 22px;
+  min-height: 28px;
+  min-width: 28px;
   padding: 0 8px;
   color: var(--text-tertiary);
   border: var(--hair) solid var(--border-strong);
@@ -6099,7 +6081,8 @@ button:disabled {
 
 .exclusion-chip,
 .layout-chip {
-  min-height: 24px;
+  min-height: 28px;
+  min-width: 28px;
   padding: 0 7px;
   color: var(--ink-dim);
   border: var(--hair) solid var(--rule);
@@ -6186,8 +6169,8 @@ button:disabled {
   background: var(--surface-overlay);
 }
 .seg-filter button.active {
-  color: var(--void);
-  background: var(--phosphor);
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
   font-weight: 800;
 }
 
@@ -6529,9 +6512,9 @@ button.major-symbol:hover {
     border-color var(--dur-fast) var(--ease-out);
 }
 .major-open:hover {
-  color: var(--void);
+  color: var(--phosphor);
   border-color: var(--phosphor);
-  background: var(--phosphor);
+  background: var(--phosphor-glow);
 }
 
 .major-absent {
@@ -6731,7 +6714,7 @@ button.major-symbol:hover {
 .direction-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
+  min-height: 28px;
   padding: 1px 7px;
   border-radius: var(--r-xs);
   font-weight: 800;
@@ -7902,9 +7885,9 @@ th.sortable:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin-left: -24px;
+  width: 28px;
+  height: 28px;
+  margin-left: -34px;
   background: transparent;
   border: none;
   color: var(--ink-dim);

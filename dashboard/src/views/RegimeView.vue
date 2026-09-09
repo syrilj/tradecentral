@@ -310,6 +310,12 @@ const moveExcursion = computed(() => {
   const last = symbolQuoteRow.value?.last
   const prev = symbolQuoteRow.value?.prev_close
   if (last == null || prev == null) return null
+  /* On a stale mark these are the last two stored daily closes, which on CRDO
+   * was the -20% 09-01 -> 09-02 gap. Measured against today's expected move it
+   * printed "5.67x 1D EM · Abnormal Volatility Breakout" — a six-day-old gap
+   * reported as this session's excursion. */
+  const q = symbolQuoteRow.value?.quality
+  if (q != null && q !== 'live') return null
   return assessMoveExcursion(last - prev, expectedMove.value.em1dDollars)
 })
 
@@ -826,6 +832,86 @@ const tacticalBias = computed(() => {
   }
 })
 
+/**
+ * The direction the briefing above is actually arguing for, as a value rather
+ * than as prose.
+ *
+ * The ticket comes from `/api/systematic-execution/signals`, which reports
+ * `gamma_conditioned: false` — it reads price and volume structure only. The
+ * briefing comes from the dealer-gamma read. Nothing reconciled them, so the
+ * banner could say SHORT SQUEEZE (BULLISH) while the ticket underneath it said
+ * ENTER_SHORT, and the page presented both as its own conclusion.
+ *
+ * It is not that one engine is right. Two lenses disagreeing is information —
+ * a breakdown ticket firing into a squeeze read is exactly the setup that gets
+ * run over. But it has to be shown as a disagreement, not as an instruction.
+ */
+const briefingSide = computed<'long' | 'short' | 'neutral'>(() => {
+  const r = regimeRead.value
+  const vel = latestStatePoint.value?.kalman_velocity ?? 0
+  if (r.side === 'long') return vel >= 0 ? 'long' : 'neutral' // damped: fade both ways
+  if (r.side === 'short') return vel > 0 ? 'long' : 'short' // squeeze vs cascade
+  if (r.side === 'flip') return vel >= 0 ? 'long' : 'short'
+  if (vel > 0.0005) return 'long'
+  if (vel < -0.0005) return 'short'
+  return 'neutral'
+})
+
+/**
+ * The ticket as the page is entitled to present it: its own numbers, plus how
+ * old it is and whether it contradicts the regime read.
+ */
+const ticketRead = computed(() => {
+  const sig = activeSignal.value
+  if (!sig) return null
+
+  const bias = briefingSide.value
+  const conflict = bias !== 'neutral' && sig.direction !== bias
+
+  // Age. `latest_signal` is the last bar of the requested window, which on a
+  // daily window is yesterday's close — the ticket was quoted against a price
+  // that is no longer spot. That was invisible: the row printed an entry with
+  // no date on it.
+  const barTs = Date.parse(sig.timestamp)
+  const ageMs = Number.isFinite(barTs) ? Date.now() - barTs : null
+  const ageHours = ageMs != null ? ageMs / 3_600_000 : null
+  const spot = effectiveSpot.value ?? regimeRead.value.spot ?? null
+  const driftPct =
+    spot != null && sig.entry_price > 0 ? ((spot - sig.entry_price) / sig.entry_price) * 100 : null
+
+  // The entry is only still live if spot has not already walked through the
+  // stop or the target.
+  let staleReason: string | null = null
+  if (spot != null && sig.stop_loss > 0) {
+    const stopHit = sig.direction === 'long' ? spot <= sig.stop_loss : spot >= sig.stop_loss
+    const tgtHit = sig.direction === 'long' ? spot >= sig.take_profit : spot <= sig.take_profit
+    if (stopHit) staleReason = 'spot has already traded through the stop'
+    else if (tgtHit) staleReason = 'spot has already reached the target'
+  }
+  if (staleReason == null && ageHours != null && ageHours > 20) {
+    staleReason = `quoted ${ageHours >= 48 ? `${Math.round(ageHours / 24)}d` : `${Math.round(ageHours)}h`} ago on a ${num(sig.entry_price, 2)} close`
+  }
+
+  return {
+    sig,
+    conflict,
+    biasSide: bias,
+    staleReason,
+    driftPct,
+    /** Risk in dollars per share — one R. */
+    riskPerShare: Math.abs(sig.entry_price - sig.stop_loss),
+    unitLabel:
+      sig.risk_unit_basis === 'implied_1bar'
+        ? 'implied 1-bar σ'
+        : sig.risk_unit_basis === 'atr'
+          ? 'ATR'
+          : sig.risk_unit_basis === 'close_to_close'
+            ? 'close-to-close σ'
+            : 'unmeasured',
+    actionable: !conflict && staleReason == null,
+  }
+})
+
 /* ---- EVIDENCE STRIP --------------------------------------------------------
  *
  * The briefing above speaks in plain sentences, and sentences are where false
@@ -852,7 +938,7 @@ const pivotLadder = computed(() => {
     ...(em
       ? [
           {
-            label: '+1D EM (VIX/16)',
+            label: expectedMove.value?.ivBasis === 'vix_proxy' ? '+1D EM (VIX/16)' : '+1D EM (IV/16)',
             price: em.em1dHigh,
             role: 'Rule of 16 upper 1σ',
             tone: 'warn',
@@ -884,7 +970,14 @@ const pivotLadder = computed(() => {
       ? [{ label: 'LOWER ENVELOPE', price: pt.nw_lower, role: 'Causal NW −ασ band', tone: 'put' }]
       : []),
     ...(em
-      ? [{ label: '-1D EM (VIX/16)', price: em.em1dLow, role: 'Rule of 16 lower 1σ', tone: 'warn' }]
+      ? [
+          {
+            label: em.ivBasis === 'vix_proxy' ? '-1D EM (VIX/16)' : '-1D EM (IV/16)',
+            price: em.em1dLow,
+            role: 'Rule of 16 lower 1σ',
+            tone: 'warn',
+          },
+        ]
       : []),
     { label: 'PUT WALL', price: r.putWall, role: 'Heaviest put gamma below spot', tone: 'put' },
   ]
@@ -1523,7 +1616,11 @@ const putCallRatio = computed<number | null>(() => {
 
 const nextExpiryDate = computed<string | null>(() => slowDerived.value.smile?.expiry ?? null)
 
-/** Calendar days to the observed expiry — previously pinned at the literal 2. */
+/** Calendar days to the observed expiry — previously pinned at the literal 2.
+ *
+ * Negative is a real and important answer: the chain snapshot's nearest expiry
+ * has already passed, which means the board is stale. `Math.max(0, ...)` turned
+ * that into "0D" and the desk advertised an expired board as a 0DTE session. */
 const nextExpiryDte = computed<number | null>(() => {
   const expiry = nextExpiryDate.value
   if (!expiry) return null
@@ -1531,7 +1628,7 @@ const nextExpiryDte = computed<number | null>(() => {
   if (Number.isNaN(target)) return null
   const today = new Date()
   const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
-  return Math.max(0, Math.round((target - todayUtc) / 86_400_000))
+  return Math.round((target - todayUtc) / 86_400_000)
 })
 
 const strikeOiRows = computed<StrikeOiPoint[]>(() => {
@@ -1841,6 +1938,8 @@ function onBreadthActivate(): void {
           :put-call-ratio="putCallRatio"
           :total-gex-m="totalGexM"
           :net-flow-m="netFlowM"
+          :quote-asof="symbolQuoteRow?.asof ?? null"
+          :quote-quality="symbolQuoteRow?.quality ?? null"
           :next-expiry-dte="nextExpiryDte"
           :next-expiry-date="nextExpiryDate ? nextExpiryDate.slice(5) : null"
           :regime="regimeRead.side"
@@ -1901,40 +2000,91 @@ function onBreadthActivate(): void {
             </div>
 
             <!-- Active Execution Ticket Overlay if present -->
-            <div v-if="activeSignal" class="active-ticket-row" :class="activeSignal.action">
+            <div
+              v-if="ticketRead"
+              class="active-ticket-row"
+              :class="[ticketRead.sig.action, { conflicted: !ticketRead.actionable }]"
+            >
               <div class="ticket-status-pill font-mono">
-                ACTIVE TICKET: {{ activeSignal.action }} &middot; {{ activeSignal.setup_name }}
+                {{ ticketRead.actionable ? 'ACTIVE TICKET' : 'UNCONFIRMED TICKET' }}:
+                {{ ticketRead.sig.action }} &middot; {{ ticketRead.sig.setup_name }}
               </div>
+
+              <!-- A price-structure ticket pointing the other way from the
+                   dealer-gamma read is stated as the disagreement it is. -->
+              <p v-if="ticketRead.conflict" class="ticket-conflict font-mono">
+                ⚠ CONFLICTS WITH THE REGIME READ — the briefing above is
+                {{ ticketRead.biasSide === 'long' ? 'bullish' : 'bearish' }}; this ticket is
+                {{ ticketRead.sig.direction }}. It is generated from price and volume structure
+                only (no dealer gamma in history), so treat it as a second opinion, not an order.
+              </p>
+              <p v-else-if="ticketRead.staleReason" class="ticket-conflict font-mono">
+                ⚠ NOT LIVE — {{ ticketRead.staleReason }}.
+                <template v-if="ticketRead.driftPct != null">
+                  Spot has moved {{ ticketRead.driftPct >= 0 ? '+' : ''
+                  }}{{ num(ticketRead.driftPct, 1) }}% since the quote.
+                </template>
+              </p>
+
               <div class="ticket-metrics-list">
                 <div>
                   Entry:
-                  <span class="font-mono font-bold">${{ num(activeSignal.entry_price, 2) }}</span>
+                  <span class="font-mono font-bold">${{ num(ticketRead.sig.entry_price, 2) }}</span>
                 </div>
                 <div>
                   Stop:
                   <span class="font-mono font-bold text-rose"
-                    >${{ num(activeSignal.stop_loss, 2) }}</span
+                    >${{ num(ticketRead.sig.stop_loss, 2) }}</span
                   >
+                  <span class="ticket-sub font-mono">1R ${{ num(ticketRead.riskPerShare, 2) }}</span>
                 </div>
                 <div>
                   Target:
                   <span class="font-mono font-bold text-emerald"
-                    >${{ num(activeSignal.take_profit, 2) }}</span
+                    >${{ num(ticketRead.sig.take_profit, 2) }}</span
                   >
+                  <span class="ticket-sub font-mono">{{ num(ticketRead.sig.risk_reward, 2) }}R</span>
+                </div>
+                <div>
+                  Scale:
+                  <span class="font-mono"
+                    >${{ num(ticketRead.sig.target_1r, 2) }} / ${{
+                      num(ticketRead.sig.target_2r, 2)
+                    }} / ${{ num(ticketRead.sig.target_3r, 2) }}</span
+                  >
+                  <span class="ticket-sub font-mono">1R / 2R / 3R</span>
                 </div>
                 <div>
                   Conviction:
                   <span class="font-mono font-bold"
-                    >{{ Math.round(activeSignal.conviction * 100) }}%</span
+                    >{{ Math.round(ticketRead.sig.conviction * 100) }}%</span
                   >
                 </div>
                 <div>
                   Size:
                   <span class="font-mono font-bold"
-                    >{{ activeSignal.suggested_size_pct }}% capital</span
+                    >{{ ticketRead.sig.suggested_size_pct }}% capital</span
+                  >
+                  <span class="ticket-sub font-mono"
+                    >risks
+                    {{
+                      num(
+                        (ticketRead.sig.suggested_size_pct * ticketRead.riskPerShare) /
+                          Math.max(ticketRead.sig.entry_price, 1e-9),
+                        2,
+                      )
+                    }}% of capital</span
                   >
                 </div>
               </div>
+
+              <!-- Say what the stop is a multiple of. Without this the numbers
+                   look chosen; they are 1x a measured bar volatility. -->
+              <p class="ticket-basis font-mono">
+                Levels sized off {{ ticketRead.unitLabel }} = ${{
+                  num(ticketRead.sig.risk_unit, 2)
+                }}/share &middot; bar {{ ticketRead.sig.timestamp.slice(0, 10) }}
+              </p>
             </div>
 
             <!-- Microstructure Pivot Ladder -->
@@ -1960,7 +2110,11 @@ function onBreadthActivate(): void {
             <!-- Rule of 16 Expected Move Volatility Strip -->
             <div v-if="expectedMove" class="expected-move-strip">
               <div class="em-item">
-                <span class="em-label font-mono">1-DAY EXPECTED MOVE (VIX / 16)</span>
+                <span class="em-label font-mono"
+                  >1-DAY EXPECTED MOVE ({{
+                    expectedMove?.ivBasis === 'vix_proxy' ? 'VIX / 16' : 'ATM IV / 16'
+                  }})</span
+                >
                 <span class="em-val font-mono font-bold text-warn">
                   &plusmn;${{ num(expectedMove.em1dDollars, 2) }} (&plusmn;{{
                     num(expectedMove.em1dPct, 1)
@@ -2000,11 +2154,16 @@ function onBreadthActivate(): void {
               </div>
               <div class="em-item">
                 <span class="em-label font-mono">VOL COMPLEX BENCHMARK</span>
+                <!-- `ivAnnualPct` is whatever fed the corridor, which after a
+                     VIX fallback IS the VIX. Printing that under an "ATM IV"
+                     label reported the index vol as the symbol's own. -->
                 <span class="em-val font-mono text-phosphor font-semibold">
                   VIX {{ vixQuote != null ? num(vixQuote, 1) : DASH }} &middot; ATM IV
-                  {{ num(expectedMove.ivAnnualPct, 1) }}%
+                  {{ atmIv != null ? `${num(atmIv > 1.5 ? atmIv : atmIv * 100, 1)}%` : DASH }}
                 </span>
-                <span class="em-sub font-mono text-ink-faint">EM = S &times; (IV / 16)</span>
+                <span class="em-sub font-mono text-ink-faint"
+                  >EM = S &times; ({{ expectedMove?.ivBasisLabel ?? 'IV / 16' }})</span
+                >
               </div>
             </div>
           </section>
@@ -3244,6 +3403,30 @@ function onBreadthActivate(): void {
   border-radius: var(--r-sm);
 }
 
+.active-ticket-row.conflicted {
+  border-style: dashed;
+  opacity: 0.92;
+}
+.ticket-conflict {
+  grid-column: 1 / -1;
+  margin: 0.35rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--warn);
+  letter-spacing: 0.02em;
+}
+.ticket-basis {
+  grid-column: 1 / -1;
+  margin: 0.4rem 0 0;
+  font-size: 0.62rem;
+  color: var(--ink-faint);
+  letter-spacing: 0.03em;
+}
+.ticket-sub {
+  margin-left: 0.4rem;
+  font-size: 0.6rem;
+  color: var(--ink-faint);
+}
 .active-ticket-row.ENTER_SHORT {
   border-color: var(--put-dim);
 }

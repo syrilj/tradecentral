@@ -163,6 +163,12 @@ describe('Microstructure Regime Dynamics contracts', () => {
       call_wall: 510,
       put_wall: 490,
       gamma_flip: 495,
+      risk_unit: 3.5,
+      risk_unit_basis: 'atr',
+      risk_reward: 2.43,
+      target_1r: 485.0,
+      target_2r: 481.5,
+      target_3r: 478.0,
       notes: ['Negative GEX breakdown cascade'],
     }
 

@@ -767,22 +767,64 @@ def build_unusual_options_flow(
     observed_symbols = int(coverage.get("observed_symbols") or 0)
     live_with_activity = int(coverage.get("with_activity") or 0)
     warnings = [str(item) for item in (live_flow.get("warnings") or [])]
-    if any("credential_missing" in item.lower() for item in warnings):
+    # A provider that answers 401/403/429 is not a missing credential. Folding
+    # every upstream failure into "credential_missing" printed
+    # "LSE_API_KEY is not configured" on a desk whose key was configured and
+    # valid, which is the one message guaranteed to send the operator to the
+    # wrong file. Read the status the adapter actually recorded.
+    lowered = [item.lower() for item in warnings]
+    http_status = next(
+        (
+            item.rsplit(":http_", 1)[1]
+            for item in lowered
+            if ":http_" in item and item.rsplit(":http_", 1)[1].isdigit()
+        ),
+        None,
+    )
+    if any("credential_missing" in item for item in lowered):
         feed_status = "credential_missing"
+    elif http_status in {"401", "403"}:
+        feed_status = "provider_rejected"
+    elif http_status == "429":
+        feed_status = "provider_throttled"
+    elif any(("provider_cooldown" in item or "circuit_open" in item) for item in lowered):
+        feed_status = "provider_cooldown"
     elif board:
         feed_status = "live"
     elif request_completed > 0:
         feed_status = "no_prints"
+    elif http_status is not None:
+        feed_status = "provider_error"
     else:
         feed_status = "unavailable"
+    _FEED_REASONS = {
+        "credential_missing": (
+            "LSE_API_KEY is not configured. The market-wide tape is unavailable; "
+            "rows and prints stay empty."
+        ),
+        "provider_rejected": (
+            f"The LSE key is configured but the provider refused the request (HTTP {http_status}). "
+            "The key is not entitled to this route, or it has been revoked; rows and prints stay empty."
+        ),
+        "provider_throttled": (
+            "The LSE account has hit its request limit (HTTP 429). The key is valid; "
+            "the tape stays empty until the quota resets."
+        ),
+        "provider_cooldown": (
+            "The LSE provider is in a failure cooldown after a rejected or throttled request. "
+            "The key is configured; the tape stays empty until the cooldown clears."
+        ),
+        "provider_error": (
+            f"The market-wide provider request failed (HTTP {http_status})."
+        ),
+        "no_prints": (
+            "The market-wide provider request completed but no prints cleared the premium threshold."
+        ),
+    }
     feed_reason = (
         None
         if feed_status == "live"
-        else "LSE_API_KEY is not configured. The market-wide tape is unavailable; rows and prints stay empty."
-        if feed_status == "credential_missing"
-        else "The market-wide provider request completed but no prints cleared the premium threshold."
-        if feed_status == "no_prints"
-        else "The market-wide provider request did not complete."
+        else _FEED_REASONS.get(feed_status, "The market-wide provider request did not complete.")
     )
     provider_asof = max(
         (str(row.get("live_asof") or "") for row in board),
@@ -821,6 +863,14 @@ def build_unusual_options_flow(
             "provider_requests_completed": request_completed,
             "provider_prints": provider_prints,
             "observed_symbols": observed_symbols,
+            # "iso" is the live cross-symbol window; "vault" is the unmetered
+            # legacy route the adapter falls back to when /iso is quota- or
+            # entitlement-blocked. A thin tape means different things on each.
+            **(
+                {"provider_route": str(coverage.get("provider_route"))}
+                if coverage.get("provider_route")
+                else {}
+            ),
         },
         "warnings": warnings,
         "min_premium": min_premium,

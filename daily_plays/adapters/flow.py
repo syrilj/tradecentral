@@ -103,6 +103,56 @@ def _bounded_call(call: Callable[[], Any], *, timeout_seconds: float) -> Any:
     return result.get("value")
 
 
+LSE_VAULT_FLOW_URL = "https://api.londonstrategicedge.com/vault/options/flow"
+
+# /iso answers 402 once the monthly byte quota is spent and 403 when the key is
+# not entitled to the route family at all. Either way the tape is gone for days
+# or weeks, so every /iso read here ladders down to the unmetered vault the way
+# lse_provider.fetch_lse_options_flow() already does for single symbols. Without
+# the ladder the market-wide desk renders blank while a working route sits idle.
+_LSE_ISO_FALLBACK_STATUSES = frozenset({401, 402, 403, 404, 405, 429})
+
+
+def _flow_rows(url: str, params: Mapping[str, Any], api_key: str, timeout: float) -> list[Any]:
+    """One provider read that insists on a JSON list."""
+    import requests
+
+    response = requests.get(
+        url,
+        headers={"x-api-key": api_key, "Accept": "application/json"},
+        params=dict(params),
+        timeout=max(1.0, float(timeout)),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError("flow_invalid_payload")
+    return payload
+
+
+def _provider_status(exc: BaseException) -> int | None:
+    """HTTP status behind a provider exception, when the exception carries one."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_failure_warning(prefix: str, exc: BaseException) -> str:
+    """Name the provider failure precisely instead of collapsing it to a type.
+
+    A bare ``HTTPError`` hides the difference between "your key is wrong"
+    (401/403) and "you burned the daily request budget" (429) -- both render
+    as an empty tape, and the operator has no way to tell which one to fix.
+    """
+    status = _provider_status(exc)
+    if status is not None:
+        return f"{prefix}:http_{status}"
+    return f"{prefix}:{type(exc).__name__}"
+
+
 def load_live_forward_flow(symbol: str, *, timeout_seconds: float = FLOW_TIMEOUT_SECONDS,
                            min_premium: float = 50_000.0,
                            fetcher: Callable[..., Any] | None = None, **_: Any) -> Mapping[str, Any]:
@@ -425,7 +475,12 @@ def load_symbol_flow_tape(
 
             api_key = get_api_key()
             if not api_key:
-                return {**empty, "warnings": ["flow_lse_credential_missing"]}
+                # LSE_API_KEY passed the env check above, so a None key here is
+                # lse_provider's own circuit breaker holding the call down after
+                # a 429/5xx -- not a missing credential. Reporting it as
+                # "credential missing" sends the operator to fix a config that
+                # is already correct.
+                return {**empty, "warnings": ["flow_lse_provider_cooldown"]}
 
             def fetcher(
                 *,
@@ -451,17 +506,27 @@ def load_symbol_flow_tape(
                     clauses.append(f"ts.lte.{u_val}")
                 if clauses:
                     params["and"] = f"({','.join(clauses)})"
-                response = requests.get(
-                    f"{LSE_ISO_BASE}/x_options_flow",
-                    headers={"x-api-key": api_key, "Accept": "application/json"},
-                    params=params,
-                    timeout=max(1.0, float(timeout)),
+                try:
+                    return _flow_rows(
+                        f"{LSE_ISO_BASE}/x_options_flow", params, api_key, timeout
+                    )
+                except Exception as exc:
+                    if _provider_status(exc) not in _LSE_ISO_FALLBACK_STATUSES:
+                        raise
+                # The vault holds no time filter, so pull the newest prints and
+                # let the caller's window filter trim them. Ascending is the
+                # vault default and would return the oldest prints it holds.
+                return _flow_rows(
+                    LSE_VAULT_FLOW_URL,
+                    {
+                        "underlying": symbol,
+                        "min_premium": str(max(0.0, float(min_premium))),
+                        "order": "desc",
+                        "limit": str(max(1, min(int(limit), 2_000))),
+                    },
+                    api_key,
+                    timeout,
                 )
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, list):
-                    raise ValueError("flow_symbol_invalid_payload")
-                return payload
 
         fetched = _bounded_call(
             lambda: fetcher(
@@ -477,7 +542,7 @@ def load_symbol_flow_tape(
     except TimeoutError:
         return {**empty, "warnings": ["flow_timeout"]}
     except Exception as exc:
-        return {**empty, "warnings": [f"flow_unavailable:{type(exc).__name__}"]}
+        return {**empty, "warnings": [_provider_failure_warning("flow_unavailable", exc)]}
 
     raw_rows = [dict(row) for row in fetched or [] if isinstance(row, Mapping)]
     normalized = normalize_flow_payload({
@@ -535,6 +600,11 @@ def load_market_flow_activity(
     if not os.getenv("LSE_API_KEY") and fetcher is None:
         return {**empty, "warnings": ["flow_lse_credential_missing"]}
 
+    # Which provider route actually served the tape. An operator staring at a
+    # thin tape needs to know it came off the vault fallback, not the live ISO
+    # window, before reading anything into the print count.
+    route: dict[str, str] = {}
+
     try:
         if fetcher is None:
             source = Path(__file__).resolve().parents[3] / "TradingWork" / "src"
@@ -545,27 +615,50 @@ def load_market_flow_activity(
 
             api_key = get_api_key()
             if not api_key:
-                return {**empty, "warnings": ["flow_lse_credential_missing"]}
+                # LSE_API_KEY passed the env check above, so a None key here is
+                # lse_provider's own circuit breaker holding the call down after
+                # a 429/5xx -- not a missing credential. Reporting it as
+                # "credential missing" sends the operator to fix a config that
+                # is already correct.
+                return {**empty, "warnings": ["flow_lse_provider_cooldown"]}
 
             def fetcher(*, min_premium: float, limit: int, timeout: float) -> Any:
-                params: dict[str, str] = {
-                    "premium": f"gte.{max(0.0, float(min_premium))}",
-                    "order": "ts.desc",
-                    "limit": str(max(1, min(int(limit), 2_000))),
-                }
-                if allowed_symbols and len(allowed_symbols) == 1:
-                    params["underlying"] = f"eq.{next(iter(allowed_symbols))}"
-                response = requests.get(
-                    f"{LSE_ISO_BASE}/x_options_flow",
-                    headers={"x-api-key": api_key, "Accept": "application/json"},
-                    params=params,
-                    timeout=max(1.0, float(timeout)),
+                capped = max(1, min(int(limit), 2_000))
+                floor = max(0.0, float(min_premium))
+                single = (
+                    next(iter(allowed_symbols))
+                    if allowed_symbols and len(allowed_symbols) == 1
+                    else None
                 )
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, list):
-                    raise ValueError("flow_market_invalid_payload")
-                return payload
+                iso_params: dict[str, str] = {
+                    "premium": f"gte.{floor}",
+                    "order": "ts.desc",
+                    "limit": str(capped),
+                }
+                if single:
+                    iso_params["underlying"] = f"eq.{single}"
+                try:
+                    rows = _flow_rows(
+                        f"{LSE_ISO_BASE}/x_options_flow", iso_params, api_key, timeout
+                    )
+                    route["served_by"] = "iso"
+                    return rows
+                except Exception as exc:
+                    if _provider_status(exc) not in _LSE_ISO_FALLBACK_STATUSES:
+                        raise
+                # The vault speaks plain params, not PostgREST filters, and
+                # defaults to ascending -- an unordered pull returns the oldest
+                # prints it holds, which reads as a dead tape on a live desk.
+                vault_params: dict[str, str] = {
+                    "min_premium": str(floor),
+                    "order": "desc",
+                    "limit": str(capped),
+                }
+                if single:
+                    vault_params["underlying"] = single
+                rows = _flow_rows(LSE_VAULT_FLOW_URL, vault_params, api_key, timeout)
+                route["served_by"] = "vault"
+                return rows
 
         fetched = _bounded_call(
             lambda: fetcher(
@@ -585,7 +678,7 @@ def load_market_flow_activity(
             return {**empty, "warnings": ["flow_market_timeout"]}
         if "credential" in msg or "lse_api_key" in msg:
             return {**empty, "warnings": ["flow_lse_credential_missing"]}
-        return {**empty, "warnings": [f"flow_market_unavailable:{type(exc).__name__}"]}
+        return {**empty, "warnings": [_provider_failure_warning("flow_market_unavailable", exc)]}
 
     _clear_lse_timeout_streak()
     raw_rows = [dict(row) for row in fetched or [] if isinstance(row, Mapping)]
@@ -623,7 +716,13 @@ def load_market_flow_activity(
             "provider_prints": len(raw_rows),
             "observed_symbols": len(grouped),
             "with_activity": len(rows),
+            # Only present when a real provider route served; an injected
+            # fetcher leaves the coverage contract exactly as it was.
+            **({"provider_route": route["served_by"]} if route.get("served_by") else {}),
         },
+        # A successful vault read is not a warning -- flagging it as one would
+        # make a working desk render degraded, and downstream gates treat any
+        # warning as a reason to withhold. The route lives in coverage instead.
         "warnings": [],
     }
 

@@ -68,6 +68,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/MacroView.vue'),
     meta: { title: 'Macro', index: '04' },
   },
+  {
+    path: '/crypto',
+    name: 'crypto',
+    component: () => import('@/views/CryptoView.vue'),
+    meta: { title: 'Crypto', index: '07' },
+  },
   /* Legacy path — structure + outliers now live on /sentiment */
   {
     path: '/anomalies',

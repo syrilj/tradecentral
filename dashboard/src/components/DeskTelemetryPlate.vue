@@ -181,15 +181,15 @@ const netLabel = computed(() => (netPositive.value ? 'LONG Γ · DAMPENED' : 'SH
    chrome — the same token family as the navy evidence band (band-dark), so
    the two dark surfaces on the page read as one system. */
 .desk-plate {
-  --dp-bg: #10111d;
-  --dp-panel: #171827;
+  --dp-bg: var(--panel);
+  --dp-panel: var(--panel-hi);
   --dp-rule: rgba(250, 250, 244, 0.12);
-  --dp-ink: #eaeaf0;
-  --dp-dim: #b7b7c4;
-  --dp-faint: #8a8a98;
-  --dp-call: #4ade80;
-  --dp-put: #ff7a70;
-  --dp-flip: #ffaf01;
+  --dp-ink: var(--ink);
+  --dp-dim: var(--ink-soft);
+  --dp-faint: var(--ink-faint);
+  --dp-call: var(--long);
+  --dp-put: var(--no-go);
+  --dp-flip: var(--warn);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -215,7 +215,7 @@ const netLabel = computed(() => (netPositive.value ? 'LONG Γ · DAMPENED' : 'SH
   border-left: 0;
 }
 .k-label {
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dp-faint);
@@ -227,7 +227,7 @@ const netLabel = computed(() => (netPositive.value ? 'LONG Γ · DAMPENED' : 'SH
   white-space: nowrap;
 }
 .k-sub {
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.06em;
   color: var(--dp-faint);
 }
@@ -262,7 +262,7 @@ const netLabel = computed(() => (netPositive.value ? 'LONG Γ · DAMPENED' : 'SH
   color: var(--dp-dim);
 }
 .z-meta {
-  font-size: 9px;
+  font-size: var(--t-nano);
   letter-spacing: 0.08em;
   color: var(--dp-faint);
 }
@@ -277,7 +277,7 @@ svg {
 }
 .zone-label {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   letter-spacing: 0.1em;
   fill: var(--dp-put);
   opacity: 0.85;
@@ -319,7 +319,7 @@ svg {
 }
 .mk-label {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -337,7 +337,7 @@ svg {
 }
 .axis-label {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: var(--t-nano);
   fill: var(--dp-faint);
 }
 
@@ -372,7 +372,7 @@ svg {
 }
 .rr-math {
   margin-left: auto;
-  font-size: 9px;
+  font-size: var(--t-nano);
   color: var(--dp-faint);
   white-space: nowrap;
 }
