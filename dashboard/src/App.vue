@@ -254,6 +254,13 @@ const primaryNav = [
     icon: 'flow',
     tab: true,
   },
+    {
+      name: 'vpa',
+      title: 'VPA',
+      hint: 'Volume Price Analysis',
+      icon: 'vpa',
+      tab: true,
+    },
   {
     name: 'options',
     title: 'Options',
@@ -404,13 +411,6 @@ const macroTools = [
     title: 'Macro',
     hint: 'Cross-asset regime board',
     icon: 'globe',
-  },
-  {
-    name: 'vpa',
-    idx: 'V1',
-    title: 'VPA',
-    hint: 'Volume Price Analysis',
-    icon: 'vpa',
   },
   {
     name: 'amt',
