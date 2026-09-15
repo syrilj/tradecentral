@@ -50,6 +50,8 @@ describe('Crypto workspace navigation', () => {
     expect(namesIn(primary)).toEqual([
       'brief',
       'flow',
+      'vpa',
+      'reversal',
       'options',
       'regime',
       'suggest',
@@ -58,8 +60,9 @@ describe('Crypto workspace navigation', () => {
       'chain',
       'market',
       'crypto',
+      'voltrend',
     ])
-    expect(namesIn(primary)).toHaveLength(10)
+    expect(namesIn(primary)).toHaveLength(13)
     expect(namesIn(desk)).toHaveLength(3)
     expect(namesIn(market)).toHaveLength(6)
     expect(namesIn(research)).toHaveLength(8)

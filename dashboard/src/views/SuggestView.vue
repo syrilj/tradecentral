@@ -10,10 +10,13 @@ import HelpTip from '@/components/HelpTip.vue'
 import SetupRiskPanel from '@/components/SetupRiskPanel.vue'
 import { DASH, num, shortDate, signed } from '@/format'
 import {
+  compactPriceList,
   freshnessLabel,
-  formatSetupLevel,
-  formatSupportLevels,
+  formatPriceList,
+  formatSetupPrice,
   formatTakeProfitZones,
+  gexMagnetCopy,
+  levelSourceImplication,
   levelSourceLabel,
   missingSourcesCopy,
   presentSetupRows,
@@ -60,6 +63,10 @@ const emptyReason = computed(
 )
 
 const coverage = computed(() => presented.value.coverage)
+const flowTapeUnmeasured = computed(() => {
+  const cov = feed.data.value?.coverage
+  return Boolean(cov && cov.flow_symbols === 0 && (cov.union_symbols ?? 0) > 0)
+})
 const qlibPublished = computed(() => feed.data.value?.sources?.qlib?.published === true)
 const marketSession = computed(() => sharedMarketClock?.data.value?.market_session ?? null)
 const planningMode = computed(() =>
@@ -134,7 +141,7 @@ function suggestionOf(row: LiveOpportunityRow): FlowSuggestion | null {
 function freshnessCopy(row: LiveOpportunityRow): string {
   if (row.freshness?.pass) return 'LIVE'
   return planningMode.value
-    ? 'CLOSED SNAPSHOT'
+    ? 'CLOSED'
     : freshnessLabel(row.freshness?.status, row.freshness?.pass)
 }
 
@@ -142,7 +149,11 @@ function actionCopy(row: LiveOpportunityRow): string {
   const suggestion = suggestionOf(row)
   if (row.live_ready) return 'READY'
   if (suggestion?.paper_actionable) return `PAPER BUY ${String(suggestion.right).toUpperCase()}`
-  return suggestion?.contract_plan?.action?.replaceAll('_', ' ') || 'WAIT'
+  const action = String(suggestion?.contract_plan?.action || '')
+  if (action === 'WAIT_FOR_LIVE_QUOTE') return 'WAIT QUOTE'
+  if (action === 'WAIT_FOR_STABILITY') return 'WAIT STABLE'
+  if (action === 'REVIEW_FLOW_PRINT') return 'REVIEW FLOW'
+  return action.replaceAll('_', ' ') || 'WAIT'
 }
 
 function filterCopy(mode: RightFilter): string {
@@ -160,11 +171,26 @@ function rightTone(right: string | null | undefined): 'call' | 'put' | 'flat' | 
 }
 
 function strikeHeadline(row: FlowSuggestion | null | undefined): string {
-  return formatSetupLevel(row?.strike ?? row?.contract_plan?.strike, row?.strike_source)
+  return formatSetupPrice(row?.strike ?? row?.contract_plan?.strike)
+}
+
+function strikeSourceCopy(row: FlowSuggestion | null | undefined): string {
+  const source = row?.strike_source
+    ? levelSourceLabel(row.strike_source)
+    : row?.contract_plan?.strike == null
+      ? 'not supplied'
+      : 'positions'
+  const implication = levelSourceImplication(
+    row?.strike_source ?? (source === 'positions' ? 'positions' : null),
+    'strike',
+    row?.right,
+  )
+  if (!implication || source === 'not supplied') return source
+  return `${source} · ${implication}`
 }
 
 function supportsHeadline(row: FlowSuggestion | null | undefined): string {
-  return formatSupportLevels(row?.supports)
+  return formatPriceList(row?.supports)
 }
 
 function invalidationHeadline(row: FlowSuggestion | null | undefined): {
@@ -177,16 +203,32 @@ function invalidationHeadline(row: FlowSuggestion | null | undefined): {
     planInvalidation: row?.plan_invalidation,
     planInvalidationSource: row?.plan_invalidation_source,
   })
+  const source = mark.source ? levelSourceLabel(mark.source) : 'not supplied'
+  const implication = levelSourceImplication(mark.source, 'invalidation', row?.right)
   return {
-    value: mark.price == null ? DASH : num(mark.price, 2),
-    sub: mark.source ? levelSourceLabel(mark.source) : 'not supplied',
+    value: formatSetupPrice(mark.price),
+    sub: implication ? `${source} · ${implication}` : source,
   }
 }
 
 function takeProfitHeadline(row: FlowSuggestion | null | undefined): string {
-  const zones = formatTakeProfitZones(row?.take_profit_zones)
+  const zones = formatPriceList(row?.take_profit_zones)
   if (zones !== DASH) return zones
-  return formatSetupLevel(row?.plan_target, row?.plan_target_source)
+  return formatSetupPrice(row?.plan_target)
+}
+
+function tableTakeProfit(row: FlowSuggestion | null | undefined): string {
+  const compact = compactPriceList(row?.take_profit_zones)
+  if (compact !== DASH) return compact
+  return formatSetupPrice(row?.plan_target)
+}
+
+function tableInvalidation(row: FlowSuggestion | null | undefined): string {
+  return invalidationHeadline(row).value
+}
+
+function tableScore(row: FlowSuggestion | null | undefined): string {
+  return row?.review_score == null ? DASH : unmeasured(row.review_score)
 }
 
 function completenessCopy(row: LiveOpportunityRow | null | undefined): string {
@@ -289,6 +331,14 @@ const meta = computed(() => {
           authorization stay off until a current regular-session chain clears every gate.
         </p>
       </div>
+      <div v-if="flowTapeUnmeasured" class="planning-strip flow-missing">
+        <span class="label">Flow tape unmeasured</span>
+        <p>
+          The market-wide options tape returned no rows. CALL/PUT plans that come from flow stay
+          off this board until that tape is available. Board structure names remain; use All to
+          see them.
+        </p>
+      </div>
 
       <div class="toolbar">
         <div class="filter-tabs">
@@ -324,11 +374,11 @@ const meta = computed(() => {
                 <th class="label">Right</th>
                 <th class="label num">Strike</th>
                 <th class="label num">Spot</th>
-                <th class="label">Take profit</th>
-                <th class="label">Qlib</th>
+                <th class="label num">Inv</th>
+                <th class="label num">TP</th>
+                <th class="label num">Score</th>
                 <th class="label">Data</th>
                 <th class="label">Action</th>
-                <th class="label">Evidence stability</th>
               </tr>
             </thead>
             <tbody>
@@ -342,9 +392,24 @@ const meta = computed(() => {
                 @click="selectRow(row.symbol)"
               >
                 <td class="row-select-cell">
-  <button type="button" class="row-select-btn" @click.stop="selectRow(row.symbol)"><span class="sr-only">Select row</span></button>
+                  <button
+                    type="button"
+                    class="row-select-btn"
+                    @click.stop="selectRow(row.symbol)"
+                  >
+                    <span class="sr-only">Select {{ row.symbol }}</span>
+                  </button>
                   <span class="fig sym">{{ row.symbol }}</span>
                   <span class="basis label">{{ row.signal_basis }}</span>
+                  <span
+                    class="stability label"
+                    :class="{
+                      stable: suggestionOf(row)?.direction_stable,
+                      churned: suggestionOf(row)?.direction_churned,
+                    }"
+                  >
+                    {{ suggestionStabilityCopy(suggestionOf(row)) }}
+                  </span>
                 </td>
                 <td>
                   <span
@@ -354,22 +419,18 @@ const meta = computed(() => {
                     {{ suggestedRightLabel(suggestionOf(row)?.right) }}
                   </span>
                 </td>
-                <td class="fig num">
-                  {{
-                    suggestionOf(row)?.strike == null &&
-                    suggestionOf(row)?.contract_plan?.strike == null
-                      ? DASH
-                      : num(
-                          suggestionOf(row)?.strike ?? suggestionOf(row)?.contract_plan?.strike,
-                          2,
-                        )
-                  }}
-                </td>
+                <td class="fig num">{{ strikeHeadline(suggestionOf(row)) }}</td>
                 <td class="fig num">
                   {{ suggestionOf(row)?.spot == null ? DASH : num(suggestionOf(row)?.spot, 2) }}
                 </td>
-                <td class="fig sell">{{ takeProfitHeadline(suggestionOf(row)) }}</td>
-                <td class="fig">{{ qlibAlignmentLabel(suggestionOf(row)?.qlib.alignment) }}</td>
+                <td class="fig num">{{ tableInvalidation(suggestionOf(row)) }}</td>
+                <td
+                  class="fig num sell"
+                  :title="formatTakeProfitZones(suggestionOf(row)?.take_profit_zones)"
+                >
+                  {{ tableTakeProfit(suggestionOf(row)) }}
+                </td>
+                <td class="fig num">{{ tableScore(suggestionOf(row)) }}</td>
                 <td>
                   <span class="fresh label" :class="row.freshness?.pass ? 'ok' : 'stale'">
                     {{ freshnessCopy(row) }}
@@ -377,20 +438,12 @@ const meta = computed(() => {
                 </td>
                 <td>
                   <span
-                    class="action-chip label"
+                    class="action-chip label wraps"
                     :class="{ paper: suggestionOf(row)?.paper_actionable, ready: row.live_ready }"
+                    :title="suggestionOf(row)?.contract_plan?.action?.replaceAll('_', ' ') || actionCopy(row)"
                   >
                     {{ actionCopy(row) }}
                   </span>
-                </td>
-                <td
-                  class="label stability"
-                  :class="{
-                    stable: suggestionOf(row)?.direction_stable,
-                    churned: suggestionOf(row)?.direction_churned,
-                  }"
-                >
-                  {{ suggestionStabilityCopy(suggestionOf(row)) }}
                 </td>
               </tr>
             </tbody>
@@ -414,7 +467,7 @@ const meta = computed(() => {
           <p v-else class="reason mute">
             Suggested from {{ active.playbook?.direction_source || 'price/model context' }}.
           </p>
-          <p v-if="suggestion.bias_right && !suggestion.bias_confirmed" class="bias-watch label">
+          <p v-if="suggestion.bias_right && !suggestion.bias_confirmed" class="bias-watch label wraps">
             UNSIGNED {{ suggestion.bias_right.toUpperCase() }} BIAS · PAPER CANDIDATE · SIZING
             LOCKED
           </p>
@@ -427,7 +480,7 @@ const meta = computed(() => {
             >
           </div>
           <p
-            class="stability-banner label"
+            class="stability-banner label wraps"
             :class="{ stable: suggestion.direction_stable, churned: suggestion.direction_churned }"
           >
             {{ suggestionStabilityCopy(suggestion) }} · REVIEW SCORE
@@ -442,7 +495,7 @@ const meta = computed(() => {
               uncalibrated: !active.confidence?.is_high,
             }"
           >
-            <span class="label">{{ completenessCopy(active) }}</span>
+            <span class="label wraps">{{ completenessCopy(active) }}</span>
             <strong class="fig">{{ active.confidence?.band || 'UNCALIBRATED' }}</strong>
             <small>
               {{
@@ -460,14 +513,7 @@ const meta = computed(() => {
             <Readout
               label="Strike"
               :value="strikeHeadline(suggestion)"
-              :sub="
-                suggestion.strike_source
-                  ? levelSourceLabel(suggestion.strike_source)
-                  : suggestion.contract_plan?.strike == null
-                    ? 'not supplied'
-                    : 'positions'
-              "
-              size="lg"
+              :sub="strikeSourceCopy(suggestion)"
               wrap
             />
             <Readout
@@ -475,7 +521,6 @@ const meta = computed(() => {
               :value="supportsHeadline(suggestion)"
               :sub="suggestion.supports?.length ? 'Watch these supports' : 'not supplied'"
               tone="flat"
-              size="lg"
               wrap
             />
             <Readout
@@ -483,6 +528,7 @@ const meta = computed(() => {
               :value="invalidationHeadline(suggestion).value"
               :sub="invalidationHeadline(suggestion).sub"
               tone="flat"
+              wrap
             />
             <Readout
               label="Take profit zones"
@@ -491,23 +537,43 @@ const meta = computed(() => {
                 suggestion.take_profit_zones?.length ? 'Labeled zones, not a blend' : 'not supplied'
               "
               :tone="rightTone(suggestion.right)"
-              size="lg"
               wrap
             />
           </div>
 
-          <dl class="facts">
+          <ol v-if="suggestion.supports?.length" class="mark-list">
+            <li v-for="(mark, index) in suggestion.supports" :key="`support-${index}`">
+              <span class="fig">{{ formatSetupPrice(mark.price) }}</span>
+              <span class="src label">{{ levelSourceLabel(mark.source) }}</span>
+              <span class="why">{{
+                levelSourceImplication(mark.source, 'support', suggestion.right)
+              }}</span>
+            </li>
+          </ol>
+          <ol v-if="suggestion.take_profit_zones?.length" class="mark-list harvest">
+            <li v-for="(mark, index) in suggestion.take_profit_zones" :key="`tp-${index}`">
+              <span class="fig">{{ formatSetupPrice(mark.price) }}</span>
+              <span class="src label">{{ levelSourceLabel(mark.source) }}</span>
+              <span class="why">{{
+                levelSourceImplication(mark.source, 'take_profit', suggestion.right)
+              }}</span>
+            </li>
+          </ol>
+
+          <dl class="facts magnets">
             <div>
               <dt class="label">Call wall</dt>
               <dd class="fig">
                 {{ active.barriers?.call_wall == null ? DASH : num(active.barriers.call_wall, 2) }}
               </dd>
+              <small>{{ gexMagnetCopy('call_wall', suggestion.right) }}</small>
             </div>
             <div>
               <dt class="label">Put wall</dt>
               <dd class="fig">
                 {{ active.barriers?.put_wall == null ? DASH : num(active.barriers.put_wall, 2) }}
               </dd>
+              <small>{{ gexMagnetCopy('put_wall', suggestion.right) }}</small>
             </div>
             <div>
               <dt class="label">Qlib score</dt>
@@ -524,6 +590,7 @@ const meta = computed(() => {
                     : `${suggestion.qlib.rank} / ${unmeasured(suggestion.qlib.n_symbols)}`
                 }}
               </dd>
+              <small>{{ qlibAlignmentLabel(suggestion.qlib.alignment) }}</small>
             </div>
           </dl>
 
@@ -728,6 +795,7 @@ const meta = computed(() => {
 
 .page-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: var(--s4);
   align-items: flex-start;
@@ -736,6 +804,12 @@ const meta = computed(() => {
   border-radius: var(--r-md);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   background: var(--panel);
+}
+
+.title-block {
+  flex: 1 1 20rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .title-block h1 {
@@ -761,6 +835,7 @@ const meta = computed(() => {
 .scope-stack {
   display: flex;
   flex-wrap: wrap;
+  flex: 0 1 auto;
   gap: var(--s2);
   justify-content: flex-end;
 }
@@ -816,6 +891,11 @@ const meta = computed(() => {
   margin: 0;
   color: var(--ink-dim);
   font-size: var(--t-tiny);
+}
+.planning-strip.flow-missing {
+  color: var(--warn);
+  border-bottom-color: var(--warn);
+  background: var(--warn-wash);
 }
 
 .toolbar {
@@ -873,31 +953,51 @@ const meta = computed(() => {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
-  min-height: 420px;
+  grid-template-columns: minmax(0, 1.75fr) minmax(20rem, 24rem);
+  align-items: stretch;
+  min-height: 28rem;
 }
 
 .table-wrap {
   overflow: auto;
-  max-height: 640px;
+  min-width: 0;
+  min-height: 16rem;
+  max-height: min(60vh, 40rem);
 }
 
 .grid {
   width: 100%;
-  border-collapse: collapse;
+  min-width: 42rem;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .grid th,
 .grid td {
-  padding: 7px 10px;
+  padding: 6px 8px;
   border-bottom: var(--hair) solid var(--rule-faint);
   text-align: left;
   font-size: var(--t-small);
+  white-space: nowrap;
+  vertical-align: top;
+  overflow: hidden;
+}
+
+.grid th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
+  box-shadow: inset 0 -1px 0 var(--rule);
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
 }
 
 .grid th.num,
 .grid td.num {
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .grid tbody tr {
@@ -915,11 +1015,16 @@ const meta = computed(() => {
 }
 
 .sym {
+  display: block;
   font-weight: 700;
-  margin-right: 8px;
 }
-.basis {
+.basis,
+.row-select-cell .stability {
+  display: block;
   color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.3;
+  white-space: normal;
 }
 
 .right-chip {
@@ -958,10 +1063,13 @@ const meta = computed(() => {
 }
 .action-chip {
   display: inline-block;
+  max-width: 100%;
   padding: 2px 7px;
   color: var(--ink-faint);
   border: var(--hair) solid var(--rule-hi);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .action-chip.paper {
   color: var(--call-hi);
@@ -990,6 +1098,8 @@ const meta = computed(() => {
   display: flex;
   flex-direction: column;
   gap: var(--s3);
+  min-height: 0;
+  overflow: auto;
   background: var(--void-lift);
 }
 
@@ -1109,6 +1219,37 @@ const meta = computed(() => {
   grid-template-columns: 1fr 1fr;
 }
 
+.mark-list {
+  display: grid;
+  gap: var(--s2);
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  list-style: none;
+  border: var(--hair) solid var(--rule);
+  background: var(--panel);
+}
+.mark-list.harvest {
+  border-color: color-mix(in srgb, var(--call) 35%, var(--rule));
+}
+.mark-list li {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(6rem, auto) minmax(0, 1fr);
+  gap: var(--s2);
+  align-items: baseline;
+}
+.mark-list .fig {
+  font-variant-numeric: tabular-nums;
+}
+.mark-list .src {
+  color: var(--ink-dim);
+}
+.mark-list .why {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.35;
+  white-space: normal;
+}
+
 .facts {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1121,6 +1262,14 @@ const meta = computed(() => {
 }
 .facts dd {
   margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.facts small {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.35;
 }
 
 .contract-reference {
@@ -1178,17 +1327,23 @@ const meta = computed(() => {
 }
 .contract-numbers {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1fr 1fr;
   border: var(--hair) solid var(--rule);
 }
 .contract-numbers span {
   padding: var(--s2);
   color: var(--ink-soft);
   font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
   border-right: var(--hair) solid var(--rule);
+  border-bottom: var(--hair) solid var(--rule);
 }
+.contract-numbers span:nth-child(2n),
 .contract-numbers span:last-child {
   border-right: 0;
+}
+.contract-numbers span:nth-last-child(-n + 2) {
+  border-bottom: 0;
 }
 /* Quote captions ("Delayed midpoint") are wider than a quarter cell — wrap
    rather than inherit the .label ellipsis and lose the "delayed" qualifier. */
@@ -1260,19 +1415,31 @@ const meta = computed(() => {
 @media (max-width: 980px) {
   .workspace {
     grid-template-columns: 1fr;
+    height: auto;
+  }
+  .table-wrap {
+    max-height: 28rem;
   }
   .detail {
     border-left: 0;
     border-top: var(--hair) solid var(--rule);
+    max-height: 40rem;
   }
   .readout-grid {
     grid-template-columns: 1fr 1fr;
   }
-  .contract-numbers {
-    grid-template-columns: 1fr 1fr;
+  .mark-list li {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
   .page-head {
     flex-direction: column;
+  }
+  .title-block {
+    flex: 0 1 auto;
+  }
+  .scope-stack {
+    justify-content: flex-start;
   }
 }
 </style>

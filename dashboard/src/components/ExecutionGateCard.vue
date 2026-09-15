@@ -185,10 +185,10 @@ const expiryLabel = computed(() => {
   gap: var(--s1);
 }
 .gate-row.ok {
-  border-left: 2px solid var(--long);
+  border-color: var(--long-dim, var(--long));
 }
 .gate-row.blocked {
-  border-left: 2px solid var(--short);
+  border-color: var(--short-dim, var(--short));
 }
 .gate-head {
   display: flex;

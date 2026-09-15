@@ -294,6 +294,7 @@ const chartCaption = computed(() => {
   box-sizing: border-box;
   overflow: hidden;
   min-width: 0;
+  height: 100%;
 }
 
 .card-header {

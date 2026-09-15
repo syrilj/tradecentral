@@ -140,15 +140,19 @@ function getCellColorClass(val: number): string {
   flex-direction: column;
   gap: var(--s3);
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
 }
 
 .agreement-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: var(--s3);
   padding-bottom: var(--s2);
   border-bottom: var(--hair) solid var(--rule);
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .score-block {
@@ -174,6 +178,8 @@ function getCellColorClass(val: number): string {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+  flex: 1 1 220px;
 }
 
 .tag-row {
@@ -211,17 +217,18 @@ function getCellColorClass(val: number): string {
 }
 
 .matrix-table-wrapper {
-  overflow-x: auto;
+  overflow: auto;
   padding: 2px 0;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
 .matrix-table {
   width: 100%;
-  height: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.75rem;
 }
@@ -231,10 +238,11 @@ function getCellColorClass(val: number): string {
   font-family: var(--font-ui);
   color: var(--ink-dim);
   font-weight: 600;
-  font-size: 0.75rem;
-  padding: 6px 8px;
+  font-size: 0.6875rem;
+  padding: 5px 4px;
   text-align: center;
   letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
 }
 
 .row-th {
@@ -243,7 +251,7 @@ function getCellColorClass(val: number): string {
 
 .mat-cell {
   text-align: center;
-  padding: 7px 6px;
+  padding: 6px 4px;
   border: var(--hair) solid var(--rule);
   color: var(--ink);
   font-size: 0.75rem;

@@ -5,10 +5,15 @@ import { fileURLToPath } from 'node:url'
 import { DASH, signedPct } from '@/format'
 import {
   UNMEASURED,
+  compactPriceList,
   freshnessLabel,
+  formatPriceList,
   formatSetupLevel,
+  formatSetupPrice,
   formatSupportLevels,
   formatTakeProfitZones,
+  gexMagnetCopy,
+  levelSourceImplication,
   levelSourceLabel,
   presentSetupRows,
   qlibAlignmentLabel,
@@ -75,6 +80,25 @@ describe('suggest display helpers (shipped)', () => {
     expect(formatSupportLevels(null)).toBe(UNMEASURED)
     expect(formatTakeProfitZones([])).toBe(UNMEASURED)
     expect(levelSourceLabel(null)).toBe(UNMEASURED)
+  })
+
+  it('keeps prices and source tags in separate display helpers', () => {
+    expect(formatSetupPrice(490)).toBe('$490.00')
+    expect(formatSetupPrice(null)).toBe(UNMEASURED)
+    expect(formatPriceList([{ price: 505, source: 'positions' }, { price: 495, source: 'options GEX' }])).toBe(
+      '$505.00 · $495.00',
+    )
+    expect(compactPriceList([{ price: 510, source: 'options GEX' }, { price: 525, source: 'positions' }])).toBe(
+      '$510.00 +1',
+    )
+    expect(compactPriceList([{ price: 510, source: 'options GEX' }])).toBe('$510.00')
+    expect(levelSourceImplication('positions', 'strike', 'call')).toContain('Open-interest')
+    expect(levelSourceImplication('put_wall', 'invalidation', 'call')).toContain('long call is wrong')
+    expect(levelSourceImplication('options GEX', 'support', 'put')).toContain('harvest zone for a long put')
+    expect(levelSourceImplication('call_wall', 'take_profit', 'call')).toContain('harvest zone')
+    expect(gexMagnetCopy('call_wall', 'call')).toContain('take-profit magnet')
+    expect(gexMagnetCopy('put_wall', 'call')).toContain('Invalidation for a long call')
+    expect(gexMagnetCopy('put_wall', 'put')).toContain('take-profit magnet for a long put')
   })
 
   it('prints measured invalidation from the payload and stays unmeasured when only supports exist', () => {
@@ -304,6 +328,11 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
     expect(view).toContain('presentSetupRows')
     expect(view).not.toMatch(/limit:\s*40/)
     expect(view).toContain('formatTakeProfitZones')
+    expect(view).toContain('formatSetupPrice')
+    expect(view).toContain('gexMagnetCopy')
+    expect(view).not.toContain('formatSetupLevel')
+    expect(view).toContain('>Inv<')
+    expect(view).toContain('>Score<')
     expect(view).toContain('suggestedRightLabel')
     expect(view).toContain('label="Strike"')
     expect(view).toContain('label="Supports"')
@@ -322,6 +351,8 @@ describe('Setups tab is reachable without a private palette or order ticket', ()
     expect(view).toContain("filter = ref<RightFilter>('SETUPS')")
     expect(view).toContain("'NEEDS DATA'")
     expect(view).toContain('MARKET CLOSED · PLANNING')
+    expect(view).toContain('Flow tape unmeasured')
+    expect(view).toContain('flowTapeUnmeasured')
     expect(view).toContain('Why live entry is not ready')
     expect(view).toContain('PAPER ACTION · UNSIZED')
     expect(view).toContain('PAPER BUY')

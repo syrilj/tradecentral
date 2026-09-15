@@ -381,6 +381,17 @@ const distanceToFlipPct = computed<number | null>(() => {
 })
 
 /* ── range (dealer positioning) ────────────────────────────────────────── */
+/** Spot marker position on the flip ruler: 0 = 2%+ below flip, 50 = at flip,
+ *  100 = 2%+ above. Clamped so the marker never leaves the rail. */
+const flipRuler = computed(() => {
+  const s = spot.value
+  const f = micro.value?.gamma_flip
+  if (typeof s !== 'number' || typeof f !== 'number' || s <= 0) return null
+  const d = ((f - s) / s) * 100
+  const pos = 50 - Math.max(-2, Math.min(2, d)) * 25
+  return { d, pos }
+})
+
 const rangeRead = computed(() => {
   const m = micro.value
   if (!m || !measurable.value) return null
@@ -852,6 +863,26 @@ function openSymbol(sym: string): void {
         <template v-if="rangeRead">
           <strong class="range-title">{{ rangeRead.title }}</strong>
           <p class="range-body">{{ rangeRead.body }}</p>
+          <div
+            v-if="flipRuler && spot !== null && micro?.gamma_flip != null"
+            class="flip-ruler"
+            role="img"
+            :aria-label="`Spot ${num(spot, 2)} is ${Math.abs(flipRuler.d).toFixed(2)}% ${
+              flipRuler.d > 0 ? 'below' : 'above'
+            } the gamma flip at ${num(micro.gamma_flip, 2)}`"
+          >
+            <div class="flip-ruler-track">
+              <span class="flip-ruler-tick" />
+              <span class="flip-ruler-marker" :style="{ left: `${flipRuler.pos}%` }" />
+            </div>
+            <p class="flip-ruler-read label">
+              GAMMA FLIP {{ num(micro.gamma_flip, 2) }}
+              <span class="fig">
+                · SPOT {{ Math.abs(flipRuler.d).toFixed(2) }}%
+                {{ flipRuler.d > 0 ? 'BELOW' : 'ABOVE' }}
+              </span>
+            </p>
+          </div>
           <dl class="mini-figs">
             <div>
               <dt class="label">NET GEX</dt>
@@ -1728,6 +1759,47 @@ h1 {
   color: var(--text-secondary);
   font-size: var(--t-small);
   line-height: 1.5;
+}
+
+/* Spot-vs-flip ruler: center tick is the flip, marker is spot, clamped to
+   ±2%. Fills the dead middle of the card without inventing figures. */
+.flip-ruler {
+  margin-block-start: var(--s4);
+}
+
+.flip-ruler-track {
+  position: relative;
+  height: 3px;
+  background: var(--rule-faint);
+}
+
+.flip-ruler-tick {
+  position: absolute;
+  inset-block-start: -4px;
+  left: 50%;
+  width: 1px;
+  height: 11px;
+  background: var(--ink-dim);
+}
+
+.flip-ruler-marker {
+  position: absolute;
+  inset-block-start: -3px;
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  background: var(--phosphor);
+}
+
+.flip-ruler-read {
+  display: flex;
+  gap: var(--s2);
+  margin-block-start: var(--s2);
+  color: var(--ink-dim);
+}
+
+.flip-ruler-read .fig {
+  color: var(--ink-faint);
 }
 
 .mini-figs {

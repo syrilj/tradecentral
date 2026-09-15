@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { OptionsDirectionRead } from '@/optionsDirection'
 import type { OptionsSqueeze } from '@/api'
-import { num, optSignedGex, optUsd, pctFrac } from '@/format'
+import { DASH, num, optSignedGex, optUsd, pctFrac } from '@/format'
 
 const props = defineProps<{
   symbol: string
@@ -314,9 +314,9 @@ const structureRange = computed(() => {
   const flipPct = props.gammaFlip != null && props.gammaFlip > 0 ? toPct(props.gammaFlip) : null
 
   const putNearCall =
-    putWallPct != null && callWallPct != null && Math.abs(putWallPct - callWallPct) < 9
-  const flipNearPut = flipPct != null && putWallPct != null && Math.abs(flipPct - putWallPct) < 9
-  const flipNearCall = flipPct != null && callWallPct != null && Math.abs(flipPct - callWallPct) < 9
+    putWallPct != null && callWallPct != null && Math.abs(putWallPct - callWallPct) < 12
+  const flipNearPut = flipPct != null && putWallPct != null && Math.abs(flipPct - putWallPct) < 12
+  const flipNearCall = flipPct != null && callWallPct != null && Math.abs(flipPct - callWallPct) < 12
 
   const putTier = 1
   const callTier = putNearCall ? 2 : 1
@@ -536,7 +536,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
           >
             {{
               read.signedFlow == null
-                ? '+0.0%'
+                ? DASH
                 : `${read.signedFlow > 0 ? '+' : ''}${pctFrac(read.signedFlow, 1)}`
             }}
           </strong>
@@ -562,7 +562,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
           >
             {{
               read.momentum == null
-                ? '+0.00%'
+                ? DASH
                 : `${read.momentum > 0 ? '+' : ''}${pctFrac(read.momentum, 2)}`
             }}
           </strong>
@@ -571,7 +571,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
         <div class="evidence-cell activity" :class="read.activity">
           <span class="label">CONTRACT MIX</span>
           <strong class="fig">{{
-            read.callPct == null ? '0% C / 0% P' : `${read.callPct}% C / ${read.putPct}% P`
+            read.callPct == null ? DASH : `${read.callPct}% C / ${read.putPct}% P`
           }}</strong>
           <small class="label">NOT DIRECTION</small>
         </div>
@@ -690,7 +690,6 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
               <span class="marker-pill spot">
                 <span class="pill-label">SPOT</span>
                 <strong class="pill-val">{{ optUsd(spot) }}</strong>
-                <small class="you-are-here">you are here</small>
               </span>
             </div>
 
@@ -755,7 +754,6 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   flex-direction: column;
   min-height: 60px;
   border: var(--hair) solid var(--glass-border);
-  border-left: 2px solid var(--direction-tone);
   background: var(--glass-surface);
   backdrop-filter: var(--glass-blur-md);
   -webkit-backdrop-filter: var(--glass-blur-md);
@@ -1185,13 +1183,13 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .dealer-conflict {
   margin: 4px 0 0;
   padding: 4px 8px;
-  border-left: 2px solid var(--warn);
+  border: var(--hair) solid var(--warn);
   background: var(--warn-wash);
   color: var(--warn);
   font-size: var(--t-micro);
   line-height: 1.35;
   white-space: normal;
-  border-radius: 0 var(--r-xs, 2px) var(--r-xs, 2px) 0;
+  border-radius: var(--r-xs, 2px);
 }
 
 .regime-tag-badge {
@@ -1529,17 +1527,5 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   font-family: var(--font-data);
   opacity: 0.9;
   margin-left: 2px;
-}
-
-.you-are-here {
-  display: inline-block;
-  font-size: var(--t-nano);
-  color: var(--phosphor);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-family: var(--font-display);
-  text-transform: lowercase;
-  white-space: nowrap;
-  margin-left: 4px;
 }
 </style>

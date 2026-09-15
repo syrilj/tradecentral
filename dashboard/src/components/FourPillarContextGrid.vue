@@ -72,34 +72,55 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
         <span class="pillar-tag">PILLAR 01</span>
         <h3 class="pillar-name">TREND & PERSISTENCE</h3>
         <span class="pillar-badge" :class="`state-${trendState}`">
-          {{ trendMeasured ? trendState.replace(/_/g, ' ').toUpperCase() : isMeasuring ? 'MEASURING' : 'UNMEASURED' }}
+          {{
+            trendMeasured
+              ? trendState.replace(/_/g, ' ').toUpperCase()
+              : isMeasuring
+                ? 'MEASURING'
+                : 'UNMEASURED'
+          }}
         </span>
       </div>
       <div class="pillar-body">
         <template v-if="trendMeasured">
           <div class="metric-row">
-            <span class="m-label">Kalman Velocity Z</span>
+            <span class="m-label">Kinematic speed</span>
             <span
               class="m-val mono"
-              :class="{ 'c-pos': (kalmanZ ?? 0) > 0.5, 'c-neg': (kalmanZ ?? 0) < -0.5 }"
+              :class="{ 'c-pos': (kalmanV ?? 0) > 0, 'c-neg': (kalmanV ?? 0) < 0 }"
+            >
+              {{ kalmanV !== null ? signed(kalmanV, 4) : DASH }}
+            </span>
+          </div>
+          <div class="metric-row">
+            <span class="m-label">Speed vs history</span>
+            <span
+              class="m-val mono"
+              :class="{ 'c-warn': kalmanZ !== null && Math.abs(kalmanZ) >= 1.5 }"
             >
               {{ kalmanZ !== null ? `${signed(kalmanZ, 2)}σ` : DASH }}
             </span>
           </div>
           <div class="metric-row">
-            <span class="m-label">Kinematic Slope</span>
-            <span class="m-val mono">{{ kalmanV !== null ? signed(kalmanV, 4) : DASH }}</span>
-          </div>
-          <div class="metric-row">
             <span class="m-label">Persistence Index</span>
             <span class="m-val mono">
-              {{ trendPersistence !== null ? pctFrac(trendPersistence, 0) : DASH }}
+              {{
+                trendPersistence !== null
+                  ? trendPersistence > 1
+                    ? `${Math.round(trendPersistence)} bars`
+                    : pctFrac(trendPersistence, 0)
+                  : DASH
+              }}
             </span>
           </div>
         </template>
         <div v-else class="unmeasured-notice">
           <span class="unm-icon">◌</span>
-          <span class="unm-text">{{ isMeasuring ? MEASURING_TEXT : 'Price bar history insufficient to compute Kinematic Kalman filter.' }}</span>
+          <span class="unm-text">{{
+            isMeasuring
+              ? MEASURING_TEXT
+              : 'Price bar history insufficient to compute Kinematic Kalman filter.'
+          }}</span>
         </div>
       </div>
     </div>
@@ -110,7 +131,13 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
         <span class="pillar-tag">PILLAR 02</span>
         <h3 class="pillar-name">VOLATILITY ENVIRONMENT</h3>
         <span class="pillar-badge" :class="`state-${volState}`">
-          {{ volMeasured ? volState.replace(/_/g, ' ').toUpperCase() : isMeasuring ? 'MEASURING' : 'UNMEASURED' }}
+          {{
+            volMeasured
+              ? volState.replace(/_/g, ' ').toUpperCase()
+              : isMeasuring
+                ? 'MEASURING'
+                : 'UNMEASURED'
+          }}
         </span>
       </div>
       <div class="pillar-body">
@@ -132,7 +159,9 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
         </template>
         <div v-else class="unmeasured-notice">
           <span class="unm-icon">◌</span>
-          <span class="unm-text">{{ isMeasuring ? MEASURING_TEXT : 'Historical volatility distribution unavailable.' }}</span>
+          <span class="unm-text">{{
+            isMeasuring ? MEASURING_TEXT : 'Historical volatility distribution unavailable.'
+          }}</span>
         </div>
       </div>
     </div>
@@ -143,14 +172,22 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
         <span class="pillar-tag">PILLAR 03</span>
         <h3 class="pillar-name">MARKET STRUCTURE</h3>
         <span class="pillar-badge" :class="`state-${structState}`">
-          {{ structMeasured ? structState.replace(/_/g, ' ').toUpperCase() : isMeasuring ? 'MEASURING' : 'UNMEASURED' }}
+          {{
+            structMeasured
+              ? structState.replace(/_/g, ' ').toUpperCase()
+              : isMeasuring
+                ? 'MEASURING'
+                : 'UNMEASURED'
+          }}
         </span>
       </div>
       <div class="pillar-body">
         <template v-if="structMeasured">
           <div class="metric-row">
             <span class="m-label">OU Reversion Half-Life</span>
-            <span class="m-val mono">{{ ouHalfLife !== null ? `${num(ouHalfLife, 1)} bars` : DASH }}</span>
+            <span class="m-val mono">{{
+              ouHalfLife !== null ? `${num(ouHalfLife, 1)} bars` : DASH
+            }}</span>
           </div>
           <div class="metric-row">
             <span class="m-label">Hurst Exponent (H)</span>
@@ -171,7 +208,9 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
         </template>
         <div v-else class="unmeasured-notice">
           <span class="unm-icon">◌</span>
-          <span class="unm-text">{{ isMeasuring ? MEASURING_TEXT : 'Variance ratio and mean-reversion telemetry unmeasured.' }}</span>
+          <span class="unm-text">{{
+            isMeasuring ? MEASURING_TEXT : 'Variance ratio and mean-reversion telemetry unmeasured.'
+          }}</span>
         </div>
       </div>
     </div>
@@ -182,7 +221,13 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
         <span class="pillar-tag">PILLAR 04</span>
         <h3 class="pillar-name">ORDER FLOW & GAMMA</h3>
         <span class="pillar-badge" :class="`state-${flowState}`">
-          {{ flowMeasured ? flowState.replace(/_/g, ' ').toUpperCase() : isMeasuring ? 'MEASURING' : 'UNMEASURED' }}
+          {{
+            flowMeasured
+              ? flowState.replace(/_/g, ' ').toUpperCase()
+              : isMeasuring
+                ? 'MEASURING'
+                : 'UNMEASURED'
+          }}
         </span>
       </div>
       <div class="pillar-body">
@@ -201,16 +246,35 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
           </div>
           <div class="metric-row">
             <span class="m-label">Net Dollar GEX</span>
-            <span class="m-val mono">{{ netGexM !== null ? `${netGexM >= 0 ? '+' : '-'}$${num(Math.abs(netGexM), 1)}M` : DASH }}</span>
+            <span
+              class="m-val mono"
+              :class="{ 'c-pos': (netGexM ?? 0) > 0, 'c-neg': (netGexM ?? 0) < 0 }"
+            >
+              {{
+                netGexM !== null
+                  ? `${netGexM >= 0 ? '+' : '-'}$${num(Math.abs(netGexM), 1)}M`
+                  : DASH
+              }}
+            </span>
           </div>
           <div class="metric-row">
             <span class="m-label">Hedging Bias</span>
-            <span class="m-val mono">{{ flow?.hedgingPressureDirection?.toUpperCase() ?? DASH }}</span>
+            <span
+              class="m-val mono"
+              :class="{
+                'c-pos': flow?.hedgingPressureDirection === 'supportive',
+                'c-neg': flow?.hedgingPressureDirection === 'pressuring',
+              }"
+            >
+              {{ flow?.hedgingPressureDirection?.toUpperCase() ?? DASH }}
+            </span>
           </div>
         </template>
         <div v-else class="unmeasured-notice">
           <span class="unm-icon">◌</span>
-          <span class="unm-text">{{ isMeasuring ? MEASURING_TEXT : 'No active option chain. Flow & dealer Greeks withheld.' }}</span>
+          <span class="unm-text">{{
+            isMeasuring ? MEASURING_TEXT : 'No active option chain. Flow & dealer Greeks withheld.'
+          }}</span>
         </div>
       </div>
     </div>
@@ -220,19 +284,20 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
 <style scoped>
 .four-pillar-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--s3);
+  min-width: 0;
 }
 
 @media (max-width: 1100px) {
   .four-pillar-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 600px) {
   .four-pillar-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -244,6 +309,7 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
   border-radius: var(--r-md);
   padding: var(--s3);
   gap: var(--s2);
+  min-width: 0;
 }
 
 .pillar-card.is-unmeasured {
@@ -337,19 +403,24 @@ const netGexM = computed<number | null>(() => flow.value?.netGexM ?? null)
 .metric-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
 }
 
 .m-label {
   font-family: var(--font-ui);
   font-size: var(--t-tiny);
   color: var(--ink-dim);
+  min-width: 0;
 }
 
 .m-val {
   font-size: var(--t-tiny);
   font-weight: 700;
   color: var(--ink);
+  flex: 0 0 auto;
+  text-align: right;
 }
 
 .unmeasured-notice {

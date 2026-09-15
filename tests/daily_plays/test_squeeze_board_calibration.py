@@ -134,6 +134,49 @@ def test_thin_liquidity_clears_the_dampening_flag():
     assert out["negative_fuel"] > 0.2
 
 
+def _falling_readout(**flow):
+    base = date(2026, 8, 18)
+    closes = [100.0] * 14 + [100.0, 99.5, 99.0, 98.5, 98.0, 97.0]
+    prices = [
+        {"date": str(base - timedelta(days=19 - i)), "close": c, "volume": 150_000.0}
+        for i, c in enumerate(closes)
+    ]
+    return _squeeze_readout(
+        spot=100.0, gex_summary=_SUMMARY, gex_rows=_GEX_ROWS, chain_rows=_CHAIN,
+        price_series=prices, atm_iv=0.4, horizon_days=30,
+        asof=datetime(2026, 8, 19, tzinfo=timezone.utc), **flow,
+    )
+
+
+def test_unsigned_tape_does_not_vote_in_conviction():
+    """No aggressor side = flow is dropped, not counted as a neutral half-weight 0."""
+    out = _falling_readout()
+    theory = out["theory"]
+    assert theory["flow_measured"] is False
+    assert theory["flow_weight"] == 0.0
+    assert theory["directional_flow_imbalance"] is None
+    # Momentum alone carries direction, so a saturated down move is full conviction
+    # instead of being capped at half of fuel.
+    assert theory["conviction_bear"] == theory["mom_dn_gate"] == 1.0
+    assert theory["bearish_ui"] > 0.99 * 100.0 * theory["fuel_ui"] - 0.01
+
+
+def test_signed_tape_keeps_the_flow_weight():
+    out = _falling_readout(directional_flow_imbalance=0.0, imbalance_confidence=1.0)
+    theory = out["theory"]
+    assert theory["flow_measured"] is True
+    assert theory["flow_weight"] == 0.5
+    assert theory["conviction_bear"] == 0.5
+
+
+def test_setup_analysis_never_claims_an_opposing_score_supports_a_side():
+    out = _falling_readout()
+    assert out["score"] < -20
+    bull_lines = " ".join(out["bullish_setup"]["setup_analysis"])
+    assert "supports bullish" not in bull_lines
+    assert "supports bearish" in " ".join(out["bearish_setup"]["setup_analysis"])
+
+
 def test_reported_fuel_matches_the_theory_scale():
     """``negative_fuel`` must be the same quantity the directional scores consume."""
     out = _readout(daily_volume=150_000.0)

@@ -196,20 +196,18 @@ describe('SqueezeScreener source: no fabricated figures', () => {
   it('does not invent a likelihood verdict for an unscored setup', () => {
     expect(src).not.toContain("'POSSIBLE'")
     expect(src).not.toContain("|| 'UNLIKELY'")
-    expect(src).toContain('UNSCORED')
+    expect(src).not.toContain('likelihood')
   })
 
-  it('renders a dash on the theory dial when nothing was scored, not a fake 0/100', () => {
-    expect(src).toContain("boardScore == null ? DASH : formatSignedScore(boardScore)")
-    expect(src).toContain("boardScore == null ? 'UNSCORED' : '/100'")
+  it('renders the score and every level through the unmeasured-aware builder', () => {
+    expect(src).toContain('{{ ex.scoreDisplay }}')
+    expect(src).toContain('lv.price != null ? optUsd(lv.price) : DASH')
     expect(src).not.toContain('PROBABILITY SCORE')
   })
 
-  it('ships the measured price ladder and its distance columns', () => {
-    expect(src).toContain('buildLevelLadder')
-    expect(src).toContain('class="ladder"')
-    expect(src).toContain('class="trigger-strip"')
-    expect(src).toContain('DISTANCE TO {{ triggerRow.label }}')
+  it('ships the measured levels with their distance column', () => {
+    expect(src).toContain('class="levels"')
+    expect(src).toContain('{{ distLabel(lv.pct) }}')
   })
 
   it('pins a freshness verdict and carries the full audit line', () => {

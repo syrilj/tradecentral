@@ -416,8 +416,8 @@ describe('Milestone 2: Squeeze Screener & Directional Bias Reconciliation Suite'
       })
       const screenerHtml = await renderToString(screenerApp)
       expect(screenerHtml).toContain('class="sq bullish"')
-      expect(screenerHtml).toContain('DISTANCE TO CALL WALL')
-      expect(screenerHtml).toContain('POCKET $100.00–$115.00')
+      expect(screenerHtml).toMatch(/class="lv-call trigger level"/)
+      expect(screenerHtml).not.toMatch(/lv-put trigger/)
       expect(screenerHtml).not.toContain('class="sq bearish"')
     })
 
@@ -510,8 +510,9 @@ describe('Milestone 2: Squeeze Screener & Directional Bias Reconciliation Suite'
       })
       const screenerHtml = await renderToString(screenerApp)
       expect(screenerHtml).toContain('class="sq bearish"')
-      expect(screenerHtml).toContain('DISTANCE TO PUT WALL')
-      expect(screenerHtml).toContain('POCKET $100.00–$85.00')
+      expect(screenerHtml).toMatch(/>BEAR LEAN<\/h3>/)
+      expect(screenerHtml).toMatch(/class="lv-put trigger level"/)
+      expect(screenerHtml).not.toMatch(/class="lv-call trigger level"/)
       expect(screenerHtml).not.toContain('class="sq bullish"')
     })
 

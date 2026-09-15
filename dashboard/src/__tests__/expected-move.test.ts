@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   computeRuleOf16ExpectedMove,
+  computeCalibratedExpectedMove,
   assessMoveExcursion,
   assessWallAlignment,
 } from '@/expectedMove'
@@ -58,6 +59,27 @@ describe('Rule of 16 Expected Move Engine', () => {
     expect(computeRuleOf16ExpectedMove(0, 0.2)).toBeNull()
     expect(computeRuleOf16ExpectedMove(-100, 0.2)).toBeNull()
     expect(computeRuleOf16ExpectedMove(null, 0.2)).toBeNull()
+  })
+
+  it('computes calibrated expected move with calendar-day scaling and skew asymmetry', () => {
+    const spot = 500
+    const iv = 0.16
+    const res = computeCalibratedExpectedMove(spot, iv, null, {
+      callIvPct: 18.0,
+      putIvPct: 14.0,
+      useCalendarDays: true,
+    })
+
+    expect(res).not.toBeNull()
+    expect(res!.method).toBe('calibrated_calendar')
+    // 1 / sqrt(365) ≈ 1 / 19.105
+    expect(res!.em1dDollars).toBeCloseTo(500 * (0.16 / Math.sqrt(365)), 2)
+    // Skew asymmetry: Call IV (18%) > Put IV (14%)
+    expect(res!.em1dUpDollars).toBeGreaterThan(res!.em1dDownDollars!)
+    expect(res!.em1dHigh - spot).toBeGreaterThan(spot - res!.em1dLow)
+    // Cones: 95% tail cone is wider than median cone
+    expect(res!.em1dTail95High!).toBeGreaterThan(res!.em1dMedianHigh!)
+    expect(res!.em1dTail95Low!).toBeLessThan(res!.em1dMedianLow!)
   })
 })
 

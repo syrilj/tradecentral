@@ -39,7 +39,10 @@ const resolvedDealerBias = computed(() => {
 <template>
   <div class="positioning-summary-card">
     <div class="card-header">
-      <span class="card-eyebrow font-mono">POSITIONING SUMMARY</span>
+      <div>
+        <span class="card-eyebrow font-mono">POSITIONING SUMMARY</span>
+        <p class="card-subtitle">How dealers, crowd flow, and net delta lean.</p>
+      </div>
     </div>
 
     <div class="positioning-rows">
@@ -121,6 +124,7 @@ const resolvedDealerBias = computed(() => {
   box-sizing: border-box;
   overflow: hidden;
   min-width: 0;
+  height: 100%;
 }
 
 .card-header {
@@ -134,6 +138,13 @@ const resolvedDealerBias = computed(() => {
   letter-spacing: 0.08em;
   color: var(--ink-dim);
   font-weight: 700;
+}
+
+.card-subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.35;
 }
 
 .positioning-rows {
@@ -218,5 +229,6 @@ const resolvedDealerBias = computed(() => {
 
 .sub-caption {
   font-size: var(--t-micro);
+  line-height: 1.4;
 }
 </style>

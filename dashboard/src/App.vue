@@ -238,7 +238,7 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
-/** Ten operator destinations. Everything else lives in Tools. */
+/** Eleven operator destinations. Everything else lives in Tools. */
 const primaryNav = [
   {
     name: 'brief',
@@ -261,6 +261,13 @@ const primaryNav = [
       icon: 'vpa',
       tab: true,
     },
+  {
+    name: 'reversal',
+    title: 'Reversal',
+    hint: 'Bottoms · tops · when to add',
+    icon: 'reversal',
+    tab: true,
+  },
   {
     name: 'options',
     title: 'Options',
@@ -314,6 +321,13 @@ const primaryNav = [
     title: 'Crypto',
     hint: '24/7 coin tape · Kalman',
     icon: 'crypto',
+    tab: true,
+  },
+  {
+    name: 'voltrend',
+    title: 'Vol Trend',
+    hint: 'Volatility-targeted trend',
+    icon: 'voltrend',
     tab: true,
   },
 ] as const
@@ -1324,9 +1338,7 @@ function openFearGreed(): void {
         >
           <div class="strip-profile-avatar">
             <img v-if="user?.imageUrl" :src="user.imageUrl" alt="" class="strip-avatar-img" />
-            <span v-else class="strip-avatar-initials fig">{{
-              stripOperatorInitials
-            }}</span>
+            <span v-else class="strip-avatar-initials fig">{{ stripOperatorInitials }}</span>
             <span class="strip-operator-lamp" aria-hidden="true" />
           </div>
           <span class="strip-profile-badge label">OP</span>
@@ -1443,7 +1455,10 @@ function openFearGreed(): void {
   background: var(--glass-rail-bg, var(--glass-base));
   backdrop-filter: var(--chrome-optics-lg);
   -webkit-backdrop-filter: var(--chrome-optics-lg);
-  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03), inset 0 1px 0 var(--glass-tint), inset -1px 0 0 var(--glass-tint);
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, 0.03),
+    inset 0 1px 0 var(--glass-tint),
+    inset -1px 0 0 var(--glass-tint);
   z-index: var(--z-rail);
   min-height: 0;
   overflow: hidden;
@@ -1977,7 +1992,10 @@ function openFearGreed(): void {
   -webkit-backdrop-filter: var(--glass-blur-md);
   -webkit-backdrop-filter: var(--chrome-optics-md, var(--glass-blur-md));
   box-shadow: var(--glass-specular-subtle), var(--glass-shadow-sm);
-  box-shadow: var(--glass-specular-subtle), var(--glass-shadow-sm), inset 0 -1px 0 var(--glass-tint);
+  box-shadow:
+    var(--glass-specular-subtle),
+    var(--glass-shadow-sm),
+    inset 0 -1px 0 var(--glass-tint);
   z-index: var(--z-strip);
   min-width: 0;
   /* The rail can expand or collapse independently of the viewport. Size the
@@ -2704,7 +2722,9 @@ function openFearGreed(): void {
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-top: var(--hair) solid var(--rule-hi);
     border-right: 0;
-    box-shadow: inset 0 1px 0 var(--glass-tint), var(--glass-shadow-sm);
+    box-shadow:
+      inset 0 1px 0 var(--glass-tint),
+      var(--glass-shadow-sm);
     overflow-x: auto;
     overflow-y: hidden;
     width: auto !important;

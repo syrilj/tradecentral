@@ -513,7 +513,26 @@ def generate_microstructure_signals(
             breached_down = s_t < lower_band or (p_wall is not None and s_t <= p_wall)
             breached_up = s_t > upper_band or (c_wall is not None and s_t >= c_wall)
 
-            if breached_down and v_z < -breakout_z:
+            # Trend & Freshness Filters:
+            # 1. Macro indices (SPY, QQQ, etc.) have strong structural upward drift and dealer put-support.
+            #    Short breakdown cascades without confirmed negative gamma are prone to bear traps.
+            # 2. Short breakdowns require alignment with trend (not trend_up) to avoid shorting dips in bull trends.
+            # 3. Freshness: only trigger if breach occurred within the last 2 bars (not chasing exhausted moves).
+            is_macro_index = symbol.upper() in {"SPY", "QQQ", "IWM", "DIA"}
+            fresh_upper = (s_prev <= prev_up_band) or (t >= 2 and p[t - 2] <= nw_res.upper[t - 2])
+            fresh_lower = (s_prev >= prev_low_band) or (t >= 2 and p[t - 2] >= nw_res.lower[t - 2])
+
+            allow_short_cascade = (
+                not (is_macro_index and regime == "gamma_unmeasured")
+                and (not trend_up or regime == "negative_gamma")
+                and (fresh_lower or p_wall is not None)
+            )
+            allow_long_expansion = (
+                (trend_up or regime == "negative_gamma")
+                and (fresh_upper or c_wall is not None)
+            )
+
+            if breached_down and v_z < -breakout_z and allow_short_cascade:
                 action = "ENTER_SHORT"
                 direction = "short"
                 setup_name = f"{gamma_tag}_PutWall_Cascade" if p_wall is not None else f"{gamma_tag}_LowerBreak_Cascade"
@@ -536,7 +555,7 @@ def generate_microstructure_signals(
 
             # Long Short-Squeeze: Decisive breakout above the upper band (or the
             # call wall, when measured) with positive velocity.
-            elif breached_up and v_z > breakout_z:
+            elif breached_up and v_z > breakout_z and allow_long_expansion:
                 action = "ENTER_LONG"
                 direction = "long"
                 setup_name = f"{gamma_tag}_CallWall_ShortSqueeze" if c_wall is not None else f"{gamma_tag}_UpperBreak_Expansion"
@@ -656,6 +675,7 @@ def run_microstructure_backtest(
     iv_series: Sequence[float] | np.ndarray | None = None,
     initial_capital: float = 100_000.0,
     risk_per_trade_pct: float = 0.02,   # 2% cash risk per trade
+    max_position_pct: float = 0.15,     # Max 15% position notional cap (MAX_SINGLE_NAME_PCT)
     slippage_bps: float = 2.0,          # 2 bps half-spread slippage
     commission_per_share: float = 0.005,# $0.005 per share
     max_holding_bars: int = 30,
@@ -744,15 +764,15 @@ def run_microstructure_backtest(
             if active_trade["direction"] == "long":
                 gain_r = (s_t - active_trade["entry_price"]) / risk_r
                 if gain_r >= 1.0:
-                    active_trade["stop_loss"] = max(active_trade["stop_loss"], active_trade["entry_price"] + 0.25 * risk_r)
+                    active_trade["stop_loss"] = max(active_trade["stop_loss"], active_trade["entry_price"] + 0.35 * risk_r)
                 if gain_r >= 2.0:
-                    active_trade["stop_loss"] = max(active_trade["stop_loss"], active_trade["entry_price"] + 1.20 * risk_r)
+                    active_trade["stop_loss"] = max(active_trade["stop_loss"], active_trade["entry_price"] + 1.25 * risk_r)
             else:
                 gain_r = (active_trade["entry_price"] - s_t) / risk_r
                 if gain_r >= 1.0:
-                    active_trade["stop_loss"] = min(active_trade["stop_loss"], active_trade["entry_price"] - 0.25 * risk_r)
+                    active_trade["stop_loss"] = min(active_trade["stop_loss"], active_trade["entry_price"] - 0.35 * risk_r)
                 if gain_r >= 2.0:
-                    active_trade["stop_loss"] = min(active_trade["stop_loss"], active_trade["entry_price"] - 1.20 * risk_r)
+                    active_trade["stop_loss"] = min(active_trade["stop_loss"], active_trade["entry_price"] - 1.25 * risk_r)
 
             exit_reason = None
             # Take Profit hit
@@ -774,8 +794,8 @@ def run_microstructure_backtest(
                 and sig.kalman_zscore < -1.4
             ):
                 exit_reason = "invalidation"
-            # Time exit with profit locking after 20 bars
-            elif holding_len >= 20 and ((active_trade["direction"] == "long" and s_t >= active_trade["entry_price"]) or (active_trade["direction"] == "short" and s_t <= active_trade["entry_price"])):
+            # Time exit with profit locking after 15 bars
+            elif holding_len >= 15 and ((active_trade["direction"] == "long" and s_t >= active_trade["entry_price"]) or (active_trade["direction"] == "short" and s_t <= active_trade["entry_price"])):
                 exit_reason = "time_profit"
             # Max holding horizon
             elif holding_len >= max_holding_bars:
@@ -837,8 +857,8 @@ def run_microstructure_backtest(
             risk_dollars = capital * risk_per_trade_pct
             price_dist_to_stop = max(0.5, abs(s_t - sig.stop_loss))
             shares = max(1.0, risk_dollars / price_dist_to_stop)
-            # Cap position notional at 45% capital
-            max_shares = (capital * 0.45) / s_t
+            # Cap position notional at max_position_pct of capital
+            max_shares = (capital * max_position_pct) / s_t
             shares = min(shares, max_shares)
 
             entry_slip = s_t * (slippage_bps / 10_000.0)

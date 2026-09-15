@@ -35,6 +35,8 @@ describe('Macro tab (cross-asset regime board)', () => {
     expect(primaryNames).toEqual([
       'brief',
       'flow',
+      'vpa',
+      'reversal',
       'options',
       'regime',
       'suggest',
@@ -43,6 +45,7 @@ describe('Macro tab (cross-asset regime board)', () => {
       'chain',
       'market',
       'crypto',
+      'voltrend',
     ])
     expect(appSrc).not.toMatch(/const primaryNav = \[[^\]]*name: 'macro'/s)
   })

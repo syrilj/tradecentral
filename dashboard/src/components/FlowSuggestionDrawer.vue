@@ -8,6 +8,7 @@ import {
   formatSetupLevel,
   formatSupportLevels,
   formatTakeProfitZones,
+  levelSourceImplication,
   levelSourceLabel,
   missingSourcesCopy,
   qlibAlignmentLabel,
@@ -272,7 +273,11 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
                 }}</strong>
                 <small>{{
                   suggestion.strike_source
-                    ? levelSourceLabel(suggestion.strike_source)
+                    ? levelSourceImplication(
+                        suggestion.strike_source,
+                        'strike',
+                        suggestion.right,
+                      ) || levelSourceLabel(suggestion.strike_source)
                     : 'not supplied'
                 }}</small>
               </article>

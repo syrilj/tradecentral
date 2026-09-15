@@ -357,11 +357,14 @@ let currentCount = 0
 let currentSeed = props.seed
 let phase: 'draw' | 'hold' = 'draw'
 let lastTick = 0
+/* Scrolled-offscreen canvases still get rAF ticks; skip them. */
+let offscreen = false
+let visibilityObserver: IntersectionObserver | null = null
 
 function loop(now: number): void {
   if (disposed || !ctx) return
   animFrameId = requestAnimationFrame(loop)
-  if (hidden) return
+  if (hidden || offscreen) return
 
   if (phase === 'draw') {
     if (now - lastTick < 33) return // ~30fps reveal
@@ -424,6 +427,13 @@ onMounted(() => {
   } else {
     animFrameId = requestAnimationFrame(loop)
     document.addEventListener('visibilitychange', onVisibility)
+    visibilityObserver = new IntersectionObserver(
+      (entries) => {
+        offscreen = !(entries[0]?.isIntersecting ?? true)
+      },
+      { threshold: 0.05 },
+    )
+    visibilityObserver.observe(container)
   }
 
   resizeObserver = new ResizeObserver(() => {
@@ -439,6 +449,7 @@ onBeforeUnmount(() => {
   disposed = true
   cancelAnimationFrame(animFrameId)
   resizeObserver?.disconnect()
+  visibilityObserver?.disconnect()
   document.removeEventListener('visibilitychange', onVisibility)
   ctx = null
 })

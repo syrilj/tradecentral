@@ -1838,19 +1838,23 @@ def _gex_map(
     flip: float | None = None
     price_profile: list[dict[str, Any]] = []
     if enriched:
+        def _calc_net_gex_at(test_spot: float) -> float:
+            tot = 0.0
+            for r in enriched:
+                gm = _bs_gamma(
+                    spot=test_spot, strike=float(r["strike"]), years=float(r["years"]),
+                    iv=float(r["iv"] or 0), rate=rate,
+                )
+                if gm is not None:
+                    tot += r["sign"] * gm * r["oi"] * r["multiplier"] * test_spot * test_spot * 0.01
+            return tot
+
         grid: list[tuple[float, float]] = []
-        # ±20% in 0.5% steps — same band used for zero-gamma search; also the
+        # ±20% in 0.5% steps — standard band used for zero-gamma search; also the
         # IF-style "gamma price profile" (projected net GEX at each test spot).
         for i in range(81):
             test_spot = spot * (0.80 + i * 0.005)
-            total = 0.0
-            for row in enriched:
-                gamma = _bs_gamma(
-                    spot=test_spot, strike=float(row["strike"]), years=float(row["years"]),
-                    iv=float(row["iv"] or 0), rate=rate,
-                )
-                if gamma is not None:
-                    total += row["sign"] * gamma * row["oi"] * row["multiplier"] * test_spot * test_spot * 0.01
+            total = _calc_net_gex_at(test_spot)
             grid.append((test_spot, total))
             price_profile.append({
                 "spot": round(test_spot, 4),
@@ -1862,8 +1866,45 @@ def _gex_map(
                 crossings.append(x0)
             elif y0 * y1 < 0:
                 crossings.append(x0 + (x1 - x0) * abs(y0) / (abs(y0) + abs(y1)))
+
+        # If no zero crossing was found in the initial ±20% band, expand the search
+        # across the active strikes range so large structural imbalances or high-vol
+        # names still locate their hedging boundary.
+        if not crossings and enriched:
+            strikes = [float(r["strike"]) for r in enriched if r.get("strike") is not None]
+            min_k = min(strikes) if strikes else spot * 0.5
+            max_k = max(strikes) if strikes else spot * 2.0
+            search_lo = max(spot * 0.20, min_k * 0.90)
+            search_hi = min(spot * 3.00, max_k * 1.10)
+            if search_hi > search_lo:
+                extended_steps = 120
+                step_size = (search_hi - search_lo) / extended_steps
+                ext_grid = []
+                for s_i in range(extended_steps + 1):
+                    ts = search_lo + s_i * step_size
+                    tot = _calc_net_gex_at(ts)
+                    ext_grid.append((ts, tot))
+                for (x0, y0), (x1, y1) in zip(ext_grid, ext_grid[1:]):
+                    if y0 == 0:
+                        crossings.append(x0)
+                    elif y0 * y1 < 0:
+                        crossings.append(x0 + (x1 - x0) * abs(y0) / (abs(y0) + abs(y1)))
+
         if crossings:
             flip = min(crossings, key=lambda value: abs(value - spot))
+            # If the flip sits outside the standard ±20% window, expand price_profile
+            # so the zero crossing is visible on the profile chart.
+            if price_profile and (flip < price_profile[0]["spot"] or flip > price_profile[-1]["spot"]):
+                profile_lo = min(spot * 0.80, flip * 0.95)
+                profile_hi = max(spot * 1.20, flip * 1.05)
+                price_profile = []
+                for s_i in range(81):
+                    ts = profile_lo + s_i * ((profile_hi - profile_lo) / 80)
+                    tot = _calc_net_gex_at(ts)
+                    price_profile.append({
+                        "spot": round(ts, 4),
+                        "net_gex_m": round(tot / 1_000_000.0, 6),
+                    })
 
     gex_by_expiry = []
     asof_day = asof.date() if isinstance(asof, datetime) else asof
@@ -2554,8 +2595,12 @@ def _setup_from_gex_score(
         )
     if dampened or fuel <= 0:
         setup_analysis.append("Long / flat gamma environment — dampens squeeze (structure still shown)")
-    if abs(signed_score) >= 20:
+    if signed_score * side_sign >= 20:
         setup_analysis.append(f"gex_core signed score supports {side} ({signed_score:+.1f})")
+    elif abs(signed_score) >= 20:
+        setup_analysis.append(
+            f"gex_core signed score opposes {side} ({signed_score:+.1f}) — structure only"
+        )
     else:
         setup_analysis.append(f"gex_core squeeze score quiet ({signed_score:+.1f}) — board is structure only")
 
@@ -2756,6 +2801,12 @@ MOMENTUM_MAX_AGE_DAYS = 4
 # Below this fuel_ui a long-gamma charting regime is reported as dampening the
 # squeeze rather than merely coexisting with it.
 DAMPENED_MAX_FUEL_UI = 0.2
+# Conviction weight on signed flow when the tape is signed; momentum gets the rest.
+SQUEEZE_FLOW_WEIGHT = 0.5
+# Signed-score bands the readout labels against: |score| ≥ lean → *_lean,
+# |score| ≥ squeeze → *_squeeze. Shipped to the UI so it never re-hardcodes them.
+SQUEEZE_LEAN_THRESHOLD = 20.0
+SQUEEZE_FIRE_THRESHOLD = 40.0
 
 
 def _imbalance_confidence(print_count: int) -> float:
@@ -2895,6 +2946,15 @@ def _squeeze_readout(
         if directional_flow_imbalance is not None
         else 0.0
     )
+    # An unmeasured input must not vote. When the tape carries no aggressor side
+    # (no signed prints, or zero confidence) the flow term used to enter the
+    # conviction blend as a hard 0.0 at weight 0.5 — silently capping every
+    # directional leg at half of fuel and reading "no flow" as "neutral flow".
+    # Drop the term instead so direction comes from momentum alone, and say so.
+    flow_measured = directional_flow_imbalance is not None and (
+        imbalance_confidence is None or float(imbalance_confidence) > 0
+    )
+    flow_weight = SQUEEZE_FLOW_WEIGHT if flow_measured else 0.0
 
     theory_chain = _enrich_chain_for_theory(
         chain_rows or [], spot=spot, rate=rate, asof=asof_dt,
@@ -2906,6 +2966,7 @@ def _squeeze_readout(
         call_imbalance=call_imb,
         momentum=momentum,
         score_scale=40.0,
+        flow_weight=flow_weight,
     )
 
     signed = float(theory["squeeze_score"])
@@ -2927,6 +2988,11 @@ def _squeeze_readout(
         "theory_conviction_bull": theory_components.get("conviction_bull"),
         "theory_conviction_bear": theory_components.get("conviction_bear"),
         "theory_imbalance_confidence": imbalance_confidence,
+        "theory_flow_measured": flow_measured,
+        "theory_mom_up_gate": theory_components.get("mom_up_gate"),
+        "theory_mom_dn_gate": theory_components.get("mom_dn_gate"),
+        "theory_urgency": theory_components.get("urgency"),
+        "flow_weight": theory_components.get("flow_weight"),
     }
     scored_components = dict(structure["squeeze_components"])
     # ``fuel`` is reported on the theory's own calibration — tanh(fuel_scale · SR),
@@ -2947,10 +3013,10 @@ def _squeeze_readout(
 
     core_label = str(theory["squeeze_label"])
     if core_label == "bullish_squeeze":
-        label = "bullish_squeeze" if signed >= 40 else "bullish_lean"
+        label = "bullish_squeeze" if signed >= SQUEEZE_FIRE_THRESHOLD else "bullish_lean"
         primary = "bullish"
     elif core_label == "bearish_squeeze":
-        label = "bearish_squeeze" if signed <= -40 else "bearish_lean"
+        label = "bearish_squeeze" if signed <= -SQUEEZE_FIRE_THRESHOLD else "bearish_lean"
         primary = "bearish"
     else:
         label = "quiet"
@@ -2969,7 +3035,7 @@ def _squeeze_readout(
         drivers.append("negative_charting_near_gex")
     elif dampened:
         drivers.append("long_gamma_dampens")
-    if abs(call_imb) >= 0.1:
+    if flow_measured and abs(call_imb) >= 0.1:
         drivers.append("signed_bullish_flow" if call_imb > 0 else "signed_bearish_flow")
     if momentum > 0.005:
         drivers.append("up_momentum")
@@ -3047,10 +3113,26 @@ def _squeeze_readout(
             "adv_m": theory.get("adv_m"),
             "adv_available": theory.get("adv_available"),
             "measurable": theory.get("measurable"),
-            "directional_flow_imbalance": theory.get("directional_flow_imbalance"),
+            # None, not 0.0, when the tape carried no aggressor side.
+            "directional_flow_imbalance": (
+                theory.get("directional_flow_imbalance") if flow_measured else None
+            ),
+            "flow_measured": flow_measured,
+            "flow_weight": theory_components.get("flow_weight"),
+            "imbalance_confidence": imbalance_confidence,
             "momentum": theory.get("momentum"),
             "momentum_fresh": momentum_fresh,
             "momentum_price_age_days": price_age_days,
+            "mom_ref": theory_components.get("mom_ref"),
+            "mom_up_gate": theory_components.get("mom_up_gate"),
+            "mom_dn_gate": theory_components.get("mom_dn_gate"),
+            "conviction_bull": theory_components.get("conviction_bull"),
+            "conviction_bear": theory_components.get("conviction_bear"),
+            "liquidity_ratio": theory_components.get("liquidity_ratio"),
+            "urgency": theory_components.get("urgency"),
+            "fuel_scale": theory_components.get("fuel_scale"),
+            "lean_threshold": SQUEEZE_LEAN_THRESHOLD,
+            "squeeze_threshold": SQUEEZE_FIRE_THRESHOLD,
             "label": theory.get("squeeze_label"),
         },
         "structure_score": structure.get("squeeze_score"),

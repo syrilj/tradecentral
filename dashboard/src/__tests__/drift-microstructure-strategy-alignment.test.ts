@@ -55,22 +55,30 @@ function evaluateDriftStrategies(params: {
 
   const s3Active = structuralBreakdown || (actionable && imb < -0.25)
 
+  const unconfirmedLean = !actionable && Math.abs(imb) > 0.25
+
   const strategies = [
     {
       id: 'strat-1',
       title: 'Strategy 1: Mean-Reversion Channeling',
+      status: unconfirmedLean ? 'MONITORING' : s1Active ? 'ACTIVE' : 'MONITORING',
       isActive: s1Active,
       directionType: 'range',
+      trade: unconfirmedLean
+        ? 'WAIT FOR CONFIRMATION'
+        : 'Fade range boundaries. BUY: Enter long call spreads',
     },
     {
       id: 'strat-2',
       title: 'Strategy 2: Breakout Expansion & Charm Inflow',
+      status: s2Active ? 'ACTIVE' : 'MONITORING',
       isActive: s2Active,
       directionType: 'buying',
     },
     {
       id: 'strat-3',
       title: 'Strategy 3: Breakdown Expansion Below Key Support',
+      status: s3Active ? 'ACTIVE' : 'MONITORING',
       isActive: s3Active,
       directionType: 'selling',
     },
@@ -81,13 +89,50 @@ function evaluateDriftStrategies(params: {
   else if (strategies[0].isActive) primary = strategies[0]
   else if (strategies[1].isActive) primary = strategies[1]
 
+  // Single authoritative consensus directive computation
+  let consensus = {
+    statusBadge: 'NEUTRAL PIVOT WATCH',
+    tone: 'balanced',
+    clearDirective: 'MONITOR PIVOTS',
+  }
+  if (structuralBreakdown || (actionable && imb < -0.25)) {
+    consensus = {
+      statusBadge: 'ACTIONABLE SHORT',
+      tone: 'selling',
+      clearDirective: 'EXECUTE SHORT BIAS',
+    }
+  } else if ((cw != null && spotVal != null && spotVal >= cw) || (actionable && imb > 0.25)) {
+    consensus = {
+      statusBadge: 'ACTIONABLE LONG',
+      tone: 'buying',
+      clearDirective: 'EXECUTE LONG BIAS',
+    }
+  } else if (unconfirmedLean) {
+    consensus = {
+      statusBadge: 'STAND ASIDE · AWAITING CONFIRMATION',
+      tone: 'balanced',
+      clearDirective: 'STAND ASIDE: Do NOT enter new directional risk',
+    }
+  } else if (
+    gex >= 0 ||
+    (spotVal != null && pw != null && cw != null && spotVal >= pw && spotVal <= cw)
+  ) {
+    consensus = {
+      statusBadge: 'RANGE BOUND',
+      tone: 'range',
+      clearDirective: 'EXECUTE RANGE FADE',
+    }
+  }
+
   return {
     charmOneSided: Math.abs(charmRatio) >= CHARM_ONE_SIDED,
     structuralBreakdown,
+    unconfirmedLean,
     s1Active,
     s2Active,
     s3Active,
     primaryStrategy: primary,
+    consensusDirective: consensus,
   }
 }
 
@@ -299,5 +344,89 @@ describe('Drift Strategy and Microstructure Alignment', () => {
     expect(res.s2Active).toBe(false)
     expect(res.s3Active).toBe(false)
     expect(res.s1Active).toBe(true)
+  })
+
+  // --- Consensus Directive & Zero-Contradiction Invariants ---
+
+  it('unconfirmed directional lean produces STAND ASIDE directive with synchronized MONITORING strategy status', () => {
+    const res = evaluateDriftStrategies({
+      spot: 210.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 205.0,
+      netGex: 12.0,
+      netCharmFlow: -900,
+      absCharmFlow: 1_000,
+      pressureImbalance: 0.86,
+      actionable: false,
+    })
+
+    // Zero-contradiction guarantee:
+    // 1. Unconfirmed lean is detected
+    expect(res.unconfirmedLean).toBe(true)
+    // 2. Consensus directive authoritative badge and instruction
+    expect(res.consensusDirective.statusBadge).toBe('STAND ASIDE · AWAITING CONFIRMATION')
+    expect(res.consensusDirective.tone).toBe('balanced')
+    expect(res.consensusDirective.clearDirective).toContain('STAND ASIDE')
+    // 3. Primary strategy status is MONITORING, not ACTIVE, and execution text instructs wait
+    expect(res.primaryStrategy.status).toBe('MONITORING')
+    expect(res.primaryStrategy.trade).toBe('WAIT FOR CONFIRMATION')
+  })
+
+  it('confirmed breakout above Call Wall produces ACTIONABLE LONG directive', () => {
+    const res = evaluateDriftStrategies({
+      spot: 225.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 210.0,
+      netGex: 5.0,
+      netCharmFlow: 1000,
+      pressureImbalance: 0.4,
+      actionable: true,
+    })
+
+    expect(res.consensusDirective.statusBadge).toBe('ACTIONABLE LONG')
+    expect(res.consensusDirective.tone).toBe('buying')
+    expect(res.consensusDirective.clearDirective).toContain('EXECUTE LONG BIAS')
+    expect(res.primaryStrategy.id).toBe('strat-2')
+    expect(res.primaryStrategy.status).toBe('ACTIVE')
+  })
+
+  it('confirmed breakdown below Put Wall produces ACTIONABLE SHORT directive', () => {
+    const res = evaluateDriftStrategies({
+      spot: 195.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 210.0,
+      netGex: -5.0,
+      netCharmFlow: -5000,
+      pressureImbalance: -0.6,
+      actionable: true,
+    })
+
+    expect(res.consensusDirective.statusBadge).toBe('ACTIONABLE SHORT')
+    expect(res.consensusDirective.tone).toBe('selling')
+    expect(res.consensusDirective.clearDirective).toContain('EXECUTE SHORT BIAS')
+    expect(res.primaryStrategy.id).toBe('strat-3')
+    expect(res.primaryStrategy.status).toBe('ACTIVE')
+  })
+
+  it('positive gamma channel with balanced flow produces RANGE BOUND directive', () => {
+    const res = evaluateDriftStrategies({
+      spot: 210.0,
+      putWall: 200.0,
+      callWall: 220.0,
+      gammaFlip: 205.0,
+      netGex: 15.0,
+      netCharmFlow: 100,
+      pressureImbalance: 0.05,
+      actionable: false,
+    })
+
+    expect(res.consensusDirective.statusBadge).toBe('RANGE BOUND')
+    expect(res.consensusDirective.tone).toBe('range')
+    expect(res.consensusDirective.clearDirective).toContain('EXECUTE RANGE FADE')
+    expect(res.primaryStrategy.id).toBe('strat-1')
+    expect(res.primaryStrategy.status).toBe('ACTIVE')
   })
 })

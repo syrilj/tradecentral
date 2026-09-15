@@ -34,6 +34,11 @@ withDefaults(
       <rect x="16" y="8" width="4" height="8" rx="1" />
       <path d="M3 21h18" />
     </template>
+    <template v-else-if="name === 'reversal'">
+      <path d="M3 5l5 9 4-5 4 7 5-11" />
+      <circle cx="8" cy="14" r="1.6" />
+      <path d="M3 21h18" />
+    </template>
     <template v-else-if="name === 'desk'">
       <rect x="3" y="3" width="7" height="7" rx="1" />
       <rect x="14" y="3" width="7" height="7" rx="1" />
@@ -269,6 +274,11 @@ withDefaults(
       <path d="M4 12h16" stroke-dasharray="2 2" />
       <path d="m8 6 4 4 4-4" />
       <path d="M12 2v8" />
+    </template>
+    <template v-else-if="name === 'voltrend'">
+      <path d="M3 17c3.5-3 6.5 3 10 0s5.5-3 8 0" />
+      <path d="M6 14 18 4" />
+      <path d="M12 4h6v6" />
     </template>
     <template v-else>
       <circle cx="12" cy="12" r="8" />

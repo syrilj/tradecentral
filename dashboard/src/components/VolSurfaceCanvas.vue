@@ -32,6 +32,7 @@ let camera: THREE.PerspectiveCamera | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let surfaceGroup: THREE.Group | null = null
 let resizeObserver: ResizeObserver | null = null
+let visibilityObserver: IntersectionObserver | null = null
 let animFrameId = 0
 let disposed = false
 
@@ -45,6 +46,10 @@ let pointerTiltX = 0
 let pointerTiltY = 0
 let dragPrev = { x: 0, y: 0 }
 let reducedMotion = false
+/* Animation only burns frames while the tab is active and the canvas is
+   on screen — an offscreen WebGL loop still costs GPU time. */
+let pageHidden = false
+let frameVisible = true
 
 function ivColor(iv: number, ivMin: number, ivMax: number): THREE.Color {
   const t = Math.max(0, Math.min(1, (iv - ivMin) / Math.max(ivMax - ivMin, 1e-6)))
@@ -177,11 +182,16 @@ function render() {
 
 function loop() {
   if (disposed) return
+  animFrameId = requestAnimationFrame(loop)
+  if (pageHidden || !frameVisible) return
   if (!reducedMotion && !dragging.value) rotY += idleSpin
   pointerTiltX *= 0.94
   pointerTiltY *= 0.94
   render()
-  animFrameId = requestAnimationFrame(loop)
+}
+
+function onVisibility(): void {
+  pageHidden = document.visibilityState !== 'visible'
 }
 
 /* Render-on-demand when motion is reduced */
@@ -270,6 +280,14 @@ onMounted(() => {
   } else {
     animFrameId = requestAnimationFrame(loop)
     container.addEventListener('pointermove', onPointerHover)
+    document.addEventListener('visibilitychange', onVisibility)
+    visibilityObserver = new IntersectionObserver(
+      (entries) => {
+        frameVisible = entries[0]?.isIntersecting ?? true
+      },
+      { threshold: 0.05 },
+    )
+    visibilityObserver.observe(container)
   }
   container.addEventListener('pointerdown', onPointerDown)
   container.addEventListener('pointermove', onPointerMove)
@@ -288,6 +306,8 @@ onBeforeUnmount(() => {
   renderer?.dispose()
   renderer?.domElement.remove()
   resizeObserver?.disconnect()
+  visibilityObserver?.disconnect()
+  document.removeEventListener('visibilitychange', onVisibility)
   const container = containerRef.value
   if (container) {
     container.removeEventListener('pointerdown', onPointerDown)

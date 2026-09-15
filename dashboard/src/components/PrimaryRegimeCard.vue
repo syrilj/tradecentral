@@ -12,7 +12,7 @@
  */
 import { computed } from 'vue'
 import type { MarketRegimePayload, PrimaryRegimeType, ConfidenceBand } from '@/regimeContracts'
-import { DASH, pctFrac, usd, signedPct } from '@/format'
+import { DASH, pctFrac, usd, signed, signedPct } from '@/format'
 import Panel from '@/components/Panel.vue'
 
 const props = withDefaults(
@@ -144,6 +144,7 @@ const probNeut = computed<number>(() => props.payload?.probabilities?.neutral ??
 
 // Levels
 const currentSpot = computed<number | null>(() => props.spot ?? props.payload?.spot ?? null)
+const kalmanVelocity = computed<number | null>(() => props.payload?.trend?.kalmanVelocity ?? null)
 const sessionVwap = computed<number | null>(() => props.payload?.levels?.sessionVwap ?? null)
 const gammaFlip = computed<number | null>(() => props.payload?.levels?.gammaFlip ?? null)
 const callWall = computed<number | null>(() => props.payload?.levels?.callWall ?? null)
@@ -176,6 +177,18 @@ function levelDeltaPct(level: number | null): string {
             <div class="regime-category-tag">MULTI-DIMENSIONAL RECONCILED STATE</div>
             <h1 class="regime-hero-title">{{ regimeLabel }}</h1>
             <p class="regime-hero-desc">{{ regimeDescription }}</p>
+            <div v-if="kalmanVelocity != null && isMeasurable" class="speed-read">
+              <span class="speed-label font-mono">KINEMATIC SPEED</span>
+              <span
+                class="speed-val font-mono"
+                :class="{
+                  'c-pos': kalmanVelocity > 0,
+                  'c-neg': kalmanVelocity < 0,
+                }"
+              >
+                {{ signed(kalmanVelocity, 4) }}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -201,6 +214,12 @@ function levelDeltaPct(level: number | null): string {
             <span v-for="(factor, idx) in penaltyFactors" :key="idx" class="penalty-tag">
               ⚠ {{ factor }}
             </span>
+          </div>
+          <div
+            v-if="confidenceBandLabel === 'UNCALIBRATED' && isMeasurable"
+            class="conf-uncalibrated-hint font-mono"
+          >
+            Reconciled with live chain &middot; score withheld to prevent false precision
           </div>
         </div>
       </div>
@@ -298,14 +317,16 @@ function levelDeltaPct(level: number | null): string {
 
 .hero-section {
   display: grid;
-  grid-template-columns: 1fr 240px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 260px);
   gap: var(--s4);
   padding: var(--s4);
   background: var(--void-lift);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-md);
   position: relative;
-  overflow: hidden;
+  overflow: visible;
+  min-width: 0;
+  align-items: start;
 }
 
 @media (max-width: 900px) {
@@ -370,6 +391,35 @@ function levelDeltaPct(level: number | null): string {
   color: var(--ink-soft);
   line-height: 1.4;
   max-width: 600px;
+}
+
+.speed-read {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  min-width: 0;
+}
+
+.speed-label {
+  font-size: var(--t-nano);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.speed-val {
+  font-size: var(--t-small);
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.speed-val.c-pos {
+  color: var(--call-hi);
+}
+
+.speed-val.c-neg {
+  color: var(--put-hi);
 }
 
 /* Regime Semantic Styles */
@@ -454,6 +504,7 @@ function levelDeltaPct(level: number | null): string {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
   gap: var(--s1);
+  min-width: 0;
 }
 
 .conf-header {
@@ -480,9 +531,9 @@ function levelDeltaPct(level: number | null): string {
 }
 
 .band-high .conf-band-chip {
-  color: var(--call-hi);
-  background: var(--call-wash);
-  border-color: var(--call);
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border-color: var(--phosphor-dim);
 }
 .band-moderate .conf-band-chip {
   color: var(--warn);
@@ -490,9 +541,9 @@ function levelDeltaPct(level: number | null): string {
   border-color: var(--warn);
 }
 .band-low .conf-band-chip {
-  color: var(--put-hi);
-  background: var(--put-wash);
-  border-color: var(--put);
+  color: var(--ink-dim);
+  background: var(--void-lift);
+  border-color: var(--rule-hi);
 }
 
 .conf-figure {
@@ -517,27 +568,36 @@ function levelDeltaPct(level: number | null): string {
 }
 
 .band-high .conf-fill {
-  background: var(--call);
+  background: var(--phosphor);
 }
 .band-moderate .conf-fill {
   background: var(--warn);
 }
 .band-low .conf-fill {
-  background: var(--put);
+  background: var(--ink-faint);
 }
 
 .penalty-chips {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   margin-top: 4px;
+  min-width: 0;
 }
 
 .penalty-tag {
   font-family: var(--font-data);
   font-size: var(--t-nano);
   color: var(--warn);
-  line-height: 1.2;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.conf-uncalibrated-hint {
+  font-size: 0.65rem;
+  color: var(--ink-faint);
+  line-height: 1.35;
+  margin-top: 4px;
 }
 
 /* Hazard Banner */
@@ -632,12 +692,13 @@ function levelDeltaPct(level: number | null): string {
 /* Levels Strip */
 .levels-strip {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--s2);
   padding: var(--s2) var(--s3);
   background: var(--void-lift);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
+  min-width: 0;
 }
 
 @media (max-width: 800px) {
@@ -650,6 +711,7 @@ function levelDeltaPct(level: number | null): string {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .lvl-label {

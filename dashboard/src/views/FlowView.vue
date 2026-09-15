@@ -128,66 +128,65 @@ const flowTapeStats = computed(() => {
 
 <template>
   <div class="flow-view">
-    <header class="flow-head ticked rise">
-      <div class="flow-title">
-        <span class="label eyebrow"
-          ><i aria-hidden="true" class="live-dot" /> OPTIONS FLOW · 15s POLL</span
-        >
-        <h1>Market-Wide Order Flow</h1>
-        <p>
-          LSE options prints from one market-wide provider window. 15s HTTP poll (not a websocket
-          firehose). Sweeps, unusual, and heat are descriptive flags, not ENTER. Unsigned prints stay
-          unsigned.
-        </p>
+    <!-- ── Slim control strip (replaces verbose header + HUD) ─────────────── -->
+    <!-- Scope: PROVIDER TAPE · SWEEPS & BLOCKS · HEURISTIC FLAGS · POWER ALERTS · WATCHLIST ALERTS · 15s POLL -->
+    <header class="fv-strip" aria-label="Options flow control strip">
+      <div class="fv-live">
+        <i aria-hidden="true" class="fv-live-dot" />
+        <span class="label fv-live-label">OPTIONS FLOW</span>
+        <!-- 15s HTTP poll (not a firehose). Flags are descriptive — not ENTER signals. -->
+        <span class="label fv-live-sub">· 15s HTTP poll · flags not ENTER</span>
       </div>
-      <div class="scope-stack">
-        <span class="scope-chip label live"><i aria-hidden="true" /> PROVIDER TAPE</span>
-        <span class="scope-chip label">SWEEPS &amp; BLOCKS</span>
-        <span class="scope-chip label">HEURISTIC FLAGS</span>
-        <span class="scope-chip label">POWER ALERTS</span>
-        <span class="scope-chip label">WATCHLIST ALERTS</span>
-        <span class="scope-chip label">15s POLL</span>
+
+      <!-- Stat chips — shown once data is available -->
+      <div
+        v-if="flowTapeStats"
+        class="fv-chips"
+        role="group"
+        aria-label="Flow summary stats"
+      >
+        <div class="fv-chip fv-chip--call" title="Total Call Flow Premium">
+          <span class="fv-chip-label">CALL FLOW</span>
+          <span class="fv-chip-val"
+            >${{ num(flowTapeStats.totalCallM, 1) }}M
+            <span v-if="flowTapeStats.callPct != null" class="fv-chip-pct"
+              >({{ num(flowTapeStats.callPct, 0) }}%)</span
+            ></span
+          >
+        </div>
+        <div class="fv-chip fv-chip--put" title="Total Put Flow Premium">
+          <span class="fv-chip-label">PUT FLOW</span>
+          <span class="fv-chip-val"
+            >${{ num(flowTapeStats.totalPutM, 1) }}M
+            <span v-if="flowTapeStats.putPct != null" class="fv-chip-pct"
+              >({{ num(flowTapeStats.putPct, 0) }}%)</span
+            ></span
+          >
+        </div>
+        <div class="fv-chip fv-chip--neutral" title="Put/Call Premium Ratio">
+          <span class="fv-chip-label">P/C RATIO</span>
+          <span class="fv-chip-val">{{
+            flowTapeStats.pcRatio != null ? num(flowTapeStats.pcRatio, 2) : '—'
+          }}</span>
+        </div>
+        <div class="fv-chip fv-chip--golden" title="Vendor Golden Sweep Flags">
+          <span class="fv-chip-label">GOLDEN</span>
+          <span class="fv-chip-val">{{ flowTapeStats.goldenCount }}</span>
+        </div>
+        <div class="fv-chip fv-chip--sweep" title="Aggressive Sweeps">
+          <span class="fv-chip-label">SWEEPS</span>
+          <span class="fv-chip-val">{{ flowTapeStats.sweepCount }}</span>
+        </div>
+        <div class="fv-chip fv-chip--whale" title="Whale Orders ($500k+)">
+          <span class="fv-chip-label">WHALES</span>
+          <span class="fv-chip-val">{{ flowTapeStats.whaleCount }}</span>
+        </div>
+        <div class="fv-chip fv-chip--neutral" title="Sampled Prints">
+          <span class="fv-chip-label">SAMPLED</span>
+          <span class="fv-chip-val">{{ flowTapeStats.totalPrints }}</span>
+        </div>
       </div>
     </header>
-
-    <!-- InsiderFinance Flow Terminal Market HUD -->
-    <div
-      v-if="flowTapeStats"
-      class="flow-market-hud rise"
-      aria-label="Market flow summary HUD"
-    >
-      <span class="hud-label label">FLOW HUD</span>
-      <div class="flow-hud-chip chip-call" title="Total Call Flow Premium">
-        <span class="hud-name label">CALL FLOW</span>
-        <span class="hud-val fig">${{ num(flowTapeStats.totalCallM, 1) }}M</span>
-        <span v-if="flowTapeStats.callPct != null" class="hud-sub fig">({{ num(flowTapeStats.callPct, 0) }}%)</span>
-      </div>
-      <div class="flow-hud-chip chip-put" title="Total Put Flow Premium">
-        <span class="hud-name label">PUT FLOW</span>
-        <span class="hud-val fig">${{ num(flowTapeStats.totalPutM, 1) }}M</span>
-        <span v-if="flowTapeStats.putPct != null" class="hud-sub fig">({{ num(flowTapeStats.putPct, 0) }}%)</span>
-      </div>
-      <div class="flow-hud-chip chip-ratio" title="Put/Call Premium Ratio">
-        <span class="hud-name label">P/C RATIO</span>
-        <span class="hud-val fig">{{ flowTapeStats.pcRatio != null ? num(flowTapeStats.pcRatio, 2) : '—' }}</span>
-      </div>
-      <div class="flow-hud-chip chip-golden" title="Vendor Golden Sweep Flags">
-        <span class="hud-name label">GOLDEN FLAGS</span>
-        <span class="hud-val fig">{{ flowTapeStats.goldenCount }}</span>
-      </div>
-      <div class="flow-hud-chip chip-sweeps" title="Aggressive Sweeps">
-        <span class="hud-name label">SWEEPS</span>
-        <span class="hud-val fig">{{ flowTapeStats.sweepCount }}</span>
-      </div>
-      <div class="flow-hud-chip chip-whales" title="Whale Orders ($500k+)">
-        <span class="hud-name label">WHALES</span>
-        <span class="hud-val fig">{{ flowTapeStats.whaleCount }}</span>
-      </div>
-      <div class="flow-hud-chip chip-neutral" title="Tape Sample Prints Count">
-        <span class="hud-name label">SAMPLED</span>
-        <span class="hud-val fig">{{ flowTapeStats.totalPrints }}</span>
-      </div>
-    </div>
 
     <FlowDashboard
       :payload="unusual.data.value"
@@ -214,220 +213,125 @@ const flowTapeStats = computed(() => {
   padding-bottom: var(--s6);
 }
 
-/* Content-layer hero: opaque standard material, concentric corners,
-   phosphor leading edge marks the live feed. No backdrop blur here. */
-.flow-head {
-  position: relative;
+/* ── Slim single-row control strip ─────────────────────────────────────────
+   Replaces the old verbose header + HUD chip row.
+   Height is intentionally short — this is chrome, not content.           */
+.fv-strip {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--s6);
-  padding: var(--s4) var(--s5);
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s2) var(--s4);
   border: var(--hair) solid var(--rule);
-  border-left: 1px solid var(--phosphor-dim);
-  border-radius: var(--r-xl);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 48px),
-    var(--surface-base);
+  border-radius: var(--r-lg);
+  background: var(--surface-base);
   box-shadow: var(--shadow-1);
 }
 
-.flow-title {
-  min-width: 0;
-}
-
-.eyebrow {
-  color: var(--phosphor);
-}
-
-h1 {
-  margin: var(--s2) 0 0;
-  color: var(--ink);
-  font: 700 calc(var(--t-display) + 4px) / 1.12 var(--font-display);
-  letter-spacing: -0.02em;
-}
-
-.flow-title p {
-  max-width: 76ch;
-  margin-top: var(--s3);
-  color: var(--text-secondary);
-  font-size: var(--t-body);
-  line-height: 1.55;
-}
-
-.scope-stack {
+/* ── Live indicator ──────────────────────────────────────────────────────── */
+.fv-live {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: var(--s2);
-  max-width: 28rem;
-  padding-bottom: var(--s1);
+  gap: var(--s1);
+  flex-shrink: 0;
+  padding-right: var(--s3);
+  border-right: var(--hair) solid var(--rule);
 }
 
-.scope-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  padding: var(--s1) 10px;
-  white-space: nowrap;
-  color: var(--ink-dim);
-  border: var(--hair) solid var(--glass-border);
-  background: var(--glass-surface);
-  box-shadow: var(--glass-specular-subtle);
-  border-radius: var(--r-capsule);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .scope-chip {
-    background: var(--panel-hi);
-  }
-}
-
-.scope-chip.live {
-  color: var(--status-live);
-  border-color: var(--phosphor-dim);
-  background: var(--phosphor-wash);
-}
-
-.scope-chip.live i {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  margin-right: 5px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.live-dot {
+.fv-live-dot {
   display: inline-block;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--phosphor);
-  margin-right: 6px;
-  vertical-align: middle;
-  animation: dot-pulse var(--dur-pulse) ease-in-out infinite;
+  flex-shrink: 0;
+  animation: fv-dot-pulse var(--dur-pulse, 2s) ease-in-out infinite;
 }
-@keyframes dot-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
+@keyframes fv-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
 }
 
-.scope-chip.warn {
-  color: var(--status-stale);
-}
-
-@media (max-width: 780px) {
-  .flow-head {
-    flex-direction: column;
-    gap: var(--s3);
-    min-height: 0;
-    padding: var(--s4);
-  }
-
-  h1 {
-    font-size: var(--t-display);
-  }
-
-  .scope-stack {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    max-width: none;
-  }
-}
-
-/* ==========================================================================
-   INSIDERFINANCE FLOW TERMINAL MARKET HUD
-   ========================================================================== */
-
-.flow-market-hud {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  flex-wrap: wrap;
-  padding: 0.35rem 0.625rem;
-  border-radius: var(--r-md);
-  background: var(--surface-base);
-  border: var(--hair) solid var(--rule);
-}
-
-.flow-market-hud .hud-label {
-  color: var(--ink-faint);
-  letter-spacing: 0.06em;
-  margin-right: 0.25rem;
-}
-
-.flow-hud-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: var(--r-xs);
-  border: var(--hair) solid var(--rule);
-  background: var(--surface-subtle, var(--wash-1));
-}
-
-.flow-hud-chip.chip-call {
-  border-color: color-mix(in srgb, var(--call) 45%, var(--rule));
-  color: var(--call-hi, var(--call));
-  background: var(--call-wash);
-}
-
-.flow-hud-chip.chip-put {
-  border-color: color-mix(in srgb, var(--put) 45%, var(--rule));
-  color: var(--put-hi, var(--put));
-  background: var(--put-wash);
-}
-
-.flow-hud-chip.chip-ratio {
-  border-color: var(--rule-hi);
-  color: var(--ink);
-  background: var(--wash-1);
-}
-
-.flow-hud-chip.chip-golden {
-  border-color: var(--badge-golden-border);
-  color: var(--badge-golden);
-  background: var(--badge-golden-wash);
-}
-
-.flow-hud-chip.chip-sweeps {
-  border-color: color-mix(in srgb, var(--call) 35%, var(--rule));
-  color: var(--badge-sweep);
-  background: var(--badge-sweep-wash);
-}
-
-.flow-hud-chip.chip-whales {
-  border-color: color-mix(in srgb, var(--warn) 40%, var(--rule));
-  color: var(--warn);
-  background: var(--warn-wash);
-}
-
-.flow-hud-chip.chip-neutral {
-  border-color: var(--rule);
-  color: var(--ink-dim);
-  background: var(--wash-1);
-}
-
-.flow-hud-chip .hud-name {
-  font-size: var(--t-nano);
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
-}
-
-.flow-hud-chip .hud-val {
+.fv-live-label {
+  color: var(--phosphor);
   font-size: var(--t-micro);
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.07em;
 }
 
-.flow-hud-chip .hud-sub {
+.fv-live-sub {
+  color: var(--ink-faint);
+  font-size: var(--t-nano, 10px);
+  letter-spacing: 0.03em;
+}
+
+/* ── Stat chip row ───────────────────────────────────────────────────────── */
+.fv-chips {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Each chip is a stacked label + value cell separated by a right rule */
+.fv-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px var(--s3);
+  border-right: var(--hair) solid var(--rule);
+}
+.fv-chip:last-child {
+  border-right: none;
+}
+
+.fv-chip-label {
+  font-family: var(--font-display);
   font-size: var(--t-nano);
-  opacity: 0.85;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.fv-chip-val {
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  font-weight: 800;
+  letter-spacing: var(--track-tight, -0.01em);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.1;
+}
+
+.fv-chip-pct {
+  font-size: var(--t-nano);
+  font-weight: 600;
+  opacity: 0.75;
+  margin-left: 2px;
+}
+
+/* ── Chip colour variants ────────────────────────────────────────────────── */
+.fv-chip--call .fv-chip-val  { color: var(--call-hi, var(--call)); }
+.fv-chip--put  .fv-chip-val  { color: var(--put-hi,  var(--put));  }
+.fv-chip--golden .fv-chip-val { color: var(--warn); }
+.fv-chip--sweep  .fv-chip-val { color: var(--call);  }
+.fv-chip--whale  .fv-chip-val { color: var(--warn);  }
+.fv-chip--neutral .fv-chip-val { color: var(--ink);  }
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 780px) {
+  .fv-strip {
+    gap: var(--s2);
+    padding: var(--s2) var(--s3);
+  }
+  .fv-live-sub {
+    display: none;
+  }
 }
 </style>

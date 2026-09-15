@@ -112,6 +112,8 @@ class KalmanTrendResult:
     trend_state: np.ndarray | None = None
     persistence: np.ndarray | None = None
     persistence_score: np.ndarray | None = None
+    extension_zscore: np.ndarray | None = None
+    q_effective: float | np.ndarray | None = None
 
 
 def bars_per_day(index: pd.Index | Sequence[float] | np.ndarray) -> float:
@@ -152,13 +154,14 @@ def bars_for_days(days: float, bpd: float, floor: int = MIN_NOISE_BARS) -> int:
 
 
 def kalman_constant_velocity(
-    observations: np.ndarray, *, q: float = DEFAULT_Q
+    observations: np.ndarray, *, q: float | np.ndarray = DEFAULT_Q
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run the constant-velocity filter, returning (level, velocity) per bar.
 
     Initialised at `level = observations[0]`, `velocity = 0`, `P = I`: the
     filter is told the first price and nothing about the trend, which is
     exactly what is known before any second observation exists.
+    Supports either scalar process noise `q` or a 1D array of point-in-time `q` values.
     """
     z = np.asarray(observations, dtype=float)
     n = z.size
@@ -167,17 +170,20 @@ def kalman_constant_velocity(
     if n == 0:
         return level_out, slope_out
 
-    q = float(q)
+    q_arr = np.asarray(q, dtype=float)
+    is_q_arr = q_arr.ndim > 0 and q_arr.size == n
+
     level, velocity = float(z[0]), 0.0
     p11, p12, p22 = 1.0, 0.0, 1.0
     for i in range(n):
+        qi = float(q_arr[i]) if is_q_arr else float(q)
         # Predict: x = F x, P = F P F' + Q. Every right-hand side below reads
         # the PRE-update covariance, which is why p11 is written before p12
         # and p12 before p22.
         level += velocity
-        p11 += 2.0 * p12 + p22 + q
+        p11 += 2.0 * p12 + p22 + qi
         p12 += p22
-        p22 += q
+        p22 += qi
         # Update against the observed level.
         s = p11 + 1.0  # innovation variance H P H' + R, with R = 1
         k1, k2 = p11 / s, p12 / s
@@ -250,6 +256,7 @@ def kalman_trend(
     exit_z: float = DEFAULT_EXIT_Z,
     allow_short: bool = False,
     bpd: float | None = None,
+    adaptive_vol_scaling: bool = False,
 ) -> KalmanTrendResult:
     """Filter a close series and reconstruct the trades the thresholds imply.
 
@@ -259,6 +266,9 @@ def kalman_trend(
     log-transformed into NaN, because a NaN entering the filter propagates
     through every later bar and would surface as an empty chart with no
     explanation.
+    When `adaptive_vol_scaling=True`, dynamically calibrates process noise `q`
+    and noise window based on trailing realized volatility to eliminate phase lag
+    on high-volatility names while preserving stability on indices.
     """
     if isinstance(close, pd.Series):
         prices = pd.to_numeric(close, errors="coerce").to_numpy(dtype=float)
@@ -272,12 +282,40 @@ def kalman_trend(
     if not np.all(np.isfinite(prices)) or np.any(prices <= 0):
         raise ValueError("close must be strictly positive and finite (log price is taken)")
 
-    noise_bars = bars_for_days(noise_days, measured)
-    level, slope = kalman_constant_velocity(np.log(prices), q=q)
+    q_effective: float | np.ndarray = float(q)
+    effective_noise_days = float(noise_days)
+    if adaptive_vol_scaling and prices.size >= 10:
+        log_px = np.log(prices)
+        rets = np.diff(log_px, prepend=log_px[0])
+        # Trailing 20d volatility shifted 1 bar to guarantee strict causality (no look-ahead)
+        vol_s = (
+            pd.Series(rets)
+            .rolling(20, min_periods=5)
+            .std()
+            .shift(1)
+            .fillna(0.015)
+            .to_numpy(dtype=float)
+        )
+        ann_vol = vol_s * np.sqrt(252.0 * float(measured))
+        q_effective = np.clip(float(q) * np.maximum(1.0, (ann_vol / 0.20) ** 2), float(q), 5e-4)
+        med_vol = float(np.median(ann_vol))
+        if med_vol > 0.30:
+            scale_factor = min(1.0, 0.35 / med_vol)
+            effective_noise_days = max(5.0, float(noise_days) * scale_factor)
+
+    noise_bars = bars_for_days(effective_noise_days, measured)
+    level, slope = kalman_constant_velocity(np.log(prices), q=q_effective)
     noise = _rolling_std(slope, noise_bars)
     with np.errstate(invalid="ignore", divide="ignore"):
         score = np.where(np.isfinite(noise) & (noise > 0), slope / noise, 0.0)
     score = np.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Extension z-score: distance from log price to filtered level, normalized by rolling residual std
+    resid = np.log(prices) - level
+    resid_std = _rolling_std(resid, noise_bars)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ext_score = np.where(np.isfinite(resid_std) & (resid_std > 0), resid / resid_std, 0.0)
+    ext_score = np.nan_to_num(ext_score, nan=0.0, posinf=0.0, neginf=0.0)
 
     trades, open_at_end = _walk_positions(
         score, entry_z=float(entry_z), exit_z=float(exit_z), allow_short=bool(allow_short)
@@ -316,6 +354,8 @@ def kalman_trend(
         trend_state=trend_state,
         persistence=persistence,
         persistence_score=persistence_score,
+        extension_zscore=ext_score,
+        q_effective=q_effective,
     )
 
 

@@ -632,6 +632,8 @@ def compute_calibrated_confidence(
     d_boundary: float,
     s_persistence: float,
     t_risk: float,
+    *,
+    z_extension: float = 0.0,
 ) -> float:
     """Multi-factor multiplicative calibrated confidence C in [0.0, 1.0]."""
     q = _clamp(q_data, 0.0, 1.0)
@@ -640,7 +642,11 @@ def compute_calibrated_confidence(
     s = _clamp(s_persistence, 0.0, 1.0)
     h = compute_t_risk_hazard(t_risk)
 
-    c = q * a * d * s * h
+    # Extension penalty: penalize entering at extreme overextension (|z| > 2.0)
+    abs_z = abs(float(z_extension))
+    d_ext = _clamp(1.0 - max(0.0, (abs_z - 2.0) * 0.35), 0.30, 1.0)
+
+    c = q * a * d * s * h * d_ext
     return _clamp(round(c, 4), 0.0, 1.0)
 
 
@@ -737,6 +743,11 @@ def reconcile_market_regime(
     agreement_ratio: float,
     has_model_conflict: bool,
     is_measurable: bool = True,
+    *,
+    upside_expansion: float = 0.0,
+    downside_hazard: Optional[float] = None,
+    z_extension: float = 0.0,
+    dist_sma50: Optional[float] = None,
 ) -> PrimaryRegime:
     """Deterministic hierarchical aggregation ladder mapping specialized models to PrimaryRegime."""
     if not is_measurable:
@@ -744,25 +755,37 @@ def reconcile_market_regime(
 
     # 1. Fail-Closed Triggers:
     # - Flip transition band proximity: |delta_flip| <= 0.25% (0.0025)
-    # - Critical transition hazard: T_risk >= 0.65
+    # - Critical downside transition hazard: downside_hazard >= 0.65
     # - Low consensus or model conflict: A_models < 0.40 or has_model_conflict
     is_in_flip_band = delta_flip is not None and abs(delta_flip) <= 0.0025
-    is_high_hazard = t_risk >= 0.65
+    effective_hazard = downside_hazard if downside_hazard is not None else t_risk
+    is_high_hazard = effective_hazard >= 0.65
     is_consensus_broken = agreement_ratio < 0.40 or has_model_conflict
 
-    if is_in_flip_band or is_high_hazard or is_consensus_broken:
+    # Anti-Bottom Capitulation Guard:
+    # If downside hazard is high and price is in deep capitulation washout (z_extension < -2.5),
+    # force UNCERTAIN_TRANSITIONAL to prevent shorting into impending V-bottom squeezes.
+    is_capitulation_washout = z_extension < -2.5 and effective_hazard >= 0.50
+
+    if is_in_flip_band or is_high_hazard or is_consensus_broken or is_capitulation_washout:
         return PrimaryRegime.UNCERTAIN_TRANSITIONAL
 
     # 2. Volatility Expansion Breakout:
-    # Elevated/shock volatility co-occurring with high price or flow velocity inside trending structure
-    is_vol_elevated = vol_state in (
-        VolatilityState.ELEVATED_HIGH,
-        VolatilityState.VOLATILITY_SHOCK,
+    # Elevated/shock volatility or strong upside expansion co-occurring with positive velocity/flow
+    is_vol_elevated = (
+        vol_state in (VolatilityState.ELEVATED_HIGH, VolatilityState.VOLATILITY_SHOCK)
+        or upside_expansion >= 0.50
     )
-    is_velocity_high = abs(kalman_z) >= 1.5 or abs(flow_mad_z) >= 2.0
-    is_structure_trending = market_structure == MarketStructure.TRENDING
+    # Directional polarity: Breakout MUST have positive momentum (kalman_z >= 0.50 or flow_mad_z >= 0.50)
+    # If velocity is negative (kalman_z <= -0.75), expanding volatility is a BEARISH breakdown, not an upside breakout.
+    is_breakout_velocity = kalman_z >= 0.50 or (flow_mad_z >= 0.50 and kalman_z >= 0.0)
+    is_structure_trending = market_structure in (
+        MarketStructure.TRENDING,
+        MarketStructure.RANGE_BOUND,
+    )
+    is_parabolic_expansion = z_extension > 3.0 and kalman_z >= 1.0
 
-    if is_vol_elevated and is_velocity_high and is_structure_trending:
+    if (is_vol_elevated and is_breakout_velocity and is_structure_trending) or is_parabolic_expansion:
         return PrimaryRegime.VOL_EXPANSION_BREAKOUT
 
     # 3. Directional Trends:
@@ -779,15 +802,22 @@ def reconcile_market_regime(
         return PrimaryRegime.BULLISH_TREND
 
     # BEARISH_TREND: z_v <= -0.75, flow <= 0.50, struct in (TRENDING, RANGE_BOUND) or kalman_z <= -1.20
+    # Also catches bearish volatility breakdowns: is_vol_elevated with negative velocity
+    is_bear_breakdown = is_vol_elevated and kalman_z <= -0.75
     if (
-        kalman_z <= -0.75
-        and flow_mad_z <= 0.50
-        and (
-            market_structure in (MarketStructure.TRENDING, MarketStructure.RANGE_BOUND)
-            or kalman_z <= -1.20
+        (
+            kalman_z <= -0.75
+            and flow_mad_z <= 0.50
+            and (
+                market_structure in (MarketStructure.TRENDING, MarketStructure.RANGE_BOUND)
+                or kalman_z <= -1.20
+            )
+            and trend_state in ("BEARISH_TREND", "BEARISH_ACCELERATING")
         )
-        and trend_state in ("BEARISH_TREND", "BEARISH_ACCELERATING")
+        or is_bear_breakdown
     ):
+        if dist_sma50 is not None and dist_sma50 > 0.0 and not is_bear_breakdown:
+            return PrimaryRegime.MEAN_REVERTING
         return PrimaryRegime.BEARISH_TREND
 
     # 4. Non-Directional Structures:
@@ -807,6 +837,8 @@ def reconcile_market_regime(
     if kalman_z >= 0.75 and flow_mad_z >= -0.75:
         return PrimaryRegime.BULLISH_TREND
     if kalman_z <= -0.75 and flow_mad_z <= 0.75:
+        if dist_sma50 is not None and dist_sma50 > 0.0:
+            return PrimaryRegime.MEAN_REVERTING
         return PrimaryRegime.BEARISH_TREND
     if market_structure == MarketStructure.MEAN_REVERTING or variance_ratio < 0.90:
         return PrimaryRegime.MEAN_REVERTING
@@ -818,8 +850,17 @@ def reconcile_market_regime(
     return (
         PrimaryRegime.COMPRESSION_RANGE
         if abs(kalman_z) <= 0.50
-        else (PrimaryRegime.BULLISH_TREND if kalman_z > 0 else PrimaryRegime.BEARISH_TREND)
+        else (
+            PrimaryRegime.BULLISH_TREND
+            if kalman_z > 0
+            else (
+                PrimaryRegime.MEAN_REVERTING
+                if dist_sma50 and dist_sma50 > 0
+                else PrimaryRegime.BEARISH_TREND
+            )
+        )
     )
+
 
 
 def compute_unified_market_regime(
@@ -984,11 +1025,23 @@ def compute_unified_market_regime(
     # -----------------------------------------------------------------------
     # Layer 2: Specialized Models
     # -----------------------------------------------------------------------
-    # 1. Trend Model (Kalman)
-    kt_res = kalman_trend(close_s)
+    # 1. Trend Model (Kalman with adaptive vol scaling & extension z-score)
+    kt_res = kalman_trend(close_s, adaptive_vol_scaling=True)
     kalman_z = float(kt_res.score[-1])
     trend_state = str(kt_res.trend_state[-1])
     trend_persistence_bars = int(kt_res.persistence[-1])
+    z_ext = (
+        float(kt_res.extension_zscore[-1])
+        if kt_res.extension_zscore is not None and pd.notna(kt_res.extension_zscore[-1])
+        else 0.0
+    )
+
+    # Macro 50-day moving average distance for trend alignment / bull pullback detection
+    dist_sma50: Optional[float] = None
+    if len(close_s) >= 20:
+        sma50_val = float(close_s.rolling(50, min_periods=20).mean().iloc[-1])
+        if sma50_val > 0:
+            dist_sma50 = (spot - sma50_val) / sma50_val
 
     # 2. Volatility Model (252d Rolling Percentile)
     vol_res = compute_rolling_volatility_regime(prices, vol_window=cfg.volatility_window)
@@ -1055,6 +1108,16 @@ def compute_unified_market_regime(
     t_risk = (
         float(trans_res.transition_risk.iloc[-1])
         if pd.notna(trans_res.transition_risk.iloc[-1])
+        else 0.0
+    )
+    t_down = (
+        float(trans_res.downside_hazard.iloc[-1])
+        if trans_res.downside_hazard is not None and pd.notna(trans_res.downside_hazard.iloc[-1])
+        else t_risk
+    )
+    t_up = (
+        float(trans_res.upside_expansion.iloc[-1])
+        if trans_res.upside_expansion is not None and pd.notna(trans_res.upside_expansion.iloc[-1])
         else 0.0
     )
 
@@ -1157,6 +1220,7 @@ def compute_unified_market_regime(
         d_boundary=d_boundary,
         s_persistence=s_persistence,
         t_risk=t_risk,
+        z_extension=z_ext,
     )
 
     q_bars = _clamp((n_bars - 20) / (252 - 20), 0.0, 1.0)
@@ -1206,7 +1270,12 @@ def compute_unified_market_regime(
         agreement_ratio=agree_ratio,
         has_model_conflict=has_critical_conflict,
         is_measurable=True,
+        upside_expansion=t_up,
+        downside_hazard=t_down,
+        z_extension=z_ext,
+        dist_sma50=dist_sma50,
     )
+
 
     # -----------------------------------------------------------------------
     # Dynamic Explainability

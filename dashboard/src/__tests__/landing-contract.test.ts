@@ -13,9 +13,6 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(root, 'views', 'LandingView.vue'), 'utf8')
 const preview = readFileSync(join(root, 'components', 'FlowWorkspaceMockup.vue'), 'utf8')
-const evidenceVisual = readFileSync(join(root, 'components', 'EvidenceLayerVisual.vue'), 'utf8')
-const liveVisual = readFileSync(join(root, 'components', 'LiveStateVisual.vue'), 'utf8')
-const researchVisual = readFileSync(join(root, 'components', 'ResearchLoopVisual.vue'), 'utf8')
 
 const FORBIDDEN_CLAIMS = [
   'actionable insight',
@@ -35,27 +32,27 @@ describe('Landing page honours the product boundary', () => {
 
   it('contains no fabricated market-board values', () => {
     for (const bad of FORBIDDEN_ILLUSTRATIVE_DATA) expect(src).not.toContain(bad)
-    expect(liveVisual).toContain('No illustrative values')
-  })
-
-  it('does not introduce pricing before the product needs it', () => {
-    expect(src.toLowerCase()).not.toContain('pricing')
-    expect(src).not.toMatch(/\$\d+\s*\/\s*mo/)
   })
 
   it('reads measured state from the local API', () => {
     expect(src).toContain('api.marketClock')
     expect(src).toMatch(/inject<Resource<StatusPayload>>\('status'\)/)
     expect(src).toMatch(/inject<Resource<Readiness>>\('readiness'\)/)
-    expect(liveVisual).toContain('Local API unavailable')
-    expect(liveVisual).toContain('bash edge/tools/run_dashboard.sh')
   })
 
   it('routes entry calls to the operator access flow', () => {
     expect(src).toContain("name: 'auth'")
     expect(src).toContain("redirect: '/flow'")
     expect(src).toContain('Sign in')
+    expect(src).toContain('Request operator access')
+    expect(src).not.toContain('>Create access<')
     expect(src).toContain('GexFlowVisual')
+  })
+
+  it('keeps the public page focused instead of exposing an internal section index', () => {
+    expect(src).not.toContain('ticker-tape')
+    expect(src).not.toContain('href="#workstation"')
+    expect(src).not.toContain('href="#regimes"')
   })
 
   it('uses the product mark and shared icon vocabulary', () => {
@@ -67,9 +64,26 @@ describe('Landing page honours the product boundary', () => {
   })
 
   it('keeps the research-only and no-execution boundary visible', () => {
-    expect(src).toContain('Research only · No execution · No investment advice')
+    expect(src).toContain('Source-visible.')
     expect(src).toContain('No order routing')
-    expect(src).toContain('No broker connection')
+    expect(src).toContain('No investment advice')
+  })
+
+  it('keeps the launch path direct and avoids a free demo promise', () => {
+    expect(src).toContain('Join now')
+    expect(src).toContain('Join the access list')
+    expect(src).toContain('Pro workspaces')
+    expect(src).not.toContain('runs without an account')
+    expect(src).not.toContain('Try the model lab')
+  })
+
+  it('keeps the public page focused on one access decision', () => {
+    expect(src).toContain('id="access"')
+    expect(src).toContain('Operator access')
+    expect(src).toContain('No payment details collected')
+    expect(src).not.toContain('See the work behind every readout')
+    expect(src).not.toContain('Read the options surface')
+    expect(src).not.toContain('Built on hard boundaries')
   })
 
   it('uses the requested brand palette and respects reduced motion', () => {
@@ -92,39 +106,11 @@ describe('Landing page honours the product boundary', () => {
   })
 
   it('uses custom evidence diagrams and the shared professional symbol system', () => {
-    expect(src).toContain('EvidenceLayerVisual')
-    expect(evidenceVisual).toContain('<svg')
-    expect(evidenceVisual).toContain('AppIcon')
-    expect(evidenceVisual).toContain("'market' | 'options' | 'governance'")
-    expect(evidenceVisual).not.toMatch(/[🚀📈💡🔒]/u)
+    expect(src).not.toContain('EvidenceLayerVisual')
   })
 
-  it('uses authored live-state and workspace compositions instead of dashboard boxes', () => {
-    expect(src).toContain('LiveStateVisual')
-    expect(src).toContain('ResearchLoopVisual')
-    expect(liveVisual).toContain('state-aperture')
-    expect(liveVisual).toContain('aperture-orbits')
-    expect(researchVisual).toContain('research-map')
-    expect(researchVisual).toContain('path-main')
+  it('uses authored product compositions instead of dashboard boxes', () => {
     expect(src).not.toContain('workspace-board')
     expect(src).not.toContain('instrument-card')
-  })
-})
-
-describe('landing route keeps three.js off its critical path', () => {
-  it('loads VolSurfaceCanvas asynchronously rather than importing it statically', () => {
-    // VolSurfaceCanvas statically imports three. A plain
-    // `import VolSurfaceCanvas from '...'` here makes the 514 kB (128 kB gzip)
-    // vendor-three chunk a hard dependency of `/` -- the public landing page --
-    // for a decorative figure below the fold. The operator desk already treats
-    // three this way; see ProbabilityDensityChart.vue.
-    expect(src).not.toMatch(/^\s*import\s+VolSurfaceCanvas\s+from/m)
-    expect(src).toMatch(
-      /defineAsyncComponent\(\s*\(\)\s*=>\s*import\('@\/components\/VolSurfaceCanvas\.vue'\)/,
-    )
-  })
-
-  it('does not import three directly', () => {
-    expect(src).not.toMatch(/from\s+'three'/)
   })
 })

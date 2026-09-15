@@ -473,9 +473,25 @@ from edge.research.kalman_trend import (  # noqa: E402
     kalman_trend,
     position_state as kalman_position_state,
 )
+from edge.research.vol_target_trend import (  # noqa: E402
+    DEFAULT_CAPITAL as _DEFAULT_VOL_CAPITAL,
+    DEFAULT_FAST_DAYS as _DEFAULT_VOL_FAST_DAYS,
+    DEFAULT_LEV_CAP as _DEFAULT_VOL_LEV_CAP,
+    DEFAULT_SLOW_DAYS as _DEFAULT_VOL_SLOW_DAYS,
+    DEFAULT_TARGET_VOL as _DEFAULT_VOL_TARGET_VOL,
+    DEFAULT_VOL_DAYS as _DEFAULT_VOL_VOL_DAYS,
+    VolTargetTrade,
+    VolTargetTrendResult,
+    compute_trade_stats as _compute_vol_trade_stats,
+    vol_target_trend,
+)
 from edge.research.zero_dte import (  # noqa: E402
     EXCHANGE_TZ as _EXCHANGE_TZ,
     compute_zero_dte_tape,
+)
+from edge.tools.reversal_endpoint import (  # noqa: E402
+    reversal_payload as _reversal_payload,
+    reversal_scan_payload as _reversal_scan_payload,
 )
 from edge.research.microstructure_regime import (  # noqa: E402
     OptionGreeks,
@@ -2147,6 +2163,375 @@ def _kalman_trend_payload(
     return payload
 
 
+_VOL_TARGET_CAVEAT = (
+    "Descriptive in-sample reconstruction: sizes entries to target constant annualised "
+    "volatility. No slippage, transaction costs, or walk-forward corrections. "
+    "Not a gate verdict."
+)
+_VOL_TARGET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_VOL_TARGET_CACHE_TTL_S = 120.0
+_VOL_TARGET_LOCK = threading.Lock()
+_VOL_TARGET_MIN_BARS = 30
+_VOL_TARGET_MAX_TRADES = 500
+
+
+def _vol_target_cache_put(key: tuple[Any, ...], payload: dict) -> None:
+    with _VOL_TARGET_LOCK:
+        _VOL_TARGET_CACHE[key] = (time.time(), payload)
+        if len(_VOL_TARGET_CACHE) > 64:
+            oldest = min(_VOL_TARGET_CACHE, key=lambda k: _VOL_TARGET_CACHE[k][0])
+            _VOL_TARGET_CACHE.pop(oldest, None)
+
+
+def _vol_target_trend_payload(
+    symbol: str,
+    window: str,
+    *,
+    target_vol: float,
+    lev_cap: float,
+    fast_days: float,
+    slow_days: float,
+    vol_days: float,
+    capital: float,
+    intraday: bool,
+) -> dict:
+    """One symbol's volatility-targeted trend reconstruction, computed live and cached briefly."""
+    if window not in WINDOW_OFFSETS:
+        window = DEFAULT_WINDOW
+
+    cache_key = (
+        symbol,
+        window,
+        target_vol,
+        lev_cap,
+        fast_days,
+        slow_days,
+        vol_days,
+        capital,
+        intraday,
+    )
+    now = time.time()
+    with _VOL_TARGET_LOCK:
+        hit = _VOL_TARGET_CACHE.get(cache_key)
+    if hit is not None and now - hit[0] < _VOL_TARGET_CACHE_TTL_S:
+        return hit[1]
+
+    params = {
+        "target_vol": target_vol,
+        "lev_cap": lev_cap,
+        "fast_days": fast_days,
+        "slow_days": slow_days,
+        "vol_days": vol_days,
+        "capital": capital,
+        "fast_bars": None,
+        "slow_bars": None,
+        "vol_bars": None,
+        "bars_per_day": None,
+    }
+    empty = {
+        "available": False,
+        "reason": None,
+        "symbol": symbol,
+        "window": window,
+        "bars": "1h" if intraday else "daily",
+        "n_bars": 0,
+        "n_bars_full": 0,
+        "first_date": None,
+        "last_date": None,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "params": params,
+        "series": [],
+        "trades": [],
+        "n_trades": 0,
+        "stats": None,
+        "now": None,
+        "plots": {},
+        "decision_authorized": False,
+        "caveat": _VOL_TARGET_CAVEAT,
+    }
+
+    raw = _load_symbol_bars(symbol, prefer_intraday=intraday)
+    if raw is None or raw.empty or "close" not in raw.columns:
+        payload = {**empty, "reason": f"no bars found for '{symbol}'"}
+        _vol_target_cache_put(cache_key, payload)
+        return payload
+
+    pd_mod = _get_pd()
+    df_full = raw[~raw.index.duplicated(keep="last")].sort_index()
+    if not isinstance(df_full.index, pd_mod.DatetimeIndex):
+        payload = {**empty, "reason": f"'{symbol}' bars have no DatetimeIndex"}
+        _vol_target_cache_put(cache_key, payload)
+        return payload
+
+    close_full = pd_mod.to_numeric(df_full["close"], errors="coerce")
+    keep = close_full.notna() & (close_full > 0)
+    df_full = df_full.loc[keep]
+    close_full = close_full.loc[keep]
+    if len(close_full) < _VOL_TARGET_MIN_BARS:
+        payload = {
+            **empty,
+            "reason": f"only {len(close_full)} usable bars (< {_VOL_TARGET_MIN_BARS})",
+        }
+        _vol_target_cache_put(cache_key, payload)
+        return payload
+
+    try:
+        result = vol_target_trend(
+            df_full,
+            target_vol=target_vol,
+            lev_cap=lev_cap,
+            fast_days=fast_days,
+            slow_days=slow_days,
+            vol_days=vol_days,
+            capital=capital,
+        )
+    except Exception as e:  # noqa: BLE001
+        payload = {**empty, "reason": f"vol_target_trend failed: {type(e).__name__}: {e}"}
+        _vol_target_cache_put(cache_key, payload)
+        return payload
+
+    params = {
+        **params,
+        "fast_bars": int(result.fast_bars),
+        "slow_bars": int(result.slow_bars),
+        "vol_bars": int(result.vol_bars),
+        "bars_per_day": _safe_round(result.bars_per_day, 3),
+    }
+
+    dates = [d.strftime("%Y-%m-%d %H:%M" if intraday else "%Y-%m-%d") for d in df_full.index]
+    trade_rows: list[dict] = []
+    for t in result.trades:
+        trade_rows.append(
+            {
+                "entry_d": dates[t.entry_i] if t.entry_i < len(dates) else dates[-1],
+                "exit_d": dates[t.exit_i] if t.exit_i < len(dates) else dates[-1],
+                "dir": t.direction,
+                "qty": _safe_round(float(t.qty), 2),
+                "entry_px": _safe_round(float(t.entry_px), 4),
+                "exit_px": _safe_round(float(t.exit_px), 4),
+                "ret_pct": _safe_round(float(t.ret_pct), 3),
+                "pnl": _safe_round(float(t.pnl), 2),
+                "notional": _safe_round(float(t.notional), 2),
+                "leverage": _safe_round(float(t.leverage_at_entry), 2),
+                "ann_vol": _safe_round(float(t.vol_at_entry), 4),
+                "bars": int(t.exit_i - t.entry_i),
+                "forced_exit": bool(t.forced_exit),
+            }
+        )
+
+    stats = _compute_vol_trade_stats(result.trades, result.position_state, capital)
+
+    win_df = _slice_window(df_full, window)
+    if win_df.empty:
+        payload = {**empty, "params": params, "reason": f"no data in window for '{symbol}'"}
+        _vol_target_cache_put(cache_key, payload)
+        return payload
+    first_pos = int(df_full.index.get_indexer([win_df.index[0]])[0])
+    if first_pos < 0:
+        first_pos = 0
+
+    close_arr = close_full.to_numpy(dtype=float)
+    series: list[dict] = []
+    for i in range(first_pos, len(df_full)):
+        av = float(result.ann_vol[i])
+        lev = float(result.leverage[i])
+        ef = float(result.ema_fast[i])
+        es = float(result.ema_slow[i])
+        series.append(
+            {
+                "d": dates[i],
+                "close": _safe_round(float(close_arr[i]), 4),
+                "ema_f": _safe_round(ef, 4) if math.isfinite(ef) else None,
+                "ema_s": _safe_round(es, 4) if math.isfinite(es) else None,
+                "ann_vol": _safe_round(av, 4) if math.isfinite(av) else None,
+                "leverage": _safe_round(lev, 4) if math.isfinite(lev) else None,
+                "pos": int(result.position_state[i]),
+                "up": bool(result.up_trend[i]),
+            }
+        )
+
+    last_i = len(df_full) - 1
+    now_state = int(result.position_state[last_i])
+    now_position = "long" if now_state > 0 else "flat"
+    now_ann_vol = float(result.ann_vol[last_i]) if math.isfinite(result.ann_vol[last_i]) else None
+    now_lev = float(result.leverage[last_i]) if math.isfinite(result.leverage[last_i]) else None
+    now_px = float(close_arr[last_i])
+    target_qty = (capital * now_lev / now_px) if (now_lev is not None and now_lev > 0 and now_px > 0) else 0.0
+
+    current_up = bool(result.up_trend[last_i])
+    current_signal = "BUY" if (current_up and (now_lev is not None and now_lev > 0)) else "SELL"
+
+    # Walk backward to find when current trend state triggered
+    signal_i = last_i
+    while signal_i > 0 and bool(result.up_trend[signal_i - 1]) == current_up:
+        signal_i -= 1
+
+    signal_date = dates[signal_i]
+    signal_px = float(close_arr[signal_i]) if signal_i < len(close_arr) else now_px
+    signal_bars = last_i - signal_i
+    signal_pnl_pct = ((now_px / signal_px - 1.0) * 100.0) if (signal_px > 0 and current_up) else 0.0
+
+    now_block = {
+        "date": dates[last_i],
+        "signal": current_signal,
+        "position": now_position,
+        "up_trend": current_up,
+        "signal_date": signal_date,
+        "signal_px": _safe_round(signal_px, 4),
+        "signal_bars": int(signal_bars),
+        "signal_pnl_pct": _safe_round(signal_pnl_pct, 2),
+        "ema_fast": _safe_round(float(result.ema_fast[last_i]), 4) if math.isfinite(result.ema_fast[last_i]) else None,
+        "ema_slow": _safe_round(float(result.ema_slow[last_i]), 4) if math.isfinite(result.ema_slow[last_i]) else None,
+        "ann_vol": _safe_round(now_ann_vol, 4) if now_ann_vol is not None else None,
+        "target_vol": target_vol,
+        "leverage": _safe_round(now_lev, 3) if now_lev is not None else None,
+        "lev_cap": lev_cap,
+        "close": _safe_round(now_px, 4),
+        "target_qty": _safe_round(target_qty, 2),
+        "target_notional": _safe_round(target_qty * now_px, 2),
+        "forced_exit": bool(result.open_at_end),
+        "last_trade": trade_rows[-1] if trade_rows else None,
+    }
+
+    payload = {
+        "available": True,
+        "reason": None,
+        "symbol": symbol,
+        "window": window,
+        "bars": "1h" if intraday else "daily",
+        "n_bars": len(series),
+        "n_bars_full": int(len(df_full)),
+        "first_date": series[0]["d"] if series else None,
+        "last_date": series[-1]["d"] if series else None,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "params": params,
+        "series": series,
+        "trades": list(reversed(trade_rows))[:_VOL_TARGET_MAX_TRADES],
+        "n_trades": len(trade_rows),
+        "stats": stats,
+        "now": now_block,
+        "plots": {
+            "annualised vol": [s["ann_vol"] for s in series],
+            "leverage": [s["leverage"] for s in series],
+        },
+        "decision_authorized": False,
+        "caveat": _VOL_TARGET_CAVEAT,
+    }
+    _vol_target_cache_put(cache_key, payload)
+    return payload
+
+
+def _vol_target_signals_payload(
+    symbols: list[str],
+    *,
+    target_vol: float,
+    lev_cap: float,
+    fast_days: float,
+    slow_days: float,
+    vol_days: float,
+    capital: float,
+    intraday: bool,
+) -> dict:
+    """Evaluate current BUY/SELL signals and sizing for a list of symbols."""
+    clean_syms = tuple(sorted({s.strip().upper() for s in symbols if s.strip()}))
+    cache_key = (
+        "signals",
+        clean_syms,
+        round(target_vol, 4),
+        round(lev_cap, 4),
+        round(fast_days, 4),
+        round(slow_days, 4),
+        round(vol_days, 4),
+        round(capital, 2),
+        intraday,
+    )
+    now = time.time()
+    with _VOL_TARGET_LOCK:
+        hit = _VOL_TARGET_CACHE.get(cache_key)
+    if hit is not None and now - hit[0] < _VOL_TARGET_CACHE_TTL_S:
+        return hit[1]
+
+    items: list[dict] = []
+    for sym in symbols[:40]:
+        clean_sym = sym.strip().upper()
+        if not clean_sym:
+            continue
+        try:
+            payload = _vol_target_trend_payload(
+                clean_sym,
+                "1y",
+                target_vol=target_vol,
+                lev_cap=lev_cap,
+                fast_days=fast_days,
+                slow_days=slow_days,
+                vol_days=vol_days,
+                capital=capital,
+                intraday=intraday,
+            )
+            now_b = payload.get("now")
+            st = payload.get("stats")
+            items.append(
+                {
+                    "symbol": clean_sym,
+                    "available": payload.get("available", False),
+                    "reason": payload.get("reason"),
+                    "signal": now_b.get("signal", "SELL") if now_b else "SELL",
+                    "position": now_b.get("position", "flat") if now_b else "flat",
+                    "up_trend": now_b.get("up_trend", False) if now_b else False,
+                    "close": now_b.get("close") if now_b else None,
+                    "ema_fast": now_b.get("ema_fast") if now_b else None,
+                    "ema_slow": now_b.get("ema_slow") if now_b else None,
+                    "signal_date": now_b.get("signal_date") if now_b else None,
+                    "signal_px": now_b.get("signal_px") if now_b else None,
+                    "signal_bars": now_b.get("signal_bars", 0) if now_b else 0,
+                    "signal_pnl_pct": now_b.get("signal_pnl_pct", 0.0) if now_b else 0.0,
+                    "ann_vol": now_b.get("ann_vol") if now_b else None,
+                    "target_vol": target_vol,
+                    "leverage": now_b.get("leverage") if now_b else None,
+                    "target_qty": now_b.get("target_qty") if now_b else None,
+                    "target_notional": now_b.get("target_notional") if now_b else None,
+                    "win_rate_pct": st.get("win_rate_pct") if st else None,
+                    "total_pnl": st.get("total_pnl") if st else None,
+                }
+            )
+        except Exception as e:
+            items.append(
+                {
+                    "symbol": clean_sym,
+                    "available": False,
+                    "reason": f"evaluation error: {e}",
+                    "signal": "SELL",
+                    "position": "flat",
+                    "up_trend": False,
+                    "close": None,
+                    "ema_fast": None,
+                    "ema_slow": None,
+                    "signal_date": None,
+                    "signal_px": None,
+                    "signal_bars": 0,
+                    "signal_pnl_pct": 0.0,
+                    "ann_vol": None,
+                    "target_vol": target_vol,
+                    "leverage": None,
+                    "target_qty": None,
+                    "target_notional": None,
+                    "win_rate_pct": None,
+                    "total_pnl": None,
+                }
+            )
+
+    payload = {
+        "asof": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "target_vol": target_vol,
+        "lev_cap": lev_cap,
+        "capital": capital,
+        "count": len(items),
+        "signals": items,
+    }
+    _vol_target_cache_put(cache_key, payload)
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Microstructure Regime Dynamics, State Estimation & Systematic Execution Payloads
 # ---------------------------------------------------------------------------
@@ -3053,6 +3438,132 @@ def _run_scan_job(job_id: str, depth: str) -> None:
         with _SCAN_JOB_LOCK:
             if _ACTIVE_SCAN_JOB_ID == job_id:
                 _ACTIVE_SCAN_JOB_ID = None
+
+
+_DATA_SYNC_LOCK = threading.Lock()
+_LAST_DATA_SYNC_TS = 0.0
+
+
+def _sync_market_data(force: bool = False) -> dict[str, Any]:
+    """Automated market data sync pipeline.
+
+    Checks and refreshes:
+    1. Volatility Complex (data/vol_complex.csv) up to current date.
+    2. Core index ETFs & universe 1d OHLCV parquets (SPY, QQQ, DIA, IWM, CRDO, etc.).
+    3. Flushes caches and warms status so the workstation stays current automatically.
+    """
+    global _LAST_DATA_SYNC_TS
+    with _DATA_SYNC_LOCK:
+        now = time.time()
+        if not force and now - _LAST_DATA_SYNC_TS < 60.0:
+            return {"status": "skipped", "reason": "rate_limited"}
+        _LAST_DATA_SYNC_TS = now
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        updated_items: list[str] = []
+        errors: list[str] = []
+
+        # 1. Check & update Volatility Complex
+        vol_file = ROOT / "edge" / "data" / "vol_complex.csv"
+        vol_needs_update = force
+        if not vol_needs_update:
+            if not vol_file.is_file():
+                vol_needs_update = True
+            else:
+                try:
+                    df_vol = _get_pd().read_csv(vol_file)
+                    if not df_vol.empty and "Date" in df_vol.columns:
+                        last_vol_date = str(df_vol["Date"].iloc[-1])[:10]
+                        if last_vol_date < today:
+                            vol_needs_update = True
+                    else:
+                        vol_needs_update = True
+                except Exception:
+                    vol_needs_update = True
+
+        if vol_needs_update:
+            try:
+                from tools.fetch_vol_complex import fetch_vol_data
+
+                print(f"[api_server] auto-sync: updating vol_complex up to {today}...", flush=True)
+                df_new = fetch_vol_data(start_date="2015-01-01", end_date=today)
+                if df_new is not None and not df_new.empty:
+                    updated_items.append("vol_complex")
+                    print(f"[api_server] auto-sync: vol_complex updated ({len(df_new)} rows)", flush=True)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"vol_complex: {e}")
+                print(f"[api_server] auto-sync vol_complex failed: {e}", file=sys.stderr, flush=True)
+
+        # 2. Check & update 1d OHLCV parquets for core active universe
+        core_symbols = ["SPY", "QQQ", "DIA", "IWM", "CRDO", "NVDA", "TSLA", "AAPL", "MSFT"]
+        one_d_dir = ROOT / "edge" / "data" / "1d"
+        one_d_dir.mkdir(parents=True, exist_ok=True)
+        stale_symbols = []
+        for sym in core_symbols:
+            p = one_d_dir / f"{sym}.parquet"
+            if not p.is_file() or force:
+                stale_symbols.append(sym)
+            else:
+                try:
+                    tail = _symbol_quote_tail_cached(p)
+                    if tail is None or str(tail[2])[:10] < today:
+                        stale_symbols.append(sym)
+                except Exception:
+                    stale_symbols.append(sym)
+
+        if stale_symbols:
+            try:
+                from tools.fetch_universe import fetch_one, maybe_write
+
+                print(f"[api_server] auto-sync: refreshing 1d OHLCV for {stale_symbols}...", flush=True)
+                for sym in stale_symbols:
+                    try:
+                        df_bar = fetch_one(sym, "1d")
+                        if df_bar is not None and not df_bar.empty:
+                            p = one_d_dir / f"{sym}.parquet"
+                            maybe_write(p, df_bar, force=True)
+                            updated_items.append(f"1d:{sym}")
+                    except Exception as sym_err:  # noqa: BLE001
+                        errors.append(f"{sym}: {sym_err}")
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"fetch_universe: {e}")
+                print(f"[api_server] auto-sync 1d parquets failed: {e}", file=sys.stderr, flush=True)
+
+        # 3. Flush caches and warm status
+        if updated_items or force:
+            with _PARQUET_LOCK:
+                _PARQUET_CACHE.clear()
+            with _PRICE_ATTRACTOR_LOCK:
+                _PRICE_ATTRACTOR_CACHE.clear()
+            with _SYMBOL_QUOTE_TAIL_CACHE_LOCK:
+                _SYMBOL_QUOTE_TAIL_CACHE.clear()
+            with _YF_FAST_QUOTE_LOCK:
+                _YF_FAST_QUOTE_CACHE.clear()
+            try:
+                get_dashboard_data(force=True)
+                print("[api_server] auto-sync: dashboard status refreshed with current data", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[api_server] auto-sync get_dashboard_data failed: {e}", file=sys.stderr, flush=True)
+
+        return {
+            "status": "ok",
+            "asof": today,
+            "updated_items": updated_items,
+            "errors": errors,
+        }
+
+
+def _auto_sync_market_data_worker():
+    """Background daemon thread that periodically checks data freshness and auto-syncs."""
+    time.sleep(2.0)
+    while True:
+        try:
+            res = _sync_market_data(force=False)
+            if res.get("updated_items"):
+                print(f"[api_server] auto-sync completed: {res['updated_items']}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[api_server] auto-sync background worker exception: {e}", file=sys.stderr, flush=True)
+        time.sleep(1800.0)
 
 
 def _start_scan_job(depth: str) -> tuple[dict[str, Any], bool]:
@@ -4575,6 +5086,77 @@ def _symbol_quote_tail_cached(path) -> tuple | None:
     return result
 
 
+_YF_FAST_QUOTE_CACHE: dict[str, tuple[float, float | None, float | None, str | None]] = {}
+_YF_FAST_QUOTE_LOCK = threading.Lock()
+_YF_FAST_QUOTE_TTL_S = 15.0
+
+
+def _fetch_yfinance_fast_quote(symbol: str) -> tuple[float | None, float | None, str | None]:
+    """Fetch current last price, prev close, and asof ISO string via yfinance with short timeout."""
+    key = symbol.upper()
+    now = time.time()
+    with _YF_FAST_QUOTE_LOCK:
+        cached = _YF_FAST_QUOTE_CACHE.get(key)
+        if cached is not None and now - cached[0] < _YF_FAST_QUOTE_TTL_S:
+            return cached[1], cached[2], cached[3]
+
+    yf_sym = key
+    if yf_sym in TRACK_FALLBACK_MAP:
+        yf_sym = TRACK_FALLBACK_MAP[yf_sym]
+    elif yf_sym == "VIX":
+        yf_sym = "^VIX"
+
+    def _do_lookup():
+        import yfinance as yf
+        t = yf.Ticker(yf_sym)
+        fi = getattr(t, "fast_info", None)
+        last_val: float | None = None
+        prev_val: float | None = None
+        if fi is not None:
+            try:
+                lp = fi.get("last_price")
+                if lp is not None and math.isfinite(float(lp)) and float(lp) > 0:
+                    last_val = _safe_round(float(lp), 4)
+            except Exception:
+                last_val = None
+            try:
+                pc = fi.get("regular_market_previous_close") or fi.get("previous_close")
+                if pc is not None and math.isfinite(float(pc)) and float(pc) > 0:
+                    prev_val = _safe_round(float(pc), 4)
+            except Exception:
+                prev_val = None
+        if last_val is None or last_val <= 0:
+            hist = t.history(period="2d", timeout=_YF_SPOT_TIMEOUT_S)
+            if hist is not None and not hist.empty and "Close" in hist.columns:
+                closes = hist["Close"].dropna()
+                if len(closes):
+                    last_val = _safe_round(float(closes.iloc[-1]), 4)
+                if len(closes) > 1:
+                    prev_val = _safe_round(float(closes.iloc[-2]), 4)
+        if last_val is not None and last_val > 0:
+            asof_val = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            return last_val, prev_val, asof_val
+        return None, None, None
+
+    last: float | None = None
+    prev: float | None = None
+    asof: str | None = None
+    try:
+        futures = _get_concurrent_futures()
+        with futures.ThreadPoolExecutor(max_workers=1) as pool:
+            last, prev, asof = pool.submit(_do_lookup).result(timeout=_YF_SPOT_DEADLINE_S)
+    except Exception:
+        last, prev, asof = None, None, None
+
+    with _YF_FAST_QUOTE_LOCK:
+        _YF_FAST_QUOTE_CACHE[key] = (now, last, prev, asof)
+        if len(_YF_FAST_QUOTE_CACHE) > 256:
+            oldest = min(_YF_FAST_QUOTE_CACHE, key=lambda k: _YF_FAST_QUOTE_CACHE[k][0])
+            _YF_FAST_QUOTE_CACHE.pop(oldest, None)
+
+    return last, prev, asof
+
+
 def _symbol_quote(symbol: str) -> dict:
     """One live mark for the desk boards. LSE last when available, else local close."""
     local_last = None
@@ -4613,6 +5195,7 @@ def _symbol_quote(symbol: str) -> dict:
 
     live_spot, live_asof = _fetch_lse_equity_spot(symbol)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     if live_spot is not None:
         last = live_spot
         if local_asof and str(local_asof)[:10] >= today:
@@ -4622,18 +5205,26 @@ def _symbol_quote(symbol: str) -> dict:
         source = "lse_equity_candles"
         quality = "live"
         asof = live_asof or local_asof
-    elif local_last is not None:
-        last = local_last
-        prev = local_prev
-        source = "1d"
-        quality = "local"
-        asof = local_asof
     else:
-        last = None
-        prev = None
-        source = "unavailable"
-        quality = "stale"
-        asof = None
+        yf_last, yf_prev, yf_asof = _fetch_yfinance_fast_quote(symbol)
+        if yf_last is not None:
+            last = yf_last
+            prev = yf_prev if yf_prev is not None else local_last
+            source = "yfinance_realtime"
+            quality = "live"
+            asof = yf_asof
+        elif local_last is not None:
+            last = local_last
+            prev = local_prev
+            source = "1d"
+            quality = "local"
+            asof = local_asof
+        else:
+            last = None
+            prev = None
+            source = "unavailable"
+            quality = "stale"
+            asof = None
 
     chg = _pct(prev, last) if prev is not None and last is not None else None
 
@@ -4764,17 +5355,23 @@ def _fetch_lse_equity_spot(symbol: str) -> tuple[float | None, str | None]:
         if frame is not None and not getattr(frame, "empty", True) and "close" in frame.columns:
             close = float(frame["close"].iloc[-1])
             if math.isfinite(close) and close > 0:
-                spot = _safe_round(close, 4)
                 try:
                     ts = _get_pd().Timestamp(frame.index[-1])
                     if ts.tzinfo is None:
-                        asof = ts.tz_localize("UTC").isoformat()
+                        cand_asof = ts.tz_localize("UTC").isoformat()
                     else:
-                        asof = ts.tz_convert("UTC").isoformat()
+                        cand_asof = ts.tz_convert("UTC").isoformat()
                 except (TypeError, ValueError, AttributeError):
-                    asof = None
-                with _LSE_CIRCUIT_LOCK:
-                    _LSE_CONSECUTIVE_FAILURES = 0
+                    cand_asof = None
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if cand_asof and str(cand_asof)[:10] < today_str:
+                    spot, asof = None, None
+                else:
+                    spot = _safe_round(close, 4)
+                    asof = cand_asof
+                if spot is not None:
+                    with _LSE_CIRCUIT_LOCK:
+                        _LSE_CONSECUTIVE_FAILURES = 0
     except Exception:  # noqa: BLE001 - equity spot is a soft dependency
         spot, asof = None, None
         with _LSE_CIRCUIT_LOCK:
@@ -5276,8 +5873,9 @@ def _fetch_live_option_inputs(
         # fake zeros until someone pressed "BACKFILL OI" by hand. Capture the
         # delayed snapshot in-process instead, then redo the exact-OCC join, so
         # structure is measured on first load for any symbol with a listed chain.
-        if not live_oi_available and not oi_matches:
-            capture_dte = min(max(int(filters.max_dte or 60), 60), 180)
+        same_day_snapshot = latest_label == request_clock.date().isoformat()
+        if not live_oi_available and (not oi_matches or not same_day_snapshot or oi_matches < len(chain_rows) * 0.25):
+            capture_dte = min(max(int(filters.max_dte or 60), 60), 365)
             captured, capture_err = _ensure_delayed_chain_snapshot(
                 symbol,
                 max_dte=capture_dte,
@@ -5564,12 +6162,11 @@ def _options_payload_impl(symbol: str, query: dict) -> tuple[dict, int]:
                 available_dates and (not requested_asof or requested_asof not in available_dates)
             ),
         }
-        if not chain_rows:
-            # Names outside the cached option_chains universe (QBTS-class)
-            # have no dated parquet. Capture a delayed yfinance snapshot so
-            # the desk can still measure structure instead of 404ing into
-            # a wall of fake-zero boxes.
-            capture_dte = min(max(int(filters.max_dte or 60), 60), 180)
+        today_iso = datetime.now(timezone.utc).date().isoformat()
+        if not chain_rows or (mode == "live" and latest_label != today_iso):
+            # Names outside the cached option_chains universe (QBTS-class) or with stale
+            # snapshots capture a delayed yfinance snapshot so the desk reads current structure.
+            capture_dte = min(max(int(filters.max_dte or 60), 60), 365)
             delayed_ok, delayed_err = _ensure_delayed_chain_snapshot(
                 symbol,
                 max_dte=capture_dte,
@@ -7808,8 +8405,21 @@ def _live_opportunities_fresh(*, force: bool) -> dict | None:
     return None
 
 
+def _coverage_flow_symbols(payload: dict | None) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    coverage = payload.get("coverage")
+    if not isinstance(coverage, dict):
+        return 0
+    try:
+        return max(0, int(coverage.get("flow_symbols") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _rebuild_live_opportunities_body(*, force: bool) -> dict:
     global _LIVE_OPPORTUNITIES_CACHE, _LIVE_OPPORTUNITIES_CACHE_TS
+    previous = _LIVE_OPPORTUNITIES_CACHE
     # Passive polling stays cache-friendly. Only an explicit force request
     # cascades to vendors, matching the dashboard's "PULL LIVE DATA" action.
     board = _options_board_payload(
@@ -7832,6 +8442,18 @@ def _rebuild_live_opportunities_body(*, force: bool) -> dict:
         flow_cache_age_seconds=float(flow_cache.get("age_seconds") or 0.0),
     )
     payload = _stabilize_contract_plans(payload)
+    if (
+        not force
+        and isinstance(previous, dict)
+        and previous.get("available")
+        and _coverage_flow_symbols(previous) > 0
+        and _coverage_flow_symbols(payload) == 0
+    ):
+        # Keep the last flow-backed union. An empty tape (HTTP 429, timeout)
+        # used to persist a board-only board and wipe CALL/PUT setups.
+        _LIVE_OPPORTUNITIES_CACHE = previous
+        _LIVE_OPPORTUNITIES_CACHE_TS = 0.0
+        return previous
     if payload.get("available"):
         payload["sources"] = {
             "board": {
@@ -9588,7 +10210,7 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     s = r_copy.get("source")
                     if s in ("1d", "core", "wide", "local"):
                         r_copy["source"] = "local_daily_parquet"
-                    elif s == "lse_equity_candles":
+                    elif s in ("lse_equity_candles", "yfinance_realtime"):
                         r_copy["source"] = "lse_candles"
                     api_rows.append(r_copy)
                 self._send_json(
@@ -9616,6 +10238,10 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/api/sector-flow":
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
                 self._send_json(get_sector_flow(force=force))
+
+            elif path == "/api/sync_data":
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                self._send_json(_sync_market_data(force=force))
 
             elif path == "/api/trigger_scan":
                 depth = _scan_depth(query.get("depth", ["quick"])[0])
@@ -9687,6 +10313,20 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
                 payload, status = _zero_dte_payload(sym_or_err, query, force=force)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/reversal":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", ["SPY"])[0] or "SPY")
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                payload, status = _reversal_payload(sym_or_err, query, _get_yf(), force=force)
+                self._send_json(payload, status=status)
+
+            elif path == "/api/reversal/scan":
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                payload, status = _reversal_scan_payload(query, _get_yf(), force=force)
                 self._send_json(payload, status=status)
 
             elif path == "/api/price-attractors":
@@ -9995,6 +10635,115 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         ),
                         allow_short=(query.get("allow_short", ["0"])[0] or "0").lower()
                         in {"1", "true", "yes"},
+                        intraday=(query.get("bars", ["daily"])[0] or "daily").lower()
+                        in {"1h", "intraday"},
+                    )
+                )
+
+            elif path in {"/api/vol-target-trend", "/api/vol-target-trend/signals"}:
+                raw_symbols_param = query.get("symbols", [])
+                is_signals_call = path == "/api/vol-target-trend/signals" or bool(raw_symbols_param)
+                if is_signals_call:
+                    raw_symbols: list[str] = []
+                    for val in raw_symbols_param:
+                        raw_symbols.extend([s.strip() for s in val.split(",") if s.strip()])
+                    if not raw_symbols:
+                        s_single = (query.get("symbol", [""])[0] or "").strip()
+                        if s_single:
+                            raw_symbols.append(s_single)
+                    if not raw_symbols:
+                        raw_symbols = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "TSLA"]
+
+                    self._send_json(
+                        _vol_target_signals_payload(
+                            raw_symbols,
+                            target_vol=_safe_float(
+                                query.get("target_vol", [_DEFAULT_VOL_TARGET_VOL])[0],
+                                _DEFAULT_VOL_TARGET_VOL,
+                                lo=0.01,
+                                hi=2.0,
+                            ),
+                            lev_cap=_safe_float(
+                                query.get("lev_cap", [_DEFAULT_VOL_LEV_CAP])[0],
+                                _DEFAULT_VOL_LEV_CAP,
+                                lo=0.1,
+                                hi=20.0,
+                            ),
+                            fast_days=_safe_float(
+                                query.get("fast_days", [_DEFAULT_VOL_FAST_DAYS])[0],
+                                _DEFAULT_VOL_FAST_DAYS,
+                                lo=1.0,
+                                hi=365.0,
+                            ),
+                            slow_days=_safe_float(
+                                query.get("slow_days", [_DEFAULT_VOL_SLOW_DAYS])[0],
+                                _DEFAULT_VOL_SLOW_DAYS,
+                                lo=2.0,
+                                hi=730.0,
+                            ),
+                            vol_days=_safe_float(
+                                query.get("vol_days", [_DEFAULT_VOL_VOL_DAYS])[0],
+                                _DEFAULT_VOL_VOL_DAYS,
+                                lo=2.0,
+                                hi=365.0,
+                            ),
+                            capital=_safe_float(
+                                query.get("capital", [_DEFAULT_VOL_CAPITAL])[0],
+                                _DEFAULT_VOL_CAPITAL,
+                                lo=100.0,
+                                hi=1e9,
+                            ),
+                            intraday=(query.get("bars", ["daily"])[0] or "daily").lower()
+                            in {"1h", "intraday"},
+                        )
+                    )
+                    return
+
+                raw_sym = (query.get("symbol", [""])[0] or "").strip()
+                ok, sym_or_err = _sanitize_symbol(raw_sym)
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                self._send_json(
+                    _vol_target_trend_payload(
+                        sym_or_err,
+                        query.get("window", [DEFAULT_WINDOW])[0],
+                        target_vol=_safe_float(
+                            query.get("target_vol", [_DEFAULT_VOL_TARGET_VOL])[0],
+                            _DEFAULT_VOL_TARGET_VOL,
+                            lo=0.01,
+                            hi=2.0,
+                        ),
+                        lev_cap=_safe_float(
+                            query.get("lev_cap", [_DEFAULT_VOL_LEV_CAP])[0],
+                            _DEFAULT_VOL_LEV_CAP,
+                            lo=0.1,
+                            hi=20.0,
+                        ),
+                        fast_days=_safe_float(
+                            query.get("fast_days", [_DEFAULT_VOL_FAST_DAYS])[0],
+                            _DEFAULT_VOL_FAST_DAYS,
+                            lo=1.0,
+                            hi=365.0,
+                        ),
+                        slow_days=_safe_float(
+                            query.get("slow_days", [_DEFAULT_VOL_SLOW_DAYS])[0],
+                            _DEFAULT_VOL_SLOW_DAYS,
+                            lo=2.0,
+                            hi=730.0,
+                        ),
+                        vol_days=_safe_float(
+                            query.get("vol_days", [_DEFAULT_VOL_VOL_DAYS])[0],
+                            _DEFAULT_VOL_VOL_DAYS,
+                            lo=2.0,
+                            hi=365.0,
+                        ),
+                        capital=_safe_float(
+                            query.get("capital", [_DEFAULT_VOL_CAPITAL])[0],
+                            _DEFAULT_VOL_CAPITAL,
+                            lo=100.0,
+                            hi=1e9,
+                        ),
                         intraday=(query.get("bars", ["daily"])[0] or "daily").lower()
                         in {"1h", "intraday"},
                     )
@@ -10652,6 +11401,10 @@ def main():
 
     threading.Thread(
         target=_warm_market_regime_cache, daemon=True, name="market-regime-warm"
+    ).start()
+
+    threading.Thread(
+        target=_auto_sync_market_data_worker, daemon=True, name="auto-data-sync"
     ).start()
 
     if not args.no_browser and _is_loopback_host(host):

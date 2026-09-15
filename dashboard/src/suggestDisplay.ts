@@ -66,10 +66,15 @@ export interface SetupLevelMark {
   source?: string | null
 }
 
+export function formatSetupPrice(price: number | null | undefined): string {
+  if (price == null || !Number.isFinite(Number(price))) return UNMEASURED
+  return `$${num(price, 2)}`
+}
+
 export function formatSetupLevel(price: number | null | undefined, source?: string | null): string {
   if (price == null || !Number.isFinite(Number(price))) return UNMEASURED
   const tagged = levelSourceLabel(source)
-  const figure = `$${num(price, 2)}`
+  const figure = formatSetupPrice(price)
   return tagged === UNMEASURED ? figure : `${figure}  ${tagged}`
 }
 
@@ -81,8 +86,77 @@ export function formatSupportLevels(supports: SetupLevelMark[] | null | undefine
   return parts.length ? parts.join(' · ') : UNMEASURED
 }
 
+export function formatPriceList(marks: SetupLevelMark[] | null | undefined): string {
+  if (!Array.isArray(marks) || marks.length === 0) return UNMEASURED
+  const parts = marks
+    .map((item) => formatSetupPrice(item?.price))
+    .filter((part) => part !== UNMEASURED)
+  return parts.length ? parts.join(' · ') : UNMEASURED
+}
+
+/** Table cell: first measured price, plus a remainder count. */
+export function compactPriceList(marks: SetupLevelMark[] | null | undefined): string {
+  if (!Array.isArray(marks) || marks.length === 0) return UNMEASURED
+  const first = formatSetupPrice(marks[0]?.price)
+  if (first === UNMEASURED) return UNMEASURED
+  return marks.length > 1 ? `${first} +${marks.length - 1}` : first
+}
+
 export function formatTakeProfitZones(zones: SetupLevelMark[] | null | undefined): string {
   return formatSupportLevels(zones)
+}
+
+export type LevelRole = 'strike' | 'support' | 'invalidation' | 'take_profit'
+
+export function levelSourceImplication(
+  source: string | null | undefined,
+  role: LevelRole,
+  right?: string | null,
+): string {
+  const family = levelSourceLabel(source)
+  const dir = String(right ?? '')
+    .trim()
+    .toLowerCase()
+  if (family === 'options GEX') {
+    if (role === 'support') {
+      if (dir === 'put') return 'Dealer-hedge support. First harvest zone for a long put.'
+      return 'Dealer-hedge support. A long call is wrong under this print.'
+    }
+    if (role === 'invalidation' && dir === 'call') {
+      return 'Dealer-hedge support. A long call is wrong under this print.'
+    }
+    if (role === 'take_profit' && dir === 'call') {
+      return 'Dealer-hedge resistance. First harvest zone for a long call.'
+    }
+    if (role === 'take_profit' && dir === 'put') {
+      return 'Dealer-hedge support. First harvest zone for a long put.'
+    }
+    if (role === 'invalidation' && dir === 'put') {
+      return 'Dealer-hedge resistance. A long put is wrong if this print is reclaimed.'
+    }
+    return 'Options GEX magnet from dealer hedging, not a forecast.'
+  }
+  if (family === 'positions') {
+    if (role === 'strike') return 'Open-interest / pin cluster. Contract strike candidate.'
+    return 'Open-interest cluster. Positioning magnet, not a GEX wall.'
+  }
+  if (family === 'resistance/support') return 'Measured chart support/resistance.'
+  if (family === 'technical analysis') return 'Technical analysis level.'
+  return ''
+}
+
+export function gexMagnetCopy(kind: 'call_wall' | 'put_wall', right?: string | null): string {
+  const dir = String(right ?? '')
+    .trim()
+    .toLowerCase()
+  if (kind === 'call_wall') {
+    if (dir === 'call') return 'Dealer-hedge resistance. First take-profit magnet for a long call.'
+    if (dir === 'put') return 'Dealer-hedge resistance. Invalidation for a long put if reclaimed.'
+    return 'Dealer-hedge resistance above spot. Selling pressure as dealers fade rips.'
+  }
+  if (dir === 'call') return 'Dealer-hedge support. Invalidation for a long call if lost.'
+  if (dir === 'put') return 'Dealer-hedge support. First take-profit magnet for a long put.'
+  return 'Dealer-hedge support below spot. Buying pressure as dealers fade dips.'
 }
 
 export function setupHeadlineInvalidation(input: {

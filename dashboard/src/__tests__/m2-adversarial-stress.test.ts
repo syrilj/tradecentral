@@ -411,7 +411,10 @@ describe('Adversarial Stress Suite - SSR Rendering & Component Resilience', () =
     })
     const html = await renderToString(app)
     expect(html).not.toContain('NaN')
-    expect(html).toContain('class="sq bullish"')
+    expect(html).not.toContain('Infinity')
+    // A NaN score is unmeasured — no side is invented for it.
+    expect(html).toContain('class="sq neutral"')
+    expect(html).toContain('UNMEASURED')
   })
 
   it('renders OptionsDirectionBrief with unmeasured/degenerate summary cleanly without crashing', async () => {

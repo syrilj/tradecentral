@@ -93,13 +93,20 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
     }
   })
 })
+
+const tapeRead = computed(() => {
+  if (sourcePrints.value.length === 0) return 'No option prints have arrived for this symbol yet.'
+  if (filteredPrints.value.length === 0) return `No ${filterMode.value.toLowerCase()} prints in the current window.`
+  return `${filteredPrints.value.length} latest ${filterMode.value === 'All' ? '' : filterMode.value.toLowerCase() + ' '}prints shown. Premium color follows the signed trade side.`
+})
 </script>
 
 <template>
   <div class="real-time-flow-card">
     <div class="card-header">
       <div class="title-group">
-        <span class="card-title font-mono font-bold">REAL-TIME FLOW</span>
+        <span class="card-title font-mono font-bold">REAL-TIME FLOW TAPE</span>
+        <p class="card-subtitle">Recent prints ranked by execution class and signed premium.</p>
       </div>
       <div class="controls-group">
         <!-- The "Filter" caption was adjacent but unassociated, so the control
@@ -123,6 +130,10 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
         </button>
       </div>
     </div>
+
+    <p class="tape-read" :class="{ 'is-muted': filteredPrints.length === 0 }">
+      {{ tapeRead }}
+    </p>
 
     <!-- Table Frame -->
     <div class="flow-table-frame">
@@ -227,6 +238,13 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
   color: var(--ink);
 }
 
+.card-subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.35;
+}
+
 .controls-group {
   display: flex;
   align-items: center;
@@ -275,7 +293,9 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
 .flow-table-frame {
   width: 100%;
   overflow-x: auto;
-  min-height: 195px;
+  min-height: 228px;
+  display: flex;
+  align-items: stretch;
 }
 
 .tape-table {
@@ -285,6 +305,17 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
   font-size: var(--t-micro);
   font-variant-numeric: tabular-nums;
   text-align: left;
+}
+
+.tape-read {
+  margin: 0.25rem 0 0;
+  color: var(--ink-soft);
+  font-size: var(--t-micro);
+  line-height: 1.4;
+}
+
+.tape-read.is-muted {
+  color: var(--ink-faint);
 }
 
 .tape-table th.time-col {
@@ -353,15 +384,21 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
 }
 
 .tape-table td {
-  padding: 0.375rem 0.375rem;
+  padding: 0.5rem 0.375rem;
   border-bottom: 1px solid var(--rule-faint);
   white-space: nowrap;
 }
 
 .type-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: var(--t-nano);
-  padding: 0.1rem 0.3rem;
-  border-radius: 2px;
+  line-height: 1.25;
+  padding: 0.1rem 0.35rem;
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .type-pill.is-call {
@@ -375,9 +412,15 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
 }
 
 .side-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: var(--t-nano);
-  padding: 0.1rem 0.35rem;
-  border-radius: 2px;
+  line-height: 1.25;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .side-pill.is-bullish {

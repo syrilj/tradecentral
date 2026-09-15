@@ -124,11 +124,13 @@ const isMeasured = computed<boolean>(
   flex-direction: column;
   align-items: center;
   gap: var(--s3);
+  min-width: 0;
+  width: 100%;
 }
 
 .arc-wrapper {
   position: relative;
-  width: 200px;
+  width: min(100%, 200px);
   height: 110px;
 }
 
@@ -143,7 +145,7 @@ const isMeasured = computed<boolean>(
 }
 
 .active-arc.lvl-low {
-  stroke: var(--call);
+  stroke: var(--phosphor);
 }
 .active-arc.lvl-moderate {
   stroke: var(--warn);
@@ -185,8 +187,8 @@ const isMeasured = computed<boolean>(
 }
 
 .hazard-tag.lvl-low {
-  color: var(--call-hi);
-  background: var(--call-wash);
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
 }
 .hazard-tag.lvl-moderate {
   color: var(--warn);
@@ -207,9 +209,10 @@ const isMeasured = computed<boolean>(
 
 .gauge-stats {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--s3);
   width: 100%;
+  min-width: 0;
   padding-top: var(--s3);
   border-top: var(--hair) solid var(--rule);
 }

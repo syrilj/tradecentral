@@ -40,6 +40,12 @@ echo "--> [6/7] Fetching small-cap momentum-scan universe..."
 echo "--> [7/7] Fetching float data for the momentum scan..."
 "$PYTHON_BIN" "$ROOT/tools/fetch_float_data.py" || true
 
+# Notify running API server to reload caches if active on localhost:8787
+if curl -fsS "http://127.0.0.1:8787/api/health" >/dev/null 2>&1; then
+  echo "--> Notifying API server on :8787 of updated datasets..."
+  curl -sS -X POST "http://127.0.0.1:8787/api/sync_data?force=1" >/dev/null 2>&1 || true
+fi
+
 echo "============================================================"
 echo "  ✅ All market and research datasets are now up to date as of $TODAY!"
 echo "============================================================"

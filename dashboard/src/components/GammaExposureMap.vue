@@ -1680,7 +1680,7 @@ watch(
   color: var(--ink-dim);
   border: var(--hair) solid var(--glass-border);
   background: var(--glass-base);
-  border-radius: 9999px;
+  border-radius: var(--r-xs);
   font: 600 var(--t-micro) var(--font-display);
   letter-spacing: 0.05em;
   cursor: pointer;
@@ -1728,7 +1728,7 @@ watch(
   letter-spacing: 0.03em;
   cursor: pointer;
   border: var(--hair) solid var(--glass-border);
-  border-radius: 9999px;
+  border-radius: var(--r-xs);
   background: var(--void-lift);
   box-shadow: var(--glass-specular-subtle);
   transition:

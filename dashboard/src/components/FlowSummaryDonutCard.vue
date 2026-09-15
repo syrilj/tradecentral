@@ -36,13 +36,18 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
 <template>
   <div class="flow-summary-card">
     <div class="card-header">
-      <span class="card-eyebrow font-display font-semibold">FLOW SUMMARY (TODAY)</span>
+      <div>
+        <span class="card-eyebrow font-display font-semibold">FLOW SUMMARY (TODAY)</span>
+        <p class="card-subtitle">Measured option premium split by directional side.</p>
+      </div>
+      <span class="card-period font-mono">TODAY</span>
     </div>
 
     <div class="summary-body">
       <div class="stat-col">
-        <span class="stat-label font-ui">Premium</span>
+        <span class="stat-label font-ui">Total premium</span>
         <span class="stat-val font-mono font-bold">{{ mix.totalPremium }}</span>
+        <span class="stat-helper">Calls + puts</span>
       </div>
 
       <div class="donut-wrap">
@@ -96,6 +101,10 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
         </li>
       </ul>
     </div>
+
+    <p class="summary-read" :class="{ 'is-muted': !hasFlow }">
+      {{ hasFlow ? `${mix.bullishLabel} of measured premium is bullish; ${mix.bearishLabel} is bearish.` : 'Directional mix is not measurable in this window.' }}
+    </p>
   </div>
 </template>
 
@@ -104,7 +113,7 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
   background: var(--panel);
   border: 1px solid var(--rule);
   border-radius: var(--r-md);
-  padding: 0.875rem 1rem;
+  padding: 1rem 1.125rem;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -112,12 +121,27 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
   box-sizing: border-box;
   overflow: hidden;
   min-width: 0;
+  height: 100%;
 }
 
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.card-subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.35;
+}
+
+.card-period {
+  align-self: flex-start;
+  color: var(--phosphor);
+  font-size: var(--t-nano);
+  letter-spacing: 0.08em;
 }
 
 .card-eyebrow {
@@ -130,10 +154,11 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
 }
 
 .summary-body {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 68px minmax(132px, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  gap: 1rem;
+  margin: 0.5rem 0;
   min-width: 0;
 }
 
@@ -158,9 +183,14 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
   white-space: nowrap;
 }
 
+.stat-helper {
+  color: var(--ink-faint);
+  font-size: var(--t-nano);
+}
+
 .donut-wrap {
-  width: 56px;
-  height: 56px;
+  width: 68px;
+  height: 68px;
   flex-shrink: 0;
 }
 
@@ -200,8 +230,38 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
      strings like "+$312.6M" when the card is in a narrow grid column. */
   min-width: 0;
   white-space: normal;
-  word-break: break-all;
+  overflow-wrap: anywhere;
   text-align: right;
+}
+
+.summary-read {
+  margin: 0;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--rule-faint);
+  color: var(--ink-soft);
+  font-size: var(--t-micro);
+  line-height: 1.45;
+}
+
+.summary-read.is-muted {
+  color: var(--ink-faint);
+}
+
+@media (max-width: 520px) {
+  .summary-body {
+    grid-template-columns: minmax(0, 1fr) 64px;
+  }
+
+  .flow-legend {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .legend-row .stat-val {
+    justify-self: start;
+  }
 }
 
 .swatch {

@@ -283,6 +283,7 @@
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --dur-fast: 120ms;
   --dur: 220ms;
+  --dur-normal: var(--dur);
   --dur-slow: 480ms;
 
   /* ---- loop durations -----------------------------------------------------
@@ -546,6 +547,7 @@
   :root {
     --dur-fast: 0ms;
     --dur: 0ms;
+    --dur-normal: 0ms;
     --dur-slow: 0ms;
     --dur-spin: 0ms;
     --dur-orb: 0ms;

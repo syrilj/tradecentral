@@ -156,6 +156,18 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Volume Price Analysis', index: '08' },
   },
   {
+    path: '/liquidity',
+    name: 'liquidity',
+    component: () => import('@/views/LiquidityView.vue'),
+    meta: { title: 'Liquidity', index: '08' },
+  },
+  {
+    path: '/reversal',
+    name: 'reversal',
+    component: () => import('@/views/ReversalView.vue'),
+    meta: { title: 'Reversal Timing', index: '08' },
+  },
+  {
     path: '/amt',
     name: 'amt',
     component: () => import('@/views/AmtView.vue'),
@@ -237,6 +249,12 @@ const routes: RouteRecordRaw[] = [
     name: 'calculator',
     component: () => import('@/views/CalculatorView.vue'),
     meta: { title: 'Calculator', index: '05' },
+  },
+  {
+    path: '/voltrend',
+    name: 'voltrend',
+    component: () => import('@/views/VolTrendView.vue'),
+    meta: { title: 'Vol Trend', index: '16' },
   },
   {
     path: '/flow-state',

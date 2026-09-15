@@ -253,6 +253,8 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
       expect(primaryNames).toEqual([
         'brief',
         'flow',
+        'vpa',
+        'reversal',
         'options',
         'regime',
         'suggest',
@@ -261,6 +263,7 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
         'chain',
         'market',
         'crypto',
+        'voltrend',
       ])
 
       const deskToolsRegex = /const deskTools = \[\s*([\s\S]*?)\] as const/

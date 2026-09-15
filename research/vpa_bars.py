@@ -38,10 +38,17 @@ from __future__ import annotations
 import re
 import threading
 import time
+from datetime import date as _date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from research.vpa_thresholds import VPA_THRESHOLDS
+
+# Bar timestamps on disk are exchange-local and naive: daily bars sit at
+# midnight, hourly bars at session clock times (09:30, 10:30, ...).
+_EXCHANGE_TZ = ZoneInfo("America/New_York")
+_SESSION_CLOSE_HOUR = 16
 
 EDGE_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = EDGE_ROOT / "data"
@@ -254,6 +261,19 @@ def _aggregate_weekly(df):
     return agg if not agg.empty else None
 
 
+def _bar_to_wire(bar: Dict[str, Any], live: bool = False) -> Dict[str, Any]:
+    """OHLCV in the dashboard wire shape `{d,o,h,l,c,v}`. Scoring still uses the long keys."""
+    return {
+        "d": str(bar.get("date") or ""),
+        "o": float(bar["open"]),
+        "h": float(bar["high"]),
+        "l": float(bar["low"]),
+        "c": float(bar["close"]),
+        "v": float(bar.get("volume") or 0.0),
+        "live": bool(live),
+    }
+
+
 def _frame_to_bars(df, limit: int) -> List[Dict[str, Any]]:
     if limit and limit > 0:
         df = df.tail(limit)
@@ -298,7 +318,37 @@ def _empty_meta(requested: str, normalized: str, reason: str) -> Dict[str, Any]:
         "source": None,
         "resampled_from": None,
         "available": False,
+        "live_bar": None,
+        "incomplete_bar_dropped": None,
     }
+
+
+def bar_is_complete(bar_date: str, timeframe: str, now: Optional[datetime] = None) -> bool:
+    """Has the session that produces this bar already closed?
+
+    The API's auto-sync worker (`tools/api_server.py` auto-sync) refetches a
+    symbol's daily parquet whenever its last bar is older than today, so a
+    request at 10:00 ET writes Yahoo's *in-progress* bar to disk -- and because
+    the file is then "fresh", nothing replaces it until the next day. Every VPA
+    rule reads volume relative to prior bars, so a 10:00 bar carrying ~20% of a
+    session's volume scores as no demand / no supply / a low-volume test on the
+    single most heavily weighted bar in the ledger. Scoring must never see it.
+    """
+    now_et = (now or datetime.now(_EXCHANGE_TZ)).astimezone(_EXCHANGE_TZ).replace(tzinfo=None)
+    try:
+        start = datetime.fromisoformat(str(bar_date).replace("Z", ""))
+    except ValueError:
+        return True
+    start = start.replace(tzinfo=None)
+    if timeframe in ("1D", "1W"):
+        # A weekly bar is labelled with its Friday; a daily bar with its day.
+        day = start.date()
+        end = datetime.combine(day, datetime.min.time()) + timedelta(hours=_SESSION_CLOSE_HOUR)
+        return now_et >= end
+    minutes = int(_SPEC_BY_VALUE.get(timeframe, {}).get("minutes") or 60)
+    session_close = datetime.combine(start.date(), datetime.min.time()) + timedelta(hours=_SESSION_CLOSE_HOUR)
+    end = min(start + timedelta(minutes=minutes), session_close)
+    return now_et >= end
 
 
 def default_lookback(timeframe: str) -> int:
@@ -310,6 +360,7 @@ def load_bars(
     symbol: Optional[str],
     timeframe: Optional[str] = None,
     lookback: Optional[int] = None,
+    now: Optional[datetime] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Load bars for `symbol` at `timeframe`, reporting exactly what was served.
 
@@ -378,7 +429,16 @@ def load_bars(
         return [], _empty_meta(requested, normalized, f"no usable bars for {sym} at {target}")
 
     limit = int(lookback) if lookback else default_lookback(target)
-    bars = _frame_to_bars(frame, limit)
+    # One spare bar so dropping an in-progress bar still serves `limit` bars.
+    bars = _frame_to_bars(frame, limit + 1)
+    dropped_incomplete: Optional[str] = None
+    live_bar: Optional[Dict[str, Any]] = None
+    if bars and not bar_is_complete(bars[-1]["date"], target, now):
+        forming = bars.pop()
+        dropped_incomplete = forming["date"]
+        # Display-only: the chart paints this forming candle. Scoring never sees it.
+        live_bar = _bar_to_wire(forming, live=True)
+    bars = bars[-limit:]
     if not bars:
         return [], _empty_meta(requested, normalized, f"no usable bars for {sym} at {target}")
 
@@ -395,6 +455,10 @@ def load_bars(
         "source": source,
         "resampled_from": resampled_from,
         "lookback_requested": limit,
+        # The session for this bar had not closed when the read was made, so
+        # it was excluded from scoring rather than read as a finished bar.
+        "incomplete_bar_dropped": dropped_incomplete,
+        "live_bar": live_bar,
         "available": True,
     }
     return bars, meta
@@ -431,6 +495,8 @@ def bars_meta_from_series(
         "lookback_requested": len(bars),
         "available": True,
         "client_supplied": True,
+        "live_bar": None,
+        "incomplete_bar_dropped": None,
     }
 
 

@@ -473,7 +473,7 @@ const deskAction = computed(() => {
   background: var(--glass-base);
   font-size: var(--t-micro);
   white-space: nowrap;
-  border-radius: 9999px;
+  border-radius: var(--r-xs);
   font-weight: 750;
   letter-spacing: 0.04em;
 }
@@ -533,21 +533,21 @@ const deskAction = computed(() => {
   overflow: hidden;
   background: var(--void);
   border: var(--hair) solid var(--glass-border);
-  border-radius: 9999px;
+  border-radius: var(--r-xs);
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .premium-track i {
   height: 100%;
-  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity var(--dur) var(--ease-out);
   position: relative;
 }
 .call-fill {
   background: var(--call-hi);
-  border-radius: 9999px 0 0 9999px;
+  border-radius: var(--r-xs) 0 0 var(--r-xs);
 }
 .put-fill {
   background: var(--put-hi);
-  border-radius: 0 9999px 9999px 0;
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
 }
 .track-center-notch {
   position: absolute;
@@ -674,17 +674,21 @@ const deskAction = computed(() => {
   justify-content: center;
   gap: 3px;
   padding: 8px 14px;
-  border-left: 3px solid var(--action-tone);
-  background: var(--glass-surface-hi);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--surface-base);
 }
 .desk-action.bullish {
   --action-tone: var(--long);
+  border-color: var(--call-dim);
 }
 .desk-action.bearish {
   --action-tone: var(--short);
+  border-color: var(--put-dim);
 }
 .desk-action.mixed {
   --action-tone: var(--warn);
+  border-color: var(--rule-hi);
 }
 .priority-tag {
   padding: 1px 6px;

@@ -49,6 +49,8 @@ class TransitionRiskResult:
     cusum_score: pd.Series
     bocpd_break_prob: pd.Series
     transition_risk: pd.Series
+    downside_hazard: pd.Series | None = None
+    upside_expansion: pd.Series | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -330,13 +332,30 @@ def compute_cusum_transition_risk(
         if bocpd_break_prob is not None
         else pd.Series(0.0, index=idx)
     )
-    shock_penalty = (
-        (vol_shock_mask.reindex(idx).fillna(False).astype(float) * 0.85)
+
+    # Directional volatility shock decoupling:
+    # A vol shock with negative return / negative CUSUM is a downside transition hazard.
+    # A vol shock with positive return / positive CUSUM is an upside breakout expansion.
+    shock_is_down = (r_s < 0) | (s_neg_s > s_pos_s)
+    shock_is_up = (r_s > 0) & (s_pos_s >= s_neg_s)
+
+    down_shock_penalty = (
+        (vol_shock_mask.reindex(idx).fillna(False) & shock_is_down).astype(float) * 0.85
+        if vol_shock_mask is not None
+        else pd.Series(0.0, index=idx)
+    )
+    up_shock_bonus = (
+        (vol_shock_mask.reindex(idx).fillna(False) & shock_is_up).astype(float) * 0.85
         if vol_shock_mask is not None
         else pd.Series(0.0, index=idx)
     )
 
-    t_risk = pd.concat([t_cusum_s, bocpd_s, shock_penalty], axis=1).max(axis=1)
+    t_down_s = s_neg_s / float(h)
+    t_up_s = s_pos_s / float(h)
+    downside_hazard = pd.concat([t_down_s, bocpd_s, down_shock_penalty], axis=1).max(axis=1).clip(lower=0.0, upper=1.0)
+    upside_expansion = pd.concat([t_up_s, up_shock_bonus], axis=1).max(axis=1).clip(lower=0.0, upper=1.0)
+
+    t_risk = pd.concat([t_cusum_s, bocpd_s, down_shock_penalty], axis=1).max(axis=1)
     t_risk = t_risk.clip(lower=0.0, upper=1.0)
 
     return TransitionRiskResult(
@@ -345,6 +364,8 @@ def compute_cusum_transition_risk(
         cusum_score=t_cusum_s,
         bocpd_break_prob=bocpd_s,
         transition_risk=t_risk,
+        downside_hazard=downside_hazard,
+        upside_expansion=upside_expansion,
     )
 
 

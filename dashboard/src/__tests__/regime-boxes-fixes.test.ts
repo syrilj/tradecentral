@@ -69,4 +69,46 @@ describe('Market Regime Workstation Box Fixes Verification', () => {
     expect(src).toContain(':symbols-list="QUICK_UNIVERSE"')
     expect(src).toContain(':spot="regimeRead.spot ?? effectiveSpot"')
   })
+
+  it('RegimeView gives section tabs equal-fill sizing and a plain-language section guide', () => {
+    const src = readSource('views/RegimeView.vue')
+    expect(src).toContain('class="section-guide"')
+    expect(src).toContain('activeSectionGuidance.description')
+    expect(src).toContain('flex: 1 1 0;')
+    expect(src).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
+  })
+
+  it('does not paint kinematic speed as a confidence penalty or fake GEX from velocity', () => {
+    const src = readSource('views/RegimeView.vue')
+    expect(src).not.toContain('penaltyFactors = sens')
+    expect(src).not.toContain('(latestStatePoint?.kalman_velocity ?? 0) * 1000')
+    expect(src).toContain(
+      'penaltyFactors = labelIsLocallyReconciled ? [] : (raw?.confidence?.penaltyFactors ?? [])',
+    )
+  })
+
+  it('PrimaryRegimeCard shows kinematic speed as a signed readout and does not color LOW confidence as put/red', () => {
+    const src = readSource('components/PrimaryRegimeCard.vue')
+    expect(src).toContain('KINEMATIC SPEED')
+    expect(src).toContain('kalmanVelocity')
+    expect(src).toContain('grid-template-columns: minmax(0, 1fr) minmax(0, 260px)')
+    expect(src).toContain('.band-low .conf-fill')
+    expect(src).toContain('background: var(--ink-faint)')
+    expect(src).toContain('.band-low .conf-band-chip')
+  })
+
+  it('FourPillarContextGrid colors speed by sign, z-score as deviation, and fits columns with minmax', () => {
+    const src = readSource('components/FourPillarContextGrid.vue')
+    expect(src).toContain('Kinematic speed')
+    expect(src).toContain('Speed vs history')
+    expect(src).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))')
+    expect(src).toContain("'c-pos': (kalmanV ?? 0) > 0")
+    expect(src).toContain("'c-warn': kalmanZ !== null && Math.abs(kalmanZ) >= 1.5")
+  })
+
+  it('ModelAgreementMatrix uses a fixed table layout so the 5×5 fit stays inside the panel', () => {
+    const src = readSource('components/ModelAgreementMatrix.vue')
+    expect(src).toContain('table-layout: fixed')
+    expect(src).toContain('min-width: 0')
+  })
 })

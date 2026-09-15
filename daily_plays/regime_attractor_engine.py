@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from daily_plays import gex_core
+from edge.research.expected_move import compute_expected_move_1d
 
 
 # ---------------------------------------------------------------------------
@@ -851,9 +852,13 @@ def compute_price_attractors(
     vp_strike = extract_volume_poc(chain_rows, spot)
 
     # Expected Move 1D estimate
+    # Same fabrication guard: no measured IV → no expected move.
     valid_ivs = [p[3] for p in valid_parsed_rows if 0.005 <= p[3] <= 8.0]
-    avg_iv = sum(valid_ivs) / len(valid_ivs) if valid_ivs else 0.25
-    expected_move_1d = round(spot * avg_iv * math.sqrt(1.0 / 252.0), 2)
+    expected_move_1d = (
+        round(compute_expected_move_1d(spot, sum(valid_ivs) / len(valid_ivs), dte=1.0, calendar_days=True), 2)
+        if valid_ivs
+        else None
+    )
 
     # 6. Classify Regime State
     regime_state_obj = classify_market_regime(
@@ -1190,8 +1195,6 @@ def calculate_market_regime(
     if crossings:
         gamma_flip = min(crossings, key=lambda x: abs(x - spot))
         gamma_flip = round(gamma_flip, 2)
-    elif total_oi > 0:
-        gamma_flip = round(float(spot), 2)
 
     mapped_strike_gex = [
         {
@@ -1217,7 +1220,13 @@ def calculate_market_regime(
     else:
         charm_drift = "neutral_decay"
 
-    expected_move_1d = round(spot * default_iv * math.sqrt(1.0 / 252.0), 2)
+    # A 1σ move computed from a hard-coded fallback IV is a fabricated number.
+    # With no plausible chain IV there is no measured input — emit None instead.
+    expected_move_1d = (
+        round(compute_expected_move_1d(spot, default_iv, dte=1.0, calendar_days=True), 2)
+        if valid_iv_list
+        else None
+    )
 
     return classify_market_regime(
         spot=spot,

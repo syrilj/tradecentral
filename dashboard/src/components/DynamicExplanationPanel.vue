@@ -92,6 +92,7 @@ const uncertaintySources = computed(() =>
   display: flex;
   flex-direction: column;
   gap: var(--s3);
+  min-width: 0;
 }
 
 .narrative-box {
@@ -163,8 +164,9 @@ const uncertaintySources = computed(() =>
 
 .alerts-section {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--s2);
+  min-width: 0;
 }
 
 @media (max-width: 700px) {

@@ -157,6 +157,39 @@ def test_payload_reuses_cache_across_calls(monkeypatch):
     assert first["rows"][0]["symbol"] == "AAA"
 
 
+def test_empty_flow_rebuild_does_not_wipe_last_flow_union(monkeypatch):
+    """A provider 429 must not persist a board-only union over the last tape."""
+    _patch(
+        monkeypatch,
+        board_rows=[
+            {
+                "symbol": "AAA",
+                "squeeze_score": 1.0,
+                "spread_pct": 0.1,
+                "open_interest": 500,
+                "selected_dte": 10,
+            }
+        ],
+        flow_rows=[{"symbol": "AMD", "unusual_score": 50.0, "context_side": "long"}],
+    )
+    first = api_server._live_opportunities_payload()
+    assert first["coverage"]["flow_symbols"] >= 1
+    assert any(row.get("symbol") == "AMD" for row in first["rows"])
+
+    monkeypatch.setattr(
+        api_server,
+        "_unusual_flow_payload",
+        lambda **_: {"rows": [], "cache": {"age_seconds": 0.0}},
+    )
+    kept = api_server._rebuild_live_opportunities_body(force=False)
+    assert kept["coverage"]["flow_symbols"] >= 1
+    assert any(row.get("symbol") == "AMD" for row in kept["rows"])
+
+    wiped = api_server._rebuild_live_opportunities_body(force=True)
+    assert wiped["coverage"]["flow_symbols"] == 0
+    assert all(row.get("symbol") != "AMD" for row in wiped["rows"])
+
+
 def test_force_bypasses_the_opportunities_cache(monkeypatch):
     board_fn, flow_fn = _patch(monkeypatch, board_rows=[], flow_rows=[])
 

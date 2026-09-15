@@ -25,6 +25,7 @@ import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import LoadingState from '@/components/LoadingState.vue'
+import ZGauge from '@/components/ZGauge.vue'
 
 /**
  * CRYPTO — 24/7 coin workspace.
@@ -157,6 +158,17 @@ function markSource(r: CryptoMark): string {
   return r.source || 'unavailable'
 }
 
+/* Provenance is shown per-row only when it deviates from the default local
+   parquet path — a repeated identical string on every row is noise, and an
+   instrument reports what is unusual, not what is expected. */
+const DEFAULT_SOURCE = 'local_daily_parquet'
+
+function markProvenance(r: CryptoMark): string | null {
+  const s = (r.source || '').toLowerCase()
+  if (!s || s === DEFAULT_SOURCE) return null
+  return r.source
+}
+
 const focusMeta = computed(() => {
   for (const g of tapeGroups.value) {
     const row = g.rows.find((r) => r.symbol === focusCoin.value)
@@ -257,30 +269,42 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
         <h1>Crypto</h1>
         <p>
           24/7 coin marks, Kalman slope-over-noise on the focus coin, and CFTC Bitcoin futures spec
-          lean. Reads are labeled measured, inferred, or missing. Decision support only.
+          lean — each read labeled measured, inferred, or missing.
         </p>
       </div>
-      <div class="head-actions">
-        <span class="label session">Session 24/7</span>
-        <span class="label asof wraps">
-          {{ tapeMeasured }}/{{ tapeTotal }} marked
-          <template v-if="quotesRes.fetchedAt.value">
-            · tape {{ age(quotesRes.fetchedAt.value) }} ago</template
+      <div class="head-side">
+        <div class="head-meta">
+          <span class="label session">Session 24/7</span>
+          <span class="label asof wraps">
+            {{ tapeMeasured }}/{{ tapeTotal }} marked
+            <template v-if="quotesRes.fetchedAt.value">
+              · tape {{ age(quotesRes.fetchedAt.value) }} ago</template
+            >
+          </span>
+          <button
+            type="button"
+            class="refresh-btn label"
+            :disabled="isRefreshing"
+            title="Refresh coin tape, Kalman, and BTC COT"
+            @click="void refreshAll()"
           >
-        </span>
-        <span class="kpi-badge" :class="cotLeanTone(spotRead.combined.lean)">
-          {{ spotRead.combined.label }}
-        </span>
-        <span class="label kind">{{ kindCopy(spotRead.combined.kind) }} combined read</span>
-        <button
-          type="button"
-          class="refresh-btn label"
-          :disabled="isRefreshing"
-          title="Refresh coin tape, Kalman, and BTC COT"
-          @click="void refreshAll()"
-        >
-          {{ isRefreshing ? 'Refreshing…' : 'Refresh' }}
-        </button>
+            {{ isRefreshing ? 'Refreshing…' : 'Refresh' }}
+          </button>
+        </div>
+        <div class="combined" :class="cotLeanTone(spotRead.combined.lean)">
+          <span class="combined-kind label">{{ kindCopy(spotRead.combined.kind) }} combined read</span>
+          <span class="combined-value">{{ spotRead.combined.label }}</span>
+          <span class="combined-evidence">
+            <span class="ev">
+              <span class="ev-lab">Kalman z</span>
+              <span class="ev-val fig">{{ num(spotRead.kalman.value, 2) }}</span>
+            </span>
+            <span class="ev">
+              <span class="ev-lab">COT z</span>
+              <span class="ev-val fig">{{ num(spotRead.cot.value, 2) }}</span>
+            </span>
+          </span>
+        </div>
       </div>
     </header>
 
@@ -309,42 +333,46 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
         compact
       />
       <p v-else-if="quotesRes.error.value" class="err">{{ quotesRes.error.value }}</p>
-      <div v-else-if="tapeMeasured > 0" class="tape-grid">
-        <div v-for="group in tapeGroups" :key="group.sleeve" class="sleeve">
-          <span class="sleeve-name">{{ group.sleeve }}</span>
-          <div class="mark-list">
-            <button
-              v-for="r in group.rows"
-              :key="r.symbol"
-              type="button"
-              class="mark"
-              :class="[`q-${markQuality(r)}`, { on: r.symbol === focusCoin }]"
-              :title="`${r.symbol} · ${r.name} · ${markSource(r)} · set focus`"
-              @click="selectCoin(r.symbol)"
-            >
-              <span class="sym fig">{{ r.symbol }}</span>
-              <span class="name label wraps">
-                {{ r.name }}
-                <span v-if="r.vehicle === 'equity'" class="vehicle">Equity vehicle</span>
-              </span>
-              <span class="last fig">{{ num(r.last, 2) }}</span>
-              <span class="chg fig" :class="tone(r.chg_1d_pct)">
-                {{ r.chg_1d_pct == null ? DASH : signedPct(r.chg_1d_pct, 2) }}
-              </span>
-              <span class="src label">{{ markSource(r) }}</span>
-              <span v-if="markQuality(r) !== 'current'" class="q-flag label">
-                {{ markQuality(r) === 'missing' ? 'UNMEASURED' : 'STALE' }}
-              </span>
-            </button>
+      <div v-else-if="tapeMeasured > 0" class="tape-list">
+        <template v-for="group in tapeGroups" :key="group.sleeve">
+          <div class="sleeve-row">
+            <span class="sleeve-name label">{{ group.sleeve }}</span>
+            <span class="sleeve-count fig">
+              {{ group.rows.filter((r) => r.last != null).length }}/{{ group.rows.length }}
+            </span>
           </div>
-        </div>
+          <button
+            v-for="r in group.rows"
+            :key="r.symbol"
+            type="button"
+            class="mark"
+            :class="[`q-${markQuality(r)}`, { on: r.symbol === focusCoin }]"
+            :title="`${r.symbol} · ${r.name} · ${markSource(r)} · set focus`"
+            @click="selectCoin(r.symbol)"
+          >
+            <span class="sym fig">{{ r.symbol }}</span>
+            <span class="name label wraps">
+              {{ r.name }}
+              <span v-if="r.vehicle === 'equity'" class="vehicle">Equity vehicle</span>
+            </span>
+            <span v-if="markProvenance(r)" class="prov label">{{ markProvenance(r) }}</span>
+            <span v-if="markQuality(r) !== 'current'" class="q-flag label">
+              {{ markQuality(r) === 'missing' ? 'unmeasured' : 'stale' }}
+            </span>
+            <span class="last fig">{{ num(r.last, 2) }}</span>
+            <span class="chg fig" :class="tone(r.chg_1d_pct)">
+              {{ r.chg_1d_pct == null ? DASH : signedPct(r.chg_1d_pct, 2) }}
+            </span>
+          </button>
+        </template>
       </div>
       <p v-else class="note pad">
         No coin marks available. The quote feed returned nothing — missing, not zero.
       </p>
       <p v-if="tapeMeasured > 0" class="note tiny pad-x">
         Click a row to set the Kalman focus coin. UNMEASURED = provider returned no mark. STALE =
-        observed bar older than four days. Equity vehicles are listed separately from spot coins.
+        observed bar older than four days. Provenance is printed only when a mark deviates from the
+        local parquet path.
       </p>
     </Panel>
 
@@ -377,6 +405,13 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
         Kalman unmeasured for {{ focusCoin }}{{ kalmanUnavailable ? ` — ${kalmanUnavailable}` : '' }}.
       </p>
       <template v-else>
+        <div class="gauge-row">
+          <div class="gauge-fig">
+            <span class="gauge-val fig" :class="kalmanTone">{{ num(spotRead.kalman.value, 2) }}</span>
+            <span class="gauge-lab label">slope / noise z</span>
+          </div>
+          <ZGauge class="gauge" :value="spotRead.kalman.value" :cutoff="1" band-label="chop" />
+        </div>
         <div class="read-grid">
           <Readout
             label="Focus"
@@ -386,13 +421,6 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
                 ? `${focusMeta.name}${focusMeta.vehicle === 'equity' ? ' · equity vehicle' : ' · coin spot'}`
                 : 'coin spot'
             "
-            size="sm"
-          />
-          <Readout
-            label="Slope / noise"
-            :value="num(spotRead.kalman.value, 2)"
-            :sub="`${kindCopy(spotRead.kalman.kind)} · ${spotRead.kalman.source}`"
-            :tone="kalmanTone"
             size="sm"
           />
           <Readout
@@ -433,6 +461,15 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
       />
       <p v-else-if="cotRes.error.value" class="err">{{ cotRes.error.value }}</p>
       <template v-else-if="btcCot">
+        <div class="gauge-row">
+          <div class="gauge-fig">
+            <span class="gauge-val fig" :class="cotLeanTone(spotRead.cot.read)">
+              {{ num(spotRead.cot.value, 2) }}
+            </span>
+            <span class="gauge-lab label">spec net z · 1y</span>
+          </div>
+          <ZGauge class="gauge" :value="spotRead.cot.value" :cutoff="0.5" band-label="balanced" />
+        </div>
         <div class="read-grid">
           <Readout
             label="Book"
@@ -444,13 +481,6 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
             label="Spec net"
             :value="btcCot.noncomm_net == null ? DASH : num(btcCot.noncomm_net, 0)"
             :sub="cotSource"
-            size="sm"
-          />
-          <Readout
-            label="Z · 1y"
-            :value="num(spotRead.cot.value, 2)"
-            :sub="`${kindCopy(spotRead.cot.kind)} · ${spotRead.cot.source}`"
-            :tone="cotLeanTone(spotRead.cot.read)"
             size="sm"
           />
           <Readout
@@ -492,16 +522,14 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
 .crypto-head {
   grid-column: 1 / -1;
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
   justify-content: space-between;
-  gap: var(--s5);
+  gap: var(--s6);
   padding: var(--s4) var(--s5);
   border: var(--hair) solid var(--rule);
   border-left: 1px solid var(--phosphor-dim);
   border-radius: var(--r-sm);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 48px),
-    var(--surface-base);
+  background: var(--surface-base);
 }
 
 .eyebrow {
@@ -516,30 +544,35 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
   letter-spacing: -0.02em;
 }
 .head-copy p {
-  max-width: 70ch;
+  max-width: 64ch;
   margin-top: var(--s3);
   color: var(--text-secondary);
   font-size: var(--t-body);
   line-height: 1.55;
 }
 
-.head-actions {
+.head-side {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: var(--s2);
-  padding-bottom: var(--s1);
+  justify-content: space-between;
+  gap: var(--s4);
+  flex-shrink: 0;
+}
+.head-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
 }
 .session {
   color: var(--phosphor);
 }
-.asof,
-.kind {
+.asof {
   color: var(--ink-dim);
 }
 .refresh-btn {
-  min-height: 44px;
-  padding: var(--s2) var(--s3);
+  min-height: var(--density-control-h);
+  padding: var(--s1) var(--s3);
   color: var(--ink-soft);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
@@ -557,51 +590,118 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
   cursor: default;
 }
 
-.tape-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: var(--s5);
-}
-.sleeve {
+.combined {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
+  min-width: 280px;
+  padding: var(--s3) var(--s4);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+}
+.combined.pos {
+  border-color: var(--long-dim, var(--long));
+  background: var(--long-wash);
+}
+.combined.neg {
+  border-color: var(--short-dim, var(--short));
+  background: var(--short-wash);
+}
+.combined.flat {
+  border-color: var(--rule-hi);
+}
+.combined-kind {
+  color: var(--ink-dim);
+}
+.combined-value {
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: calc(var(--t-fig-lg) - 6px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
+}
+.combined.pos .combined-value {
+  color: var(--long);
+}
+.combined.neg .combined-value {
+  color: var(--short);
+}
+.combined-evidence {
+  display: flex;
+  gap: var(--s5);
+  padding-top: var(--s1);
+  border-top: var(--hair) solid var(--rule-faint);
+}
+.ev {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+}
+.ev-lab {
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
+}
+.ev-val {
+  color: var(--ink);
+  font-size: var(--t-body);
+}
+
+.tape-list {
+  display: flex;
+  flex-direction: column;
 }
 .crypto-view :deep(.panel .lab) {
   text-transform: none;
   letter-spacing: 0.01em;
 }
+.sleeve-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: var(--s3);
+  padding-bottom: var(--s1);
+  border-bottom: var(--hair) solid var(--rule);
+}
+.tape-list > .sleeve-row:first-child {
+  margin-top: 0;
+}
 .sleeve-name {
-  color: var(--ink-faint);
+  color: var(--ink-dim);
   font-size: var(--t-micro);
   font-weight: 600;
-  border-bottom: var(--hair) solid var(--rule-faint);
-  padding-bottom: var(--s1);
 }
-.mark-list {
-  display: flex;
-  flex-direction: column;
+.sleeve-count {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
 }
 .mark {
   display: grid;
-  grid-template-columns: 8ch minmax(0, 1fr) auto minmax(8ch, auto);
+  grid-template-columns:
+    minmax(9ch, auto) minmax(0, 1fr) auto auto minmax(9ch, auto)
+    8ch;
   align-items: center;
   gap: var(--s3);
-  min-height: 44px;
-  padding: var(--s2);
+  min-height: var(--density-row-height);
+  padding: 0 var(--s2);
   border-bottom: var(--hair) solid var(--rule-faint);
   text-align: left;
   transition: background var(--dur-fast) var(--ease-out);
-}
-.mark:last-child {
-  border-bottom: none;
 }
 .mark:hover,
 .mark.on {
   background: var(--panel-hi);
 }
+.mark.on {
+  box-shadow: inset 2px 0 0 var(--phosphor);
+}
 .mark.q-stale {
   box-shadow: inset 2px 0 0 var(--warn);
+}
+.mark.on.q-stale {
+  box-shadow: inset 2px 0 0 var(--phosphor);
 }
 .mark.q-missing .last,
 .mark.q-missing .chg {
@@ -622,10 +722,10 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
 .mark .chg {
   text-align: right;
 }
-.src {
-  grid-column: 1 / 3;
+.prov {
+  justify-self: end;
+  color: var(--ink-dim);
   font-size: var(--t-micro);
-  color: var(--ink-faint);
 }
 .vehicle {
   margin-left: var(--s2);
@@ -638,7 +738,6 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
   color: var(--short);
 }
 .q-flag {
-  grid-column: 3 / 5;
   justify-self: end;
   color: var(--warn);
   font-size: var(--t-tiny);
@@ -646,30 +745,34 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
 
 .read-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: var(--s3);
+  margin-top: var(--s4);
 }
 
-.kpi-badge {
-  display: inline-block;
+.gauge-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s6);
+}
+.gauge-fig {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  min-width: 10ch;
+}
+.gauge-val {
   font-family: var(--font-data);
-  font-size: var(--t-tiny);
+  font-size: calc(var(--t-fig) + 4px);
   font-weight: 700;
-  padding: 2px 7px;
-  border-radius: var(--r-xs);
-  letter-spacing: 0.04em;
+  line-height: 1.1;
 }
-.kpi-badge.pos {
-  color: var(--long);
-  background: var(--long-wash);
-}
-.kpi-badge.neg {
-  color: var(--short);
-  background: var(--short-wash);
-}
-.kpi-badge.flat {
+.gauge-lab {
   color: var(--ink-dim);
-  background: var(--panel-hi);
+}
+.gauge {
+  flex: 1;
+  min-width: 0;
 }
 
 .filter-btn {
@@ -721,9 +824,47 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
   .crypto-head {
     flex-direction: column;
     align-items: stretch;
+    gap: var(--s4);
   }
-  .head-actions {
-    align-items: flex-start;
+  .head-side {
+    align-items: stretch;
+  }
+  .head-meta {
+    flex-wrap: wrap;
+  }
+  .combined {
+    min-width: 0;
+  }
+  .gauge-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--s3);
+  }
+  .mark {
+    grid-template-columns: minmax(9ch, auto) minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'sym name last chg'
+      'sym name flag chg';
+    row-gap: 2px;
+    padding: var(--s1) var(--s2);
+  }
+  .mark .sym {
+    grid-area: sym;
+  }
+  .mark .name {
+    grid-area: name;
+  }
+  .mark .last {
+    grid-area: last;
+  }
+  .mark .chg {
+    grid-area: chg;
+  }
+  .mark .q-flag {
+    grid-area: flag;
+  }
+  .prov {
+    display: none;
   }
 }
 </style>

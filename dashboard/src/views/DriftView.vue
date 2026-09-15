@@ -399,7 +399,6 @@ const isUnderlyingStale = computed(
   () => pressureChannelRows.value.find((r) => r.key === 'underlying')?.stale === true,
 )
 
-
 const dataModeBadge = computed(() => {
   if (loading.value) return 'SYNC'
   if (error.value) return 'FAULT'
@@ -516,9 +515,21 @@ const microstructureAssessment = computed(() => {
     let conflictBody: string
     if (conflictExplanation) {
       conflictBody = `The evidence disagrees: ${conflictExplanation}.`
-      if (tapeTone && charmTone && tapeTone !== 'na' && charmTone !== 'na' && tapeTone !== charmTone) {
-        const tapeDir = tapeTone === 'buying' ? 'buying' : tapeTone === 'selling' ? 'selling' : 'neutral'
-        const charmDir = charmTone === 'buying' ? 'buying tailwind' : charmTone === 'selling' ? 'selling headwind' : 'neutral'
+      if (
+        tapeTone &&
+        charmTone &&
+        tapeTone !== 'na' &&
+        charmTone !== 'na' &&
+        tapeTone !== charmTone
+      ) {
+        const tapeDir =
+          tapeTone === 'buying' ? 'buying' : tapeTone === 'selling' ? 'selling' : 'neutral'
+        const charmDir =
+          charmTone === 'buying'
+            ? 'buying tailwind'
+            : charmTone === 'selling'
+              ? 'selling headwind'
+              : 'neutral'
         conflictBody += ` Note: Tape shows live ${tapeDir} flow (real-time order fill data); Charm shows mechanical ${charmDir} (time-decay model output) — these measure different dynamics and can legitimately diverge.`
       }
       if (isUnderlyingStale.value) {
@@ -596,8 +607,7 @@ const microstructureAssessment = computed(() => {
       action: 'VOLATILITY DAMPENING',
       tone: 'range',
       body: `Dealer positioning is Net Long Gamma ($${compact(summary.value.total_gex_m ?? 0)}M GEX). Dealers hedge counter-cyclically (buying dips, selling rips), compressing realized volatility between Put Wall ($${num(summary.value.put_wall, 0)}) and Call Wall ($${num(summary.value.call_wall, 0)}). ${spotPos}`,
-      implication:
-        `High probability of range-bound mean-reversion. Scenario if support holds: buy near Put Wall $${num(pw, 0)}, take profit near Call Wall $${num(cw, 0)}. Scenario if Put Wall breaks: wait for hourly close below $${num(pw, 0)} to switch to short bias. Breakout follow-through above $${num(cw, 0)} would invalidate range.`,
+      implication: `High probability of range-bound mean-reversion. Scenario if support holds: buy near Put Wall $${num(pw, 0)}, take profit near Call Wall $${num(cw, 0)}. Scenario if Put Wall breaks: wait for hourly close below $${num(pw, 0)} to switch to short bias. Breakout follow-through above $${num(cw, 0)} would invalidate range.`,
     }
   }
 
@@ -615,6 +625,96 @@ const microstructureAssessment = computed(() => {
   }
 })
 
+/** True when pressure imbalance is non-trivial but server confirmation is absent. */
+const isUnconfirmedLean = computed(() => {
+  const actionable = pressure.value?.actionable === true
+  const imb = pressure.value?.imbalance ?? 0
+  return !actionable && Math.abs(imb) > 0.25
+})
+
+/** Single unified authoritative consensus directive across all model & tape components.
+ * Eliminates contradictory reads by reconciling Microstructure Assessment, Playbook Strategies,
+ * and Order Flow Pressure into ONE unambiguous operational directive.
+ */
+const consensusDirective = computed(() => {
+  if (!pressure.value || !summary.value) return null
+  const assess = microstructureAssessment.value
+  const spotVal = spot.value
+  const cw = callWall.value
+  const pw = putWall.value
+  const flip = gammaFlip.value
+  const actionable = pressure.value.actionable === true
+  const imb = pressure.value.imbalance ?? 0
+  const gex = netGex.value ?? 0
+
+  // 1. Confirmed Structural Breakdown (Short Bias)
+  const structuralBreakdown =
+    (pw != null && spotVal != null && spotVal <= pw) ||
+    (flip != null && spotVal != null && spotVal < flip && gex < 0)
+
+  if (structuralBreakdown || (actionable && imb < -0.25)) {
+    const level = pw ?? flip ?? (spotVal ? spotVal * 0.98 : 0)
+    return {
+      headline: 'Bearish Breakdown & Structural Selling Headwind',
+      statusBadge: 'ACTIONABLE SHORT',
+      actionBadge: 'DOWNSIDE VOLATILITY CASCADE',
+      tone: 'selling' as const,
+      narrative: `Spot ($${num(spotVal, 2)}) is trading below key structural support (Put Wall $${num(pw, 0)} / Flip $${num(flip, 0)}). Dealer negative gamma accelerates downside slip. Tape and positioning corroboration confirms immediate selling headwind.`,
+      clearDirective: `EXECUTE SHORT BIAS: Fade counter-trend bounces towards $${num(level, 0)} or enter Bear Put Spreads. Invalidation stop: hourly close back above $${num(level, 0)}.`,
+    }
+  }
+
+  // 2. Confirmed Bullish Breakout (Long Bias)
+  if ((cw != null && spotVal != null && spotVal >= cw) || (actionable && imb > 0.25)) {
+    return {
+      headline: 'Bullish Breakout & Mechanical Buying Tailwind',
+      statusBadge: 'ACTIONABLE LONG',
+      actionBadge: 'UPWARD VOLATILITY EXPANSION',
+      tone: 'buying' as const,
+      narrative: `Spot ($${num(spotVal, 2)}) has confirmed bullish orderflow acceleration above resistance. Dealer call gamma unwinding and charm rebalancing create sustained upward drift.`,
+      clearDirective: `EXECUTE LONG BIAS: Enter on breakout retests or buy Bull Call Spreads. Invalidation stop: hourly close below Call Wall $${num(cw, 0)}.`,
+    }
+  }
+
+  // 3. Unconfirmed Lean / Conflicting Channels (No Trade / Stand Aside)
+  if (
+    !actionable &&
+    (Math.abs(imb) > 0.25 || (assess?.direction.startsWith('NO TRADE') ?? false))
+  ) {
+    const lean = imb > 0.25 ? 'Buying' : 'Selling'
+    return {
+      headline: `Orderflow Divergence: Unconfirmed ${lean} Lean`,
+      statusBadge: 'STAND ASIDE · AWAITING CONFIRMATION',
+      actionBadge: 'ZERO CONVICTION · PRESERVE CAPITAL',
+      tone: 'balanced' as const,
+      narrative: `Live tape orderflow and structural charm models are divergent. Dealer positioning indicates an unconfirmed ${lean.toLowerCase()} lean, but lack of multi-channel agreement makes directional entry low-probability.`,
+      clearDirective: `STAND ASIDE: Do NOT enter new directional risk. Hold capital until spot decisively closes outside range [$${num(pw, 0)} – $${num(cw, 0)}] on heavy volume.`,
+    }
+  }
+
+  // 4. Stable Range Mean-Reversion
+  if (gex >= 0 || (spotVal != null && pw != null && cw != null && spotVal >= pw && spotVal <= cw)) {
+    return {
+      headline: 'Positive Gamma Channeling & Mean-Reversion',
+      statusBadge: 'RANGE BOUND',
+      actionBadge: 'VOLATILITY DAMPENING PIN',
+      tone: 'range' as const,
+      narrative: `Positive dealer gamma ($${compact(gex)}M) compresses realized volatility between Put Wall $${num(pw, 0)} and Call Wall $${num(cw, 0)}. Dealer rebalancing enforces range pinning.`,
+      clearDirective: `EXECUTE RANGE FADE: Buy dips near Put Wall ($${num(pw, 0)}), take profit near Call Wall ($${num(cw, 0)}). Invalidation stop: close below $${num(pw, 0)}.`,
+    }
+  }
+
+  // 5. Neutral Consolidation
+  return {
+    headline: 'Neutral Market Equilibrium',
+    statusBadge: 'NEUTRAL PIVOT WATCH',
+    actionBadge: 'BREAKOUT MONITOR',
+    tone: 'balanced' as const,
+    narrative: 'Order flow and charm drift are balanced. No dominant dealer supply or demand bias.',
+    clearDirective:
+      'MONITOR PIVOTS: Wait for spot expansion outside immediate consolidation before deploying risk.',
+  }
+})
 
 /** Strike table: pair call/put rows per strike, sorted by strike. */
 interface StrikeTableRow {
@@ -856,6 +956,7 @@ const strategies = computed(() => {
   // Only a server-confirmed directional read can arm a pressure-driven
   // strategy. An unconfirmed lean leaves the range regime standing.
   const actionable = pressure.value?.actionable === true
+  const unconfirmedLean = !actionable && Math.abs(imb) > 0.25
   const s1Active =
     gex >= 0 &&
     spotVal != null &&
@@ -882,7 +983,7 @@ const strategies = computed(() => {
       direction: 'LONG at Put Wall / SHORT at Call Wall',
       directionType: 'range' as const,
       biasTag: 'RANGE MEAN-REVERSION',
-      status: s1Active ? 'ACTIVE' : 'MONITORING',
+      status: unconfirmedLean ? 'MONITORING' : s1Active ? 'ACTIVE' : 'MONITORING',
       isActive: s1Active,
       entryZone: pw != null ? `$${num(pw, 0)} (Put Wall Support)` : `Near Spot $${num(spotVal, 0)}`,
       target1: spotVal != null ? `$${num(spotVal + em * 0.5, 2)} (Equilibrium)` : 'Equilibrium',
@@ -893,8 +994,9 @@ const strategies = computed(() => {
           ? ((cw - spotVal) / (spotVal - pw * 0.985)).toFixed(1) + 'x'
           : '2.2x',
       condition: `Spot ($${num(spotVal, 0)}) bounded between Put Wall ($${num(pw, 0)}) and Call Wall ($${num(cw, 0)}), Net GEX > 0`,
-      trade:
-        'Fade range boundaries. BUY: Enter long call spreads / long shares near Put Wall support. SELL: Take profit and sell call spreads near Call Wall resistance.',
+      trade: unconfirmedLean
+        ? `WAIT FOR CONFIRMATION: Spot is inside channel [$${num(pw, 0)} – $${num(cw, 0)}], but directional orderflow is unconfirmed. Hold off on new entries until spot tests Put Wall support ($${num(pw, 0)}) or Call Wall resistance ($${num(cw, 0)}).`
+        : 'Fade range boundaries. BUY: Enter long call spreads / long shares near Put Wall support. SELL: Take profit and sell call spreads near Call Wall resistance.',
       mechanic:
         'Dealer counter-cyclical hedging dampens realized volatility: dealers buy falling prices and sell rising prices, enforcing range compression.',
       stages: [
@@ -1247,6 +1349,35 @@ const charmChartKey = computed(
       </div>
     </section>
 
+    <!-- Unified Authoritative Consensus Directive Banner -->
+    <section v-if="consensusDirective" class="consensus-section">
+      <div class="consensus-banner" :class="consensusDirective.tone">
+        <div class="consensus-header">
+          <div class="consensus-title-group">
+            <span class="label consensus-pill" :class="consensusDirective.tone"
+              >AUTHORITATIVE CONSENSUS</span
+            >
+            <span class="consensus-title">{{ consensusDirective.headline }}</span>
+          </div>
+          <div class="consensus-badge-group">
+            <span class="badge consensus-badge label" :class="consensusDirective.tone">
+              {{ consensusDirective.statusBadge }}
+            </span>
+            <span class="badge consensus-sub-badge label">
+              {{ consensusDirective.actionBadge }}
+            </span>
+          </div>
+        </div>
+        <p class="consensus-narrative">{{ consensusDirective.narrative }}</p>
+        <div class="consensus-footer label">
+          <span class="consensus-prompt"><b>ONE CLEAR DIRECTIVE:</b></span>
+          <span class="consensus-action-text" :class="consensusDirective.tone">{{
+            consensusDirective.clearDirective
+          }}</span>
+        </div>
+      </div>
+    </section>
+
     <!-- Pressure Gauge & Multi-Factor Decomposition -->
     <Panel label="PRESSURE GAUGE &amp; FLOW POSTURE" :meta="pressureVerdict" live>
       <div class="gauge-card-container">
@@ -1300,7 +1431,9 @@ const charmChartKey = computed(
           -->
           <div v-if="pressure" class="read-block" data-testid="pressure-read">
             <div class="read-verdict">
-              <span class="fig read-verdict-text" :class="pressure.direction">{{ pressure.verdict }}</span>
+              <span class="fig read-verdict-text" :class="pressure.direction">{{
+                pressure.verdict
+              }}</span>
               <span class="conf-chip label" :class="pressureBand">
                 {{ pressureBand.toUpperCase() }} · {{ Math.round(pressure.confidence.score * 100) }}
               </span>
@@ -1311,7 +1444,8 @@ const charmChartKey = computed(
             <div class="channel-list">
               <!-- Signal freshness ranking header -->
               <span class="label channel-freshness-hdr" colspan="3">
-                SIGNAL QUALITY RANK: Tape (live) &gt; Charm (structural) &gt; Underlying vol (OHLCV proxy)
+                SIGNAL QUALITY RANK: Tape (live) &gt; Charm (structural) &gt; Underlying vol (OHLCV
+                proxy)
               </span>
               <template v-for="row in pressureChannelRows" :key="row.key">
                 <span
@@ -1325,25 +1459,37 @@ const charmChartKey = computed(
                 <span
                   class="fig channel-ratio"
                   :class="[row.tone, { 'channel-stale': row.stale }]"
-                >{{ channelText(row.ratio) }}</span>
-                <span
-                  class="label channel-detail"
-                  :class="{ 'channel-stale': row.stale }"
-                >w {{ row.weight }} · {{ row.detail }}</span>
+                  >{{ channelText(row.ratio) }}</span
+                >
+                <span class="label channel-detail" :class="{ 'channel-stale': row.stale }"
+                  >w {{ row.weight }} · {{ row.detail }}</span
+                >
               </template>
             </div>
 
             <p class="gauge-note label">
-              Context (not votes) · call/put mix {{ channelText(pressure.context.call_put_mix) }} · GEX
-              {{ signed(pressure.components.net_gex_m, 1) }}M {{ pressure.context.gex_regime }} —
-              {{ pressure.context.follow_through }} · agreement
+              Context (not votes) · call/put mix {{ channelText(pressure.context.call_put_mix) }} ·
+              GEX {{ signed(pressure.components.net_gex_m, 1) }}M
+              {{ pressure.context.gex_regime }} — {{ pressure.context.follow_through }} · agreement
               {{ Math.round(pressure.confidence.agreement * 100) }}% · evidence
               {{ Math.round(pressure.confidence.evidence * 100) }}% · freshness
               {{ Math.round(pressure.confidence.freshness * 100) }}%
             </p>
-            <ul v-if="pressureConflicts.length" class="reason-list conflict label">
-              <li v-for="c in pressureConflicts" :key="c.channel">⚠ {{ c.note }} ({{ signed(c.ratio, 2) }})</li>
-            </ul>
+            <div v-if="pressureConflicts.length" class="conflict-reconciliation-box label">
+              <div class="reconcile-title">
+                <span class="reconcile-icon">⚖</span>
+                <b>ORDERFLOW RECONCILIATION · CHANNELS DIVERGENT:</b>
+              </div>
+              <p class="reconcile-text">
+                Live prints and mechanical charm disagree. Overall consensus is
+                <b>STAND ASIDE</b> until live order flow confirms direction.
+              </p>
+              <ul class="reason-list conflict label">
+                <li v-for="c in pressureConflicts" :key="c.channel">
+                  ⚠ {{ c.note }} ({{ signed(c.ratio, 2) }})
+                </li>
+              </ul>
+            </div>
             <ul v-if="pressureReasons.length" class="reason-list label">
               <li v-for="(r, i) in pressureReasons" :key="i">{{ r }}</li>
             </ul>
@@ -1403,12 +1549,18 @@ const charmChartKey = computed(
             <div class="factor-head">
               <span class="label">3. TAPE BUYERS VS SELLERS</span>
               <span class="factor-badge label" :class="pressureChannelRows[1]?.tone">
-                {{ pressureChannelRows[1]?.tone === 'na' ? 'ABSTAINS' : (pressureChannelRows[1]?.tone ?? 'n/a').toUpperCase() }}
+                {{
+                  pressureChannelRows[1]?.tone === 'na'
+                    ? 'ABSTAINS'
+                    : (pressureChannelRows[1]?.tone ?? 'n/a').toUpperCase()
+                }}
               </span>
             </div>
             <div class="factor-metric fig" :class="pressureChannelRows[1]?.tone">
               {{ channelText(pressure.channels.tape) }}
-              <small v-if="tapeChannel">{{ tapeChannel.n_signed }}/{{ tapeChannel.n_total }} sided</small>
+              <small v-if="tapeChannel"
+                >{{ tapeChannel.n_signed }}/{{ tapeChannel.n_total }} sided</small
+              >
             </div>
             <p class="factor-desc">
               {{
@@ -1421,15 +1573,24 @@ const charmChartKey = computed(
 
           <div
             class="factor-card"
-            :class="[pressureChannelRows[2]?.stale ? 'stale-channel' : pressureChannelRows[2]?.tone]"
+            :class="[
+              pressureChannelRows[2]?.stale ? 'stale-channel' : pressureChannelRows[2]?.tone,
+            ]"
           >
             <div class="factor-head">
-              <span class="label">4. UNDERLYING VOLUME READ <small class="freshness-rank-label">(quality 3/3 — lowest)</small></span>
+              <span class="label"
+                >4. UNDERLYING VOLUME READ
+                <small class="freshness-rank-label">(quality 3/3 — lowest)</small></span
+              >
               <span v-if="isUnderlyingStale" class="factor-badge label stale-excluded">
                 STALE · EXCLUDED FROM BLEND
               </span>
               <span v-else class="factor-badge label" :class="pressureChannelRows[2]?.tone">
-                {{ pressureChannelRows[2]?.tone === 'na' ? 'ABSTAINS' : (pressureChannelRows[2]?.tone ?? 'n/a').toUpperCase() }}
+                {{
+                  pressureChannelRows[2]?.tone === 'na'
+                    ? 'ABSTAINS'
+                    : (pressureChannelRows[2]?.tone ?? 'n/a').toUpperCase()
+                }}
               </span>
             </div>
             <div
@@ -1438,10 +1599,17 @@ const charmChartKey = computed(
             >
               <s v-if="isUnderlyingStale">{{ channelText(pressure.channels.underlying) }}</s>
               <template v-else>{{ channelText(pressure.channels.underlying) }}</template>
-              <small v-if="underlyingChannel"> rvol {{ underlyingChannel.rvol != null ? underlyingChannel.rvol.toFixed(2) + '×' : 'n/a' }}</small>
+              <small v-if="underlyingChannel">
+                rvol
+                {{
+                  underlyingChannel.rvol != null ? underlyingChannel.rvol.toFixed(2) + '×' : 'n/a'
+                }}</small
+              >
             </div>
             <p v-if="isUnderlyingStale" class="factor-desc stale-desc">
-              ⏸ Underlying OHLCV bars are STALE (not from the current session). This channel was <b>excluded from the blend</b> and did not vote on the pressure verdict. Verdict above is based on Tape + Charm only.
+              ⏸ Underlying OHLCV bars are STALE (not from the current session). This channel was
+              <b>excluded from the blend</b> and did not vote on the pressure verdict. Verdict above
+              is based on Tape + Charm only.
             </p>
             <p v-else class="factor-desc">
               {{
@@ -1451,7 +1619,6 @@ const charmChartKey = computed(
               }}
             </p>
           </div>
-
         </div>
 
         <!-- Microstructure Interpretation Banner with Directional Action -->
@@ -1473,7 +1640,9 @@ const charmChartKey = computed(
           <p class="assess-body">{{ microstructureAssessment.body }}</p>
           <div
             class="assess-footer label"
-            :class="microstructureAssessment.direction.startsWith('NO TRADE') ? 'no-trade-footer' : ''"
+            :class="
+              microstructureAssessment.direction.startsWith('NO TRADE') ? 'no-trade-footer' : ''
+            "
           >
             <b v-if="microstructureAssessment.direction.startsWith('NO TRADE')">
               ⚠ Confirmation Required:
@@ -1482,7 +1651,6 @@ const charmChartKey = computed(
             {{ microstructureAssessment.implication }}
           </div>
         </div>
-
       </div>
     </Panel>
 
@@ -1703,15 +1871,28 @@ const charmChartKey = computed(
         <div class="primary-ticket" :class="primaryStrategy.directionType">
           <div class="ticket-head">
             <div class="ticket-title-group">
-              <span class="badge primary-tag label">PRIMARY ACTIONABLE SETUP</span>
+              <span
+                class="badge primary-tag label"
+                :class="{ 'monitoring-tag': isUnconfirmedLean }"
+              >
+                {{
+                  isUnconfirmedLean ? 'MONITORING SETUP (RANGE WATCH)' : 'PRIMARY ACTIONABLE SETUP'
+                }}
+              </span>
               <span class="ticket-title">{{ primaryStrategy.title }}</span>
             </div>
             <div class="ticket-badges">
               <span class="badge dir-badge label" :class="primaryStrategy.directionType">
                 {{ primaryStrategy.biasTag }}
               </span>
-              <span class="strat-status label" :class="primaryStrategy.status.toLowerCase()">
-                {{ primaryStrategy.status }}
+              <span
+                class="strat-status label"
+                :class="[
+                  primaryStrategy.status.toLowerCase(),
+                  { 'stand-aside': isUnconfirmedLean },
+                ]"
+              >
+                {{ isUnconfirmedLean ? 'AWAITING CONFIRMATION' : primaryStrategy.status }}
               </span>
             </div>
           </div>
@@ -2967,6 +3148,169 @@ h1 {
   margin: 0;
 }
 
+/* Unified Consensus Directive Banner */
+.consensus-section {
+  margin-bottom: var(--s3);
+}
+.consensus-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--surface-base);
+  box-shadow: var(--shadow-1);
+}
+.consensus-banner.buying {
+  border-color: var(--call-dim);
+  background: var(--surface-base);
+}
+.consensus-banner.selling {
+  border-color: var(--put-dim);
+  background: var(--surface-base);
+}
+.consensus-banner.range {
+  border-color: var(--phosphor-dim);
+  background: var(--surface-base);
+}
+.consensus-banner.balanced {
+  border-color: var(--warn);
+  background: var(--surface-base);
+}
+.consensus-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.consensus-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.consensus-pill {
+  font-size: var(--t-nano);
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  background: var(--panel-hi);
+  color: var(--ink-faint);
+  font-weight: 700;
+}
+.consensus-title {
+  font-size: var(--t-h3, 16px);
+  font-weight: 700;
+  color: var(--ink);
+}
+.consensus-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.consensus-badge {
+  font-size: var(--t-nano);
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: var(--r-xs);
+}
+.consensus-badge.buying {
+  color: var(--call-hi);
+  background: var(--call-wash);
+  border: 1px solid var(--call-dim);
+}
+.consensus-badge.selling {
+  color: var(--put-hi);
+  background: var(--put-wash);
+  border: 1px solid var(--put-dim);
+}
+.consensus-badge.range {
+  color: var(--phosphor);
+  background: var(--phosphor-wash);
+  border: 1px solid var(--phosphor-dim);
+}
+.consensus-badge.balanced {
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: 1px solid var(--warn);
+}
+.consensus-sub-badge {
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
+  background: var(--wash-1);
+  border: 1px solid var(--rule-faint);
+}
+.consensus-narrative {
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0;
+}
+.consensus-footer {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--t-micro);
+  padding-top: 8px;
+  border-top: var(--hair) solid var(--rule-faint);
+  flex-wrap: wrap;
+}
+.consensus-prompt b {
+  color: var(--ink);
+  letter-spacing: 0.05em;
+}
+.consensus-action-text {
+  font-weight: 600;
+}
+.consensus-action-text.buying {
+  color: var(--call-hi);
+}
+.consensus-action-text.selling {
+  color: var(--put-hi);
+}
+.consensus-action-text.range {
+  color: var(--phosphor);
+}
+.consensus-action-text.balanced {
+  color: var(--warn);
+}
+
+/* Conflict Reconciliation Box in Pressure Gauge */
+.conflict-reconciliation-box {
+  margin-top: 8px;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--warn);
+  background: var(--warn-wash);
+  border-radius: var(--r-xs);
+}
+.reconcile-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+  font-size: var(--t-nano);
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.reconcile-text {
+  font-size: var(--t-micro);
+  color: var(--ink);
+  margin: 0 0 6px 0;
+  line-height: 1.4;
+}
+.monitoring-tag {
+  background: var(--warn-wash) !important;
+  color: var(--warn) !important;
+  border-color: var(--warn) !important;
+}
+.strat-status.stand-aside {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
 /* Microstructure Assessment Box */
 .assessment-box {
   display: flex;
@@ -3060,7 +3404,6 @@ h1 {
   letter-spacing: 0.04em;
 }
 
-
 /* Flow Cascade Diagram */
 .flow-cascade-container {
   display: flex;
@@ -3086,10 +3429,10 @@ h1 {
   background: var(--surface-base);
 }
 .cascade-step.buying {
-  border-left: 1px solid var(--call-hi);
+  border-color: var(--call-dim);
 }
 .cascade-step.selling {
-  border-left: 1px solid var(--put-hi);
+  border-color: var(--put-dim);
 }
 
 .step-num {
@@ -3205,6 +3548,7 @@ h1 {
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-xs);
   background: var(--panel);
+  min-width: 0;
 }
 .lvl-label {
   font-size: var(--t-nano);
@@ -3214,6 +3558,8 @@ h1 {
 .lvl-val {
   font-size: var(--t-body);
   font-weight: 700;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .lvl-val.highlight {
   color: var(--ink);

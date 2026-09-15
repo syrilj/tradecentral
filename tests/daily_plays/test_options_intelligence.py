@@ -243,7 +243,11 @@ def test_unsigned_call_put_mix_never_drives_squeeze_direction():
     ])
     assert unsigned["summary"]["activity_imbalance"] == 1.0
     assert unsigned["summary"]["signed_flow_imbalance"] is None
-    assert unsigned["summary"]["squeeze"]["theory"]["directional_flow_imbalance"] == 0.0
+    theory = unsigned["summary"]["squeeze"]["theory"]
+    # Unmeasured, not a neutral 0.0 vote: the flow term is dropped from conviction.
+    assert theory["directional_flow_imbalance"] is None
+    assert theory["flow_measured"] is False
+    assert theory["flow_weight"] == 0.0
     # Unsigned tape still gets a live activity-shift readout (call+/put−),
     # which must not leak into the signed squeeze term.
     activity = unsigned["summary"]["activity_shift"]

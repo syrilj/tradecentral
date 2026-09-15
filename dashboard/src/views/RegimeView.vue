@@ -141,8 +141,52 @@ const SECTIONS = [
   { id: 'all', label: 'ALL WORKSPACES' },
 ] as const
 
+const SECTION_GUIDANCE: Record<SectionId, { label: string; description: string }> = {
+  tactical: {
+    label: 'Start here',
+    description:
+      'The executive read combines trend, volatility, structure, flow, and dealer gamma into one stance.',
+  },
+  levels: {
+    label: 'Price map',
+    description:
+      'Use this view to see the nearest support and resistance, the mean target, and what the tape did at each level.',
+  },
+  gamma: {
+    label: 'Dealer positioning',
+    description:
+      'This view explains where dealer hedging can dampen moves, amplify them, or change across the gamma flip.',
+  },
+  dynamics: {
+    label: 'Market motion',
+    description:
+      'The charts show the measured trend, velocity, envelope, and anchored VWAP context behind the current read.',
+  },
+  flow: {
+    label: 'Participation',
+    description:
+      'Follow options flow, expiry pressure, institutional prints, and the dealer hedging response.',
+  },
+  setups: {
+    label: 'Evidence check',
+    description:
+      'Review recent trigger setups and the backtest breakdown before treating a pattern as actionable.',
+  },
+  surface: {
+    label: 'Probability audit',
+    description:
+      'Inspect the volatility surface, selected expiry, probability band, and any reasons a number is withheld.',
+  },
+  all: {
+    label: 'Full workstation',
+    description:
+      'Keep every workspace visible when you need the complete chain from market read to supporting evidence.',
+  },
+}
+
 type SectionId = (typeof SECTIONS)[number]['id']
 const activeSection = ref<SectionId>('tactical')
+const activeSectionGuidance = computed(() => SECTION_GUIDANCE[activeSection.value])
 
 function setSection(id: SectionId): void {
   activeSection.value = id
@@ -315,7 +359,7 @@ const moveExcursion = computed(() => {
    * printed "5.67x 1D EM · Abnormal Volatility Breakout" — a six-day-old gap
    * reported as this session's excursion. */
   const q = symbolQuoteRow.value?.quality
-  if (q != null && q !== 'live') return null
+  if (q != null && q !== 'live' && q !== 'realtime' && q !== 'delayed') return null
   return assessMoveExcursion(last - prev, expectedMove.value.em1dDollars)
 })
 
@@ -520,10 +564,11 @@ const microRegimeRes = useResource<MicrostructureRegimeSnapshot>(
    the routed contract. Polled faster than the regime read because its lead
    value is the clock, and a phase boundary that lands 30s late is a boundary
    the operator can trade through. */
-const executionGateRes = useResource<ExecutionGatePayload>(
-  () => api.executionGate(symbol.value),
-  { intervalMs: 15_000, immediate: false, enabled: () => activated.value },
-)
+const executionGateRes = useResource<ExecutionGatePayload>(() => api.executionGate(symbol.value), {
+  intervalMs: 15_000,
+  immediate: false,
+  enabled: () => activated.value,
+})
 
 const stateRes = useResource<StateEstimationPayload>(
   () =>
@@ -938,7 +983,8 @@ const pivotLadder = computed(() => {
     ...(em
       ? [
           {
-            label: expectedMove.value?.ivBasis === 'vix_proxy' ? '+1D EM (VIX/16)' : '+1D EM (IV/16)',
+            label:
+              expectedMove.value?.ivBasis === 'vix_proxy' ? '+1D EM (VIX/16)' : '+1D EM (IV/16)',
             price: em.em1dHigh,
             role: 'Rule of 16 upper 1σ',
             tone: 'warn',
@@ -1001,6 +1047,13 @@ const missingLevels = computed<string[]>(() => {
   if (r.zeroGamma == null) out.push('gamma flip')
   return out
 })
+
+function pivotDeltaPct(price: number | null): string | null {
+  const s = regimeRead.value.spot ?? effectiveSpot.value
+  if (!s || s <= 0 || !price) return null
+  const diff = ((price - s) / s) * 100
+  return `${diff >= 0 ? '+' : ''}${num(diff, 1)}%`
+}
 
 /* ---- LEVEL MAP: probabilities, order flow, and the mean -----------------
  *
@@ -1140,24 +1193,10 @@ const reconciledMarketRegime = computed<MarketRegimePayload | null>(() => {
     probs = null
   }
 
-  // Real market sensitivities rather than subjective penalties
-  const sens: string[] = []
-  if (r.distanceToFlip != null && r.zeroGamma != null) {
-    sens.push(`Spot ${pctFrac(Math.abs(r.distanceToFlip), 2)} from Flip ($${num(r.zeroGamma, 2)})`)
-  }
-  if (vel !== 0) {
-    sens.push(`Kinematic Velocity: ${vel >= 0 ? '+' : ''}${num(vel, 4)}`)
-  }
-  if (pt?.ou_half_life != null) {
-    sens.push(`OU Half-life: ${num(pt.ou_half_life, 1)} ${barUnit.value}`)
-  }
-  if (r.callWall != null && spot) {
-    sens.push(`Call Wall: $${num(r.callWall, 2)} (+${num(((r.callWall - spot) / spot) * 100, 1)}%)`)
-  }
-  if (r.putWall != null && spot) {
-    sens.push(`Put Wall: $${num(r.putWall, 2)} (${num(((r.putWall - spot) / spot) * 100, 1)}%)`)
-  }
-  penaltyFactors = sens
+  // Keep engine-authored confidence penalties only. Walls, flip distance and
+  // kinematic speed are signed reads, not ⚠ penalties — stuffing them into
+  // penaltyFactors painted the confidence box red and overflowed the gauge.
+  penaltyFactors = labelIsLocallyReconciled ? [] : (raw?.confidence?.penaltyFactors ?? [])
 
   const trendState: TrendState =
     vel > 0.005
@@ -1259,7 +1298,10 @@ const reconciledMarketRegime = computed<MarketRegimePayload | null>(() => {
               ? `Support at Put Wall $${num(r.putWall, 2)}`
               : 'Support channel dynamic',
           ],
-    uncertaintySources: penaltyFactors,
+    uncertaintySources:
+      raw?.explanation?.uncertaintySources && raw.explanation.uncertaintySources.length > 0
+        ? raw.explanation.uncertaintySources
+        : [],
   }
 
   const volState: VolatilityStateType =
@@ -1567,7 +1609,7 @@ watch(
       void vwapRes.refresh({ clear: true })
       void signalsRes.refresh({ clear: true })
       void absorptionRes.refresh({ clear: true })
-    void zeroDteRes.refresh({ clear: true })
+      void zeroDteRes.refresh({ clear: true })
       void runBacktest()
     }
   },
@@ -1849,6 +1891,11 @@ function onBreadthActivate(): void {
         </div>
       </div>
 
+      <div v-if="activated" class="section-guide" aria-live="polite">
+        <span class="section-guide-label font-mono">{{ activeSectionGuidance.label }}</span>
+        <span class="section-guide-text">{{ activeSectionGuidance.description }}</span>
+      </div>
+
       <!-- Controls & Quick Universe Bar -->
       <div class="controls-line">
         <form class="symbol-form" @submit.prevent="applySymbol">
@@ -1918,6 +1965,15 @@ function onBreadthActivate(): void {
         start it.
       </p>
       <button type="button" class="go-live-btn" @click="goLive">GO LIVE</button>
+      <ol class="idle-sections label" aria-label="Sections that activate">
+        <li>Tactical brief</li>
+        <li>Levels &amp; flow</li>
+        <li>Gamma map</li>
+        <li>Dynamics</li>
+        <li>Flow tape</li>
+        <li>Setups</li>
+        <li>Surface</li>
+      </ol>
     </section>
 
     <!-- ACTIVE WORKSTATION BODY -->
@@ -1989,12 +2045,18 @@ function onBreadthActivate(): void {
             </div>
 
             <div class="tactical-body-grid">
-              <div class="tactical-col">
-                <span class="col-label font-mono">MARKET MICROSTRUCTURE STANCE</span>
+              <div class="tactical-col stance-col">
+                <div class="col-header">
+                  <span class="col-label font-mono">MARKET MICROSTRUCTURE STANCE</span>
+                  <span class="col-tag font-mono">DEALER DYNAMICS</span>
+                </div>
                 <p class="col-text">{{ tacticalBias.stance }}</p>
               </div>
-              <div class="tactical-col">
-                <span class="col-label font-mono">ACTIONABLE EXECUTION PLAN</span>
+              <div class="tactical-col action-col">
+                <div class="col-header">
+                  <span class="col-label font-mono">ACTIONABLE EXECUTION PLAN</span>
+                  <span class="col-tag font-mono action-tag">TACTICAL PLAYBOOK</span>
+                </div>
                 <p class="col-text text-phosphor font-semibold">{{ tacticalBias.action }}</p>
               </div>
             </div>
@@ -2015,8 +2077,8 @@ function onBreadthActivate(): void {
               <p v-if="ticketRead.conflict" class="ticket-conflict font-mono">
                 ⚠ CONFLICTS WITH THE REGIME READ — the briefing above is
                 {{ ticketRead.biasSide === 'long' ? 'bullish' : 'bearish' }}; this ticket is
-                {{ ticketRead.sig.direction }}. It is generated from price and volume structure
-                only (no dealer gamma in history), so treat it as a second opinion, not an order.
+                {{ ticketRead.sig.direction }}. It is generated from price and volume structure only
+                (no dealer gamma in history), so treat it as a second opinion, not an order.
               </p>
               <p v-else-if="ticketRead.staleReason" class="ticket-conflict font-mono">
                 ⚠ NOT LIVE — {{ ticketRead.staleReason }}.
@@ -2036,21 +2098,26 @@ function onBreadthActivate(): void {
                   <span class="font-mono font-bold text-rose"
                     >${{ num(ticketRead.sig.stop_loss, 2) }}</span
                   >
-                  <span class="ticket-sub font-mono">1R ${{ num(ticketRead.riskPerShare, 2) }}</span>
+                  <span class="ticket-sub font-mono"
+                    >1R ${{ num(ticketRead.riskPerShare, 2) }}</span
+                  >
                 </div>
                 <div>
                   Target:
                   <span class="font-mono font-bold text-emerald"
                     >${{ num(ticketRead.sig.take_profit, 2) }}</span
                   >
-                  <span class="ticket-sub font-mono">{{ num(ticketRead.sig.risk_reward, 2) }}R</span>
+                  <span class="ticket-sub font-mono"
+                    >{{ num(ticketRead.sig.risk_reward, 2) }}R</span
+                  >
                 </div>
                 <div>
                   Scale:
                   <span class="font-mono"
                     >${{ num(ticketRead.sig.target_1r, 2) }} / ${{
                       num(ticketRead.sig.target_2r, 2)
-                    }} / ${{ num(ticketRead.sig.target_3r, 2) }}</span
+                    }}
+                    / ${{ num(ticketRead.sig.target_3r, 2) }}</span
                   >
                   <span class="ticket-sub font-mono">1R / 2R / 3R</span>
                 </div>
@@ -2095,10 +2162,19 @@ function onBreadthActivate(): void {
                   v-for="p in pivotLadder"
                   :key="p.label"
                   class="ladder-pill font-mono"
-                  :class="p.tone"
+                  :class="[p.tone, { 'is-spot': p.tone === 'spot' }]"
+                  :title="p.role"
                 >
+                  <span v-if="p.tone === 'spot'" class="spot-live-dot" aria-hidden="true" />
                   <span class="p-name">{{ p.label }}</span>
                   <span class="p-price">${{ num(p.price, 2) }}</span>
+                  <span
+                    v-if="p.tone !== 'spot' && pivotDeltaPct(p.price)"
+                    class="p-delta font-mono"
+                    :class="p.price >= (regimeRead.spot ?? effectiveSpot ?? 0) ? 'above' : 'below'"
+                  >
+                    {{ pivotDeltaPct(p.price) }}
+                  </span>
                 </span>
               </div>
               <!-- Levels outside the immediate window are noted without evasive wording -->
@@ -2542,6 +2618,17 @@ function onBreadthActivate(): void {
           id="sec-flow"
           class="section-container"
         >
+          <div class="flow-section-heading">
+            <div>
+              <span class="flow-section-kicker font-mono">FLOW &amp; POSITIONING</span>
+              <h2>Follow the money, then check the hedge</h2>
+            </div>
+            <p>
+              Start with the measured premium split, use the tape to find fresh participation, and
+              finish with the dealer response. None of these panels is a trade signal by itself.
+            </p>
+          </div>
+
           <!-- Flow Summary Metrics & Positioning Matrix -->
           <div class="quant-grid-row flow-summary-row">
             <FlowSummaryDonutCard
@@ -2566,41 +2653,19 @@ function onBreadthActivate(): void {
             />
             <NetFlowByExpiryChart :rows="expiryFlowRows" />
             <PositioningSummaryCard
-              :regime="
-                regimeRead.side ??
-                (reconciledMarketRegime?.primary === 'bull_trend'
-                  ? 'long'
-                  : reconciledMarketRegime?.primary === 'bear_trend'
-                    ? 'short'
-                    : 'flip')
-              "
-              :dealer-bias="
-                microRegimeRes.data.value?.topography?.dealer_hedging_action ??
-                (reconciledMarketRegime?.primary === 'bull_trend'
-                  ? 'Supportive Buying'
-                  : reconciledMarketRegime?.primary === 'bear_trend'
-                    ? 'Downside Amplification'
-                    : 'Neutral Rebalancing')
-              "
+              :regime="regimeRead.side"
+              :dealer-bias="microRegimeRes.data.value?.topography?.dealer_hedging_action ?? null"
               :crowd-positioning="
                 optionsRes.data.value?.summary?.signed_net_premium != null
                   ? optionsRes.data.value.summary.signed_net_premium >= 0
                     ? 'Bullish'
                     : 'Bearish'
-                  : (latestStatePoint?.kalman_velocity ?? 0) >= 0
-                    ? 'Bullish'
-                    : 'Bearish'
+                  : null
               "
               :smart-money-flow="
-                totalGexM != null
-                  ? totalGexM >= 0
-                    ? 'Bullish'
-                    : 'Bearish'
-                  : (latestStatePoint?.kalman_velocity ?? 0) >= 0
-                    ? 'Bullish'
-                    : 'Bearish'
+                totalGexM != null ? (totalGexM >= 0 ? 'Bullish' : 'Bearish') : null
               "
-              :net-delta-m="totalGexM ?? (latestStatePoint?.kalman_velocity ?? 0) * 1000"
+              :net-delta-m="totalGexM"
             />
           </div>
 
@@ -2769,6 +2834,18 @@ function onBreadthActivate(): void {
                   </table>
                 </div>
               </div>
+              <div v-else class="backtest-empty-state">
+                <p v-if="backtestRunning" class="note pad">
+                  Running systematic backtest simulation on historical microstructure signals…
+                </p>
+                <div v-else class="empty-prompt">
+                  <p class="note">No simulation run yet for {{ symbol }}.</p>
+                  <p class="note tiny text-muted">
+                    Click "Run Simulation" above to evaluate microstructure execution gates, win
+                    rates, and regime-segmented P&amp;L attribution.
+                  </p>
+                </div>
+              </div>
             </Panel>
           </div>
         </div>
@@ -2885,9 +2962,9 @@ function onBreadthActivate(): void {
                   looks precise and is not.
                 </p>
                 <p v-else-if="densityUnreliable" class="unmeasurable-note" role="status">
-                  Density not usable: {{ pctFrac(withheldMassPct) }} of its mass was negative
-                  before clipping, so the shape is artifact rather than a distribution. Usually a
-                  put/call step at the money on a very short expiry; try a later expiry above.
+                  Density not usable: {{ pctFrac(withheldMassPct) }} of its mass was negative before
+                  clipping, so the shape is artifact rather than a distribution. Usually a put/call
+                  step at the money on a very short expiry; try a later expiry above.
                 </p>
                 <div v-else class="prob-grid">
                   <Readout
@@ -3060,7 +3137,9 @@ function onBreadthActivate(): void {
 .mode-tabs {
   display: flex;
   flex-wrap: wrap;
-  max-width: 100%;
+  flex: 1 1 620px;
+  min-width: min(100%, 480px);
+  max-width: 760px;
   gap: 0.375rem;
   background: var(--panel-hi);
   padding: 0.25rem;
@@ -3069,6 +3148,9 @@ function onBreadthActivate(): void {
 }
 
 .tab-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 2.25rem;
   background: transparent;
   border: none;
   color: var(--ink-dim);
@@ -3079,6 +3161,32 @@ function onBreadthActivate(): void {
   border-radius: var(--r-xs);
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-out);
+}
+
+.section-guide {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
+  background: var(--void-lift);
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  line-height: 1.45;
+}
+
+.section-guide-label {
+  flex: 0 0 auto;
+  color: var(--phosphor);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.section-guide-text {
+  max-width: 92ch;
 }
 
 .tab-btn:hover:not(.active) {
@@ -3196,6 +3304,31 @@ function onBreadthActivate(): void {
   line-height: 1.5;
 }
 
+/* Names the surfaces the live run will populate, so the idle page reads as
+   a staged instrument rather than an empty one. No figures are claimed. */
+.idle-sections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  margin: var(--s2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.idle-sections li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  color: var(--ink-faint);
+}
+.idle-sections li::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border: var(--hair) solid var(--ink-ghost);
+  border-left-color: transparent;
+  border-top-color: transparent;
+}
+
 .go-live-btn {
   padding: var(--s2) var(--s5);
   border: var(--hair) solid var(--phosphor);
@@ -3223,29 +3356,33 @@ function onBreadthActivate(): void {
 
 /* Tactical Intelligence Briefing Banner */
 .tactical-banner {
-  padding: 1rem 1.25rem;
+  padding: 1.125rem 1.35rem;
   background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
+  position: relative;
+  overflow: visible;
+  min-width: 0;
 }
 
 .tactical-banner.bullish {
-  border-left: 1px solid var(--long);
+  border-color: var(--call-dim);
 }
 
 .tactical-banner.bearish {
-  border-left: 1px solid var(--short);
+  border-color: var(--put-dim);
 }
 
 .tactical-banner.squeeze {
-  border-left: 1px solid var(--warn);
+  border-color: var(--warn);
 }
 
 .tactical-banner.transition {
-  border-left: 1px solid var(--rule-hi);
+  border-color: var(--rule-hi);
 }
 
 .tactical-header {
@@ -3262,7 +3399,7 @@ function onBreadthActivate(): void {
    Both are set explicitly here rather than inherited from the table styles. */
 .tactical-eyebrow {
   font-size: var(--t-nano);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.16em;
   color: var(--ink-faint);
 }
@@ -3270,11 +3407,11 @@ function onBreadthActivate(): void {
 .tactical-title {
   margin: 0.25rem 0 0;
   font-family: var(--font-display);
-  font-size: 1.0625rem;
-  font-weight: 600;
+  font-size: 1.125rem;
+  font-weight: 700;
   /* The titles are set uppercase; without tracking the caps collide. */
   letter-spacing: 0.035em;
-  line-height: 1.2;
+  line-height: 1.25;
   text-wrap: balance;
   color: var(--ink);
 }
@@ -3322,8 +3459,10 @@ function onBreadthActivate(): void {
 .tactical-bias-badge {
   font-size: var(--t-micro);
   font-weight: 700;
-  padding: 0.25rem 0.625rem;
-  border-radius: var(--r-sm);
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--r-xs);
+  letter-spacing: 0.04em;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 .tactical-bias-badge.bullish {
@@ -3353,23 +3492,65 @@ function onBreadthActivate(): void {
 
 .tactical-body-grid {
   display: grid;
-  /* 180px let a sentence wrap every three or four words. Prose needs a column
-     it can actually set in. */
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 0.75rem 1.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0.875rem 1.25rem;
   min-width: 0;
 }
 
 .tactical-col {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.5rem;
   min-width: 0;
+  padding: 0.875rem 1.125rem;
+  background: var(--void-lift);
+  border: 1px solid var(--rule-faint);
+  border-radius: var(--r-sm);
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.tactical-col:hover {
+  border-color: var(--rule);
+}
+
+.tactical-col.action-col {
+  background: var(--phosphor-wash);
+  border-color: var(--phosphor-dim);
+}
+
+.tactical-col.action-col:hover {
+  border-color: var(--phosphor);
+}
+
+.col-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.col-tag {
+  font-size: var(--t-nano);
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--panel-hi);
+  color: var(--ink-dim);
+  border: 1px solid var(--rule-faint);
+}
+
+.col-tag.action-tag {
+  background: var(--phosphor-wash);
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  font-weight: 600;
 }
 
 .col-label {
   font-size: var(--t-nano);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--ink-faint);
   letter-spacing: var(--track-label);
 }
@@ -3418,13 +3599,13 @@ function onBreadthActivate(): void {
 .ticket-basis {
   grid-column: 1 / -1;
   margin: 0.4rem 0 0;
-  font-size: 0.62rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
   letter-spacing: 0.03em;
 }
 .ticket-sub {
   margin-left: 0.4rem;
-  font-size: 0.6rem;
+  font-size: var(--t-nano);
   color: var(--ink-faint);
 }
 .active-ticket-row.ENTER_SHORT {
@@ -3490,16 +3671,16 @@ function onBreadthActivate(): void {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
-  padding-top: 0.5rem;
+  gap: 0.625rem;
+  padding-top: 0.75rem;
   border-top: 1px solid var(--rule-faint);
 }
 
 .expected-move-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 0.75rem;
-  padding: 0.625rem 0.875rem;
+  padding: 0.75rem 1rem;
   background: var(--void-lift);
   border: 1px solid var(--rule-faint);
   border-radius: var(--r-sm);
@@ -3508,79 +3689,153 @@ function onBreadthActivate(): void {
 .em-item {
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--rule-faint);
+  border-radius: var(--r-xs);
+  transition: border-color 0.15s ease;
+}
+
+.em-item:hover {
+  border-color: var(--rule);
 }
 
 .em-label {
   font-size: var(--t-nano);
   color: var(--ink-faint);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  font-weight: 500;
 }
 
 .em-val {
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   color: var(--ink);
+  line-height: 1.25;
 }
 
 .em-sub {
   font-size: var(--t-nano);
-  line-height: 1.25;
+  line-height: 1.35;
+  color: var(--ink-dim);
 }
 
 .ladder-title {
   font-size: var(--t-nano);
   color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  font-weight: 600;
 }
 
 .ladder-pills {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.375rem;
 }
 
 .ladder-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 3px;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--r-xs);
   background: var(--panel-hi);
   border: 1px solid var(--rule-faint);
   font-size: var(--t-micro);
+  transition:
+    border-color 0.1s ease,
+    transform 0.1s ease;
 }
 
-.ladder-pill.spot {
+.ladder-pill:hover {
+  border-color: var(--rule-hi);
+}
+
+.ladder-pill.spot,
+.ladder-pill.is-spot {
   background: var(--phosphor-wash);
   border-color: var(--phosphor);
   color: var(--phosphor);
   font-weight: 700;
 }
 
+.spot-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--phosphor);
+  animation: spot-live-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes spot-live-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
 .ladder-pill.call {
+  background: var(--call-wash);
+  border-color: var(--call-dim);
   color: var(--call-hi);
 }
 
 .ladder-pill.put {
+  background: var(--put-wash);
+  border-color: var(--put-dim);
   color: var(--put-hi);
 }
 
 .ladder-pill.warn {
+  background: var(--warn-wash);
+  border-color: var(--warn);
   color: var(--warn);
+}
+
+.ladder-pill.phosphor {
+  background: var(--phosphor-wash);
+  border-color: var(--phosphor-dim);
+  color: var(--phosphor);
 }
 
 .p-name {
   font-size: var(--t-nano);
-  color: var(--ink-faint);
+  letter-spacing: 0.04em;
+  opacity: 0.85;
 }
 
 .p-price {
+  font-weight: 700;
+}
+
+.p-delta {
+  font-size: var(--t-nano);
   font-weight: 600;
+  padding: 0 3px;
+  border-radius: 2px;
+  line-height: 1.2;
+}
+
+.p-delta.above {
+  color: var(--call-hi);
+  background: var(--call-wash);
+}
+
+.p-delta.below {
+  color: var(--put-hi);
+  background: var(--put-wash);
 }
 
 .hero-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s3);
 }
 
 .chart-params {
@@ -3597,8 +3852,8 @@ function onBreadthActivate(): void {
 
 .bottom-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s3);
 }
 
 /* Both panels stretch to one row height; let each side's table rows absorb
@@ -3612,11 +3867,6 @@ function onBreadthActivate(): void {
   min-height: 0;
 }
 
-.signals-table,
-.regime-perf-table {
-  height: 100%;
-}
-
 .table-wrap {
   overflow-x: auto;
 }
@@ -3625,7 +3875,8 @@ function onBreadthActivate(): void {
 .regime-perf-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.75rem;
+  font-size: var(--t-tiny);
+  font-variant-numeric: tabular-nums;
 }
 
 .signals-table th,
@@ -3761,6 +4012,21 @@ function onBreadthActivate(): void {
   .surface-grid,
   .tactical-body-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .mode-tabs {
+    min-width: 100%;
+    max-width: none;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .section-guide {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.25rem;
   }
 }
 
@@ -3968,6 +4234,9 @@ function onBreadthActivate(): void {
 .flow-read.fr-distrib {
   border-left-color: var(--put);
 }
+.flow-read.fr-balanced {
+  border-left-color: var(--phosphor-dim);
+}
 .fr-head {
   display: flex;
   align-items: baseline;
@@ -4057,6 +4326,7 @@ function onBreadthActivate(): void {
   gap: 1.25rem;
   width: 100%;
   min-width: 0;
+  padding-bottom: var(--s3);
 }
 
 .quant-grid-row {
@@ -4066,35 +4336,41 @@ function onBreadthActivate(): void {
 }
 
 .quant-grid-row.tier-1-row {
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: stretch;
 }
 
 .quant-grid-row.tier-2-row {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .quant-grid-row.tier-3-row {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
 }
 
 .quant-grid-row.top-row {
-  grid-template-columns: 1.2fr 1.4fr 1.4fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
 }
 
 .quant-grid-row.mid-row {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
 }
 
 .quant-grid-row.lower-row {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
 }
 
 .quant-grid-row.flow-summary-row {
-  grid-template-columns: 1fr 1.3fr 1.2fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
 }
 
 .quant-grid-row.flow-tape-row {
-  grid-template-columns: 2fr 1.2fr;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   align-items: stretch;
 }
 
@@ -4102,8 +4378,39 @@ function onBreadthActivate(): void {
   grid-template-columns: 1fr;
 }
 
+.flow-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 0 0.25rem 0.25rem;
+  border-bottom: 1px solid var(--rule-faint);
+}
+
+.flow-section-kicker {
+  color: var(--phosphor);
+  font-size: var(--t-nano);
+  letter-spacing: 0.12em;
+}
+
+.flow-section-heading h2 {
+  margin: 0.3rem 0 0;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+
+.flow-section-heading p {
+  max-width: 58ch;
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-small);
+  line-height: 1.45;
+}
+
 .quant-grid-row.bottom-row {
-  grid-template-columns: 2fr 1.2fr;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr);
   align-items: stretch;
 }
 
@@ -4137,6 +4444,12 @@ function onBreadthActivate(): void {
   .quant-grid-row.flow-summary-row,
   .quant-grid-row.flow-tape-row {
     grid-template-columns: 1fr;
+  }
+
+  .flow-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 }
 </style>

@@ -192,6 +192,9 @@ watch([accountEquity, selectedRiskPct, openRiskDollars], () => {
       <template v-else-if="sizingEnabled"
         >Planning size only: freshness or confidence has not cleared the live-entry gate.</template
       >
+      <template v-else-if="mode === 'paper_candidate'"
+        >Sizing stays at zero. Paper candidate: a delayed quote cannot unlock live size.</template
+      >
       <template v-else>Sizing stays at zero because this row has no directional plan.</template>
       This calculator does not authorize execution.
     </p>

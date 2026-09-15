@@ -406,7 +406,7 @@ function verdictLabel(v: string | undefined): string {
 }
 
 .zdt-intent {
-  border-left: 2px solid var(--tone); background: var(--panel);
+  border: 1px solid var(--rule); background: var(--panel);
   border-radius: var(--r-sm); padding: 10px 14px;
 }
 .zdt-intent-top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }

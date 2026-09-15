@@ -52,23 +52,23 @@ describe('Options UI token gate (shipped SFCs)', () => {
     })
   }
 
-  it('SqueezeScreener ships circular ring + KEY sections + call/put side-dots', () => {
+  it('SqueezeScreener ships verdict + signed scale + reasoning steps on call/put tokens', () => {
     const src = readSrc('components/SqueezeScreener.vue')
-    expect(src).toMatch(/class="ring-fill"/)
-    expect(src).toMatch(/RING_C/)
-    expect(src).toMatch(/KEY LEVELS/)
-    expect(src).toMatch(/KEY FACTORS/)
-    expect(src).toMatch(/KEY TAKEAWAYS/)
-    expect(src).toMatch(/side-dot/)
-    expect(src).toMatch(/var\(--call/)
-    expect(src).toMatch(/var\(--put/)
-    expect(src).toMatch(/\.ring-fill\.bullish\s*\{\s*stroke:\s*var\(--call/)
-    expect(src).toMatch(/\.ring-fill\.bearish\s*\{\s*stroke:\s*var\(--put/)
+    expect(src).toContain('buildSqueezeExplanation')
+    expect(src).toContain('class="scale-track"')
+    expect(src).toContain('HOW IT GOT HERE')
+    expect(src).toContain('LEVELS')
+    expect(src).toContain('WHAT WOULD CHANGE IT')
+    expect(src).toMatch(/\.sq\[data-tone='bullish'\]\s*\{\s*--sq-tone:\s*var\(--call/)
+    expect(src).toMatch(/\.sq\[data-tone='bearish'\]\s*\{\s*--sq-tone:\s*var\(--put/)
+    expect(src).toMatch(/\.level\.lv-call\s*\{\s*--lv-tone:\s*var\(--call\)/)
+    expect(src).toMatch(/\.level\.lv-put\s*\{\s*--lv-tone:\s*var\(--put\)/)
     expect(src).toContain('THEORY SCORE · NOT A FORECAST')
     expect(src).not.toContain('PROBABILITY SCORE')
     expect(src).not.toContain('Imminent')
     expect(src).not.toContain('⚡')
-    expect(src).not.toMatch(/ring-wrap visually-hidden/)
+    // The old structure boards printed "likely/imminent" on both sides at once.
+    expect(src).not.toContain('likelihood')
   })
 
   it('GammaExposureMap bars/legend use call/put tokens and flat net dots', () => {
@@ -357,7 +357,8 @@ describe('Aura-farming instrument shell gate', () => {
 
   it('FlowView standalone market-tape shell stays flat and instrument-like', () => {
     const src = readSrc('views/FlowView.vue')
-    expect(src).toMatch(/\.flow-head\s*\{[^}]*border:\s*var\(--hair\) solid var\(--rule\)/s)
+    // The slim control strip replaced .flow-head; it uses the same token set.
+    expect(src).toMatch(/\.fv-strip\s*\{[^}]*border:\s*var\(--hair\) solid var\(--rule\)/s)
     expect(src).not.toContain('opportunity-row')
     expect(src).not.toMatch(/feed-beacon::before/)
   })

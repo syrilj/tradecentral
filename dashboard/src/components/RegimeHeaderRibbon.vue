@@ -71,7 +71,12 @@ const props = withDefaults(
  * mark and its close-to-close move printed as "-41.88 (-20.27%)" — the
  * 09-01→09-02 session presented as today's tape.
  */
-const quoteIsLive = computed(() => props.quoteQuality == null || props.quoteQuality === 'live')
+const quoteIsLive = computed(() => {
+  const q = props.quoteQuality
+  if (q === 'local' || q === 'eod_parquet' || q === 'unavailable' || q === 'stale') return false
+  if (quoteAgeDays.value != null && quoteAgeDays.value >= 1) return false
+  return q == null || q === 'live' || q === 'realtime' || q === 'delayed'
+})
 
 /** Calendar days between the quote's bar and now, or null when undatable. */
 const quoteAgeDays = computed<number | null>(() => {
