@@ -5,7 +5,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from pathlib import Path
 import sys
-from threading import Thread
+from threading import Lock, Thread
+import time
 from typing import Any, Callable, Mapping
 
 from ..activity_lean import describe_activity_lean
@@ -25,10 +26,11 @@ _LSE_CIRCUIT_THRESHOLD = 3
 
 
 def reset_lse_circuit() -> None:
-    """Test helper — re-enable LSE after injected failures."""
+    """Test helper — re-enable LSE after injected failures, drop the tape memo."""
     global _LSE_TIMEOUT_STREAK, _LSE_CIRCUIT_OPEN
     _LSE_TIMEOUT_STREAK = 0
     _LSE_CIRCUIT_OPEN = False
+    reset_tape_memo()
 
 
 def lse_circuit_is_open() -> bool:
@@ -47,6 +49,74 @@ def _clear_lse_timeout_streak() -> None:
     global _LSE_TIMEOUT_STREAK, _LSE_CIRCUIT_OPEN
     _LSE_TIMEOUT_STREAK = 0
     _LSE_CIRCUIT_OPEN = False
+
+
+class _LseVaultRateLimited(RuntimeError):
+    """The vault fallback itself answered 429 (burst throttle).
+
+    Distinct from the daily-limit latch (``flow_lse_provider_cooldown``) and
+    from a missing credential: the fix is to stop polling so hard, and the
+    feed recovers on its own in seconds, so it gets its own warning name.
+    """
+
+
+# --- In-process tape memo ---------------------------------------------------
+# Every tape poll used to be a raw provider request: this adapter builds its
+# own fetchers and never sees lse_provider's memo layer, so the 5s UI poll
+# from each open tab went straight to the provider and burst-throttle windows
+# became self-inflicted 429 storms. Memoize fresh tapes briefly, and memoize
+# degraded envelopes on a short TTL, so a hot failure loop cannot hammer the
+# provider while recovery still shows within seconds. TTLs env-overridable.
+_EDGE_TAPE_MEMO_LOCK = Lock()
+# key -> (expires_at, envelope); the envelope is the exact payload returned.
+_EDGE_TAPE_MEMO: dict[tuple, tuple[float, dict[str, Any]]] = {}
+
+EDGE_TAPE_MEMO_TTL = float(os.getenv("EDGE_TAPE_MEMO_TTL", "12") or 12)
+EDGE_TAPE_DEGRADED_MEMO_TTL = float(os.getenv("EDGE_TAPE_DEGRADED_MEMO_TTL", "5") or 5)
+
+# The fix for a missing credential lives outside the tape loop; caching that
+# envelope would hide a just-configured key behind an empty tape. Market
+# timeouts are excluded for a different reason: every attempt must advance the
+# breaker streak, which is itself the protection against timeout storms.
+_NEVER_MEMO_WARNINGS = frozenset({
+    "flow_lse_credential_missing",
+    "flow_market_timeout",
+})
+
+
+def reset_tape_memo() -> None:
+    """Test helper — drop every memoized tape envelope."""
+    with _EDGE_TAPE_MEMO_LOCK:
+        _EDGE_TAPE_MEMO.clear()
+
+
+def _tape_memo_get(key: tuple) -> dict[str, Any] | None:
+    with _EDGE_TAPE_MEMO_LOCK:
+        hit = _EDGE_TAPE_MEMO.get(key)
+        if hit is None:
+            return None
+        if hit[0] <= time.time():
+            del _EDGE_TAPE_MEMO[key]
+            return None
+        return hit[1]
+
+
+def _tape_memo_put(key: tuple, envelope: dict[str, Any]) -> None:
+    """Memoize one tape envelope; fresh content briefly, degraded briefly-er.
+
+    A warning-free envelope with actual rows is good for the full TTL. Any
+    degraded envelope (warnings, or an empty result) is cached only for the
+    short degraded TTL: long enough that a hot failure loop stops hammering
+    the provider, short enough that a recovered feed is visible in seconds.
+    ``flow_lse_credential_missing`` is never memoized.
+    """
+    warnings = {str(item) for item in (envelope.get("warnings") or [])}
+    if warnings & _NEVER_MEMO_WARNINGS:
+        return
+    fresh = not warnings and bool(envelope.get("tape") or envelope.get("rows"))
+    ttl = EDGE_TAPE_MEMO_TTL if fresh else EDGE_TAPE_DEGRADED_MEMO_TTL
+    with _EDGE_TAPE_MEMO_LOCK:
+        _EDGE_TAPE_MEMO[key] = (time.time() + ttl, envelope)
 
 
 def _canonical_symbol(value: Any) -> str:
@@ -465,6 +535,18 @@ def load_symbol_flow_tape(
     if fetcher is None and lse_circuit_is_open():
         return {**empty, "warnings": ["flow_lse_circuit_open"]}
 
+    memo_key = (
+        "symbol_tape",
+        requested,
+        round(max(0.0, float(min_premium)), 6),
+        since_s,
+        until_s,
+        max(1, min(int(limit), 2_000)),
+    )
+    memo_hit = _tape_memo_get(memo_key)
+    if memo_hit is not None:
+        return memo_hit
+
     try:
         if fetcher is None:
             source = Path(__file__).resolve().parents[3] / "TradingWork" / "src"
@@ -480,7 +562,9 @@ def load_symbol_flow_tape(
                 # a 429/5xx -- not a missing credential. Reporting it as
                 # "credential missing" sends the operator to fix a config that
                 # is already correct.
-                return {**empty, "warnings": ["flow_lse_provider_cooldown"]}
+                result = {**empty, "warnings": ["flow_lse_provider_cooldown"]}
+                _tape_memo_put(memo_key, result)
+                return result
 
             def fetcher(
                 *,
@@ -516,17 +600,24 @@ def load_symbol_flow_tape(
                 # The vault holds no time filter, so pull the newest prints and
                 # let the caller's window filter trim them. Ascending is the
                 # vault default and would return the oldest prints it holds.
-                return _flow_rows(
-                    LSE_VAULT_FLOW_URL,
-                    {
-                        "underlying": symbol,
-                        "min_premium": str(max(0.0, float(min_premium))),
-                        "order": "desc",
-                        "limit": str(max(1, min(int(limit), 2_000))),
-                    },
-                    api_key,
-                    timeout,
-                )
+                try:
+                    return _flow_rows(
+                        LSE_VAULT_FLOW_URL,
+                        {
+                            "underlying": symbol,
+                            "min_premium": str(max(0.0, float(min_premium))),
+                            "order": "desc",
+                            "limit": str(max(1, min(int(limit), 2_000))),
+                        },
+                        api_key,
+                        timeout,
+                    )
+                except Exception as exc:
+                    # A vault 429 under polling load is burst throttle, not the
+                    # daily-limit latch -- surface it under its own warning.
+                    if _provider_status(exc) == 429:
+                        raise _LseVaultRateLimited("vault flow burst-throttled") from exc
+                    raise
 
         fetched = _bounded_call(
             lambda: fetcher(
@@ -540,9 +631,18 @@ def load_symbol_flow_tape(
             timeout_seconds=timeout_seconds,
         )
     except TimeoutError:
-        return {**empty, "warnings": ["flow_timeout"]}
+        result = {**empty, "warnings": ["flow_timeout"]}
+        _tape_memo_put(memo_key, result)
+        return result
     except Exception as exc:
-        return {**empty, "warnings": [_provider_failure_warning("flow_unavailable", exc)]}
+        warning = (
+            "flow_lse_rate_limited"
+            if isinstance(exc, _LseVaultRateLimited)
+            else _provider_failure_warning("flow_unavailable", exc)
+        )
+        result = {**empty, "warnings": [warning]}
+        _tape_memo_put(memo_key, result)
+        return result
 
     raw_rows = [dict(row) for row in fetched or [] if isinstance(row, Mapping)]
     normalized = normalize_flow_payload({
@@ -555,7 +655,7 @@ def load_symbol_flow_tape(
         for row in (normalized.get("prints") or [])
         if isinstance(row, Mapping) and _timestamp_in_window(row.get("timestamp"), since_s, until_s)
     ]
-    return {
+    result = {
         "schema_version": "symbol-flow-tape-v1",
         "symbol": requested,
         "from": since_s,
@@ -569,6 +669,8 @@ def load_symbol_flow_tape(
         "warnings": [],
         "evidence": normalized.get("evidence") if isinstance(normalized, Mapping) else {},
     }
+    _tape_memo_put(memo_key, result)
+    return result
 
 
 def load_market_flow_activity(
@@ -600,6 +702,18 @@ def load_market_flow_activity(
     if not os.getenv("LSE_API_KEY") and fetcher is None:
         return {**empty, "warnings": ["flow_lse_credential_missing"]}
 
+    memo_key = (
+        "market_flow",
+        round(max(0.0, float(min_premium)), 6),
+        max(1, min(int(limit), 2_000)),
+        tuple(sorted({_canonical_symbol(symbol) for symbol in allowed_symbols}))
+        if allowed_symbols
+        else None,
+    )
+    memo_hit = _tape_memo_get(memo_key)
+    if memo_hit is not None:
+        return memo_hit
+
     # Which provider route actually served the tape. An operator staring at a
     # thin tape needs to know it came off the vault fallback, not the live ISO
     # window, before reading anything into the print count.
@@ -620,7 +734,9 @@ def load_market_flow_activity(
                 # a 429/5xx -- not a missing credential. Reporting it as
                 # "credential missing" sends the operator to fix a config that
                 # is already correct.
-                return {**empty, "warnings": ["flow_lse_provider_cooldown"]}
+                result = {**empty, "warnings": ["flow_lse_provider_cooldown"]}
+                _tape_memo_put(memo_key, result)
+                return result
 
             def fetcher(*, min_premium: float, limit: int, timeout: float) -> Any:
                 capped = max(1, min(int(limit), 2_000))
@@ -656,7 +772,14 @@ def load_market_flow_activity(
                 }
                 if single:
                     vault_params["underlying"] = single
-                rows = _flow_rows(LSE_VAULT_FLOW_URL, vault_params, api_key, timeout)
+                try:
+                    rows = _flow_rows(LSE_VAULT_FLOW_URL, vault_params, api_key, timeout)
+                except Exception as exc:
+                    # A vault 429 under polling load is burst throttle, not the
+                    # daily-limit latch -- surface it under its own warning.
+                    if _provider_status(exc) == 429:
+                        raise _LseVaultRateLimited("market vault flow burst-throttled") from exc
+                    raise
                 route["served_by"] = "vault"
                 return rows
 
@@ -670,15 +793,26 @@ def load_market_flow_activity(
         )
     except TimeoutError:
         _note_lse_timeout()
-        return {**empty, "warnings": ["flow_market_timeout"]}
+        result = {**empty, "warnings": ["flow_market_timeout"]}
+        _tape_memo_put(memo_key, result)
+        return result
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}".lower()
         if "timeout" in msg or "timed out" in msg:
             _note_lse_timeout()
-            return {**empty, "warnings": ["flow_market_timeout"]}
+            result = {**empty, "warnings": ["flow_market_timeout"]}
+            _tape_memo_put(memo_key, result)
+            return result
         if "credential" in msg or "lse_api_key" in msg:
             return {**empty, "warnings": ["flow_lse_credential_missing"]}
-        return {**empty, "warnings": [_provider_failure_warning("flow_market_unavailable", exc)]}
+        warning = (
+            "flow_market_lse_rate_limited"
+            if isinstance(exc, _LseVaultRateLimited)
+            else _provider_failure_warning("flow_market_unavailable", exc)
+        )
+        result = {**empty, "warnings": [warning]}
+        _tape_memo_put(memo_key, result)
+        return result
 
     _clear_lse_timeout_streak()
     raw_rows = [dict(row) for row in fetched or [] if isinstance(row, Mapping)]
@@ -708,7 +842,7 @@ def load_market_flow_activity(
             rows.append(normalized)
     rows.sort(key=lambda row: -float((row.get("evidence") or {}).get("premium") or 0.0))
 
-    return {
+    result = {
         "schema_version": "market-options-flow-v1",
         "rows": rows,
         "coverage": {
@@ -725,6 +859,8 @@ def load_market_flow_activity(
         # warning as a reason to withhold. The route lives in coverage instead.
         "warnings": [],
     }
+    _tape_memo_put(memo_key, result)
+    return result
 
 
 def load_live_flow_activity(

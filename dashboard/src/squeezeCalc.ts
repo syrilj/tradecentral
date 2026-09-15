@@ -421,6 +421,8 @@ export interface TheoryIdentity {
   flowWeight: number
   momentum: number | null
   momentumFresh: boolean
+  /** Calendar age of the price series behind momentum, when shipped. */
+  momentumAgeDays: number | null
   convictionBull: number | null
   convictionBear: number | null
   bullUi: number | null
@@ -482,12 +484,17 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
   // A 0.0 with zero confidence is not a measurement — the tape carried no
   // buy/sell side, so the honest value is "unmeasured", not a flat zero.
   const flowConfidence = finiteNum(c.theory_imbalance_confidence)
-  const flowImbalance = flowImbalanceRaw != null && flowConfidence === 0 ? null : flowImbalanceRaw
-  const flowWeight = finiteNum(c.flow_weight) ?? DEFAULT_FLOW_WEIGHT
+  const flowDropped = t.flow_measured === false || c.theory_flow_measured === false
+  const flowImbalance =
+    flowDropped || (flowImbalanceRaw != null && flowConfidence === 0) ? null : flowImbalanceRaw
+  const flowWeight =
+    finiteNum(t.flow_weight) ?? finiteNum(c.flow_weight) ?? (flowDropped ? 0 : DEFAULT_FLOW_WEIGHT)
   const momentum = finiteNum(t.momentum) ?? finiteNum(c.theory_momentum)
   const momentumFresh = Boolean(t.momentum_fresh ?? c.theory_momentum_fresh)
-  const convictionBull = finiteNum(c.theory_conviction_bull)
-  const convictionBear = finiteNum(c.theory_conviction_bear)
+  const momentumAgeDays =
+    finiteNum(t.momentum_price_age_days) ?? finiteNum(c.theory_momentum_price_age_days)
+  const convictionBull = finiteNum(t.conviction_bull) ?? finiteNum(c.theory_conviction_bull)
+  const convictionBear = finiteNum(t.conviction_bear) ?? finiteNum(c.theory_conviction_bear)
   const bullRaw = finiteNum(squeeze?.bullish)
   const bearRaw = finiteNum(squeeze?.bearish)
   const bullUi = finiteNum(t.bullish_ui) ?? (bullRaw != null ? bullRaw * 100 : null)
@@ -575,7 +582,9 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
       fill01: momGate ?? 0,
       detail: momentumFresh
         ? `Close-to-close lookback, saturates at |r|=${(MOM_REF * 100).toFixed(0)}%. Weight ${(1 - flowWeight).toFixed(2)} of conviction.`
-        : 'Price series older than the freshness gate — momentum does not drive this score.',
+        : momentumAgeDays != null
+          ? `Price series is ${momentumAgeDays} calendar days old — momentum does not drive this score.`
+          : 'Price series older than the freshness gate — momentum does not drive this score.',
       tone: momentumFresh ? 'mom' : 'warn',
     },
     {
@@ -609,6 +618,7 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
     flowWeight,
     momentum,
     momentumFresh,
+    momentumAgeDays,
     convictionBull,
     convictionBear,
     bullUi,
@@ -619,5 +629,514 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
     stateLabel: THEORY_STATE_LABEL[state],
     formula: `tanh(${FUEL_SCALE}·SR) × (${flowWeight.toFixed(1)}·flow + ${(1 - flowWeight).toFixed(1)}·mom)`,
     terms,
+  }
+}
+
+/* ==========================================================================
+   Plain-English explanation — the board's "how it got here".
+
+   The squeeze score is a three-step identity: FUEL × DIRECTION = SCORE. This
+   walks the shipped payload through those steps and prints the actual numbers
+   at each one, so a trader can check the arithmetic instead of trusting a dial.
+   Every figure is read from the payload; an input the payload did not carry is
+   named as missing and never rendered as a zero.
+   ========================================================================== */
+
+export type SqueezeSide = 'bullish' | 'bearish' | 'neutral'
+export type SqueezeVerdictTone = 'bullish' | 'bearish' | 'neutral' | 'warn' | 'unmeasured'
+
+/**
+ * How much of the direction pair actually voted.
+ *  - measured: signed flow AND fresh 5-day momentum
+ *  - partial: exactly one of the two
+ *  - degraded: neither — the direction half of fuel × direction is absent, so
+ *    any numeric score the payload carries is an artifact, not a read.
+ */
+export type SqueezeDirectionStatus = 'measured' | 'partial' | 'degraded'
+
+export interface SqueezeChip {
+  text: string
+  tone: 'warn' | 'muted'
+}
+
+export interface SqueezeStep {
+  id: 'fuel' | 'direction' | 'score'
+  title: string
+  /** Headline value for the step, or the em-dash placeholder. */
+  value: string
+  /** 0–1 meter fill, or null when the step has no measured value. */
+  fill01: number | null
+  tone: 'fuel' | 'bullish' | 'bearish' | 'neutral' | 'warn'
+  lines: string[]
+}
+
+export interface SqueezeLevel {
+  id: 'call_wall' | 'put_wall' | 'gamma_flip' | 'spot'
+  label: string
+  price: number | null
+  pct: number | null
+  note: string
+  tone: 'call' | 'put' | 'accent' | 'ink'
+  /** True for the level that starts the move on the leaning side. */
+  trigger: boolean
+}
+
+export interface SqueezeExplanation {
+  measurable: boolean
+  side: SqueezeSide
+  tone: SqueezeVerdictTone
+  verdict: string
+  summary: string
+  score: number | null
+  scoreDisplay: string
+  /** How many of the direction pair (signed flow, momentum) actually voted. */
+  dirStatus: SqueezeDirectionStatus
+  /** A compact "why the score looks like this" chip for the header; null when fully measured. */
+  dirChip: SqueezeChip | null
+  leanAt: number
+  squeezeAt: number
+  /** Marker position on a −100…+100 scale as 0–100%, or null when unscored. */
+  markerPct: number | null
+  steps: SqueezeStep[]
+  levels: SqueezeLevel[]
+  watch: string[]
+}
+
+const DEFAULT_LEAN_AT = 20
+const DEFAULT_SQUEEZE_AT = 40
+const EM_DASH = '—'
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v))
+}
+
+function pct0(v: number | null): string {
+  return v == null ? EM_DASH : `${Math.round(v * 100)}%`
+}
+
+function signedPct2(v: number | null): string {
+  if (v == null) return EM_DASH
+  const r = v * 100
+  return `${r > 0 ? '+' : r < 0 ? '−' : ''}${Math.abs(r).toFixed(2)}%`
+}
+
+/** $M → compact dollars: 1511.2 → "$1.51B", 115.1 → "$115M", 0.84 → "$0.84M". */
+export function formatMillions(m: number | null | undefined): string {
+  if (m == null || !Number.isFinite(m)) return EM_DASH
+  const a = Math.abs(m)
+  const sign = m < 0 ? '−' : ''
+  if (a >= 1000) return `${sign}$${(a / 1000).toFixed(2)}B`
+  if (a >= 100) return `${sign}$${a.toFixed(0)}M`
+  if (a >= 10) return `${sign}$${a.toFixed(1)}M`
+  return `${sign}$${a.toFixed(2)}M`
+}
+
+function money(v: number): string {
+  return `$${v.toFixed(2)}`
+}
+
+function signedScoreText(v: number): string {
+  const r = Math.round(v)
+  if (r === 0) return '0'
+  return `${r > 0 ? '+' : '−'}${Math.abs(r)}`
+}
+
+export function buildSqueezeExplanation(
+  squeeze: OptionsSqueeze | null | undefined,
+  spotProp?: number | null,
+): SqueezeExplanation {
+  const id = buildTheoryIdentity(squeeze)
+  const t = squeeze?.theory ?? {}
+  const c = squeeze?.components ?? {}
+  const kl = squeeze?.key_levels
+
+  const leanAt = finiteNum(t.lean_threshold) ?? DEFAULT_LEAN_AT
+  const squeezeAt = finiteNum(t.squeeze_threshold) ?? DEFAULT_SQUEEZE_AT
+  const momRef = finiteNum(t.mom_ref) ?? MOM_REF
+  const fuelScale = finiteNum(t.fuel_scale) ?? FUEL_SCALE
+
+  const spotCandidate = finiteNum(spotProp) ?? finiteNum(kl?.spot)
+  const spot = spotCandidate != null && spotCandidate > 0 ? spotCandidate : null
+  const score = id.signed
+  // Fuel is tanh(·) ∈ [0, 1). Anything outside that is a different quantity on a
+  // different scale (legacy payloads), so it is unmeasured — not clamped to 100%.
+  const fuel = id.fuelUi != null && id.fuelUi >= 0 && id.fuelUi <= 1 ? id.fuelUi : null
+  const dampened = Boolean(squeeze?.long_gamma_dampened)
+  const flowMeasured = id.flowImbalance != null
+  const momFresh = id.momentum != null && id.momentumFresh
+
+  // Direction is a two-leg vote: signed flow and fresh 5-day momentum. When
+  // neither votes, "score 0" is an artifact of conviction being suppressed to
+  // zero behind the scenes — the board shows the suppressed state, not a fake
+  // flat zero that reads as measured conviction.
+  const flowVotes = flowMeasured
+  const momVotes = momFresh
+  const dirStatus: SqueezeDirectionStatus =
+    flowVotes && momVotes ? 'measured' : flowVotes || momVotes ? 'partial' : 'degraded'
+
+  // Gates: prefer the shipped values, else re-derive from the shipped inputs.
+  const momUp =
+    finiteNum(t.mom_up_gate) ??
+    finiteNum(c.theory_mom_up_gate) ??
+    (momFresh ? clamp01(Math.max(0, id.momentum as number) / momRef) : null)
+  const momDn =
+    finiteNum(t.mom_dn_gate) ??
+    finiteNum(c.theory_mom_dn_gate) ??
+    (momFresh ? clamp01(Math.max(0, -(id.momentum as number)) / momRef) : null)
+  const wFlow = flowMeasured ? id.flowWeight : 0
+  const convBull =
+    id.convictionBull ??
+    (momUp != null || flowMeasured
+      ? wFlow * clamp01(Math.max(0, id.flowImbalance ?? 0)) + (1 - wFlow) * (momUp ?? 0)
+      : null)
+  const convBear =
+    id.convictionBear ??
+    (momDn != null || flowMeasured
+      ? wFlow * clamp01(Math.max(0, -(id.flowImbalance ?? 0))) + (1 - wFlow) * (momDn ?? 0)
+      : null)
+
+  const measurable = squeeze != null && id.measurable && score != null
+  // The score is a read only when direction had at least one vote. In the
+  // degraded state the shipped number (usually 0, because conviction is zeroed
+  // out behind the scenes) is an artifact, so it is suppressed to the em-dash.
+  const scoreShown = measurable && dirStatus !== 'degraded' ? score : null
+  const side: SqueezeSide =
+    !measurable || scoreShown == null || Math.round(scoreShown) === 0
+      ? 'neutral'
+      : scoreShown > 0
+        ? 'bullish'
+        : 'bearish'
+
+  // ---- verdict ------------------------------------------------------------
+  const label = String(squeeze?.label ?? '').toLowerCase()
+  const mag = scoreShown == null ? 0 : Math.abs(scoreShown)
+  const dirWord = side === 'bullish' ? 'BULL' : 'BEAR'
+  const upDown = side === 'bullish' ? 'up' : 'down'
+  let verdict: string
+  let tone: SqueezeVerdictTone
+  let summary: string
+  if (!measurable) {
+    verdict = 'UNMEASURED'
+    tone = 'unmeasured'
+    summary =
+      id.advAvailable === false
+        ? 'No average dollar volume for this name, so dealer gamma cannot be sized against liquidity.'
+        : 'The chain did not carry enough gamma and volume data to score a squeeze.'
+  } else if (dirStatus === 'degraded') {
+    // Neither direction leg voted. This is an absent measurement, never a
+    // quiet market and never a numeric zero.
+    verdict = 'DIRECTION UNMEASURED'
+    tone = 'unmeasured'
+    const structure = dampened
+      ? 'Dealers are long gamma, so hedging leans against moves rather than chasing them.'
+      : fuel != null
+        ? fuel * 100 < leanAt
+          ? `Short-gamma fuel runs only ${pct0(fuel)} — under the ±${leanAt} lean band anyway.`
+          : `Short-gamma fuel runs ${pct0(fuel)}.`
+        : 'Even the fuel term could not be sized.'
+    summary =
+      `Structure only: ${structure} Neither signed flow nor a fresh momentum read was measured, ` +
+      'so no direction vote stands behind this name — the score is suppressed, not a zero.'
+  } else if (dampened) {
+    verdict = 'DAMPENED'
+    tone = 'warn'
+    summary =
+      'Dealers are long gamma here, so their hedging leans against moves rather than chasing them.'
+  } else if (fuel != null && fuel * 100 < leanAt) {
+    verdict = 'NO FUEL'
+    tone = 'neutral'
+    summary =
+      'Dealer short gamma is small next to how much this name trades — hedging is too light to force a move.'
+  } else if (
+    // The readout's own label wins; the leg test only applies below the lean band,
+    // which is where the backend applies it too.
+    label === 'two_way' ||
+    (!/_(lean|squeeze)$/.test(label) &&
+      mag < leanAt &&
+      (id.bullUi ?? 0) > 8 &&
+      (id.bearUi ?? 0) > 8)
+  ) {
+    verdict = 'TWO-WAY'
+    tone = 'warn'
+    summary = 'Fuel is loaded but the signals disagree — a squeeze could break either way.'
+  } else if (side !== 'neutral' && (label.endsWith('_squeeze') || mag >= squeezeAt)) {
+    verdict = `${dirWord} SQUEEZE`
+    tone = side
+    summary = `Dealers are short enough gamma that hedging can feed a move ${upDown}, and direction is pointing ${upDown}.`
+  } else if (side !== 'neutral' && (label.endsWith('_lean') || mag >= leanAt)) {
+    verdict = `${dirWord} LEAN`
+    tone = side
+    summary = `Squeeze fuel is there and direction tilts ${upDown}, but not strongly enough to call a squeeze.`
+  } else {
+    verdict = 'NO SQUEEZE'
+    tone = 'neutral'
+    summary =
+      'Dealers are short gamma, but nothing is pushing price hard either way — fuel without a spark.'
+  }
+
+  // ---- step 1: fuel -------------------------------------------------------
+  const gexM = finiteNum(t.short_premium_gex_m?.total_gex_m)
+  const fuelLines: string[] = []
+  if (gexM != null) {
+    fuelLines.push(`Dealers are short ${formatMillions(Math.abs(gexM))} of gamma per 1% move.`)
+  }
+  if (id.advAvailable && id.advM != null && id.liquidityRatio != null) {
+    fuelLines.push(
+      `That is ${(id.liquidityRatio * 100).toFixed(1)}% of the ${formatMillions(id.advM)} traded per day.`,
+    )
+  } else {
+    fuelLines.push('No average dollar volume — fuel cannot be sized against liquidity.')
+  }
+  if (id.atmShare != null || id.weightedDte != null) {
+    const atm =
+      id.atmShare == null ? null : `${Math.round(id.atmShare * 100)}% sits within ±2% of spot`
+    const dte =
+      id.weightedDte == null
+        ? null
+        : id.weightedDte < 1
+          ? 'mostly expiring today'
+          : `weighted expiry ${id.weightedDte.toFixed(1)} days`
+    fuelLines.push([atm, dte].filter(Boolean).join(', ') + '.')
+  }
+  if (id.squeezeRisk != null && fuel != null) {
+    fuelLines.push(
+      `Squeeze risk ${id.squeezeRisk.toFixed(4)} → tanh(${fuelScale} × risk) = ${pct0(fuel)} fuel.`,
+    )
+  }
+
+  // ---- step 2: direction --------------------------------------------------
+  const dirLines: string[] = []
+  if (flowMeasured) {
+    dirLines.push(
+      `Signed flow ${formatSignedScore(id.flowImbalance)} (buyers minus sellers), weight ${pct0(wFlow)}.`,
+    )
+  } else {
+    dirLines.push("Signed flow — UNMEASURED: the tape has no buy/sell side, so it doesn't vote.")
+  }
+  if (momFresh) {
+    const gate = (id.momentum as number) >= 0 ? momUp : momDn
+    dirLines.push(
+      `5-day move ${signedPct2(id.momentum)} → ${pct0(gate)} of the ±${(momRef * 100).toFixed(0)}% cap, weight ${pct0(1 - wFlow)}.`,
+    )
+  } else {
+    dirLines.push(
+      id.momentumAgeDays != null
+        ? `5-day momentum — UNMEASURED: the price series is ${id.momentumAgeDays} calendar days old, so it doesn't vote.`
+        : "5-day momentum — UNMEASURED: price data is stale, so it doesn't vote.",
+    )
+  }
+  // Conviction is a blend of the two legs; with no legs voting, printing
+  // "bull 0% · bear 0%" would present the artifact as a measured flat zero.
+  if (dirStatus !== 'degraded' && (convBull != null || convBear != null)) {
+    dirLines.push(`Conviction: bull ${pct0(convBull)} · bear ${pct0(convBear)}.`)
+  }
+  const dirLead =
+    convBull == null && convBear == null
+      ? null
+      : (convBull ?? 0) >= (convBear ?? 0)
+        ? { word: 'BULL', v: convBull ?? 0, tone: 'bullish' as const }
+        : { word: 'BEAR', v: convBear ?? 0, tone: 'bearish' as const }
+  const dirValue =
+    dirStatus === 'degraded' || dirLead == null
+      ? EM_DASH
+      : dirLead.v < 0.005
+        ? 'NONE'
+        : `${dirLead.word} ${pct0(dirLead.v)}`
+
+  // ---- step 3: score ------------------------------------------------------
+  const scoreLines: string[] = []
+  if (dirStatus === 'degraded' && measurable) {
+    scoreLines.push(
+      'Neither direction leg voted, so fuel × direction is suppressed instead of computed.',
+    )
+    scoreLines.push('A printed 0 here would be an artifact, not a quiet market.')
+  } else if (id.bullUi != null && id.bearUi != null) {
+    if (fuel != null && convBull != null && convBear != null) {
+      scoreLines.push(`Bull leg: ${pct0(fuel)} fuel × ${pct0(convBull)} = ${id.bullUi.toFixed(1)}.`)
+      scoreLines.push(`Bear leg: ${pct0(fuel)} fuel × ${pct0(convBear)} = ${id.bearUi.toFixed(1)}.`)
+    } else {
+      // Inputs to re-derive the legs were not shipped — report the legs as given.
+      scoreLines.push(`Bull leg ${id.bullUi.toFixed(1)} · bear leg ${id.bearUi.toFixed(1)}.`)
+    }
+  }
+  if (scoreShown != null) {
+    scoreLines.push(
+      `Bull − bear = ${signedScoreText(scoreShown)}. Lean at ±${leanAt}, squeeze at ±${squeezeAt}.`,
+    )
+  }
+
+  const steps: SqueezeStep[] = [
+    {
+      id: 'fuel',
+      title: 'FUEL',
+      value: pct0(fuel),
+      fill01: fuel == null ? null : clamp01(fuel),
+      tone: dampened ? 'warn' : 'fuel',
+      lines: fuelLines,
+    },
+    {
+      id: 'direction',
+      title: 'DIRECTION',
+      value: dirValue,
+      fill01: dirStatus === 'degraded' || dirLead == null ? null : clamp01(dirLead.v),
+      tone:
+        dirStatus === 'degraded'
+          ? 'warn'
+          : dirLead == null || dirLead.v < 0.005
+            ? 'neutral'
+            : dirLead.tone,
+      lines: dirLines,
+    },
+    {
+      id: 'score',
+      title: 'SCORE',
+      value: scoreShown == null ? EM_DASH : signedScoreText(scoreShown),
+      fill01: scoreShown == null ? null : clamp01(Math.abs(scoreShown) / 100),
+      tone: scoreShown == null || side === 'neutral' ? 'neutral' : side,
+      lines: scoreLines,
+    },
+  ]
+
+  // ---- levels -------------------------------------------------------------
+  const lvl = (v: unknown) => {
+    const n = finiteNum(v)
+    return n != null && n > 0 ? n : null
+  }
+  const callWall = lvl(kl?.call_wall)
+  const putWall = lvl(kl?.put_wall)
+  const flip = lvl(kl?.gamma_flip)
+  const dist = (p: number | null) => (p == null ? null : (distanceFromSpot(p, spot)?.pct ?? null))
+  const regime = gammaRegimeSide(spot, flip)
+  const levels: SqueezeLevel[] = [
+    {
+      id: 'call_wall',
+      label: 'CALL WALL',
+      price: callWall,
+      pct: dist(callWall),
+      note:
+        side === 'bullish'
+          ? 'Trigger — a break above makes dealers buy more'
+          : 'Largest call gamma — tends to cap rallies',
+      tone: 'call',
+      trigger: side === 'bullish',
+    },
+    {
+      id: 'gamma_flip',
+      label: 'GAMMA FLIP',
+      price: flip,
+      pct: dist(flip),
+      note:
+        regime === 'below_flip'
+          ? 'Spot is below — dealers amplify moves'
+          : regime === 'above_flip'
+            ? 'Spot is above — dealers absorb moves'
+            : 'Where dealer hedging changes sides',
+      tone: 'accent',
+      trigger: false,
+    },
+    {
+      id: 'spot',
+      label: 'SPOT',
+      price: spot,
+      pct: spot == null ? null : 0,
+      note: 'Last price',
+      tone: 'ink',
+      trigger: false,
+    },
+    {
+      id: 'put_wall',
+      label: 'PUT WALL',
+      price: putWall,
+      pct: dist(putWall),
+      note:
+        side === 'bearish'
+          ? 'Trigger — a break below makes dealers sell more'
+          : 'Largest put gamma — tends to hold dips',
+      tone: 'put',
+      trigger: side === 'bearish',
+    },
+  ]
+  const measuredLevels = levels.filter((l) => l.price != null)
+  measuredLevels.sort((a, b) => (b.price as number) - (a.price as number))
+
+  // ---- what would change it -----------------------------------------------
+  const watch: string[] = []
+  if (measurable && fuel != null) {
+    const ceiling = fuel * 100
+    if (ceiling < leanAt) {
+      watch.push(
+        `Fuel caps the score at ±${Math.round(ceiling)} — it needs more dealer short gamma before any lean is possible.`,
+      )
+    } else if (!dampened && mag < squeezeAt) {
+      const target = mag < leanAt ? leanAt : squeezeAt
+      const needConv = target / ceiling
+      if (needConv <= 1 && !flowMeasured) {
+        const needMove = needConv * momRef * 100
+        watch.push(
+          `A 5-day move of ±${needMove.toFixed(1)}% would lift it to a ${target === leanAt ? 'lean' : 'squeeze'} at this fuel.`,
+        )
+      } else if (needConv <= 1) {
+        watch.push(
+          `Conviction of ${Math.round(needConv * 100)}% on one side would lift it to a ${target === leanAt ? 'lean' : 'squeeze'}.`,
+        )
+      } else {
+        watch.push(`At ${pct0(fuel)} fuel a full squeeze (±${squeezeAt}) is out of reach.`)
+      }
+    }
+  }
+  if (flip != null && spot != null) {
+    const d = dist(flip)
+    const where = d == null ? '' : ` (${signedPct2(d)})`
+    watch.push(
+      regime === 'below_flip'
+        ? `Reclaiming the flip at ${money(flip)}${where} puts dealers back on the absorbing side.`
+        : `Losing the flip at ${money(flip)}${where} puts dealers on the chasing side.`,
+    )
+  }
+  if (measurable && !flowMeasured) {
+    watch.push(
+      dirStatus === 'degraded'
+        ? 'Signed prints with a buyer/seller side would give flow a direction vote.'
+        : 'Buy/sell-signed prints would add flow as a second vote on direction.',
+    )
+  }
+  if (measurable && !momVotes) {
+    watch.push(
+      id.momentumAgeDays != null
+        ? `Momentum data is ${id.momentumAgeDays} calendar days old — a fresh 5-day close would restore the momentum vote.`
+        : 'A fresh 5-day close would restore the momentum vote.',
+    )
+  }
+  if (measurable && id.weightedDte != null && id.weightedDte < 1) {
+    watch.push('Most of this gamma expires today — the fuel resets with the next expiry.')
+  }
+
+  const dirChip: SqueezeChip | null = !measurable
+    ? null
+    : dirStatus === 'measured'
+      ? null
+      : dirStatus === 'partial'
+        ? {
+            text: `DIRECTION PARTIAL · ${flowVotes ? 'MOMENTUM' : 'SIGNED FLOW'} UNMEASURED`,
+            tone: 'warn',
+          }
+        : { text: 'DIRECTION UNMEASURED · SCORE SUPPRESSED', tone: 'warn' }
+
+  return {
+    measurable,
+    side,
+    tone,
+    verdict,
+    summary,
+    score: scoreShown,
+    scoreDisplay: scoreShown != null ? signedScoreText(scoreShown) : EM_DASH,
+    dirStatus,
+    dirChip,
+    leanAt,
+    squeezeAt,
+    markerPct: scoreShown != null ? 50 + Math.max(-100, Math.min(100, scoreShown)) / 2 : null,
+    steps,
+    levels: measuredLevels,
+    watch: watch.slice(0, 4),
   }
 }

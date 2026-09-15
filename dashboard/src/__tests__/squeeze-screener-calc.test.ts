@@ -10,6 +10,8 @@ import {
   calculateTrackWidthPct,
   buildTakeaways,
   buildTheoryIdentity,
+  buildSqueezeExplanation,
+  formatMillions,
   RING_CIRCUMFERENCE,
   RING_RADIUS,
 } from '@/squeezeCalc'
@@ -292,56 +294,29 @@ describe('Squeeze Screener Calculation Suite', () => {
   describe('6. Component Template & CSS Token Compliance', () => {
     const vueSrc = readFileSync(join(root, 'components/SqueezeScreener.vue'), 'utf8')
 
-    it('includes smooth cubic-bezier transition for radial ring fill', () => {
-      expect(vueSrc).toContain('transition: stroke-dashoffset 0.6s cubic-bezier(0.22, 1, 0.36, 1);')
-    })
-
-    it('defines crimson takeaway dot class for bearish setups', () => {
-      expect(vueSrc).toMatch(/\.takeaway-dot\.neg\s*\{\s*background:\s*var\(--put\);?\s*\}/)
-    })
-
-    it('preserves emerald and crimson score highlights for hot scores without amber override', () => {
+    it('colours the verdict by side through call/put tokens, never an amber override', () => {
       expect(vueSrc).toMatch(
-        /\.sq\.bullish\s+\.score-num\.hot\s*\{\s*color:\s*var\(--call-hi\);?\s*\}/,
+        /\.sq\[data-tone='bullish'\]\s*\{\s*--sq-tone:\s*var\(--call-hi\);?\s*\}/,
       )
       expect(vueSrc).toMatch(
-        /\.sq\.bearish\s+\.score-num\.hot\s*\{\s*color:\s*var\(--put-hi\);?\s*\}/,
+        /\.sq\[data-tone='bearish'\]\s*\{\s*--sq-tone:\s*var\(--put-hi\);?\s*\}/,
       )
-      expect(vueSrc).not.toContain('.score-num.hot { color: var(--warn); }')
+      expect(vueSrc).toMatch(/\.score-num\s*\{[^}]*color:\s*var\(--sq-tone\)/s)
     })
 
-    it('binds calculated track width helper across factors and alt tracks', () => {
-      expect(vueSrc).toContain('calculateTrackWidthPct(f.score, f.max)')
-      expect(vueSrc).toContain('calculateTrackWidthPct(otherSide.setup.score, 100)')
+    it('renders an unmeasured dash — not a fake $0.00 — for a null level', () => {
+      // api.ts documents squeeze/GEX/wall fields as "null = unmeasured, NOT zero".
+      expect(vueSrc).not.toContain("'$0.00'")
+      expect(vueSrc).toContain('lv.price != null ? optUsd(lv.price) : DASH')
     })
 
-    it('renders an unmeasured dash — not a fake $0.00 — for a null wall or gamma-flip level', () => {
-      // Regression: api.ts documents that squeeze/GEX/wall fields are
-      // "null = unmeasured, NOT zero" (see api.ts:1000). The WALL and FLIP
-      // cells used to fall back to the literal string '$0.00' when the
-      // backend sent null, which is indistinguishable from a real $0 price
-      // and reads as a broken panel. They must fall back to DASH instead.
-      expect(vueSrc).not.toContain(": '$0.00'")
-      expect(vueSrc).toContain('featuredWall.level != null ? optUsd(featuredWall.level) : DASH')
-      expect(vueSrc).toContain('levels?.gamma_flip != null ? optUsd(levels.gamma_flip) : DASH')
+    it('draws a meter only for a measured step', () => {
+      expect(vueSrc).toContain('<i v-if="st.fill01 != null"')
     })
 
-    it('shows a distinct "structure unmeasured" state instead of a fake 0/100 ring when a squeeze payload carries no scored setup', () => {
-      // Regression: when `squeeze` is a real (truthy) object but neither
-      // bullish_setup nor bearish_setup is populated, calculateFeaturedSetup
-      // still returns a side with `setup: undefined`. The board previously
-      // rendered anyway, showing a hard "0/100 UNLIKELY" ring that looks
-      // identical to a genuinely measured quiet market. The template must
-      // gate the scored board on `featured.setup` and show an explicit
-      // in-between state for "payload present, nothing scored".
-      expect(vueSrc).toContain('v-if="squeeze && featured.setup"')
-      expect(vueSrc).toContain('v-else-if="squeeze"')
-      expect(vueSrc).toContain('Structure unmeasured')
-    })
-
-    it('labels the dial as a theory score, not a squeeze probability', () => {
+    it('labels the score as a theory score, not a squeeze probability', () => {
       expect(vueSrc).toContain('THEORY SCORE · NOT A FORECAST')
-      expect(vueSrc).toContain('buildTheoryIdentity')
+      expect(vueSrc).toContain('buildSqueezeExplanation')
       expect(vueSrc).not.toContain('PROBABILITY SCORE')
       expect(vueSrc).not.toContain('Imminent')
     })
@@ -408,9 +383,7 @@ describe('7. Theory identity — fuel × flow × momentum, not a coin-flip forec
   it('does not call a quiet book a squeeze, and stale momentum is not a side', () => {
     expect(buildTheoryIdentity(squeeze()).state).toBe('fuel_only')
     expect(buildTheoryIdentity(squeeze({ score: 42, primary: 'bullish' })).state).toBe('bull_lean')
-    expect(buildTheoryIdentity(squeeze({ score: -44, primary: 'bearish' })).state).toBe(
-      'bear_lean',
-    )
+    expect(buildTheoryIdentity(squeeze({ score: -44, primary: 'bearish' })).state).toBe('bear_lean')
     const stale = buildTheoryIdentity(
       squeeze({
         theory: {
@@ -434,5 +407,303 @@ describe('7. Theory identity — fuel × flow × momentum, not a coin-flip forec
     expect(buildTheoryIdentity(squeeze({ long_gamma_dampened: true })).stateLabel).not.toMatch(
       /IMMINENT|LIKELY/,
     )
+  })
+})
+
+describe('8. Squeeze explanation — the board shows its arithmetic', () => {
+  /** Shape of the live SPY payload on 2026-09-14 after the flow-vote fix. */
+  function spy(over: Partial<OptionsSqueeze> = {}): OptionsSqueeze {
+    return {
+      bullish: 0,
+      bearish: 0.5179,
+      score: -51.8,
+      label: 'bearish_squeeze',
+      primary: 'bearish',
+      drivers: ['short_premium_dealer_gamma', 'down_momentum'],
+      long_gamma_dampened: false,
+      negative_fuel: 0.9772,
+      theory: {
+        squeeze_risk: 0.05578,
+        fuel_ui: 0.9772,
+        bullish_ui: 0,
+        bearish_ui: 51.8,
+        adv_m: 26342.1,
+        adv_available: true,
+        measurable: true,
+        directional_flow_imbalance: null,
+        flow_measured: false,
+        flow_weight: 0,
+        momentum: -0.0159,
+        momentum_fresh: true,
+        mom_ref: 0.03,
+        mom_up_gate: 0,
+        mom_dn_gate: 0.53,
+        conviction_bull: 0,
+        conviction_bear: 0.53,
+        liquidity_ratio: 0.05737,
+        urgency: 1,
+        fuel_scale: 40,
+        lean_threshold: 20,
+        squeeze_threshold: 40,
+        short_premium_gex_m: { total_gex_m: -1511.2, atm_share: 0.9723, weighted_dte: 0 },
+      },
+      components: {
+        theory_liquidity_ratio: 0.05737,
+        theory_atm_share: 0.9723,
+        theory_weighted_dte: 0,
+      },
+      key_levels: {
+        spot: 760.88,
+        call_wall: 765,
+        call_wall_pct: 0.0054,
+        put_wall: 760,
+        put_wall_pct: -0.0012,
+        gamma_flip: 766.96,
+        gamma_flip_pct: 0.008,
+        pin_strike: 760,
+      },
+      ...over,
+    }
+  }
+
+  it('reads a verdict, side and marker straight from the signed score', () => {
+    const ex = buildSqueezeExplanation(spy(), 760.88)
+    expect(ex.measurable).toBe(true)
+    expect(ex.verdict).toBe('BEAR SQUEEZE')
+    expect(ex.side).toBe('bearish')
+    expect(ex.scoreDisplay).toBe('−52')
+    expect(ex.markerPct).toBeCloseTo(24.1, 2)
+  })
+
+  it('walks fuel × direction = score with the payload numbers', () => {
+    const ex = buildSqueezeExplanation(spy(), 760.88)
+    const [fuel, dir, score] = ex.steps
+    expect(fuel.value).toBe('98%')
+    expect(fuel.lines.join(' ')).toContain('$1.51B')
+    expect(fuel.lines.join(' ')).toContain('5.7% of the $26.34B traded per day')
+    expect(fuel.lines.join(' ')).toContain('mostly expiring today')
+    expect(dir.value).toBe('BEAR 53%')
+    expect(dir.lines[0]).toContain("doesn't vote")
+    expect(dir.lines[1]).toContain('−1.59%')
+    expect(score.value).toBe('−52')
+    expect(score.lines.join(' ')).toContain('Bear leg: 98% fuel × 53% = 51.8')
+  })
+
+  it('marks the put wall as the trigger on a bearish read and orders levels by price', () => {
+    const ex = buildSqueezeExplanation(spy(), 760.88)
+    expect(ex.levels.map((l) => l.id)).toEqual(['gamma_flip', 'call_wall', 'spot', 'put_wall'])
+    expect(ex.levels.find((l) => l.trigger)?.id).toBe('put_wall')
+    expect(ex.levels.find((l) => l.id === 'gamma_flip')?.note).toContain('amplify')
+  })
+
+  it('says what would change the read, derived from fuel and the flip', () => {
+    const ex = buildSqueezeExplanation(
+      spy({ score: -26, bearish: 0.26, label: 'bearish_lean' }),
+      760.88,
+    )
+    expect(ex.verdict).toBe('BEAR LEAN')
+    const watch = ex.watch.join(' ')
+    // squeeze at 40 needs conviction 40/97.72 → 41% of the 3% cap ≈ 1.2%
+    expect(watch).toContain('±1.2% would lift it to a squeeze')
+    expect(watch).toContain('Reclaiming the flip at $766.96')
+    expect(watch).toContain('expires today')
+  })
+
+  it('never calls a squeeze without fuel, and caps the reachable score', () => {
+    const ex = buildSqueezeExplanation(
+      spy({
+        score: -7.4,
+        label: 'quiet',
+        primary: 'quiet',
+        theory: { ...spy().theory, fuel_ui: 0.148, bearish_ui: 7.4, conviction_bear: 0.5 },
+      }),
+      760.88,
+    )
+    expect(ex.verdict).toBe('NO FUEL')
+    expect(ex.watch[0]).toContain('caps the score at ±15')
+  })
+
+  it('reports long gamma as dampened and a missing payload as unmeasured, with no numbers', () => {
+    expect(buildSqueezeExplanation(spy({ long_gamma_dampened: true }), 760.88).verdict).toBe(
+      'DAMPENED',
+    )
+    const none = buildSqueezeExplanation(null, null)
+    expect(none.verdict).toBe('UNMEASURED')
+    expect(none.scoreDisplay).toBe('—')
+    expect(none.markerPct).toBeNull()
+    expect(none.steps.every((s) => s.fill01 == null)).toBe(true)
+    expect(none.levels).toEqual([])
+  })
+
+  it('keeps flow as a vote when the tape is signed', () => {
+    const ex = buildSqueezeExplanation(
+      spy({
+        theory: {
+          ...spy().theory,
+          directional_flow_imbalance: -0.4,
+          flow_measured: true,
+          flow_weight: 0.5,
+        },
+      }),
+      760.88,
+    )
+    expect(ex.steps[1].lines[0]).toContain('Signed flow -0.4')
+    expect(ex.watch.join(' ')).not.toContain('second vote')
+  })
+
+  it('treats an out-of-range legacy fuel as unmeasured instead of printing >100%', () => {
+    const ex = buildSqueezeExplanation(
+      spy({ negative_fuel: 14.5, theory: { ...spy().theory, fuel_ui: undefined } }),
+      760.88,
+    )
+    expect(ex.steps[0].value).toBe('—')
+    expect(ex.steps[0].fill01).toBeNull()
+  })
+
+  it('lets the readout label win over the two-way leg test', () => {
+    const ex = buildSqueezeExplanation(
+      spy({
+        label: 'bearish_lean',
+        score: -26,
+        theory: { ...spy().theory, bullish_ui: 12, bearish_ui: 38 },
+      }),
+      760.88,
+    )
+    expect(ex.verdict).toBe('BEAR LEAN')
+  })
+
+  it('formats $M figures compactly without inventing a zero', () => {
+    expect(formatMillions(1511.2)).toBe('$1.51B')
+    expect(formatMillions(115.14)).toBe('$115M')
+    expect(formatMillions(-12.44)).toBe('−$12.4M')
+    expect(formatMillions(null)).toBe('—')
+  })
+})
+
+describe('9. Direction honesty — measured / partial / degraded', () => {
+  /** A real NVDA-style degraded payload: tape unsigned, momentum 5 days stale. */
+  function nvda(over: Partial<OptionsSqueeze> = {}): OptionsSqueeze {
+    return {
+      bullish: 0,
+      bearish: 0,
+      score: 0,
+      label: 'quiet',
+      primary: 'quiet',
+      drivers: ['short_premium_dealer_gamma'],
+      long_gamma_dampened: false,
+      negative_fuel: 0.05,
+      theory: {
+        squeeze_risk: 0.0013,
+        fuel_ui: 0.05,
+        bullish_ui: 0,
+        bearish_ui: 0,
+        adv_m: 9400,
+        adv_available: true,
+        measurable: true,
+        directional_flow_imbalance: null,
+        flow_measured: false,
+        flow_weight: 0,
+        momentum: 0.011,
+        momentum_fresh: false,
+        momentum_price_age_days: 5,
+        short_premium_gex_m: { total_gex_m: -1.1, atm_share: 0.3, weighted_dte: 3 },
+      },
+      key_levels: {
+        spot: 177.4,
+        call_wall: 185,
+        call_wall_pct: 0.043,
+        put_wall: 170,
+        put_wall_pct: -0.042,
+        gamma_flip: 180.2,
+        gamma_flip_pct: 0.016,
+        pin_strike: 175,
+      },
+      ...over,
+    }
+  }
+
+  it('suppresses the score when neither direction leg votes — never a numeric 0', () => {
+    const ex = buildSqueezeExplanation(nvda(), 177.4)
+    expect(ex.dirStatus).toBe('degraded')
+    expect(ex.verdict).toBe('DIRECTION UNMEASURED')
+    expect(ex.tone).toBe('unmeasured')
+    expect(ex.score).toBeNull()
+    expect(ex.scoreDisplay).toBe('—')
+    expect(ex.markerPct).toBeNull()
+    expect(ex.side).toBe('neutral')
+    expect(ex.summary).toContain('suppressed, not a zero')
+    expect(ex.dirChip?.text).toBe('DIRECTION UNMEASURED · SCORE SUPPRESSED')
+  })
+
+  it('keeps structural sections alive in the degraded state', () => {
+    const ex = buildSqueezeExplanation(nvda(), 177.4)
+    const [fuel, dir, score] = ex.steps
+    expect(fuel.value).not.toBe('—')
+    expect(fuel.fill01).not.toBeNull()
+    expect(dir.value).toBe('—')
+    expect(dir.fill01).toBeNull()
+    expect(dir.tone).toBe('warn')
+    expect(score.value).toBe('—')
+    expect(score.fill01).toBeNull()
+    expect(score.lines.join(' ')).not.toMatch(/Bull leg|Bull − bear/)
+    expect(dir.lines.join(' ')).toContain('5 calendar days old')
+    expect(ex.levels.length).toBeGreaterThanOrEqual(3)
+    expect(ex.watch.join(' ')).toContain('restore the momentum vote')
+    expect(ex.watch.join(' ')).toContain('direction vote')
+  })
+
+  it('shows the voting leg in the partial state and names the other UNMEASURED', () => {
+    // Same payload shape as the live SPY read: momentum fresh, tape unsigned.
+    const wMom = buildSqueezeExplanation(
+      nvda({ theory: { ...nvda().theory, momentum_fresh: true } }),
+      177.4,
+    )
+    expect(wMom.dirStatus).toBe('partial')
+    expect(wMom.dirChip?.text).toBe('DIRECTION PARTIAL · SIGNED FLOW UNMEASURED')
+    expect(wMom.scoreDisplay).not.toBe('—')
+    expect(wMom.steps[1].lines.join(' ')).toContain('UNMEASURED')
+    expect(wMom.steps[1].lines.join(' ')).toContain("doesn't vote")
+  })
+
+  it('reports full measurement with no chip when both legs vote', () => {
+    const both = buildSqueezeExplanation(
+      nvda({
+        score: 12.4,
+        bullish: 0.124,
+        theory: {
+          ...nvda().theory,
+          directional_flow_imbalance: 0.3,
+          flow_measured: true,
+          flow_weight: 0.5,
+          momentum_fresh: true,
+        },
+      }),
+      177.4,
+    )
+    expect(both.dirStatus).toBe('measured')
+    expect(both.dirChip).toBeNull()
+    expect(both.markerPct).not.toBeNull()
+  })
+
+  it('a measured flat zero conviction still renders as a real NONE, not an em-dash', () => {
+    const flat = buildSqueezeExplanation(
+      nvda({
+        score: 0,
+        theory: {
+          ...nvda().theory,
+          directional_flow_imbalance: 0.01,
+          flow_measured: true,
+          flow_weight: 0.5,
+          momentum: 0.001,
+          momentum_fresh: true,
+          momentum_price_age_days: 0,
+          conviction_bull: 0,
+          conviction_bear: 0,
+        },
+      }),
+      177.4,
+    )
+    expect(flat.dirStatus).toBe('measured')
+    expect(flat.steps[1].value).toBe('NONE')
   })
 })

@@ -1,6 +1,7 @@
 """Theory-aligned bullish/bearish gamma-squeeze math — worked examples + unit tests."""
 from __future__ import annotations
 
+import math
 
 import pytest
 
@@ -245,3 +246,99 @@ def test_short_gamma_without_directional_shock_stays_neutral():
     assert out["squeeze_label"] == "neutral"
     assert out["squeeze_risk"] > 0  # fuel present
     assert abs(out["squeeze_score"]) < 20
+
+
+# ---------------------------------------------------------------------------
+# Fuel calibration: front-book urgency DTE (docs/SQUEEZE_FUEL_CALIBRATION.md)
+# ---------------------------------------------------------------------------
+
+# Worked fixture: $50M of |GEX| at dte 5 (ATM) + $75M at dte 180 (far tail).
+# |dg_m| = OI·M·Γ·S²·0.01/1e6 → ATM row: 100k·100·0.05·10⁴·0.01/1e6 = $50M;
+# tail row: 1.25M·100·0.006·10⁴·0.01/1e6 = $75M.
+def _front_tail_rows():
+    return [
+        {"right": "call", "strike": 100, "gamma": 0.05, "open_interest": 100_000, "multiplier": 100, "dte": 5},
+        {"right": "call", "strike": 140, "gamma": 0.006, "open_interest": 1_250_000, "multiplier": 100, "dte": 180},
+    ]
+
+
+def test_short_premium_gex_reports_front40_weighted_dte():
+    gex = short_premium_gex_1pct_m(_front_tail_rows(), spot=100.0)
+    # Full book: (50·5 + 75·180)/125 = 110. Front 40% (cap 50 of 125) is the
+    # near-expiry row exactly → dte 5.
+    assert gex["weighted_dte"] == pytest.approx(110.0, abs=1e-9)
+    assert gex["front40_weighted_dte"] == pytest.approx(5.0, abs=1e-9)
+    assert gex["atm_share"] == pytest.approx(0.4, abs=1e-9)
+
+
+def test_default_urgency_uses_front_book_not_long_dated_tail():
+    """The mega-cap NO-FUEL regression: a heavy near-expiry book must not be
+    drained by a long-dated OI tail (NVDA 2026-09-15: dte_full 64.5 vs
+    front40 5.9 shrunk fuel from 79% to 4% under the legacy basis)."""
+    kw = dict(
+        chain_rows=_front_tail_rows(),
+        spot=100.0,
+        adv_notional=500_000_000.0,
+        call_imbalance=0.0,
+        momentum=0.0,
+    )
+    new = compute_theory_squeeze(**kw)
+    legacy = compute_theory_squeeze(
+        **kw, urgency_dte_basis="full", urgency_c=0.05, fuel_scale=40.0,
+    )
+    comp = new["components"]
+    assert comp["urgency_dte_basis"] == "front40"
+    assert comp["urgency_dte"] == pytest.approx(5.0, abs=1e-9)
+    assert comp["weighted_dte"] == pytest.approx(110.0, abs=1e-9)
+    assert comp["urgency"] == pytest.approx(math.exp(-0.05 * 5.0), abs=1e-9)
+    assert comp["fuel_scale"] == 25.0
+    # exp(-0.05·5)/exp(-0.05·110) ≈ 190× more squeeze risk than the legacy read.
+    assert new["squeeze_risk"] > 100.0 * legacy["squeeze_risk"]
+    lcomp = legacy["components"]
+    assert lcomp["urgency_dte"] == pytest.approx(110.0, abs=1e-9)
+    assert lcomp["urgency"] == pytest.approx(math.exp(-0.05 * 110.0), abs=1e-9)
+    assert lcomp["fuel_scale"] == 40.0
+
+
+def test_front40_falls_back_to_full_book_dte_when_no_dte_data():
+    rows = [
+        {"right": "call", "strike": 100, "gamma": 0.1, "open_interest": 100_000, "multiplier": 100},
+    ]
+    gex = short_premium_gex_1pct_m(rows, spot=100.0)
+    assert gex["front40_weighted_dte"] is None
+    out = compute_theory_squeeze(
+        chain_rows=rows,
+        spot=100.0,
+        adv_notional=10_000_000.0,
+        call_imbalance=0.0,
+        momentum=0.0,
+    )
+    # No DTE data anywhere → both sentinels; front book must not crash the read.
+    assert out["components"]["urgency_dte"] == out["components"]["weighted_dte"] == 30.0
+    assert out["squeeze_risk"] > 0
+
+
+def test_nan_open_interest_does_not_poison_aggregates():
+    """Vendor-blank OI arrives as NaN (truthy) — one bad row used to turn the
+    whole chain's GEX NaN, atm_share 0, and weighted_dte into the sentinel."""
+    rows = [
+        {"right": "call", "strike": 100, "gamma": 0.05, "open_interest": float("nan"), "multiplier": 100, "dte": 5},
+        {"right": "put", "strike": 99, "gamma": 0.05, "open_interest": 8_000, "multiplier": 100, "dte": 5},
+    ]
+    gex = short_premium_gex_1pct_m(rows, spot=100.0)
+    assert math.isfinite(gex["total_gex_m"]) and gex["total_gex_m"] < 0
+    assert gex["weighted_dte"] == pytest.approx(5.0, abs=1e-9)
+    assert gex["front40_weighted_dte"] == pytest.approx(5.0, abs=1e-9)
+    assert gex["atm_share"] > 0.9
+
+
+def test_unknown_urgency_dte_basis_rejected():
+    with pytest.raises(ValueError):
+        compute_theory_squeeze(
+            chain_rows=_front_tail_rows(),
+            spot=100.0,
+            adv_notional=500_000_000.0,
+            call_imbalance=0.0,
+            momentum=0.0,
+            urgency_dte_basis="median",
+        )

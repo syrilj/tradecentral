@@ -1307,6 +1307,15 @@ const displayedFlaggedPrints = computed(() =>
   showAllFlagged.value ? flaggedPrints.value : flaggedPrints.value.slice(0, 4),
 )
 
+/* A trade tape can only ever show prints, but a name with no print feed still
+   has a chain. When the tape is empty and the dated snapshot kept contracts,
+   fall back to those rows so the table still shows this name's options data. */
+const chainSnapshotRows = computed(() =>
+  [...(d.value?.chain_by_strike ?? [])].sort(
+    (a, b) => a.strike - b.strike || (a.right === 'call' ? -1 : 1),
+  ),
+)
+
 /* Without an aggressor the lean function degrades to the print's call/put
    identity — which the "Strike · Type" column already shows — so the column
    rendered a second copy of the same chip on every row and cost the tape a
@@ -2460,6 +2469,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 :oi-provider="d?.provider?.open_interest ?? null"
                 :contracts="d?.quality?.chain_contracts_included ?? null"
                 :expiry-label="expiry?.selected_expiry ?? null"
+                :tape-prints="d?.quality?.flow_prints_included ?? null"
+                :tape-signed="d?.provider?.signed_flow_available ?? null"
+                :tape-warnings="d?.warnings ?? null"
               />
             </Panel>
           </div>
@@ -3419,10 +3431,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     <td class="fig num-col strike-cell">
                       <div class="strike-lockup">
                         <span class="strike-val">{{ optUsd(row.strike) }}</span>
-                        <span
-                          class="type-chip label"
-                          :class="(row.right || row.activity_side || '').toLowerCase()"
-                        >
+                        <span class="type-chip label" :class="(row.right || row.activity_side || '').toLowerCase()">
                           {{ (row.right || row.activity_side) ? (row.right || row.activity_side)!.toUpperCase() : '—' }}
                         </span>
                       </div>
@@ -3602,6 +3611,53 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               >
                 CLEAR DATE FILTERS
               </button>
+            </div>
+          </div>
+          <div v-if="chainSnapshotRows.length && !d?.flow_tape?.length" class="chain-snapshot">
+            <div class="chain-snapshot-head">
+              <span class="label dim">
+                DATED CHAIN SNAPSHOT
+                <template v-if="d?.history?.selected_asof">
+                  · {{ shortDate(d.history.selected_asof) }}
+                </template>
+                · {{ chainSnapshotRows.length }} CONTRACTS
+              </span>
+              <span class="label dim">No prints on this feed — chain quotes shown instead</span>
+            </div>
+            <div class="chain-snap-scroll">
+              <table class="tape-table chain-snap-table" role="table" aria-label="Dated chain snapshot">
+                <thead>
+                  <tr>
+                    <th class="num-col">Strike</th>
+                    <th>Type</th>
+                    <th class="num-col">DTE</th>
+                    <th class="num-col">IV</th>
+                    <th class="num-col">Delta</th>
+                    <th class="num-col">Gamma</th>
+                    <th class="num-col">Vol</th>
+                    <th class="num-col">OI</th>
+                    <th class="num-col">Charm/day</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in chainSnapshotRows" :key="`${row.strike}-${row.right}`">
+                    <td class="fig num-col">{{ num(row.strike, 2) }}</td>
+                    <td class="snap-side" :class="row.right === 'call' ? 'is-call' : 'is-put'">
+                      {{ row.right === 'call' ? 'CALL' : 'PUT' }}
+                    </td>
+                    <td class="fig num-col">{{ row.dte != null ? num(row.dte, 0) : '—' }}</td>
+                    <td class="fig num-col">{{ row.iv != null ? `${num(row.iv * 100, 1)}%` : '—' }}</td>
+                    <td class="fig num-col">{{ row.delta != null ? signed(row.delta, 3) : '—' }}</td>
+                    <td class="fig num-col">{{ row.gamma != null ? signed(row.gamma, 4) : '—' }}</td>
+                    <td class="fig num-col">{{ num(row.volume, 0) }}</td>
+                    <td class="fig num-col">{{ num(row.open_interest, 0) }}</td>
+                    <td class="fig num-col">{{ signed(row.charm_flow, 1) }}</td>
+                  </tr>
+                  <tr v-if="!chainSnapshotRows.length">
+                    <td colspan="9" class="td-empty">No chain snapshot contracts found for this expiry.</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </Panel>
@@ -3880,6 +3936,12 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   EXPORT ALL {{ historyTape.length }} TO CSV
                 </button>
               </div>
+            </div>
+            <div v-else class="tape-unavailable pad">
+              <p class="note">No historical prints loaded.</p>
+              <p class="note tiny text-muted">
+                Select a date range and preset above to inspect historical option prints.
+              </p>
             </div>
           </div>
         </Panel> </template
@@ -4802,11 +4864,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   margin: 0 2px;
 }
 .side-pill {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px 7px;
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs);
   font-size: var(--t-micro);
+  line-height: 1.25;
   letter-spacing: 0.08em;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .side-pill.pos {
   color: var(--long);
@@ -4860,11 +4928,17 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   color: var(--ink-faint);
 }
 .gate-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px 7px;
   border: var(--hair) solid var(--rule);
+  border-radius: var(--r-xs);
   font-size: var(--t-micro);
+  line-height: 1.25;
   letter-spacing: 0.06em;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .gate-chip.pass {
   color: var(--long);
@@ -4877,12 +4951,18 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--short-wash);
 }
 .basis {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px 7px;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
   color: var(--ink-dim);
   font-size: var(--t-micro);
+  line-height: 1.25;
   letter-spacing: 0.06em;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .basis.both {
   border-color: var(--phosphor-dim);
@@ -5834,6 +5914,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   margin-left: auto;
 }
 .flag-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 22px;
   padding: 0 8px;
   border: var(--hair) solid var(--glass-border);
@@ -5843,6 +5926,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-weight: 700;
   border-radius: var(--r-capsule);
   cursor: pointer;
+  white-space: nowrap;
   transition: all var(--dur-fast) var(--ease-out);
 }
 .flag-pill:hover {
@@ -6584,34 +6668,48 @@ tr.isGoldenSweep td {
   white-space: nowrap;
 }
 .moneyness-tag {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 1px 5px;
   font-size: var(--t-micro);
   font-weight: 750;
+  line-height: 1.25;
   border-radius: var(--r-xs);
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .moneyness-tag.itm {
   color: var(--call-hi);
   background: var(--call-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--call) 35%, var(--rule));
 }
 .moneyness-tag.otm {
   color: var(--ink-dim);
   background: var(--surface-raised);
+  border: var(--hair) solid var(--rule);
 }
 .moneyness-tag.atm {
   color: var(--warn);
   background: var(--warn-wash);
+  border: var(--hair) solid color-mix(in srgb, var(--warn) 35%, var(--rule));
 }
 .flag-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin: 1px 4px 2px 0;
   padding: 2px 6px;
   color: var(--warn);
   background: var(--warn-wash);
   border: var(--hair) solid color-mix(in srgb, var(--warn) 45%, var(--rule));
+  border-radius: var(--r-xs);
   font-size: var(--t-micro);
   font-weight: 800;
+  line-height: 1.25;
   letter-spacing: 0.04em;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .num-col {
   text-align: right;
@@ -6649,15 +6747,21 @@ tr.isGoldenSweep td {
 .bias-chip,
 .class-chip,
 .edge-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 46px;
   padding: 2px 6px;
   text-align: center;
   border: var(--hair) solid var(--rule-hi);
+  border-radius: var(--r-xs);
   background: var(--panel-hi);
   font-size: var(--t-micro);
+  line-height: 1.25;
   font-weight: 700;
   letter-spacing: 0.05em;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .type-chip.call {
   color: var(--call-hi, var(--call));
@@ -6820,6 +6924,47 @@ td.put {
 }
 .compact-empty {
   min-height: 140px;
+}
+
+/* Print tape is absent → the panel falls back to the dated chain snapshot so
+   the table still shows this name's options data. */
+.chain-snapshot {
+  margin-top: var(--s3);
+  border-top: var(--hair) solid var(--rule);
+  padding-top: var(--s3);
+}
+.chain-snapshot-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s4);
+  margin-bottom: var(--s2);
+}
+.chain-snap-scroll {
+  max-height: 340px;
+  overflow: auto;
+  border: var(--hair) solid var(--rule);
+  background: var(--surface-overlay);
+}
+.chain-snap-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+.chain-snap-table td {
+  padding: 5px var(--s3);
+  border-bottom: var(--hair) solid var(--border-subtle);
+  vertical-align: middle;
+}
+.chain-snap-table .snap-side {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.chain-snap-table .snap-side.is-call {
+  color: var(--call-hi);
+}
+.chain-snap-table .snap-side.is-put {
+  color: var(--put-hi);
 }
 
 .methodology {
@@ -6993,27 +7138,6 @@ td.put {
   font-family: var(--font-data);
   font-weight: 600;
   color: var(--ink);
-}
-.moneyness-tag {
-  font-size: var(--t-micro);
-  font-weight: 700;
-  padding: 1px 4px;
-  letter-spacing: 0.05em;
-  line-height: 1;
-}
-.moneyness-tag.itm {
-  color: var(--long);
-  background: var(--long-wash);
-  border: var(--hair) solid color-mix(in srgb, var(--long) 30%, var(--rule));
-}
-.moneyness-tag.otm {
-  color: var(--ink-faint);
-  background: transparent;
-}
-.moneyness-tag.atm {
-  color: var(--phosphor);
-  background: var(--phosphor-wash);
-  border: var(--hair) solid var(--phosphor-dim);
 }
 
 /* Whale tab highlight — tokens only, no !important */
@@ -7203,6 +7327,8 @@ tr.isMegaWhale:hover {
 .fill-sub {
   font: 500 var(--t-nano) var(--font-data);
   color: var(--ink-faint);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .card-foot-row {
   display: flex;
@@ -7335,7 +7461,7 @@ tr.isMegaWhale:hover {
 
 .flow-badge.badge-fills,
 .sweep-fill-count-badge {
-  font: 700 9px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   padding: 2px 6px;
   border-radius: var(--r-xs);
   letter-spacing: 0.04em;
@@ -7352,12 +7478,14 @@ tr.isMegaWhale:hover {
   padding: 8px 0;
   border-top: var(--hair) solid var(--glass-border-subtle);
   border-bottom: var(--hair) solid var(--glass-border-subtle);
+  min-width: 0;
 }
 
 .hero-left {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .hero-prem-lockup {
@@ -7367,7 +7495,7 @@ tr.isMegaWhale:hover {
 }
 
 .hero-prem-lockup .prem-label {
-  font: 800 8.5px var(--font-display);
+  font: 800 var(--t-nano) var(--font-display);
   color: var(--ink-faint);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -7376,7 +7504,7 @@ tr.isMegaWhale:hover {
 .hero-prem-lockup .prem-val {
   font: 900 22px var(--font-data);
   letter-spacing: -0.02em;
-  line-height: 1;
+  line-height: 1.15;
 }
 
 .hero-prem-lockup.call .prem-val {
@@ -7390,6 +7518,7 @@ tr.isMegaWhale:hover {
 .hero-sub {
   font: 500 11px var(--font-data);
   color: var(--ink-dim);
+  overflow-wrap: anywhere;
 }
 
 .hero-right {
@@ -7397,6 +7526,8 @@ tr.isMegaWhale:hover {
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .hero-tags {
@@ -7458,14 +7589,14 @@ tr.isMegaWhale:hover {
 /* 6-Cell Metric Matrix */
 .card-specs-matrix {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   padding: 4px 0;
 }
 
 @media (max-width: 640px) {
   .card-specs-matrix {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -7482,7 +7613,7 @@ tr.isMegaWhale:hover {
 }
 
 .spec-label {
-  font: 800 8.5px var(--font-display);
+  font: 800 var(--t-nano) var(--font-display);
   color: var(--ink-faint);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -7522,7 +7653,7 @@ tr.isMegaWhale:hover {
   background: var(--wash-1);
   border: 1px solid var(--glass-border);
   color: var(--phosphor);
-  font: 700 9px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   padding: 2px 7px;
   border-radius: var(--r-xs);
   cursor: pointer;
@@ -7548,7 +7679,7 @@ tr.isMegaWhale:hover {
 }
 
 .fills-drawer-head {
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   color: var(--phosphor);
   letter-spacing: 0.06em;
   margin-bottom: 6px;
@@ -7602,7 +7733,7 @@ tr.isMegaWhale:hover {
   background: color-mix(in srgb, var(--phosphor) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--phosphor) 35%, transparent);
   color: var(--phosphor);
-  font: 700 8.5px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   padding: 1px 5px;
   border-radius: var(--r-xs);
   cursor: pointer;
@@ -7624,7 +7755,7 @@ tr.isMegaWhale:hover {
 }
 
 .oi-faint-sub {
-  font: 500 9px var(--font-data);
+  font: 500 var(--t-nano) var(--font-data);
   color: var(--ink-faint);
   letter-spacing: 0.02em;
 }
@@ -7645,7 +7776,7 @@ tr.isMegaWhale:hover {
 }
 
 .subrow-title {
-  font: 700 9px var(--font-display);
+  font: 700 var(--t-nano) var(--font-display);
   color: var(--phosphor);
   letter-spacing: 0.05em;
   margin-bottom: 6px;

@@ -203,11 +203,10 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
       expect(squeezeSrc).not.toContain('class="trigger-track-container"')
     })
 
-    it('carries a unified, high-clarity trigger strip and key levels DOM ladder', () => {
-      expect(squeezeSrc).toContain('class="trigger-strip"')
-      expect(squeezeSrc).toContain('DISTANCE TO {{ triggerRow.label }}')
-      expect(squeezeSrc).toContain('POCKET {{ optUsd(spotPrice) }}–{{ optUsd(triggerRow.level) }}')
-      expect(squeezeSrc).toContain('class="ladder"')
+    it('carries one levels list with the trigger level flagged', () => {
+      expect(squeezeSrc).toContain('class="levels"')
+      expect(squeezeSrc).toContain('{ trigger: lv.trigger }')
+      expect(squeezeSrc).not.toContain('class="ladder"')
     })
 
     it('renders SqueezeScreener with clean, non-duplicated structure', async () => {
@@ -240,6 +239,10 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
           trading_implication: 'Favorable upside gamma acceleration profile.',
         },
         bearish_setup: undefined,
+        // Direction legs: fresh momentum votes, the tape is unsigned. Without
+        // this the payload is structurally degraded — the readout then rightly
+        // suppresses the score instead of trusting it.
+        theory: { momentum: 0.02, momentum_fresh: true },
         key_levels: {
           spot: 100,
           call_wall: 110,
@@ -271,15 +274,16 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
 
       const html = await renderToString(app)
       expect(html).toContain('class="sq bullish"')
-      expect(html).toContain('78')
-      expect(html).toContain('/100')
+      expect(html).toContain('<h3 class="verdict" data-v-')
+      expect(html).toMatch(/>BULL SQUEEZE<\/h3>/)
+      expect(html).toContain('+78')
       expect(html).toContain('THEORY SCORE · NOT A FORECAST')
-      expect(html).toContain('DISTANCE TO CALL WALL')
-      expect(html).toContain('KEY LEVELS')
-      expect(html).toContain('KEY FACTORS')
-      expect(html).toContain('KEY TAKEAWAYS')
+      expect(html).toContain('HOW IT GOT HERE')
+      expect(html).toMatch(/class="lv-call trigger level"/)
+      expect(html).toContain('WHAT WOULD CHANGE IT')
       expect(html).toContain('AGE 15s')
       expect(html).toContain('450 CONTRACTS')
+      expect(html.match(/HOW IT GOT HERE/g)).toHaveLength(1)
     })
   })
 
@@ -287,17 +291,14 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
     const squeezeSrc = readFileSync(join(root, 'components', 'SqueezeScreener.vue'), 'utf8')
     const chartSizeSrc = readFileSync(join(root, 'composables', 'useChartSize.ts'), 'utf8')
 
-    it('lays each factor out on one row with a fixed-width meter', () => {
-      expect(squeezeSrc).toContain("grid-template-areas: 'title track score'")
-      expect(squeezeSrc).toContain('grid-template-columns: minmax(0, 1fr) 54px auto')
-      // the stacked full-bleed track only survives at the narrow breakpoint
-      const stacked = squeezeSrc.match(/'title score'\s*\n\s*'track track'/g) ?? []
-      expect(stacked).toHaveLength(1)
+    it('keeps step meters and the score scale inside the panel', () => {
+      expect(squeezeSrc).toMatch(/\.step-meter\s*\{[^}]*overflow:\s*hidden/s)
+      expect(squeezeSrc).toMatch(/\.scale-track\s*\{[^}]*position:\s*relative/s)
+      expect(squeezeSrc).toMatch(/\.sq\s*\{[^}]*overflow-y:\s*auto/s)
     })
 
-    it('gives every factor value the same gutter so the meters share one column', () => {
-      expect(squeezeSrc).toMatch(/\.factor-score\s*\{[^}]*min-width:\s*84px/)
-      expect(squeezeSrc).not.toContain('.theory-terms .factor-score')
+    it('gives every level the same columns so prices and distances line up', () => {
+      expect(squeezeSrc).toContain('grid-template-columns: 8px 84px auto 64px minmax(0, 1fr)')
     })
 
     it('re-observes the chart host when a v-if swaps the element', () => {

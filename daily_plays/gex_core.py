@@ -25,7 +25,14 @@ Two layers:
 
    Squeeze risk (fuel, unsigned):
 
-       SR = |GEX⁻_1%| / ADV · exp(−c · T) · (ATM_γ / total_γ)
+       SR = |GEX⁻_1%| / ADV · exp(−c · T_front40) · (ATM_γ / total_γ)
+
+   T_front40 is the |GEX|-weighted DTE of the *front* 40% of the book by expiry
+   (falls back to the full-book weighted DTE when no DTE data survives). The
+   full-book weighted DTE lets a long-dated OI tail drain urgency to zero even
+   when the near-expiry book — the part dealers rehedge intraday — is heavy;
+   that left mega-caps reading "NO FUEL" on multi-billion-dollar short-gamma
+   books (see docs/SQUEEZE_FUEL_CALIBRATION.md).
 
    Directional scores use explicitly signed flow (+ bullish / − bearish) and
    price momentum. Unsigned call/put contract identity is not direction.
@@ -158,12 +165,20 @@ def short_premium_gex_1pct_m(
     rows: Sequence[Mapping[str, Any]],
     *,
     spot: float,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     """
     Dealer GEX under customer-long / dealer-short premium (q = −OI).
 
     Returns components in $M for a 1% move (same scale as charting net_gex_m).
     All short-premium contributions are ≤ 0.
+
+    ``weighted_dte`` is the |GEX|-weighted mean DTE of the whole book.
+    ``front40_weighted_dte`` is the |GEX|-weighted mean DTE of the cheapest 40%
+    of the book *by expiry* (rows sorted by DTE, accumulated until their share
+    of total |GEX| reaches 40%). It is ``None`` when no rows carry DTE data.
+    A book whose near-expiry gamma is heavy but whose OI tail is long-dated
+    shows a small front40 DTE next to a large full-book DTE — the front book is
+    what dealers rehedge intraday, so urgency is priced off the front book.
     """
     if spot <= 0:
         return {
@@ -174,6 +189,7 @@ def short_premium_gex_1pct_m(
             "atm_abs_gex_m": 0.0,
             "atm_share": 0.0,
             "weighted_dte": 0.0,
+            "front40_weighted_dte": None,
         }
 
     call_m = 0.0
@@ -182,12 +198,28 @@ def short_premium_gex_1pct_m(
     dte_w_sum = 0.0
     dte_w = 0.0
     atm_band = 0.02 * spot
+    dte_weights: list[tuple[float, float]] = []
 
     for row in rows:
-        oi = float(row.get("open_interest") or row.get("oi") or 0.0)
-        gamma = float(row.get("gamma") or 0.0)
-        mult = float(row.get("multiplier") or 100.0)
-        strike = float(row.get("strike") or 0.0)
+        # Vendor blanks arrive as NaN, which is truthy: ``nan or 0.0`` keeps NaN
+        # and one bad row poisons every downstream sum (|GEX| → NaN, atm_share →
+        # 0, weighted_dte → sentinel). Coerce non-finite to defaults here.
+        def _f(key: str, *alts: str, default: float = 0.0) -> float:
+            for k in (key, *alts):
+                try:
+                    v = float(row.get(k))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(v):
+                    return v
+            return default
+
+        oi = _f("open_interest", "oi")
+        gamma = _f("gamma")
+        mult = _f("multiplier", default=100.0)
+        if mult <= 0:
+            mult = 100.0
+        strike = _f("strike")
         right = str(row.get("right") or row.get("option_type") or "").lower()
         if right in {"c", "call"}:
             right = "call"
@@ -212,6 +244,22 @@ def short_premium_gex_1pct_m(
             w = abs(dg_m)
             dte_w_sum += dte_f * w
             dte_w += w
+            dte_weights.append((dte_f, w))
+
+    front40: float | None = None
+    if dte_w > 1e-12:
+        cap = 0.40 * dte_w
+        f_sum = 0.0
+        f_w = 0.0
+        f_acc = 0.0
+        for dte_f, w in sorted(dte_weights):
+            if f_acc >= cap:
+                break
+            f_acc += w
+            f_sum += dte_f * w
+            f_w += w
+        if f_w > 1e-12:
+            front40 = f_sum / f_w
 
     total = call_m + put_m
     abs_total = abs(call_m) + abs(put_m)
@@ -223,6 +271,7 @@ def short_premium_gex_1pct_m(
         "atm_abs_gex_m": atm_abs,
         "atm_share": (atm_abs / abs_total) if abs_total > 1e-12 else 0.0,
         "weighted_dte": (dte_w_sum / dte_w) if dte_w > 1e-12 else 30.0,
+        "front40_weighted_dte": front40,
     }
 
 
@@ -242,6 +291,9 @@ def squeeze_risk(
     ``neg_gex_1pct_m`` is *signed* dealer GEX in $M for a 1% move.
     Only negative GEX contributes fuel: |GEX⁻| = max(0, −GEX).
     ADV is average daily dollar volume in $M.
+    ``weighted_dte`` is the urgency DTE *as chosen by the caller* — production
+    passes the front-book (front-40% of |GEX|) weighted DTE, not the full-book
+    one; see compute_theory_squeeze.
     """
     fuel = max(0.0, -float(neg_gex_1pct_m))
     adv = max(float(adv_m), 1e-6)
@@ -257,7 +309,7 @@ def directional_squeeze_scores(
     call_imbalance: float,
     put_imbalance: float | None = None,
     momentum: float,
-    fuel_scale: float = 40.0,
+    fuel_scale: float = 25.0,
     mom_ref: float = 0.03,
     flow_weight: float = 0.5,
 ) -> dict[str, float]:
@@ -265,6 +317,11 @@ def directional_squeeze_scores(
     Directional scores (theory, fuel-scaled conviction blend):
 
         fuel_ui   = tanh(fuel_scale · SR)          ∈ [0, 1)
+
+    ``fuel_scale`` default 25.0 was percentile-calibrated on the production
+    chain panel (runs/squeeze_fuel_calibration): p75 → ~50% fuel, p80 → ~63%,
+    top ~12% saturate ≥85%; the old 40.0 pinned the top ~19% of the universe
+    at ≥85% and erased resolution exactly where squeeze ranking matters.
         flow_bull = max(0, signed_flow_imb)         ∈ [0, 1]
         flow_bear = max(0, −signed_flow_imb)        ∈ [0, 1]
         mom_up    = clip(max(0, mom) / mom_ref, 1)
@@ -336,8 +393,9 @@ def compute_theory_squeeze(
     momentum: float,
     put_imbalance: float | None = None,
     urgency_c: float = 0.05,
+    urgency_dte_basis: str = "front40",
     score_scale: float = 40.0,
-    fuel_scale: float = 40.0,
+    fuel_scale: float = 25.0,
     mom_ref: float = 0.03,
     flow_weight: float = 0.5,
 ) -> dict[str, Any]:
@@ -349,17 +407,38 @@ def compute_theory_squeeze(
     directional premium imbalance (+ bullish / − bearish). It must not be
     populated from unsigned call-vs-put contract identity.
     ``momentum`` is a simple return (e.g. close/close_n − 1).
+
+    Fuel calibration (validated in docs/SQUEEZE_FUEL_CALIBRATION.md):
+
+        SR      = |GEX⁻_1%| / ADV · exp(−urgency_c · T_urgency) · ATM_share
+        fuel_ui = tanh(fuel_scale · SR)
+
+    ``urgency_dte_basis`` selects T_urgency:
+      - ``"front40"`` (default): |GEX|-weighted DTE of the front 40% of the
+        book by expiry — what dealers actually rehedge intraday. A heavy
+        long-dated OI tail no longer drains a near-dated short-gamma book
+        (the mega-cap "NO FUEL" bug).
+      - ``"full"``: the legacy full-book weighted DTE. Combined with
+        ``urgency_c=0.05, fuel_scale=40.0`` this reproduces the pre-fix
+        calibration exactly.
     """
+    if urgency_dte_basis not in ("front40", "full"):
+        raise ValueError(f"unknown urgency_dte_basis {urgency_dte_basis!r}")
     gex = short_premium_gex_1pct_m(chain_rows, spot=spot)
     adv_m = max(float(adv_notional), 0.0) / 1_000_000.0
     adv_available = adv_m > 0
     neg_gex = gex["total_gex_m"]  # ≤ 0 under short-premium
+    front40_dte = gex.get("front40_weighted_dte")
+    if urgency_dte_basis == "front40" and isinstance(front40_dte, (int, float)) and math.isfinite(front40_dte):
+        urgency_dte = float(front40_dte)
+    else:
+        urgency_dte = float(gex["weighted_dte"])
     sr = (
         squeeze_risk(
             neg_gex_1pct_m=neg_gex,
             adv_m=adv_m,
             atm_share=gex["atm_share"],
-            weighted_dte=gex["weighted_dte"],
+            weighted_dte=urgency_dte,
             urgency_c=urgency_c,
         )
         if adv_available else 0.0
@@ -412,7 +491,10 @@ def compute_theory_squeeze(
             "put_short_gex_m": gex["put_gex_m"],
             "atm_share": gex["atm_share"],
             "weighted_dte": gex["weighted_dte"],
-            "urgency": math.exp(-urgency_c * gex["weighted_dte"]),
+            "front40_weighted_dte": gex.get("front40_weighted_dte"),
+            "urgency_dte": urgency_dte,
+            "urgency_dte_basis": urgency_dte_basis,
+            "urgency": math.exp(-urgency_c * urgency_dte),
             "liquidity_ratio": (abs(gex["total_gex_m"]) / adv_m) if adv_m > 0 else None,
             "adv_available": adv_available,
             "squeeze_risk": sr,

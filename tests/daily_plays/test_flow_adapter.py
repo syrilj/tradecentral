@@ -335,3 +335,137 @@ def test_symbol_flow_tape_parses_occ_symbol_for_historical_prints() -> None:
     assert row["contracts"] == 50
     assert row["price"] == 30.0  # 150000 / (50 * 100)
 
+
+def _amd_print() -> dict[str, Any]:
+    return {
+        "id": "p1", "underlying": "AMD", "contract_type": "call",
+        "premium": 80_000, "volume": 10, "ts": "2026-08-11T15:00:00Z",
+    }
+
+
+def test_symbol_flow_tape_serves_repeat_polls_from_memo_within_ttl():
+    calls = {"n": 0}
+
+    def fetcher(*, symbol, min_premium, limit, timeout, since, until):
+        calls["n"] += 1
+        return [_amd_print()]
+
+    first = load_symbol_flow_tape("amd", fetcher=fetcher)
+    second = load_symbol_flow_tape("AMD", fetcher=fetcher)
+    assert first["feed_status"] == "live"
+    assert second["print_count"] == 1
+    assert calls["n"] == 1
+    # A different question is a different memo key and must re-fetch.
+    third = load_symbol_flow_tape("AMD", min_premium=100_000, fetcher=fetcher)
+    assert third["feed_status"] == "live"
+    assert calls["n"] == 2
+
+
+def test_symbol_flow_tape_memoizes_degraded_envelope_for_the_short_ttl():
+    calls = {"n": 0}
+
+    def broken_fetcher(**_kwargs):
+        calls["n"] += 1
+        raise RuntimeError("provider exploded")
+
+    first = load_symbol_flow_tape("AMD", fetcher=broken_fetcher)
+    assert first["feed_status"] == "unavailable"
+    assert first["tape"] == []
+    assert first["warnings"] == ["flow_unavailable:RuntimeError"]
+    # The hot failure loop is memoized: the repeat poll does not re-fetch.
+    second = load_symbol_flow_tape("AMD", fetcher=broken_fetcher)
+    assert second["warnings"] == first["warnings"]
+    assert calls["n"] == 1
+
+
+def test_degraded_memo_does_not_mask_provider_recovery(monkeypatch):
+    monkeypatch.setattr(
+        "edge.daily_plays.adapters.flow.EDGE_TAPE_DEGRADED_MEMO_TTL", -1.0,
+    )
+
+    def broken_fetcher(**_kwargs):
+        raise RuntimeError("burst")
+
+    first = load_symbol_flow_tape("AMD", fetcher=broken_fetcher)
+    assert first["warnings"] == ["flow_unavailable:RuntimeError"]
+
+    calls = {"n": 0}
+
+    def working_fetcher(**_kwargs):
+        calls["n"] += 1
+        return [_amd_print()]
+
+    second = load_symbol_flow_tape("AMD", fetcher=working_fetcher)
+    assert second["feed_status"] == "live"
+    assert second["print_count"] == 1
+    assert calls["n"] == 1
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.text = ""
+
+    def json(self):
+        return []
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(f"http {self.status_code}", response=self)
+
+
+@pytest.fixture
+def _lse_vault_burst_limited(monkeypatch):
+    """Real-path run: ISO window declines, the vault fallback 429s."""
+    import sys as _sys
+    import types
+
+    import requests as real_requests
+
+    provider = types.ModuleType("lse_provider")
+    provider.LSE_ISO_BASE = "https://iso.invalid"
+    provider.get_api_key = lambda: "test-key"
+    monkeypatch.setitem(_sys.modules, "lse_provider", provider)
+    monkeypatch.setenv("LSE_API_KEY", "test-key")
+
+    stats = {"iso": 0, "vault": 0}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if str(url).startswith("https://iso.invalid"):
+            stats["iso"] += 1
+            return _FakeHttpResponse(404)
+        stats["vault"] += 1
+        return _FakeHttpResponse(429)
+
+    monkeypatch.setattr(real_requests, "get", fake_get)
+    return stats
+
+
+def test_vault_fallback_429_is_burst_rate_limit_not_daily_latch(_lse_vault_burst_limited):
+    result = load_symbol_flow_tape("NVDA")
+    assert result["feed_status"] == "unavailable"
+    assert result["tape"] == []
+    assert result["decision_authorized"] is False
+    assert result["warnings"] == ["flow_lse_rate_limited"]
+    assert _lse_vault_burst_limited == {"iso": 1, "vault": 1}
+    # The degraded memo stops the polling storm from re-hitting the vault.
+    again = load_symbol_flow_tape("NVDA")
+    assert again["warnings"] == ["flow_lse_rate_limited"]
+    assert _lse_vault_burst_limited == {"iso": 1, "vault": 1}
+
+
+def test_market_vault_429_has_its_own_rate_limit_warning(_lse_vault_burst_limited):
+    result = load_market_flow_activity()
+    assert result["rows"] == []
+    assert result["coverage"]["request_completed"] == 0
+    assert result["warnings"] == ["flow_market_lse_rate_limited"]
+
+
+def test_render_names_vault_burst_rate_limit_for_operators():
+    from edge.daily_plays.render import render_report
+
+    report = render_report({"status": "COMPLETE", "decision_blockers": ["flow_lse_rate_limited"]})
+    assert "burst rate limit" in report
+
