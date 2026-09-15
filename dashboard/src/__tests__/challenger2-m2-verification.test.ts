@@ -264,6 +264,7 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
         'market',
         'crypto',
         'voltrend',
+        'vanna',
       ])
 
       const deskToolsRegex = /const deskTools = \[\s*([\s\S]*?)\] as const/

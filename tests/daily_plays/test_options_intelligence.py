@@ -472,6 +472,13 @@ def test_squeeze_readout_is_attached_to_summary():
     assert "theory" in method or "gex_core" in method
     assert "theory" in squeeze or "components" in squeeze
     assert "components" in squeeze
+    theory = squeeze["theory"]
+    assert theory["fuel_scale"] == 25.0
+    assert theory["urgency_dte_basis"] == "front40"
+    assert "urgency_dte" in theory
+    assert "front40_weighted_dte" in theory
+    assert "theory_urgency_dte" in squeeze["components"]
+    assert "theory_fuel_scale" in squeeze["components"]
     assert "bullish_setup" in squeeze and "bearish_setup" in squeeze
     bull = squeeze["bullish_setup"]
     bear = squeeze["bearish_setup"]

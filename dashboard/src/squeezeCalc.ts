@@ -415,8 +415,13 @@ export interface TheoryIdentity {
   squeezeRisk: number | null
   liquidityRatio: number | null
   atmShare: number | null
+  /** DTE used in fuel (front-book under the current calibration). */
   weightedDte: number | null
+  /** Full-book |GEX|-weighted DTE; shown only when it differs from fuel DTE. */
+  fullBookDte: number | null
   urgency: number | null
+  urgencyDteBasis: string
+  fuelScale: number
   flowImbalance: number | null
   flowWeight: number
   momentum: number | null
@@ -447,15 +452,16 @@ const THEORY_STATE_LABEL: Record<TheoryState, string> = {
 
 const URGENCY_C = 0.05
 const DEFAULT_FLOW_WEIGHT = 0.5
-const FUEL_SCALE = 40
+/** Percentile-calibrated display transform; payload `fuel_scale` always wins. */
+export const DEFAULT_FUEL_SCALE = 25
 const MOM_REF = 0.03
 
 /**
  * Unpack the shipped theory squeeze identity for the board.
  *
- *   SR   = |GEX⁻_1%| / ADV · e^{−c T} · ATM share
- *   fuel = tanh(40 · SR)
- *   conv = 0.5 · signed_flow + 0.5 · clip(|mom| / 3%)
+ *   SR   = |GEX⁻_1%| / ADV · e^{−c T_front40} · ATM share
+ *   fuel = tanh(fuel_scale · SR)     fuel_scale defaults to 25
+ *   conv = w · signed_flow + (1−w) · clip(|mom| / 3%)
  *   score = 100 · fuel · conv   (signed bull − bear)
  *
  * This is a gamma-structure diagnostic, not a calibrated probability. Do not
@@ -472,13 +478,27 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
   const gexM = finiteNum(gex.total_gex_m)
   const advFromTheory = finiteNum(t.adv_m)
   const liquidityRatio =
+    finiteNum(t.liquidity_ratio) ??
     finiteNum(c.theory_liquidity_ratio) ??
     (gexM != null && advFromTheory != null && advFromTheory > 0
       ? Math.abs(gexM) / advFromTheory
       : null)
   const atmShare = finiteNum(c.theory_atm_share) ?? finiteNum(gex.atm_share)
-  const weightedDte = finiteNum(c.theory_weighted_dte) ?? finiteNum(gex.weighted_dte)
-  const urgency = weightedDte == null ? null : Math.exp(-URGENCY_C * weightedDte)
+  const fullBookDte = finiteNum(c.theory_weighted_dte) ?? finiteNum(gex.weighted_dte)
+  const urgencyDte =
+    finiteNum(t.urgency_dte) ??
+    finiteNum(c.theory_urgency_dte) ??
+    finiteNum(t.front40_weighted_dte) ??
+    finiteNum(c.theory_front40_weighted_dte) ??
+    finiteNum(gex.front40_weighted_dte) ??
+    fullBookDte
+  const urgency =
+    finiteNum(t.urgency) ??
+    finiteNum(c.theory_urgency) ??
+    (urgencyDte == null ? null : Math.exp(-URGENCY_C * urgencyDte))
+  const weightedDte = urgencyDte
+  const urgencyDteBasis = String(t.urgency_dte_basis ?? 'front40')
+  const fuelScale = finiteNum(t.fuel_scale) ?? finiteNum(c.theory_fuel_scale) ?? DEFAULT_FUEL_SCALE
   const flowImbalanceRaw =
     finiteNum(t.directional_flow_imbalance) ?? finiteNum(c.theory_directional_flow_imbalance)
   // A 0.0 with zero confidence is not a measurement — the tape carried no
@@ -553,12 +573,17 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
           ? '—'
           : `${weightedDte.toFixed(1)}D · ${urgency == null ? '—' : urgency.toFixed(2)}`,
       fill01: urgency == null ? 0 : Math.max(0, Math.min(1, urgency)),
-      detail: `e^{−${URGENCY_C} · weighted DTE}. Near-dated gamma is more urgent; 45D is ~0.11.`,
+      detail:
+        fullBookDte != null &&
+        weightedDte != null &&
+        Math.abs(fullBookDte - weightedDte) > 1
+          ? `e^{−${URGENCY_C} · T_${urgencyDteBasis}}. Fuel uses ${weightedDte.toFixed(1)}D; full book is ${fullBookDte.toFixed(1)}D and does not drain this term.`
+          : `e^{−${URGENCY_C} · T_${urgencyDteBasis}}. Near-dated gamma is more urgent; 45D is ~0.11.`,
       tone: 'fuel',
     },
     {
       id: 'fuel',
-      label: 'FUEL tanh(40·SR)',
+      label: `FUEL tanh(${fuelScale}·SR)`,
       display: fuelUi == null ? '—' : `${Math.round(fuelUi * 100)}%`,
       fill01: fuelUi == null ? 0 : Math.max(0, Math.min(1, fuelUi)),
       detail: `SR=${squeezeRisk == null ? '—' : squeezeRisk.toFixed(4)}. Fuel is unsigned: no short gamma ⇒ no squeeze either way.`,
@@ -613,7 +638,10 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
     liquidityRatio,
     atmShare,
     weightedDte,
+    fullBookDte,
     urgency,
+    urgencyDteBasis,
+    fuelScale,
     flowImbalance,
     flowWeight,
     momentum,
@@ -627,7 +655,7 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
     advAvailable,
     state,
     stateLabel: THEORY_STATE_LABEL[state],
-    formula: `tanh(${FUEL_SCALE}·SR) × (${flowWeight.toFixed(1)}·flow + ${(1 - flowWeight).toFixed(1)}·mom)`,
+    formula: `tanh(${fuelScale}·SR) × (${flowWeight.toFixed(1)}·flow + ${(1 - flowWeight).toFixed(1)}·mom)`,
     terms,
   }
 }
@@ -657,6 +685,15 @@ export type SqueezeDirectionStatus = 'measured' | 'partial' | 'degraded'
 export interface SqueezeChip {
   text: string
   tone: 'warn' | 'muted'
+}
+
+export interface SqueezeDirLeg {
+  id: 'flow' | 'mom'
+  label: string
+  display: string
+  fill01: number | null
+  votes: boolean
+  tone: 'flow' | 'mom' | 'warn'
 }
 
 export interface SqueezeStep {
@@ -695,9 +732,12 @@ export interface SqueezeExplanation {
   dirChip: SqueezeChip | null
   leanAt: number
   squeezeAt: number
+  fuelScale: number
+  formula: string
   /** Marker position on a −100…+100 scale as 0–100%, or null when unscored. */
   markerPct: number | null
   steps: SqueezeStep[]
+  dirLegs: SqueezeDirLeg[]
   levels: SqueezeLevel[]
   watch: string[]
 }
@@ -753,7 +793,7 @@ export function buildSqueezeExplanation(
   const leanAt = finiteNum(t.lean_threshold) ?? DEFAULT_LEAN_AT
   const squeezeAt = finiteNum(t.squeeze_threshold) ?? DEFAULT_SQUEEZE_AT
   const momRef = finiteNum(t.mom_ref) ?? MOM_REF
-  const fuelScale = finiteNum(t.fuel_scale) ?? FUEL_SCALE
+  const fuelScale = id.fuelScale
 
   const spotCandidate = finiteNum(spotProp) ?? finiteNum(kl?.spot)
   const spot = spotCandidate != null && spotCandidate > 0 ? spotCandidate : null
@@ -895,8 +935,14 @@ export function buildSqueezeExplanation(
         ? null
         : id.weightedDte < 1
           ? 'mostly expiring today'
-          : `weighted expiry ${id.weightedDte.toFixed(1)} days`
-    fuelLines.push([atm, dte].filter(Boolean).join(', ') + '.')
+          : `front-book expiry ${id.weightedDte.toFixed(1)} days`
+    const tail =
+      id.fullBookDte != null &&
+      id.weightedDte != null &&
+      Math.abs(id.fullBookDte - id.weightedDte) > 1
+        ? `full book ${id.fullBookDte.toFixed(1)}D is not in fuel`
+        : null
+    fuelLines.push([atm, dte, tail].filter(Boolean).join(', ') + '.')
   }
   if (id.squeezeRisk != null && fuel != null) {
     fuelLines.push(
@@ -1108,7 +1154,7 @@ export function buildSqueezeExplanation(
     )
   }
   if (measurable && id.weightedDte != null && id.weightedDte < 1) {
-    watch.push('Most of this gamma expires today — the fuel resets with the next expiry.')
+    watch.push('Most of this front-book gamma expires today — the fuel resets with the next expiry.')
   }
 
   const dirChip: SqueezeChip | null = !measurable
@@ -1122,6 +1168,29 @@ export function buildSqueezeExplanation(
           }
         : { text: 'DIRECTION UNMEASURED · SCORE SUPPRESSED', tone: 'warn' }
 
+  const dirLegs: SqueezeDirLeg[] = [
+    {
+      id: 'flow',
+      label: 'SIGNED FLOW',
+      display: flowMeasured ? formatSignedScore(id.flowImbalance) : 'UNMEASURED',
+      fill01: flowMeasured ? clamp01(Math.abs(id.flowImbalance ?? 0)) : null,
+      votes: flowVotes,
+      tone: flowVotes ? 'flow' : 'warn',
+    },
+    {
+      id: 'mom',
+      label: '5D MOMENTUM',
+      display: momFresh
+        ? signedPct2(id.momentum)
+        : id.momentumAgeDays != null
+          ? `STALE ${id.momentumAgeDays}D`
+          : 'UNMEASURED',
+      fill01: momFresh ? clamp01(Math.abs(id.momentum as number) / momRef) : null,
+      votes: momVotes,
+      tone: momVotes ? 'mom' : 'warn',
+    },
+  ]
+
   return {
     measurable,
     side,
@@ -1134,8 +1203,11 @@ export function buildSqueezeExplanation(
     dirChip,
     leanAt,
     squeezeAt,
+    fuelScale,
+    formula: id.formula,
     markerPct: scoreShown != null ? 50 + Math.max(-100, Math.min(100, scoreShown)) / 2 : null,
     steps,
+    dirLegs,
     levels: measuredLevels,
     watch: watch.slice(0, 4),
   }

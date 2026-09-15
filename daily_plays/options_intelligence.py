@@ -2982,7 +2982,10 @@ def _squeeze_readout(
         "theory_directional_flow_imbalance": theory_components.get("directional_flow_imbalance"),
         "theory_atm_share": theory_components.get("atm_share"),
         "theory_weighted_dte": theory_components.get("weighted_dte"),
+        "theory_front40_weighted_dte": theory_components.get("front40_weighted_dte"),
+        "theory_urgency_dte": theory_components.get("urgency_dte"),
         "theory_liquidity_ratio": theory_components.get("liquidity_ratio"),
+        "theory_fuel_scale": theory_components.get("fuel_scale"),
         "theory_call_short_gex_m": theory_components.get("call_short_gex_m"),
         "theory_put_short_gex_m": theory_components.get("put_short_gex_m"),
         "theory_conviction_bull": theory_components.get("conviction_bull"),
@@ -3047,7 +3050,10 @@ def _squeeze_readout(
         drivers.append("put_wall_proximity")
     if float(theory_components.get("atm_share") or 0) >= 0.25:
         drivers.append("atm_gamma_concentration")
-    if float(theory_components.get("weighted_dte") or 99) <= 7:
+    urgency_dte = theory_components.get("urgency_dte")
+    if urgency_dte is None:
+        urgency_dte = theory_components.get("weighted_dte")
+    if float(urgency_dte or 99) <= 7:
         drivers.append("short_dated_urgency")
     if abs(float(components.get("flip_score") or 0)) > 0:
         drivers.append("near_gamma_flip")
@@ -3130,6 +3136,9 @@ def _squeeze_readout(
             "conviction_bear": theory_components.get("conviction_bear"),
             "liquidity_ratio": theory_components.get("liquidity_ratio"),
             "urgency": theory_components.get("urgency"),
+            "urgency_dte": theory_components.get("urgency_dte"),
+            "urgency_dte_basis": theory_components.get("urgency_dte_basis"),
+            "front40_weighted_dte": theory_components.get("front40_weighted_dte"),
             "fuel_scale": theory_components.get("fuel_scale"),
             "lean_threshold": SQUEEZE_LEAN_THRESHOLD,
             "squeeze_threshold": SQUEEZE_FIRE_THRESHOLD,

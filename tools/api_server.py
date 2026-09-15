@@ -424,6 +424,7 @@ from edge.daily_plays.options_intelligence import (  # noqa: E402
     OptionsFilters,
     build_options_intelligence,
 )
+from edge.daily_plays.vanna_exposure import compute_vanna_surface  # noqa: E402
 from edge.daily_plays.regime_attractor_engine import (  # noqa: E402
     ConfluenceCluster,
     MarketRegimeState,
@@ -10295,6 +10296,24 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
                 payload, status = _options_payload(sym_or_err, query)
                 self._send_json(payload, status=status)
+
+            elif path == "/api/vanna":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                payload = compute_vanna_surface(sym_or_err)
+                if payload is None:
+                    self._send_json(
+                        {
+                            "error": f"No options chain is available for {sym_or_err}.",
+                            "endpoint": path,
+                            "symbol": sym_or_err,
+                        },
+                        status=404,
+                    )
+                    return
+                self._send_json(payload)
 
             elif path == "/api/market-regime":
                 raw_sym = query.get("symbol", ["SPY"])[0] or "SPY"

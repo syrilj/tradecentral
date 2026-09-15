@@ -61,8 +61,9 @@ describe('Crypto workspace navigation', () => {
       'market',
       'crypto',
       'voltrend',
+      'vanna',
     ])
-    expect(namesIn(primary)).toHaveLength(13)
+    expect(namesIn(primary)).toHaveLength(14)
     expect(namesIn(desk)).toHaveLength(3)
     expect(namesIn(market)).toHaveLength(6)
     expect(namesIn(research)).toHaveLength(8)

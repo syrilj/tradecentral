@@ -802,7 +802,7 @@ const meta = computed(() => {
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-md);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-1);
   background: var(--panel);
 }
 
@@ -855,9 +855,9 @@ const meta = computed(() => {
 }
 
 .scope-chip.planning {
-  color: var(--call-hi);
-  border-color: var(--call);
-  background: var(--call-wash);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: var(--warn-wash);
 }
 
 .board {
@@ -879,9 +879,9 @@ const meta = computed(() => {
   align-items: center;
   gap: var(--s3);
   padding: var(--s2) var(--s3);
-  color: var(--call-hi);
-  border-bottom: var(--hair) solid var(--call);
-  background: var(--call-wash);
+  color: var(--warn);
+  border-bottom: var(--hair) solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: var(--warn-wash);
 }
 .planning-strip .label {
   flex: 0 0 auto;
@@ -921,7 +921,10 @@ const meta = computed(() => {
   background: var(--void-lift);
   color: var(--ink-dim);
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .tab-btn.active {
@@ -952,6 +955,7 @@ const meta = computed(() => {
 }
 
 .workspace {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1.75fr) minmax(20rem, 24rem);
   align-items: stretch;
@@ -1072,9 +1076,9 @@ const meta = computed(() => {
   text-overflow: ellipsis;
 }
 .action-chip.paper {
-  color: var(--call-hi);
-  border-color: var(--call);
-  background: var(--call-wash);
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
 }
 .action-chip.ready {
   color: var(--phosphor);
@@ -1093,12 +1097,18 @@ const meta = computed(() => {
 }
 
 .detail {
+  /* Fill the column 2 grid area exactly (row height driven by the setups
+     table), so the play card ends with the list instead of stretching the
+     page. Out of flow, so it never contributes to row sizing. */
+  position: absolute;
+  grid-row: 1;
+  grid-column: 2;
+  inset: 0;
   border-left: var(--hair) solid var(--rule);
   padding: var(--s3);
   display: flex;
   flex-direction: column;
   gap: var(--s3);
-  min-height: 0;
   overflow: auto;
   background: var(--void-lift);
 }
@@ -1125,9 +1135,9 @@ const meta = computed(() => {
 }
 .mode-chip {
   padding: 3px 7px;
-  color: var(--call-hi);
-  border: var(--hair) solid var(--call);
-  background: var(--call-wash);
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule-hi);
+  background: var(--void-lift);
 }
 .mode-chip.candidate {
   color: var(--phosphor);
@@ -1169,10 +1179,10 @@ const meta = computed(() => {
   display: grid;
   gap: 4px;
   padding: var(--s3);
-  color: var(--call-hi);
-  border: var(--hair) solid var(--call);
-  background: var(--call-wash);
-  box-shadow: inset 8px 0 0 color-mix(in srgb, var(--call) 18%, transparent);
+  color: var(--phosphor);
+  border: var(--hair) solid var(--phosphor-dim);
+  background: var(--phosphor-wash);
+  box-shadow: inset 8px 0 0 color-mix(in srgb, var(--phosphor) 18%, transparent);
 }
 .paper-action-banner strong {
   font-family: var(--font-data);
@@ -1229,7 +1239,7 @@ const meta = computed(() => {
   background: var(--panel);
 }
 .mark-list.harvest {
-  border-color: color-mix(in srgb, var(--call) 35%, var(--rule));
+  border-color: color-mix(in srgb, var(--phosphor) 30%, var(--rule));
 }
 .mark-list li {
   display: grid;
@@ -1274,13 +1284,13 @@ const meta = computed(() => {
 
 .contract-reference {
   padding: var(--s3);
-  border: var(--hair) solid var(--call);
-  background: var(--call-wash);
+  border: var(--hair) solid var(--rule);
+  background: var(--void-lift);
 }
 .contract-reference strong {
   display: block;
   margin: 6px 0 var(--s3);
-  color: var(--call-hi);
+  color: var(--ink);
   font-size: var(--t-lead);
   line-height: 1.2;
 }
@@ -1421,6 +1431,11 @@ const meta = computed(() => {
     max-height: 28rem;
   }
   .detail {
+    /* Stacked below the table on phones — back in normal flow. */
+    position: static;
+    grid-row: auto;
+    grid-column: auto;
+    inset: auto;
     border-left: 0;
     border-top: var(--hair) solid var(--rule);
     max-height: 40rem;

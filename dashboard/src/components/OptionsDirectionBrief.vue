@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import type { OptionsDirectionRead } from '@/optionsDirection'
 import type { OptionsSqueeze } from '@/api'
 import { DASH, num, optSignedGex, optUsd, pctFrac } from '@/format'
+import { buildSqueezeExplanation, buildTheoryIdentity } from '@/squeezeCalc'
 
 const props = defineProps<{
   symbol: string
@@ -17,7 +18,7 @@ const props = defineProps<{
 }>()
 
 function signedScore(value: number | null): string {
-  if (value == null || !Number.isFinite(value)) return '+0.0'
+  if (value == null || !Number.isFinite(value)) return DASH
   const rounded = Number(value.toFixed(1))
   if (rounded === 0 || Object.is(rounded, -0)) return '+0.0'
   return `${rounded > 0 ? '+' : ''}${num(rounded, 1)}`
@@ -182,20 +183,21 @@ const squeezeDiagnostics = computed(() => {
       (reg.isPos && !reg.isNeg && fm?.side !== 'below'),
   )
 
-  // 2. Fuel status (negative GEX / short gamma provides runaway fuel)
+  // 2. Fuel is unsigned structure: short dealer gamma vs ADV. It is not a side.
+  const fuelUi = finiteNum(sq?.theory?.fuel_ui) ?? finiteNum(sq?.negative_fuel)
   let fuelLabel: string
-  let fuelTone: 'bullish' | 'bearish' | 'neutral' | 'warn'
+  let fuelTone: 'bullish' | 'bearish' | 'neutral' | 'warn' | 'fuel'
   if (isDampened) {
     fuelLabel = 'FUEL: LONG Γ DAMPENED'
     fuelTone = 'warn'
-  } else if (sq?.negative_fuel != null && sq.negative_fuel > 0) {
-    fuelLabel = `FUEL: ${Math.round(sq.negative_fuel * 100)}% SHORT Γ`
-    fuelTone = 'bearish'
+  } else if (fuelUi != null && fuelUi >= 0 && fuelUi <= 1) {
+    fuelLabel = `FUEL ${Math.round(fuelUi * 100)}%`
+    fuelTone = fuelUi < 0.05 ? 'warn' : 'fuel'
   } else if (reg.isNeg || fm?.side === 'below') {
     fuelLabel = 'FUEL: SHORT Γ LOADED'
-    fuelTone = 'bearish'
+    fuelTone = 'fuel'
   } else {
-    fuelLabel = 'FUEL: NEUTRAL / BALANCED'
+    fuelLabel = 'FUEL UNMEASURED'
     fuelTone = 'neutral'
   }
 
@@ -382,16 +384,43 @@ function wallDistancePct(wall: number | null | undefined): string {
   return `${sign}${num(rounded, 1)}%`
 }
 
+const squeezeIdentity = computed(() => buildTheoryIdentity(props.squeeze))
+const squeezeExpl = computed(() => buildSqueezeExplanation(props.squeeze, props.spot))
+
 const squeezeMeter = computed(() => {
-  const raw = props.read.score
-  const has = raw != null && Number.isFinite(raw)
+  const ex = squeezeExpl.value
+  const fromSqueeze = Boolean(props.squeeze)
+  const raw = fromSqueeze ? ex.score : props.read.score
+  const has =
+    raw != null &&
+    Number.isFinite(raw) &&
+    (!fromSqueeze || ex.dirStatus !== 'degraded')
   const clamped = has ? Math.max(-100, Math.min(100, raw as number)) : 0
   return {
     has,
     value: clamped,
-    pct: (clamped + 100) / 2,
-    tone: clamped > 8 ? 'bullish' : clamped < -8 ? 'bearish' : 'neutral',
+    pct: fromSqueeze && has && ex.markerPct != null ? ex.markerPct : (clamped + 100) / 2,
+    tone: !has ? 'unmeasured' : clamped > 8 ? 'bullish' : clamped < -8 ? 'bearish' : 'neutral',
+    leanAt: ex.leanAt,
+    squeezeAt: ex.squeezeAt,
   }
+})
+
+const squeezeTicks = computed(() => {
+  const { leanAt, squeezeAt } = squeezeMeter.value
+  return [-squeezeAt, -leanAt, leanAt, squeezeAt].map((v) => ({
+    v,
+    left: 50 + v / 2,
+  }))
+})
+
+const scoreLabel = computed(() => {
+  if (props.squeeze) {
+    const ex = squeezeExpl.value
+    if (!ex.measurable || ex.dirStatus === 'degraded') return DASH
+    return signedScore(ex.score ?? props.read.score)
+  }
+  return signedScore(props.read.score)
 })
 
 const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
@@ -417,9 +446,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
           </div>
 
           <div class="dir-title-line">
-            <strong class="fig score-val" :class="squeezeMeter.tone">{{
-              signedScore(read.score)
-            }}</strong>
+            <strong class="fig score-val" :class="squeezeMeter.tone">{{ scoreLabel }}</strong>
             <span class="score-max">/100</span>
             <span class="direction-mark" aria-hidden="true">{{ directionArrow(read.state) }}</span>
             <strong class="fig direction-title">{{ read.headline }}</strong>
@@ -437,12 +464,19 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             :aria-valuemin="-100"
             :aria-valuemax="100"
             :aria-valuenow="squeezeMeter.has ? squeezeMeter.value : undefined"
-            :aria-valuetext="`Squeeze score ${signedScore(read.score)} of 100`"
-            :aria-label="`Directional squeeze score ${signedScore(read.score)} of 100`"
+            :aria-valuetext="`Squeeze score ${scoreLabel} of 100`"
+            :aria-label="`Directional squeeze score ${scoreLabel} of 100`"
           >
             <span class="sq-end label bear">BEARISH</span>
             <span class="sq-track">
               <span class="sq-spectrum" aria-hidden="true"><i /><i /><i /><i /><i /></span>
+              <i
+                v-for="tk in squeezeTicks"
+                :key="tk.v"
+                class="sq-band-tick"
+                aria-hidden="true"
+                :style="{ left: `${tk.left}%` }"
+              />
               <i class="sq-zero" aria-hidden="true" />
               <span
                 v-if="squeezeMeter.has"
@@ -465,6 +499,23 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
             <span class="sq-chip label" :class="squeezeDiagnostics.triggerTone">{{
               squeezeDiagnostics.triggerLabel
             }}</span>
+          </div>
+
+          <p v-if="squeeze" class="sq-identity-formula label">{{ squeezeIdentity.formula }}</p>
+          <div v-if="squeeze" class="sq-moment" aria-label="Squeeze direction legs">
+            <div
+              v-for="leg in squeezeExpl.dirLegs"
+              :key="leg.id"
+              class="sq-moment-leg"
+              :data-tone="leg.tone"
+              :data-votes="leg.votes ? 'yes' : 'no'"
+            >
+              <span class="sq-moment-label label">{{ leg.label }}</span>
+              <strong class="sq-moment-val fig">{{ leg.display }}</strong>
+              <span class="sq-moment-meter" aria-hidden="true">
+                <i v-if="leg.fill01 != null" :style="{ width: `${(leg.fill01 * 100).toFixed(1)}%` }" />
+              </span>
+            </div>
           </div>
 
           <!-- Descriptive Subhead / Mechanics Note -->
@@ -754,9 +805,7 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   flex-direction: column;
   min-height: 60px;
   border: var(--hair) solid var(--glass-border);
-  background: var(--glass-surface);
-  backdrop-filter: var(--glass-blur-md);
-  -webkit-backdrop-filter: var(--glass-blur-md);
+  background: var(--panel);
   border-radius: var(--r-xs, 2px);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   overflow: hidden;
@@ -788,6 +837,11 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 }
 @media (max-width: 1080px) {
   .direction-head {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .sq-moment {
     grid-template-columns: 1fr;
   }
 }
@@ -880,7 +934,8 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
 .score-val.bearish {
   color: var(--short);
 }
-.score-val.neutral {
+.score-val.neutral,
+.score-val.unmeasured {
   color: var(--ink-dim);
 }
 .score-max {
@@ -987,6 +1042,15 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   transform: translateX(-50%);
   pointer-events: none;
 }
+.sq-band-tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: var(--hair);
+  background: var(--rule-hi);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
 .sq-thumb {
   position: absolute;
   top: 50%;
@@ -1054,6 +1118,65 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
   color: var(--put-hi);
   border-color: color-mix(in srgb, var(--put) 35%, var(--rule));
   background: var(--put-wash);
+}
+.sq-chip.fuel {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 35%, var(--rule));
+  background: var(--phosphor-wash);
+}
+
+.sq-identity-formula {
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: var(--t-nano);
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+.sq-moment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+  min-width: 0;
+}
+.sq-moment-leg {
+  --leg-tone: var(--ink-faint);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--s2);
+  align-items: baseline;
+}
+.sq-moment-leg[data-tone='flow'] {
+  --leg-tone: var(--phosphor);
+}
+.sq-moment-leg[data-tone='mom'] {
+  --leg-tone: var(--ink);
+}
+.sq-moment-leg[data-tone='warn'] {
+  --leg-tone: var(--warn);
+}
+.sq-moment-label {
+  font-size: var(--t-nano);
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+.sq-moment-val {
+  font-size: var(--t-small);
+  font-weight: 700;
+  color: var(--leg-tone);
+  text-align: right;
+}
+.sq-moment-meter {
+  grid-column: 1 / -1;
+  height: 3px;
+  background: var(--void);
+  border: var(--hair) solid var(--rule);
+  overflow: hidden;
+}
+.sq-moment-meter i {
+  display: block;
+  height: 100%;
+  background: var(--leg-tone);
 }
 
 .dir-subhead-box {

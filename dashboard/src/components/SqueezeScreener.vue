@@ -128,8 +128,10 @@ const provDetail = computed(() => {
   ]
   if (props.expiryLabel) parts.push(`Expiry: ${props.expiryLabel}.`)
   if (props.mode) parts.push(`Mode: ${props.mode}.`)
+  const scale = ex.value.fuelScale
   parts.push(
-    'Score = fuel × direction. Fuel = tanh(40 × |short dealer gamma| ÷ daily $ volume × ATM share × expiry urgency). ' +
+    `Score = fuel × direction. Fuel = tanh(${scale} × squeeze risk), ` +
+      'where squeeze risk is |short dealer gamma| ÷ daily $ volume × ATM share × front-book expiry urgency. ' +
       'Direction blends signed flow and 5-day momentum; an input that is not measured does not vote. ' +
       'A gamma-structure diagnostic, not a calibrated probability.',
   )
@@ -191,6 +193,7 @@ const provDetail = computed(() => {
     <!-- 3 · How it got here -->
     <section class="block">
       <h4 class="block-title label">HOW IT GOT HERE</h4>
+      <p class="identity-formula label">{{ ex.formula }}</p>
       <ol class="steps">
         <li v-for="(st, i) in ex.steps" :key="st.id" class="step" :class="`st-${st.tone}`">
           <div class="step-top">
@@ -198,7 +201,22 @@ const provDetail = computed(() => {
             <span class="step-title label">{{ st.title }}</span>
             <span class="step-value">{{ st.value }}</span>
           </div>
-          <div class="step-meter" aria-hidden="true">
+          <div v-if="st.id === 'direction'" class="dir-legs" aria-label="Direction legs">
+            <div
+              v-for="leg in ex.dirLegs"
+              :key="leg.id"
+              class="dir-leg"
+              :data-tone="leg.tone"
+              :data-votes="leg.votes ? 'yes' : 'no'"
+            >
+              <span class="dir-leg-label label">{{ leg.label }}</span>
+              <span class="dir-leg-val">{{ leg.display }}</span>
+              <span class="dir-leg-meter" aria-hidden="true">
+                <i v-if="leg.fill01 != null" :style="{ width: `${(leg.fill01 * 100).toFixed(1)}%` }" />
+              </span>
+            </div>
+          </div>
+          <div v-else class="step-meter" aria-hidden="true">
             <i v-if="st.fill01 != null" :style="{ width: `${(st.fill01 * 100).toFixed(1)}%` }" />
           </div>
           <ul class="step-lines">
@@ -428,6 +446,13 @@ const provDetail = computed(() => {
   color: var(--ink-faint);
   letter-spacing: 0.12em;
 }
+.identity-formula {
+  margin: calc(var(--s3) * -1) 0 var(--s3);
+  font-family: var(--font-data);
+  font-size: var(--t-tiny);
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
 
 /* ---- steps ------------------------------------------------------------ */
 .steps {
@@ -488,6 +513,52 @@ const provDetail = computed(() => {
   height: 100%;
   background: var(--st-tone);
   transition: width var(--dur) var(--ease-out);
+}
+.dir-legs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+  margin: var(--s2) 0 var(--s2) 24px;
+}
+.dir-leg {
+  --leg-tone: var(--ink-faint);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--s2);
+  align-items: baseline;
+}
+.dir-leg[data-tone='flow'] {
+  --leg-tone: var(--phosphor);
+}
+.dir-leg[data-tone='mom'] {
+  --leg-tone: var(--ink);
+}
+.dir-leg[data-tone='warn'] {
+  --leg-tone: var(--warn);
+}
+.dir-leg-label {
+  font-size: var(--t-nano);
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+.dir-leg-val {
+  font-family: var(--font-data);
+  font-size: var(--t-small);
+  font-weight: 600;
+  color: var(--leg-tone);
+  text-align: right;
+}
+.dir-leg-meter {
+  grid-column: 1 / -1;
+  height: 3px;
+  background: var(--glass-base);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+.dir-leg-meter i {
+  display: block;
+  height: 100%;
+  background: var(--leg-tone);
 }
 .step-lines {
   list-style: none;
@@ -637,6 +708,9 @@ const provDetail = computed(() => {
   }
   .head-score {
     align-items: flex-start;
+  }
+  .dir-legs {
+    grid-template-columns: 1fr;
   }
 }
 </style>

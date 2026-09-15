@@ -257,6 +257,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Vol Trend', index: '16' },
   },
   {
+    path: '/vanna',
+    name: 'vanna',
+    component: () => import('@/views/VannaView.vue'),
+    meta: { title: 'Vanna', index: '17' },
+  },
+  {
     path: '/flow-state',
     name: 'flowstate',
     redirect: (to) => ({

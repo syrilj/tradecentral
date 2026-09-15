@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from datetime import date as _date, datetime, timedelta
+from datetime import date as _date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -57,51 +57,202 @@ HOURLY_DIR = DATA_ROOT / "1h"
 # `_load_daily_frame`). Never treat either directory as replacing the other.
 DAILY_DIRS: Tuple[Path, ...] = (DATA_ROOT / "1d", DATA_ROOT / "1d_wide")
 
-# On-demand fetch: one lock per symbol so two concurrent VPA requests for the
-# same never-before-seen symbol don't race to write the same parquet.
+# On-demand fetch: one lock per (symbol, interval) so two concurrent VPA
+# requests for the same symbol don't race to write the same parquet.
 _FETCH_LOCKS: Dict[str, threading.Lock] = {}
 _FETCH_LOCKS_LOCK = threading.Lock()
 
+# Provider-rate guards for staleness refresh. `_FETCH_ATTEMPT_TS` is the last
+# attempt per (symbol, interval) — recorded even on failure, so a down
+# provider or an unknown symbol is never hammered once per search.
+# `_VERIFIED_THROUGH` is the newest daily session the provider proved to us:
+# once a file is verified through session D, we stay quiet until the session
+# AFTER D has closed (+ publish buffer). A file whose provenance is unknown
+# (nightly job, api auto-sync's mid-session partial write) is re-verified once
+# its own last bar's session has closed + buffer, which heals an in-progress
+# bar the same evening it was written.
+_FETCH_ATTEMPT_TS: Dict[Tuple[str, str], float] = {}
+_VERIFIED_THROUGH: Dict[str, _date] = {}
+_FETCH_COOLDOWN_S = 20 * 60
+# Yahoo's EOD bar can lag the 16:00 ET close by over an hour; a staleness
+# verdict issued before close+buffer just burns a provider call against a bar
+# that does not exist yet.
+_PUBLISH_BUFFER = timedelta(hours=2)
 
-def _fetch_lock_for(symbol: str) -> threading.Lock:
+
+def _fetch_lock_for(key: str) -> threading.Lock:
     with _FETCH_LOCKS_LOCK:
-        if symbol not in _FETCH_LOCKS:
-            _FETCH_LOCKS[symbol] = threading.Lock()
-        return _FETCH_LOCKS[symbol]
+        if key not in _FETCH_LOCKS:
+            _FETCH_LOCKS[key] = threading.Lock()
+        return _FETCH_LOCKS[key]
 
 
-def _try_fetch_daily(symbol: str) -> bool:
-    """Fetch 10y daily OHLCV from Yahoo Finance and write to data/1d/.
+def _next_weekday(d: _date) -> _date:
+    nd = d + timedelta(days=1)
+    while nd.weekday() >= 5:
+        nd += timedelta(days=1)
+    return nd
 
-    Returns True if the file was successfully written, False on any error.
-    Never raises — callers degrade gracefully on failure.
+
+def _close_plus_buffer(day: _date) -> datetime:
+    """16:00 ET session close plus publish buffer, naive exchange-local."""
+    return (
+        datetime.combine(day, datetime.min.time())
+        + timedelta(hours=_SESSION_CLOSE_HOUR)
+        + _PUBLISH_BUFFER
+    )
+
+
+def _drop_incomplete(df, timeframe: str, now_utc: datetime):
+    """Remove rows whose session had not closed at `now_utc`.
+
+    This module's writer must never persist an in-progress bar: once a partial
+    bar (a fraction of a session's volume) lands in the parquet, the read-side
+    `bar_is_complete` check treats it as finished the next morning and every
+    volume-relative VPA score misreads it. See `bar_is_complete` for the
+    incident that rule defends.
     """
-    lock = _fetch_lock_for(symbol)
+    if df is None or df.empty:
+        return df
+    keep = [
+        i
+        for i, ts in enumerate(df.index)
+        if bar_is_complete(
+            ts.isoformat() if hasattr(ts, "isoformat") else str(ts), timeframe, now_utc
+        )
+    ]
+    return df.iloc[keep]
+
+
+def _provider_fetch(symbol: str, interval: str):
+    import sys as _sys
+
+    _tools_dir = str(EDGE_ROOT / "tools")
+    if _tools_dir not in _sys.path:
+        _sys.path.insert(0, _tools_dir)
+    from fetch_universe import fetch_one  # noqa: PLC0415
+
+    return fetch_one(symbol, interval)
+
+
+def _run_fetch(
+    symbol: str,
+    interval: str,
+    timeframe: str,
+    now_utc: datetime,
+    current,
+    target_path: Path,
+) -> bool:
+    """Fetch `interval` bars, merge newest-wins, write the parquet if changed.
+
+    Never raises. Returns True only when the file on disk changed, so callers
+    know whether a re-read is warranted and honest stale data is not churned
+    (rewriting an unchanged file would lie to mtime readers).
+    """
+    key = (symbol, interval)
+    now_ts = time.time()
+    if now_ts - _FETCH_ATTEMPT_TS.get(key, 0.0) < _FETCH_COOLDOWN_S:
+        return False
+    _FETCH_ATTEMPT_TS[key] = now_ts
+    try:
+        df = _provider_fetch(symbol, interval)
+    except Exception as exc:  # noqa: BLE001
+        import sys as _sys
+
+        print(
+            f"[vpa_bars] on-demand fetch for {symbol} ({interval}) failed: {exc}",
+            file=_sys.stderr,
+        )
+        return False
+    df = _drop_incomplete(df, timeframe, now_utc)
+    if df is None or df.empty:
+        return False
+    if current is None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(target_path)
+        if interval == "1d":
+            _VERIFIED_THROUGH[symbol] = df.index[-1].date()
+        return True
+    import pandas as pd  # local import: keeps module importable without pandas
+
+    merged = pd.concat([current, df])
+    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    # A changed same-date bar (partial -> complete) matters as much as a new
+    # bar: compare the tail row, not just the index.
+    changed = (
+        len(merged) != len(current)
+        or merged.index[-1] != current.index[-1]
+        or not merged.iloc[-1].equals(current.iloc[-1])
+    )
+    if interval == "1d":
+        _VERIFIED_THROUGH[symbol] = merged.index[-1].date()
+    if not changed:
+        return False
+    merged.to_parquet(target_path)
+    return True
+
+
+def _try_fetch_daily(symbol: str, now: Optional[datetime] = None, current=None) -> bool:
+    """Fetch daily OHLCV from Yahoo into `data/1d/{symbol}.parquet`.
+
+    Fetches when the file is missing, or when it is stale. Staleness is judged
+    against completed sessions, never mtime: with unknown provenance the file
+    is re-verified once its own last bar's session has closed + publish
+    buffer; once verified through session D it is left alone until the session
+    after D has closed + buffer. A provider that has not published yet yields
+    no change and is retried no more than once per cooldown.
+
+    Returns True only when the on-disk parquet changed. Never raises.
+    """
+    lock = _fetch_lock_for(f"{symbol}:1d")
     with lock:
-        # Re-check inside the lock; another thread may have fetched while we waited.
-        target_dir = DATA_ROOT / "1d"
-        target_path = target_dir / f"{symbol}.parquet"
-        if target_path.is_file():
-            return True
-        try:
-            import sys as _sys
-            _tools_dir = str(EDGE_ROOT / "tools")
-            if _tools_dir not in _sys.path:
-                _sys.path.insert(0, _tools_dir)
-            from fetch_universe import fetch_one  # noqa: PLC0415
-            df = fetch_one(symbol, "1d")
-            if df is None or df.empty:
-                return False
-            target_dir.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(target_path)
-            return True
-        except Exception as exc:
-            import sys as _sys2
-            print(
-                f"[vpa_bars] on-demand fetch for {symbol} failed: {exc}",
-                file=_sys2.stderr,
+        now_utc = now or datetime.now(timezone.utc)
+        target_path = DATA_ROOT / "1d" / f"{symbol}.parquet"
+        if current is None and target_path.is_file():
+            # Another thread may have healed the file while we waited on the lock.
+            try:
+                current = _read_parquet(target_path)
+            except Exception:  # noqa: BLE001
+                current = None
+        if current is not None and not current.empty:
+            last_day = current.index[-1].date()
+            target_session = (
+                _next_weekday(last_day)
+                if _VERIFIED_THROUGH.get(symbol) == last_day
+                else last_day
             )
+            fresh = (
+                now_utc.astimezone(_EXCHANGE_TZ).replace(tzinfo=None)
+                < _close_plus_buffer(target_session)
+            )
+            if fresh:
+                return False
+            print(
+                f"[vpa_bars] {symbol}: daily parquet stale (last bar {last_day}) — "
+                "refreshing on demand",
+                flush=True,
+            )
+        return _run_fetch(symbol, "1d", "1D", now_utc, current, target_path)
+
+
+def _try_fetch_hourly(symbol: str, now: Optional[datetime] = None) -> bool:
+    """Fetch ~2y of hourly bars when the symbol has no hourly parquet at all.
+
+    Missing-file healing only: the staleness of files that exist is owned by
+    the refresh jobs (`fetch_universe`), not by interactive search.
+    Returns True only when the file was created. Never raises.
+    """
+    lock = _fetch_lock_for(f"{symbol}:1h")
+    with lock:
+        target_path = HOURLY_DIR / f"{symbol}.parquet"
+        if target_path.is_file():
             return False
+        now_utc = now or datetime.now(timezone.utc)
+        print(
+            f"[vpa_bars] {symbol}: no hourly parquet found — attempting on-demand fetch",
+            flush=True,
+        )
+        return _run_fetch(symbol, "1h", "1h", now_utc, None, target_path)
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,14}$")
 
@@ -320,19 +471,23 @@ def _empty_meta(requested: str, normalized: str, reason: str) -> Dict[str, Any]:
         "available": False,
         "live_bar": None,
         "incomplete_bar_dropped": None,
+        "refreshed_on_demand": False,
     }
 
 
 def bar_is_complete(bar_date: str, timeframe: str, now: Optional[datetime] = None) -> bool:
     """Has the session that produces this bar already closed?
 
-    The API's auto-sync worker (`tools/api_server.py` auto-sync) refetches a
-    symbol's daily parquet whenever its last bar is older than today, so a
-    request at 10:00 ET writes Yahoo's *in-progress* bar to disk -- and because
-    the file is then "fresh", nothing replaces it until the next day. Every VPA
-    rule reads volume relative to prior bars, so a 10:00 bar carrying ~20% of a
-    session's volume scores as no demand / no supply / a low-volume test on the
-    single most heavily weighted bar in the ledger. Scoring must never see it.
+    Freshness is healed from two directions: `load_bars` itself refetches a
+    stale or missing parquet on demand (session-close + publish-buffer gated),
+    and the API's auto-sync worker periodically refetches the core list. Any
+    writer that merges an *in-progress* bar to disk creates a trap: the file
+    looks fresh while its last bar carries a fraction of the session's volume,
+    so every volume-relative VPA rule misreads the most heavily weighted bar in
+    the ledger. This module's own fetch path filters such rows at write time
+    (`_drop_incomplete`); scoring additionally drops a still-forming bar at
+    read time here. Both guards exist because the other writers
+    (`tools/fetch_universe.maybe_write`, api auto-sync) merge without them.
     """
     now_et = (now or datetime.now(_EXCHANGE_TZ)).astimezone(_EXCHANGE_TZ).replace(tzinfo=None)
     try:
@@ -386,9 +541,13 @@ def load_bars(
         reason = f"no data below 1h for {sym}; {normalized} is not backed by any source"
         target = "1h"
 
+    refreshed = False
     hourly, hourly_src = (None, None)
     if _SPEC_BY_VALUE[target]["basis"] == "1h" or target == "1h":
         hourly, hourly_src = _load_hourly_frame(sym)
+        if hourly is None and _try_fetch_hourly(sym, now=now):
+            hourly, hourly_src = _load_hourly_frame(sym)
+            refreshed = hourly is not None
         if hourly is None:
             # 59 symbols have hourly bars; everything else falls back to daily.
             prior = reason
@@ -410,14 +569,22 @@ def load_bars(
     else:
         daily, daily_src = _load_daily_frame(sym)
         if daily is None:
-            # Symbol not on disk yet — try fetching it on demand from Yahoo.
+            # Symbol not on disk yet — fetch it on demand from Yahoo.
             print(f"[vpa_bars] {sym}: no daily parquet found — attempting on-demand fetch", flush=True)
-            if _try_fetch_daily(sym):
-                daily, daily_src = _load_daily_frame(sym)
-            if daily is None:
-                return [], _empty_meta(
-                    requested, normalized, f"no daily parquet found for {sym} in data/1d or data/1d_wide"
-                )
+            _try_fetch_daily(sym, now=now, current=None)
+            # Re-read regardless of the fetch result: a sibling request may
+            # have healed the file while this thread's call was a cooldown
+            # no-op or a failure.
+            daily, daily_src = _load_daily_frame(sym)
+            if daily is not None:
+                refreshed = True
+        elif _try_fetch_daily(sym, now=now, current=daily):
+            daily, daily_src = _load_daily_frame(sym)
+            refreshed = True
+        if daily is None:
+            return [], _empty_meta(
+                requested, normalized, f"no daily parquet found for {sym} in data/1d or data/1d_wide"
+            )
         source = daily_src
         if target == "1W":
             frame = _aggregate_weekly(daily)
@@ -459,6 +626,9 @@ def load_bars(
         # it was excluded from scoring rather than read as a finished bar.
         "incomplete_bar_dropped": dropped_incomplete,
         "live_bar": live_bar,
+        # True when this call fetched from the provider and changed the bars
+        # on disk (missing symbol or stale file healed on search).
+        "refreshed_on_demand": bool(refreshed),
         "available": True,
     }
     return bars, meta

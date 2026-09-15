@@ -129,11 +129,9 @@ research/squeeze_flow_eval — inherit the new calibration through defaults):
 
 Exact legacy replay: `urgency_dte_basis="full", urgency_c=0.05, fuel_scale=40.0`.
 
-Known cosmetic mismatch (frontend deliberately untouched per scope):
-`dashboard/src/squeezeCalc.ts` comment/fallback still say `tanh(40·SR)`; the
-runtime reads `fuel_scale` from the theory payload (`squeezeCalc.ts:756`), which
-now ships 25 — live displays follow the payload, the hardcoded fallback 40 is
-stale but only fires when the payload omits the field.
+Frontend identity (`dashboard/src/squeezeCalc.ts`) defaults `fuel_scale` to 25
+and prints `tanh(fuel_scale·SR)` from the shipped payload. Legacy replay still
+ships `fuel_scale: 40` and the board follows that number.
 
 ## Tests
 

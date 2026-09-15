@@ -49,6 +49,7 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'momentum', title: 'Momentum', idx: '14', hint: 'Five Pillars · gap scan' },
   { name: 'calculator', title: 'Calculator', idx: '16', hint: 'Spot · strike · DTE · P/L' },
   { name: 'voltrend', title: 'Vol Trend', idx: '16', hint: 'Volatility-targeted trend strategy' },
+  { name: 'vanna', title: 'Vanna', idx: '17', hint: 'Delta–vol coupling · FOMC event load' },
   { name: 'flowstate', title: 'Flow State', idx: '15', hint: 'Daily proxy research' },
   { name: 'vpa', title: 'VPA', idx: '17', hint: 'Volume Price Analysis & AI vision' },
   { name: 'amt', title: 'AMT', idx: '18', hint: 'Auction Market Theory · balance vs breakout' },

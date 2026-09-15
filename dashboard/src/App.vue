@@ -238,7 +238,7 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
-/** Eleven operator destinations. Everything else lives in Tools. */
+/** Fourteen operator destinations. Everything else lives in Tools. */
 const primaryNav = [
   {
     name: 'brief',
@@ -254,13 +254,13 @@ const primaryNav = [
     icon: 'flow',
     tab: true,
   },
-    {
-      name: 'vpa',
-      title: 'VPA',
-      hint: 'Volume Price Analysis',
-      icon: 'vpa',
-      tab: true,
-    },
+  {
+    name: 'vpa',
+    title: 'VPA',
+    hint: 'Volume Price Analysis',
+    icon: 'vpa',
+    tab: true,
+  },
   {
     name: 'reversal',
     title: 'Reversal',
@@ -287,6 +287,7 @@ const primaryNav = [
     title: 'Setups',
     hint: 'Strike · levels · GEX plan',
     icon: 'suggest',
+    tab: true,
   },
   {
     name: 'drift',
@@ -328,6 +329,13 @@ const primaryNav = [
     title: 'Vol Trend',
     hint: 'Volatility-targeted trend',
     icon: 'voltrend',
+    tab: true,
+  },
+  {
+    name: 'vanna',
+    title: 'Vanna',
+    hint: 'Delta–vol coupling · FOMC',
+    icon: 'density',
     tab: true,
   },
 ] as const
@@ -428,7 +436,7 @@ const macroTools = [
   },
   {
     name: 'amt',
-    idx: 'V2',
+    idx: 'G2',
     title: 'AMT',
     hint: 'Auction Market Theory',
     icon: 'amt',
@@ -2345,7 +2353,7 @@ function openFearGreed(): void {
   border: 2px solid var(--void-lift);
   transform: translate(-50%, -50%);
   pointer-events: none;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-1);
 }
 .fg-thumb.extreme-fear,
 .fg-thumb.fear {

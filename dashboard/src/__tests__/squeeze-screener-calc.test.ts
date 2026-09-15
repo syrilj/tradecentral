@@ -320,6 +320,13 @@ describe('Squeeze Screener Calculation Suite', () => {
       expect(vueSrc).not.toContain('PROBABILITY SCORE')
       expect(vueSrc).not.toContain('Imminent')
     })
+
+    it('exposes the identity formula and the two direction legs', () => {
+      expect(vueSrc).toContain('identity-formula')
+      expect(vueSrc).toContain('dir-legs')
+      expect(vueSrc).toContain('ex.dirLegs')
+      expect(vueSrc).not.toContain('tanh(40 ×')
+    })
   })
 })
 
@@ -362,7 +369,8 @@ describe('7. Theory identity — fuel × flow × momentum, not a coin-flip forec
 
   it('unpacks every term in the shipped identity', () => {
     const id = buildTheoryIdentity(squeeze())
-    expect(id.formula).toContain('tanh(40·SR)')
+    expect(id.formula).toContain('tanh(25·SR)')
+    expect(id.fuelScale).toBe(25)
     expect(id.fuelUi).toBeCloseTo(0.64, 4)
     expect(id.atmShare).toBeCloseTo(0.31, 4)
     expect(id.flowImbalance).toBeCloseTo(0.4, 4)
@@ -378,6 +386,39 @@ describe('7. Theory identity — fuel × flow × momentum, not a coin-flip forec
       'bear',
     ])
     expect(id.terms.find((t) => t.id === 'mom')?.display).toBe('1.80%')
+  })
+
+  it('uses payload fuel_scale in the formula and defaults to 25', () => {
+    expect(buildTheoryIdentity(squeeze()).formula).toContain('tanh(25·SR)')
+    const legacy = buildTheoryIdentity(
+      squeeze({ theory: { ...squeeze().theory, fuel_scale: 40 } }),
+    )
+    expect(legacy.fuelScale).toBe(40)
+    expect(legacy.formula).toContain('tanh(40·SR)')
+    expect(legacy.terms.find((t) => t.id === 'fuel')?.label).toBe('FUEL tanh(40·SR)')
+  })
+
+  it('uses shipped front-book urgency instead of recomputing from full-book DTE', () => {
+    const id = buildTheoryIdentity(
+      squeeze({
+        theory: {
+          ...squeeze().theory,
+          urgency: 0.78,
+          urgency_dte: 5,
+          urgency_dte_basis: 'front40',
+          front40_weighted_dte: 5,
+        },
+        components: {
+          ...(squeeze().components ?? {}),
+          theory_weighted_dte: 110,
+        },
+      }),
+    )
+    expect(id.weightedDte).toBeCloseTo(5, 4)
+    expect(id.fullBookDte).toBeCloseTo(110, 4)
+    expect(id.urgency).toBeCloseTo(0.78, 4)
+    expect(id.urgencyDteBasis).toBe('front40')
+    expect(id.terms.find((t) => t.id === 'urgency')?.detail).toContain('110')
   })
 
   it('does not call a quiet book a squeeze, and stale momentum is not a side', () => {
@@ -487,6 +528,11 @@ describe('8. Squeeze explanation — the board shows its arithmetic', () => {
     expect(dir.lines[1]).toContain('−1.59%')
     expect(score.value).toBe('−52')
     expect(score.lines.join(' ')).toContain('Bear leg: 98% fuel × 53% = 51.8')
+    expect(ex.fuelScale).toBe(40)
+    expect(ex.formula).toContain('tanh(40·SR)')
+    expect(ex.dirLegs.find((l) => l.id === 'flow')?.votes).toBe(false)
+    expect(ex.dirLegs.find((l) => l.id === 'mom')?.votes).toBe(true)
+    expect(ex.dirLegs.find((l) => l.id === 'mom')?.display).toContain('−1.59%')
   })
 
   it('marks the put wall as the trigger on a bearish read and orders levels by price', () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { OptionsSqueeze } from '@/api'
 import { buildOptionsDirection, type OptionsDirectionSummary } from '@/optionsDirection'
 
 function summary(overrides: Partial<OptionsDirectionSummary> = {}): OptionsDirectionSummary {
@@ -230,9 +231,29 @@ describe('OptionsDirectionBrief Component & Positioning Telemetry Map (R1)', () 
     'live',
   )
 
+  const baseSqueeze: OptionsSqueeze = {
+    bullish: 0.6,
+    bearish: 0.1,
+    score: 50,
+    label: 'bullish_squeeze',
+    primary: 'bullish',
+    drivers: ['signed_bullish_flow'],
+    theory: {
+      momentum: 0.02,
+      momentum_fresh: true,
+      fuel_ui: 0.62,
+      fuel_scale: 25,
+      directional_flow_imbalance: 0.5,
+      flow_measured: true,
+      flow_weight: 0.5,
+      measurable: true,
+    },
+  }
+
   async function renderBrief(props: {
     symbol?: string
     read?: typeof baseRead
+    squeeze?: OptionsSqueeze | null
     spot?: number | null
     callWall?: number | null
     putWall?: number | null
@@ -245,6 +266,7 @@ describe('OptionsDirectionBrief Component & Positioning Telemetry Map (R1)', () 
         h(OptionsDirectionBrief, {
           symbol: props.symbol ?? 'NVDA',
           read: props.read ?? baseRead,
+          squeeze: props.squeeze,
           spot: props.spot !== undefined ? props.spot : 100,
           callWall: props.callWall !== undefined ? props.callWall : 110,
           putWall: props.putWall !== undefined ? props.putWall : 90,
@@ -452,6 +474,27 @@ describe('OptionsDirectionBrief Component & Positioning Telemetry Map (R1)', () 
     })
 
     expect(html).toContain('+0.0')
+  })
+
+  it('does not paint an unmeasured squeeze score as +0.0', async () => {
+    const html = await renderBrief({
+      read: buildOptionsDirection(null, 'missing'),
+      spot: null,
+      callWall: null,
+      putWall: null,
+      gammaFlip: null,
+    })
+    expect(html).toContain('AWAITING DATA')
+    expect(html).not.toMatch(/score-val[^>]*>\+0\.0/)
+    expect(html).toMatch(/score-val[^>]*>—/)
+  })
+
+  it('prints the fuel × momentum identity and the two direction legs', async () => {
+    const html = await renderBrief({ squeeze: baseSqueeze })
+    expect(html).toContain('tanh(25·SR)')
+    expect(html).toContain('SIGNED FLOW')
+    expect(html).toContain('5D MOMENTUM')
+    expect(html).toContain('sq-moment')
   })
 
   it('applies is-left and is-right edge classes to prevent boundary pill clipping', async () => {
