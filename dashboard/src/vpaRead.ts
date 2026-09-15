@@ -104,6 +104,147 @@ export interface VpaRead {
   walkForwardNote: string
 }
 
+/**
+ * One rung on the trade-framing price staff.
+ *
+ * Rows are ranked (high price at top), not placed on a linear axis. Clustered
+ * prices — NVDA's $217.30 entry sitting 2 points from a $215 target — used to
+ * paint four overlapping labels on a 4px horizontal rail. Even rows keep every
+ * role readable; coincident prices merge into one rung instead of stacking.
+ */
+export type VpaRiskRole = 'stop' | 'entry' | 'target' | 'last'
+
+export interface VpaRiskRung {
+  roles: VpaRiskRole[]
+  label: string
+  price: number
+  deltaFromEntry: number
+  deltaLabel: string
+  tone: VpaRiskRole
+  isEntry: boolean
+  /** Connector from this tick down to the next rung. */
+  segBelow: 'risk' | 'reward' | 'idle' | null
+}
+
+export interface VpaRiskLadder {
+  rungs: VpaRiskRung[]
+  risk: number
+  reward: number
+  lo: number
+  hi: number
+  direction: 'long' | 'short'
+}
+
+const ROLE_LABEL: Record<VpaRiskRole, string> = {
+  stop: 'Stop',
+  entry: 'Entry',
+  target: 'Target',
+  last: 'Last',
+}
+
+const ROLE_ORDER: VpaRiskRole[] = ['stop', 'entry', 'last', 'target']
+
+function priceKey(price: number): string {
+  return price.toFixed(2)
+}
+
+function isFinitePrice(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v)
+}
+
+function segmentTone(
+  upper: number,
+  lower: number,
+  entry: number,
+  stop: number,
+  target: number,
+): 'risk' | 'reward' | 'idle' {
+  const mid = (upper + lower) / 2
+  const riskLo = Math.min(entry, stop)
+  const riskHi = Math.max(entry, stop)
+  const rewardLo = Math.min(entry, target)
+  const rewardHi = Math.max(entry, target)
+  if (mid >= riskLo && mid <= riskHi) return 'risk'
+  if (mid >= rewardLo && mid <= rewardHi) return 'reward'
+  return 'idle'
+}
+
+/**
+ * Build a collision-free price staff from entry / stop / target (and last).
+ * Returns null when the triplet is not measurable.
+ */
+export function buildRiskLadder(input: {
+  entry: number
+  stop: number
+  target: number
+  last?: number | null
+}): VpaRiskLadder | null {
+  const { entry, stop, target } = input
+  if (!isFinitePrice(entry) || !isFinitePrice(stop) || !isFinitePrice(target)) {
+    return null
+  }
+  const last = isFinitePrice(input.last) ? input.last : null
+
+  const seeds: Array<{ role: VpaRiskRole; price: number }> = [
+    { role: 'stop', price: stop },
+    { role: 'entry', price: entry },
+    { role: 'target', price: target },
+  ]
+  if (last !== null) seeds.push({ role: 'last', price: last })
+
+  const buckets = new Map<string, Array<{ role: VpaRiskRole; price: number }>>()
+  for (const seed of seeds) {
+    const key = priceKey(seed.price)
+    const group = buckets.get(key) ?? []
+    group.push(seed)
+    buckets.set(key, group)
+  }
+
+  const rungs: VpaRiskRung[] = [...buckets.values()]
+    .map((group) => {
+      const roles = ROLE_ORDER.filter((role) => group.some((g) => g.role === role))
+      const price = group[0].price
+      const delta = price - entry
+      const tone: VpaRiskRole = roles.includes('stop')
+        ? 'stop'
+        : roles.includes('target')
+          ? 'target'
+          : roles.includes('entry')
+            ? 'entry'
+            : 'last'
+      const deltaLabel =
+        Math.abs(delta) < 0.005 ? '0.00' : `${delta > 0 ? '+' : ''}${delta.toFixed(2)}`
+      return {
+        roles,
+        label: roles.map((role) => ROLE_LABEL[role].toUpperCase()).join(' · '),
+        price,
+        deltaFromEntry: delta,
+        deltaLabel,
+        tone,
+        isEntry: roles.includes('entry'),
+        segBelow: null,
+      }
+    })
+    .sort((a, b) => b.price - a.price)
+
+  for (let i = 0; i < rungs.length - 1; i++) {
+    const upper = rungs[i]
+    const lower = rungs[i + 1]
+    if (!upper || !lower) continue
+    upper.segBelow = segmentTone(upper.price, lower.price, entry, stop, target)
+  }
+
+  const extras = last === null ? [] : [last]
+  return {
+    rungs,
+    risk: Math.abs(entry - stop),
+    reward: Math.abs(target - entry),
+    lo: Math.min(entry, stop, target, ...extras),
+    hi: Math.max(entry, stop, target, ...extras),
+    direction: target < entry ? 'short' : 'long',
+  }
+}
+
 /** Format risk:reward as a clean display string '1 : X.XX' or DASH. */
 export function formatRiskReward(rr: number | string | null | undefined): string {
   if (typeof rr === 'number' && Number.isFinite(rr) && rr > 0) {
