@@ -12,7 +12,7 @@ import { structuralGexProfile } from '@/charts/landing-viz'
  * never a quote; live chains appear after operator sign-in.
  */
 const S = 100
-const SIGMA = 0.30
+const SIGMA = 0.3
 const FLIP = 88
 const CALL_WALL = 110
 const PUT_WALL = 92

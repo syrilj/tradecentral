@@ -66,7 +66,7 @@ withDefaults(
 
 .panel:hover {
   border-color: var(--rule-hi);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-2);
 }
 
 /* Opt-in: a panel that genuinely floats (popover-adjacent content) may take

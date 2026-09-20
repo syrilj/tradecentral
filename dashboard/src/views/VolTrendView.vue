@@ -397,7 +397,8 @@ const paramsLine = computed(() => {
     >
       <div class="banner label">
         <span>
-          <strong>Live Signal Desk:</strong> Keep your stocks in the watchlist below to monitor real-time BUY / SELL signals and volatility-targeted position sizing.
+          <strong>Live Signal Desk:</strong> Keep your stocks in the watchlist below to monitor
+          real-time BUY / SELL signals and volatility-targeted position sizing.
         </span>
         <HelpTip
           label="Signal & Sizing Rules"
@@ -653,7 +654,9 @@ const paramsLine = computed(() => {
                 <td class="right">
                   {{ item.ann_vol != null ? `${num(item.ann_vol * 100, 1)}%` : DASH }}
                 </td>
-                <td class="right">{{ item.leverage != null ? `${num(item.leverage, 2)}x` : DASH }}</td>
+                <td class="right">
+                  {{ item.leverage != null ? `${num(item.leverage, 2)}x` : DASH }}
+                </td>
                 <td class="right">
                   {{
                     item.signal === 'BUY' && item.target_qty != null
@@ -690,8 +693,16 @@ const paramsLine = computed(() => {
               <tr v-if="!signalItems.length">
                 <td colspan="11" class="empty label">
                   <template v-if="signalsResource.error.value">
-                    <span class="neg">Failed to load signals: {{ signalsResource.error.value }}</span>
-                    <button type="button" class="btn label wl-retry-btn" @click="signalsResource.refresh({ clear: true })">Retry</button>
+                    <span class="neg"
+                      >Failed to load signals: {{ signalsResource.error.value }}</span
+                    >
+                    <button
+                      type="button"
+                      class="btn label wl-retry-btn"
+                      @click="signalsResource.refresh({ clear: true })"
+                    >
+                      Retry
+                    </button>
                   </template>
                   <template v-else-if="signalsResource.loading.value">
                     Loading tracked signals...
@@ -726,13 +737,17 @@ const paramsLine = computed(() => {
               </div>
               <p class="bp-rationale label">
                 <template v-if="isBuySignal">
-                  Fast EMA ({{ optNum(nowBlock?.ema_fast, 2) }}) &gt; Slow EMA ({{ optNum(nowBlock?.ema_slow, 2) }}).
-                  Bullish regime active for {{ nowBlock?.signal_bars ?? 0 }} bars since {{ nowBlock?.signal_date ?? DASH }}.
-                  Vol is {{ num((nowBlock?.ann_vol ?? 0) * 100, 1) }}% (target: {{ targetVolPct }}%).
+                  Fast EMA ({{ optNum(nowBlock?.ema_fast, 2) }}) &gt; Slow EMA ({{
+                    optNum(nowBlock?.ema_slow, 2)
+                  }}). Bullish regime active for {{ nowBlock?.signal_bars ?? 0 }} bars since
+                  {{ nowBlock?.signal_date ?? DASH }}. Vol is
+                  {{ num((nowBlock?.ann_vol ?? 0) * 100, 1) }}% (target: {{ targetVolPct }}%).
                 </template>
                 <template v-else>
-                  Fast EMA ({{ optNum(nowBlock?.ema_fast, 2) }}) &le; Slow EMA ({{ optNum(nowBlock?.ema_slow, 2) }}).
-                  Trend crossover absent or negative. Sizing is defensive (100% Cash preservation).
+                  Fast EMA ({{ optNum(nowBlock?.ema_fast, 2) }}) &le; Slow EMA ({{
+                    optNum(nowBlock?.ema_slow, 2)
+                  }}). Trend crossover absent or negative. Sizing is defensive (100% Cash
+                  preservation).
                 </template>
               </p>
             </div>
@@ -763,17 +778,29 @@ const paramsLine = computed(() => {
             <div class="bp-spec">
               <span class="label bp-spec-label">Recommended Size</span>
               <span class="fig bp-spec-val">
-                {{ isBuySignal && nowBlock?.target_qty != null ? `${num(nowBlock.target_qty, 0)} shares` : '0 shares' }}
+                {{
+                  isBuySignal && nowBlock?.target_qty != null
+                    ? `${num(nowBlock.target_qty, 0)} shares`
+                    : '0 shares'
+                }}
               </span>
               <span class="label bp-spec-sub">
-                {{ isBuySignal && nowBlock?.target_notional != null ? usd(nowBlock.target_notional) : '$0 notional' }}
+                {{
+                  isBuySignal && nowBlock?.target_notional != null
+                    ? usd(nowBlock.target_notional)
+                    : '$0 notional'
+                }}
               </span>
             </div>
 
             <div class="bp-spec">
               <span class="label bp-spec-label">Target Leverage</span>
               <span class="fig bp-spec-val">
-                {{ isBuySignal && nowBlock?.leverage != null ? `${num(nowBlock.leverage, 2)}x` : '0.00x' }}
+                {{
+                  isBuySignal && nowBlock?.leverage != null
+                    ? `${num(nowBlock.leverage, 2)}x`
+                    : '0.00x'
+                }}
               </span>
               <span class="label bp-spec-sub">Capped at {{ num(levCap, 1) }}x</span>
             </div>
@@ -782,9 +809,16 @@ const paramsLine = computed(() => {
               <span class="label bp-spec-label">Signal Entry / P&amp;L</span>
               <span
                 class="fig bp-spec-val"
-                :class="{ pos: (nowBlock?.signal_pnl_pct ?? 0) > 0, neg: (nowBlock?.signal_pnl_pct ?? 0) < 0 }"
+                :class="{
+                  pos: (nowBlock?.signal_pnl_pct ?? 0) > 0,
+                  neg: (nowBlock?.signal_pnl_pct ?? 0) < 0,
+                }"
               >
-                {{ nowBlock?.signal_pnl_pct != null ? `${optSigned(nowBlock.signal_pnl_pct, 2)}%` : DASH }}
+                {{
+                  nowBlock?.signal_pnl_pct != null
+                    ? `${optSigned(nowBlock.signal_pnl_pct, 2)}%`
+                    : DASH
+                }}
               </span>
               <span class="label bp-spec-sub">
                 {{ nowBlock?.signal_px != null ? `Entry: ${usd(nowBlock.signal_px)}` : 'Entry: —' }}
@@ -800,250 +834,260 @@ const paramsLine = computed(() => {
             class="btn label backtest-toggle-btn"
             @click="showBacktest = !showBacktest"
           >
-            <span>{{ showBacktest ? '▲ Hide Historical Backtest & Technical Charts' : '▼ Show Historical Backtest & Technical Charts (Optional)' }}</span>
-            <span class="backtest-hint label">Win Rate · Reconstructed Trades · Multi-Pane Charts</span>
+            <span>{{
+              showBacktest
+                ? '▲ Hide Historical Backtest & Technical Charts'
+                : '▼ Show Historical Backtest & Technical Charts (Optional)'
+            }}</span>
+            <span class="backtest-hint label"
+              >Win Rate · Reconstructed Trades · Multi-Pane Charts</span
+            >
           </button>
 
           <div v-show="showBacktest" class="backtest-body">
             <div class="readout-grid">
               <Readout
                 label="Position Now"
-            :value="(nowBlock?.position ?? 'flat').toUpperCase()"
-            :tone="positionTone"
-            :sub="nowBlock?.forced_exit ? 'open at end of data' : `as of ${nowBlock?.date ?? DASH}`"
-          />
-          <Readout
-            label="Signal State"
-            :value="nowBlock?.up_trend ? 'BULLISH CROSS' : 'BEARISH / FLAT'"
-            :tone="nowBlock?.up_trend ? 'pos' : 'flat'"
-            :sub="`Fast ${fastDays}d vs Slow ${slowDays}d`"
-          />
-          <Readout
-            label="Realised Vol"
-            :value="nowBlock?.ann_vol != null ? `${num(nowBlock.ann_vol * 100, 1)}%` : DASH"
-            :sub="`Target: ${targetVolPct}%`"
-            :tone="(nowBlock?.ann_vol ?? 0) <= targetVolRatio ? 'pos' : 'flat'"
-          />
-          <Readout
-            label="Target Leverage"
-            :value="nowBlock?.leverage != null ? `${num(nowBlock.leverage, 2)}x` : DASH"
-            :sub="`Cap: ${num(levCap, 1)}x`"
-            tone="accent"
-          />
-          <Readout
-            label="Target Notional"
-            :value="nowBlock?.target_notional != null ? usd(nowBlock.target_notional) : DASH"
-            :sub="nowBlock?.target_qty != null ? `${num(nowBlock.target_qty, 0)} shares` : ''"
-          />
-          <Readout
-            label="Win Rate"
-            :value="winRateLabel"
-            :sub="`${stats?.n_trades ?? 0} round trips`"
-          />
-          <Readout
-            label="Total P&L"
-            :value="stats?.total_pnl != null ? usd(stats.total_pnl) : DASH"
-            :sub="
-              stats?.compounded_pct != null
-                ? `${optSigned(stats.compounded_pct, 1)}% on capital`
-                : ''
-            "
-            :tone="pnlTone"
-          />
-          <Readout
-            label="Profit Factor"
-            :value="stats?.profit_factor != null ? num(stats.profit_factor, 2) : DASH"
-            :sub="
-              stats?.max_drawdown_pct != null ? `Max DD: -${num(stats.max_drawdown_pct, 1)}%` : ''
-            "
-          />
-        </div>
+                :value="(nowBlock?.position ?? 'flat').toUpperCase()"
+                :tone="positionTone"
+                :sub="
+                  nowBlock?.forced_exit ? 'open at end of data' : `as of ${nowBlock?.date ?? DASH}`
+                "
+              />
+              <Readout
+                label="Signal State"
+                :value="nowBlock?.up_trend ? 'BULLISH CROSS' : 'BEARISH / FLAT'"
+                :tone="nowBlock?.up_trend ? 'pos' : 'flat'"
+                :sub="`Fast ${fastDays}d vs Slow ${slowDays}d`"
+              />
+              <Readout
+                label="Realised Vol"
+                :value="nowBlock?.ann_vol != null ? `${num(nowBlock.ann_vol * 100, 1)}%` : DASH"
+                :sub="`Target: ${targetVolPct}%`"
+                :tone="(nowBlock?.ann_vol ?? 0) <= targetVolRatio ? 'pos' : 'flat'"
+              />
+              <Readout
+                label="Target Leverage"
+                :value="nowBlock?.leverage != null ? `${num(nowBlock.leverage, 2)}x` : DASH"
+                :sub="`Cap: ${num(levCap, 1)}x`"
+                tone="accent"
+              />
+              <Readout
+                label="Target Notional"
+                :value="nowBlock?.target_notional != null ? usd(nowBlock.target_notional) : DASH"
+                :sub="nowBlock?.target_qty != null ? `${num(nowBlock.target_qty, 0)} shares` : ''"
+              />
+              <Readout
+                label="Win Rate"
+                :value="winRateLabel"
+                :sub="`${stats?.n_trades ?? 0} round trips`"
+              />
+              <Readout
+                label="Total P&L"
+                :value="stats?.total_pnl != null ? usd(stats.total_pnl) : DASH"
+                :sub="
+                  stats?.compounded_pct != null
+                    ? `${optSigned(stats.compounded_pct, 1)}% on capital`
+                    : ''
+                "
+                :tone="pnlTone"
+              />
+              <Readout
+                label="Profit Factor"
+                :value="stats?.profit_factor != null ? num(stats.profit_factor, 2) : DASH"
+                :sub="
+                  stats?.max_drawdown_pct != null
+                    ? `Max DD: -${num(stats.max_drawdown_pct, 1)}%`
+                    : ''
+                "
+              />
+            </div>
 
-        <p class="caveat label">{{ d.caveat }}</p>
+            <p class="caveat label">{{ d.caveat }}</p>
 
-        <figure class="figure">
-          <!-- Pane 01: Price and EMAs -->
-          <div class="pane-header">
-            <figcaption class="label fig-cap">
-              01 · {{ d.symbol }} close with Fast EMA (cyan), Slow EMA (rule), and held position
-              bands
-            </figcaption>
-            <div class="legend label">
-              <span class="legend-item"><span class="swatch close-swatch" /> Close</span>
-              <span class="legend-item"
-                ><span class="swatch fast-swatch" /> Fast EMA ({{ fastDays }}d)</span
+            <figure class="figure">
+              <!-- Pane 01: Price and EMAs -->
+              <div class="pane-header">
+                <figcaption class="label fig-cap">
+                  01 · {{ d.symbol }} close with Fast EMA (cyan), Slow EMA (rule), and held position
+                  bands
+                </figcaption>
+                <div class="legend label">
+                  <span class="legend-item"><span class="swatch close-swatch" /> Close</span>
+                  <span class="legend-item"
+                    ><span class="swatch fast-swatch" /> Fast EMA ({{ fastDays }}d)</span
+                  >
+                  <span class="legend-item"
+                    ><span class="swatch slow-swatch" /> Slow EMA ({{ slowDays }}d)</span
+                  >
+                  <span class="legend-item"><span class="swatch pos-swatch" /> Long Held</span>
+                </div>
+              </div>
+              <svg
+                class="pane"
+                :viewBox="`0 0 ${W} ${PRICE_H}`"
+                preserveAspectRatio="none"
+                role="img"
+                :aria-label="`${d.symbol} close with trend signals`"
               >
-              <span class="legend-item"
-                ><span class="swatch slow-swatch" /> Slow EMA ({{ slowDays }}d)</span
+                <g v-if="priceChart">
+                  <rect
+                    v-for="(b, i) in priceChart.bands"
+                    :key="`b${i}`"
+                    :x="b.x"
+                    :y="b.y"
+                    :width="b.w"
+                    :height="b.h"
+                    class="band long"
+                  />
+                  <g v-for="t in priceChart.ticks" :key="`pt${t.v}`">
+                    <line class="grid" :x1="PAD_L" :y1="t.y" :x2="W - PAD_R" :y2="t.y" />
+                    <text class="axis fig" :x="PAD_L - 8" :y="t.y + 3" text-anchor="end">
+                      {{ num(t.v, 2) }}
+                    </text>
+                  </g>
+                  <path class="slow-line" :d="priceChart.emaSPath" />
+                  <path class="fast-line" :d="priceChart.emaFPath" />
+                  <path class="price-line" :d="priceChart.closePath" />
+                </g>
+              </svg>
+
+              <!-- Pane 02: Realised Volatility -->
+              <div class="pane-header">
+                <figcaption class="label fig-cap">
+                  02 · Annualised realised volatility (%) vs target volatility ({{ targetVolPct }}%)
+                </figcaption>
+              </div>
+              <svg
+                class="pane"
+                :viewBox="`0 0 ${W} ${VOL_H}`"
+                preserveAspectRatio="none"
+                role="img"
+                aria-label="Realised volatility vs target"
               >
-              <span class="legend-item"><span class="swatch pos-swatch" /> Long Held</span>
+                <g v-if="volChart">
+                  <g v-for="t in volChart.ticks" :key="`vt${t.v}`">
+                    <line class="grid" :x1="PAD_L" :y1="t.y" :x2="W - PAD_R" :y2="t.y" />
+                    <text class="axis fig" :x="PAD_L - 8" :y="t.y + 3" text-anchor="end">
+                      {{ num(t.v, 0) }}%
+                    </text>
+                  </g>
+                  <line
+                    class="ref-line"
+                    :x1="PAD_L"
+                    :y1="volChart.targetY"
+                    :x2="W - PAD_R"
+                    :y2="volChart.targetY"
+                  />
+                  <path class="vol-line" :d="volChart.path" />
+                </g>
+              </svg>
+
+              <!-- Pane 03: Leverage & Sizing -->
+              <div class="pane-header">
+                <figcaption class="label fig-cap">
+                  03 · Dynamic entry leverage (notional / capital) vs cap ({{ levCap }}x)
+                </figcaption>
+              </div>
+              <svg
+                class="pane"
+                :viewBox="`0 0 ${W} ${LEV_H}`"
+                preserveAspectRatio="none"
+                role="img"
+                aria-label="Dynamic leverage"
+              >
+                <g v-if="leverageChart">
+                  <g v-for="t in leverageChart.ticks" :key="`lt${t.v}`">
+                    <line class="grid" :x1="PAD_L" :y1="t.y" :x2="W - PAD_R" :y2="t.y" />
+                    <text class="axis fig" :x="PAD_L - 8" :y="t.y + 3" text-anchor="end">
+                      {{ num(t.v, 1) }}x
+                    </text>
+                  </g>
+                  <line
+                    class="ref-line cap-line"
+                    :x1="PAD_L"
+                    :y1="leverageChart.capY"
+                    :x2="W - PAD_R"
+                    :y2="leverageChart.capY"
+                  />
+                  <path class="lev-line" :d="leverageChart.path" />
+                </g>
+              </svg>
+
+              <!-- Shared Time Axis -->
+              <svg
+                class="axis-bar"
+                :viewBox="`0 0 ${W} 22`"
+                preserveAspectRatio="none"
+                role="presentation"
+              >
+                <g v-for="(t, i) in xTicks" :key="`xt${i}`">
+                  <line class="axis-tick" :x1="t.x" y1="0" :x2="t.x" y2="4" />
+                  <text class="axis fig" :x="t.x" y="15" text-anchor="middle">
+                    {{ t.label }}
+                  </text>
+                </g>
+              </svg>
+            </figure>
+
+            <!-- Trades Table -->
+            <div class="trades-panel">
+              <div class="trades-head">
+                <h3 class="label panel-title">RECONSTRUCTED ROUND TRIPS ({{ trades.length }})</h3>
+                <span class="label trades-sub">Filled at bar i+1 open without look-ahead</span>
+              </div>
+
+              <div v-if="trades.length" class="table-wrap">
+                <table class="table fig">
+                  <thead>
+                    <tr>
+                      <th class="label">Entry Date</th>
+                      <th class="label">Exit Date</th>
+                      <th class="label">Dir</th>
+                      <th class="label right">Entry Px</th>
+                      <th class="label right">Exit Px</th>
+                      <th class="label right">Size (Qty)</th>
+                      <th class="label right">Notional</th>
+                      <th class="label right">Leverage</th>
+                      <th class="label right">Return</th>
+                      <th class="label right">P&L ($)</th>
+                      <th class="label right">Bars</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(t, i) in trades" :key="`t${i}`">
+                      <td>{{ t.entry_d }}</td>
+                      <td>
+                        {{ t.exit_d }}
+                        <span v-if="t.forced_exit" class="chip forced-chip">OPEN</span>
+                      </td>
+                      <td>
+                        <span class="chip long-chip">LONG</span>
+                      </td>
+                      <td class="right">{{ optNum(t.entry_px, 2) }}</td>
+                      <td class="right">{{ optNum(t.exit_px, 2) }}</td>
+                      <td class="right">{{ num(t.qty, 0) }}</td>
+                      <td class="right">{{ usd(t.notional) }}</td>
+                      <td class="right">{{ num(t.leverage, 2) }}x</td>
+                      <td
+                        class="right"
+                        :class="{ pos: (t.ret_pct ?? 0) > 0, neg: (t.ret_pct ?? 0) < 0 }"
+                      >
+                        {{ optSigned(t.ret_pct, 2) }}%
+                      </td>
+                      <td class="right" :class="{ pos: (t.pnl ?? 0) > 0, neg: (t.pnl ?? 0) < 0 }">
+                        {{ usd(t.pnl) }}
+                      </td>
+                      <td class="right">{{ t.bars }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-else class="empty label">No trades triggered in this window.</p>
             </div>
           </div>
-          <svg
-            class="pane"
-            :viewBox="`0 0 ${W} ${PRICE_H}`"
-            preserveAspectRatio="none"
-            role="img"
-            :aria-label="`${d.symbol} close with trend signals`"
-          >
-            <g v-if="priceChart">
-              <rect
-                v-for="(b, i) in priceChart.bands"
-                :key="`b${i}`"
-                :x="b.x"
-                :y="b.y"
-                :width="b.w"
-                :height="b.h"
-                class="band long"
-              />
-              <g v-for="t in priceChart.ticks" :key="`pt${t.v}`">
-                <line class="grid" :x1="PAD_L" :y1="t.y" :x2="W - PAD_R" :y2="t.y" />
-                <text class="axis fig" :x="PAD_L - 8" :y="t.y + 3" text-anchor="end">
-                  {{ num(t.v, 2) }}
-                </text>
-              </g>
-              <path class="slow-line" :d="priceChart.emaSPath" />
-              <path class="fast-line" :d="priceChart.emaFPath" />
-              <path class="price-line" :d="priceChart.closePath" />
-            </g>
-          </svg>
-
-          <!-- Pane 02: Realised Volatility -->
-          <div class="pane-header">
-            <figcaption class="label fig-cap">
-              02 · Annualised realised volatility (%) vs target volatility ({{ targetVolPct }}%)
-            </figcaption>
-          </div>
-          <svg
-            class="pane"
-            :viewBox="`0 0 ${W} ${VOL_H}`"
-            preserveAspectRatio="none"
-            role="img"
-            aria-label="Realised volatility vs target"
-          >
-            <g v-if="volChart">
-              <g v-for="t in volChart.ticks" :key="`vt${t.v}`">
-                <line class="grid" :x1="PAD_L" :y1="t.y" :x2="W - PAD_R" :y2="t.y" />
-                <text class="axis fig" :x="PAD_L - 8" :y="t.y + 3" text-anchor="end">
-                  {{ num(t.v, 0) }}%
-                </text>
-              </g>
-              <line
-                class="ref-line"
-                :x1="PAD_L"
-                :y1="volChart.targetY"
-                :x2="W - PAD_R"
-                :y2="volChart.targetY"
-              />
-              <path class="vol-line" :d="volChart.path" />
-            </g>
-          </svg>
-
-          <!-- Pane 03: Leverage & Sizing -->
-          <div class="pane-header">
-            <figcaption class="label fig-cap">
-              03 · Dynamic entry leverage (notional / capital) vs cap ({{ levCap }}x)
-            </figcaption>
-          </div>
-          <svg
-            class="pane"
-            :viewBox="`0 0 ${W} ${LEV_H}`"
-            preserveAspectRatio="none"
-            role="img"
-            aria-label="Dynamic leverage"
-          >
-            <g v-if="leverageChart">
-              <g v-for="t in leverageChart.ticks" :key="`lt${t.v}`">
-                <line class="grid" :x1="PAD_L" :y1="t.y" :x2="W - PAD_R" :y2="t.y" />
-                <text class="axis fig" :x="PAD_L - 8" :y="t.y + 3" text-anchor="end">
-                  {{ num(t.v, 1) }}x
-                </text>
-              </g>
-              <line
-                class="ref-line cap-line"
-                :x1="PAD_L"
-                :y1="leverageChart.capY"
-                :x2="W - PAD_R"
-                :y2="leverageChart.capY"
-              />
-              <path class="lev-line" :d="leverageChart.path" />
-            </g>
-          </svg>
-
-          <!-- Shared Time Axis -->
-          <svg
-            class="axis-bar"
-            :viewBox="`0 0 ${W} 22`"
-            preserveAspectRatio="none"
-            role="presentation"
-          >
-            <g v-for="(t, i) in xTicks" :key="`xt${i}`">
-              <line class="axis-tick" :x1="t.x" y1="0" :x2="t.x" y2="4" />
-              <text class="axis fig" :x="t.x" y="15" text-anchor="middle">
-                {{ t.label }}
-              </text>
-            </g>
-          </svg>
-        </figure>
-
-        <!-- Trades Table -->
-        <div class="trades-panel">
-          <div class="trades-head">
-            <h3 class="label panel-title">RECONSTRUCTED ROUND TRIPS ({{ trades.length }})</h3>
-            <span class="label trades-sub">Filled at bar i+1 open without look-ahead</span>
-          </div>
-
-          <div v-if="trades.length" class="table-wrap">
-            <table class="table fig">
-              <thead>
-                <tr>
-                  <th class="label">Entry Date</th>
-                  <th class="label">Exit Date</th>
-                  <th class="label">Dir</th>
-                  <th class="label right">Entry Px</th>
-                  <th class="label right">Exit Px</th>
-                  <th class="label right">Size (Qty)</th>
-                  <th class="label right">Notional</th>
-                  <th class="label right">Leverage</th>
-                  <th class="label right">Return</th>
-                  <th class="label right">P&L ($)</th>
-                  <th class="label right">Bars</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(t, i) in trades" :key="`t${i}`">
-                  <td>{{ t.entry_d }}</td>
-                  <td>
-                    {{ t.exit_d }}
-                    <span v-if="t.forced_exit" class="chip forced-chip">OPEN</span>
-                  </td>
-                  <td>
-                    <span class="chip long-chip">LONG</span>
-                  </td>
-                  <td class="right">{{ optNum(t.entry_px, 2) }}</td>
-                  <td class="right">{{ optNum(t.exit_px, 2) }}</td>
-                  <td class="right">{{ num(t.qty, 0) }}</td>
-                  <td class="right">{{ usd(t.notional) }}</td>
-                  <td class="right">{{ num(t.leverage, 2) }}x</td>
-                  <td
-                    class="right"
-                    :class="{ pos: (t.ret_pct ?? 0) > 0, neg: (t.ret_pct ?? 0) < 0 }"
-                  >
-                    {{ optSigned(t.ret_pct, 2) }}%
-                  </td>
-                  <td class="right" :class="{ pos: (t.pnl ?? 0) > 0, neg: (t.pnl ?? 0) < 0 }">
-                    {{ usd(t.pnl) }}
-                  </td>
-                  <td class="right">{{ t.bars }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p v-else class="empty label">No trades triggered in this window.</p>
         </div>
-      </div>
-    </div>
-  </template>
+      </template>
     </Panel>
   </div>
 </template>

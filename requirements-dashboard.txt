@@ -2,3 +2,6 @@
 # training image so an operational package cannot silently change model runs.
 clerk-backend-api==6.0.1
 exchange-calendars==4.13.2
+
+# Trusted HTTPS roots for the TypeSafe urllib transport, including macOS Python.
+certifi>=2024.2.2

@@ -108,14 +108,16 @@ const expiryLabel = computed(() => {
       <div class="gate-row">
         <div class="gate-head">
           <span class="gate-label">INITIAL BALANCE · 09:30–09:45</span>
-          <span v-if="ibMeasured && ibLocation" class="gate-pill" :class="ibLocation === 'inside' ? 'neu' : 'pos'">
+          <span
+            v-if="ibMeasured && ibLocation"
+            class="gate-pill"
+            :class="ibLocation === 'inside' ? 'neu' : 'pos'"
+          >
             SPOT {{ ibLocation.toUpperCase() }}
           </span>
         </div>
         <template v-if="ibMeasured">
-          <div class="gate-val font-mono">
-            {{ num(ib!.low, 2) }} – {{ num(ib!.high, 2) }}
-          </div>
+          <div class="gate-val font-mono">{{ num(ib!.low, 2) }} – {{ num(ib!.high, 2) }}</div>
           <div class="gate-sub">
             Width {{ num(ib!.width, 2) }} · {{ ib!.bar_count }} bars · {{ ib!.session_date }}
           </div>
@@ -134,7 +136,8 @@ const expiryLabel = computed(() => {
         </div>
         <template v-if="contractRouted">
           <div class="gate-val font-mono">
-            {{ num(contract!.strike, 2) }} {{ contract!.right?.toUpperCase() }} · {{ contract!.expiry }}
+            {{ num(contract!.strike, 2) }} {{ contract!.right?.toUpperCase() }} ·
+            {{ contract!.expiry }}
           </div>
           <div class="gate-sub">
             Δ {{ num(contract!.delta, 3) }} · {{ contract!.dte }} DTE ·
@@ -147,11 +150,7 @@ const expiryLabel = computed(() => {
               — {{ contract!.spread!.passes ? 'crossable' : 'too wide' }}
             </span>
           </div>
-          <div
-            v-for="w in contract!.warnings"
-            :key="w"
-            class="gate-warn"
-          >
+          <div v-for="w in contract!.warnings" :key="w" class="gate-warn">
             {{ w }}
           </div>
         </template>

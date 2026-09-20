@@ -6,6 +6,8 @@ import { useResource, type Resource } from '@/composables/useResource'
 import { num } from '@/format'
 import { printPremium, classifyFlowOrder, classifyPremiumTier } from '@/flowDisplay'
 import FlowDashboard from '@/components/FlowDashboard.vue'
+import ConvictionPlaysPanel from '@/components/ConvictionPlaysPanel.vue'
+import FlowSuggestionDrawer from '@/components/FlowSuggestionDrawer.vue'
 
 const FLOW_LIMIT = 500
 const BASE_FLOW_FLOOR = 25_000
@@ -66,6 +68,14 @@ function openSymbol(symbol: string): void {
     name: 'flow',
     query: { ...route.query, symbol },
   })
+}
+
+function closeSymbol(): void {
+  focusSymbol.value = ''
+  const nextQuery = { ...route.query }
+  delete nextQuery.symbol
+  delete nextQuery.setup
+  void router.replace({ name: 'flow', query: nextQuery })
 }
 
 watch(
@@ -139,12 +149,7 @@ const flowTapeStats = computed(() => {
       </div>
 
       <!-- Stat chips — shown once data is available -->
-      <div
-        v-if="flowTapeStats"
-        class="fv-chips"
-        role="group"
-        aria-label="Flow summary stats"
-      >
+      <div v-if="flowTapeStats" class="fv-chips" role="group" aria-label="Flow summary stats">
         <div class="fv-chip fv-chip--call" title="Total Call Flow Premium">
           <span class="fv-chip-label">CALL FLOW</span>
           <span class="fv-chip-val"
@@ -188,6 +193,8 @@ const flowTapeStats = computed(() => {
       </div>
     </header>
 
+    <ConvictionPlaysPanel @select="openSymbol" />
+
     <FlowDashboard
       :payload="unusual.data.value"
       :status="statusPayload"
@@ -200,6 +207,8 @@ const flowTapeStats = computed(() => {
       @threshold="setPremium"
       @open-symbol="openSymbol"
     />
+
+    <FlowSuggestionDrawer v-if="focusSymbol" :symbol="focusSymbol" @close="closeSymbol" />
   </div>
 </template>
 
@@ -248,8 +257,13 @@ const flowTapeStats = computed(() => {
   animation: fv-dot-pulse var(--dur-pulse, 2s) ease-in-out infinite;
 }
 @keyframes fv-dot-pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.35; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .fv-live-label {
@@ -260,8 +274,8 @@ const flowTapeStats = computed(() => {
 }
 
 .fv-live-sub {
-  color: var(--ink-faint);
-  font-size: var(--t-nano, 10px);
+  color: var(--ink-dim);
+  font-size: var(--t-micro);
   letter-spacing: 0.03em;
 }
 
@@ -293,36 +307,49 @@ const flowTapeStats = computed(() => {
   font-family: var(--font-display);
   font-size: var(--t-nano);
   font-weight: 700;
-  letter-spacing: 0.07em;
-  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
   white-space: nowrap;
   text-transform: uppercase;
 }
 
 .fv-chip-val {
   font-family: var(--font-data);
-  font-size: var(--t-tiny);
-  font-weight: 800;
+  font-size: var(--t-small);
+  font-weight: 750;
   letter-spacing: var(--track-tight, -0.01em);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  line-height: 1.1;
+  line-height: 1.15;
 }
 
 .fv-chip-pct {
-  font-size: var(--t-nano);
+  font-size: var(--t-micro);
   font-weight: 600;
-  opacity: 0.75;
-  margin-left: 2px;
+  opacity: 0.9;
+  color: var(--ink-dim);
+  margin-left: 3px;
 }
 
 /* ── Chip colour variants ────────────────────────────────────────────────── */
-.fv-chip--call .fv-chip-val  { color: var(--call-hi, var(--call)); }
-.fv-chip--put  .fv-chip-val  { color: var(--put-hi,  var(--put));  }
-.fv-chip--golden .fv-chip-val { color: var(--warn); }
-.fv-chip--sweep  .fv-chip-val { color: var(--call);  }
-.fv-chip--whale  .fv-chip-val { color: var(--warn);  }
-.fv-chip--neutral .fv-chip-val { color: var(--ink);  }
+.fv-chip--call .fv-chip-val {
+  color: var(--call-hi, var(--call));
+}
+.fv-chip--put .fv-chip-val {
+  color: var(--put-hi, var(--put));
+}
+.fv-chip--golden .fv-chip-val {
+  color: var(--warn);
+}
+.fv-chip--sweep .fv-chip-val {
+  color: var(--call);
+}
+.fv-chip--whale .fv-chip-val {
+  color: var(--warn);
+}
+.fv-chip--neutral .fv-chip-val {
+  color: var(--ink);
+}
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 780px) {

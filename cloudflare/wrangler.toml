@@ -1,0 +1,24 @@
+# TradeCentral Cloudflare Worker.
+#
+# Serves the built SPA as static assets and proxies /api/* to the local
+# Python API server behind a Cloudflare Tunnel.
+#
+# Deploy from the repo root:
+#   cd dashboard && npm run build
+#   cd .. && npx wrangler deploy -c cloudflare/wrangler.toml
+#
+# API_UPSTREAM is the public hostname of the cloudflared tunnel that exposes
+# the local Python API server. Set it after running setup_tunnel.sh.
+
+name = "tradecentral"
+main = "cloudflare/worker.js"
+compatibility_date = "2024-12-01"
+
+[assets]
+directory = "runs/dashboard_dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[vars]
+VITE_EDGE_AUTH_MODE = "local"
+API_UPSTREAM = ""

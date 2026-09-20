@@ -181,7 +181,10 @@ const basisBadge = computed(() => {
   if (!r) return { cls: 'badge-structure', text: '' }
   if (r.bias.confidence_basis === 'counted_history') {
     const n = r.calibration?.sweep_reclaim_follow_through?.n
-    return { cls: 'badge-counted', text: n != null ? `Counted history · n=${n}` : 'Counted history' }
+    return {
+      cls: 'badge-counted',
+      text: n != null ? `Counted history · n=${n}` : 'Counted history',
+    }
   }
   return { cls: 'badge-structure', text: 'Structure only' }
 })
@@ -244,7 +247,9 @@ const watchRows = computed<WatchRow[]>(() =>
 
 const watchMeta = computed(() => {
   const watchAtr = ok.value?.thresholds?.watch_atr
-  return typeof watchAtr === 'number' ? `resting pools within ${watchAtr} ATR` : 'resting pools near price'
+  return typeof watchAtr === 'number'
+    ? `resting pools within ${watchAtr} ATR`
+    : 'resting pools near price'
 })
 
 function stopMethodLabel(stop: LiquidityStop): string {
@@ -352,10 +357,7 @@ const yScale = computed(() => linearScale(priceDomain.value, [H.value - pad.b, p
 const priceTicks = computed(() => niceTicks(priceDomain.value[0], priceDomain.value[1], 6))
 
 const xScale = computed(() =>
-  linearScale(
-    [0, Math.max(visibleBars.value.length - 1, 1)],
-    [plotX0 + 4, candleX1.value - 4],
-  ),
+  linearScale([0, Math.max(visibleBars.value.length - 1, 1)], [plotX0 + 4, candleX1.value - 4]),
 )
 
 const candleGeom = computed(() => {
@@ -502,7 +504,8 @@ const refLines = computed(() => {
   if (!r) return []
   const out: { key: string; y: number; cls: string; label: string }[] = []
   const add = (key: string, v: number | null, cls: string, name: string) => {
-    if (v != null && Number.isFinite(v)) out.push({ key, y: yScale.value(v), cls, label: `${name} ${num(v, 2)}` })
+    if (v != null && Number.isFinite(v))
+      out.push({ key, y: yScale.value(v), cls, label: `${name} ${num(v, 2)}` })
   }
   add('poc', r.profile.poc, 'poc-line', 'POC')
   add('vah', r.profile.vah, 'va-line', 'VAH')
@@ -694,12 +697,25 @@ const chartState = computed<string | null>(() => {
 
               <g v-for="l in refLines" :key="`ref-${l.key}`">
                 <line :x1="plotX0" :x2="plotX1" :y1="l.y" :y2="l.y" :class="['ref-line', l.cls]" />
-                <text :x="plotX1 + 4" :y="l.y + 3" :class="['ref-label', l.cls]">{{ l.label }}</text>
+                <text :x="plotX1 + 4" :y="l.y + 3" :class="['ref-label', l.cls]">
+                  {{ l.label }}
+                </text>
               </g>
 
               <g v-for="s in stopLines" :key="`stop-${s.key}`">
-                <line :x1="plotX0" :x2="candleX1" :y1="s.y" :y2="s.y" :class="['stop-line', s.cls]" />
-                <text :x="candleX1 - 4" :y="s.y - 3" text-anchor="end" :class="['stop-label', s.cls]">
+                <line
+                  :x1="plotX0"
+                  :x2="candleX1"
+                  :y1="s.y"
+                  :y2="s.y"
+                  :class="['stop-line', s.cls]"
+                />
+                <text
+                  :x="candleX1 - 4"
+                  :y="s.y - 3"
+                  text-anchor="end"
+                  :class="['stop-label', s.cls]"
+                >
                   {{ s.label }}
                 </text>
               </g>
@@ -751,7 +767,9 @@ const chartState = computed<string | null>(() => {
               :data-pool="w.item.pool_id"
             >
               <div class="watch-head">
-                <span class="side-tag" :class="sideClass(w.item.side)">{{ sideLabel(w.item.side) }}</span>
+                <span class="side-tag" :class="sideClass(w.item.side)">{{
+                  sideLabel(w.item.side)
+                }}</span>
                 <span class="fig">{{ w.levelText }}</span>
                 <span class="fig dim">{{ atrText(w.item.distance_atr) }}</span>
               </div>
@@ -780,8 +798,18 @@ const chartState = computed<string | null>(() => {
             </div>
             <template v-if="side.stop">
               <div class="stop-figs">
-                <Readout label="Naive" :value="num(side.stop.naive, 2)" sub="where a sweep hunts" size="sm" />
-                <Readout label="Suggested" :value="num(side.stop.suggested, 2)" tone="accent" size="sm" />
+                <Readout
+                  label="Naive"
+                  :value="num(side.stop.naive, 2)"
+                  sub="where a sweep hunts"
+                  size="sm"
+                />
+                <Readout
+                  label="Suggested"
+                  :value="num(side.stop.suggested, 2)"
+                  tone="accent"
+                  size="sm"
+                />
                 <Readout label="Risk" :value="atrText(side.stop.risk_atr)" size="sm" />
               </div>
               <p class="rationale">{{ side.stop.rationale || DASH }}</p>
@@ -804,19 +832,28 @@ const chartState = computed<string | null>(() => {
                 </tr>
               </thead>
               <tbody>
-                <template v-for="(row, i) in poolTableRows" :key="row.kind === 'pool' ? row.pool.id : `last-${i}`">
+                <template
+                  v-for="(row, i) in poolTableRows"
+                  :key="row.kind === 'pool' ? row.pool.id : `last-${i}`"
+                >
                   <tr v-if="row.kind === 'pool'" class="pool-row" :class="sideClass(row.pool.side)">
                     <td class="fig num">{{ num(row.pool.level, 2) }}</td>
                     <td class="side-cell">{{ sideShort(row.pool.side) }}</td>
                     <td>
                       <span class="sources">
-                        <span v-for="src in row.pool.sources" :key="src" class="src-chip">{{ sourceLabel(src) }}</span>
-                        <span v-if="row.pool.thin_liquidity_between" class="src-chip thin-chip">thin path</span>
+                        <span v-for="src in row.pool.sources" :key="src" class="src-chip">{{
+                          sourceLabel(src)
+                        }}</span>
+                        <span v-if="row.pool.thin_liquidity_between" class="src-chip thin-chip"
+                          >thin path</span
+                        >
                       </span>
                     </td>
                     <td class="fig num">{{ num(row.pool.distance.atr, 2) }}</td>
                     <td class="fig num">{{ num(row.pool.score, 2) }}</td>
-                    <td :class="['status', `st-${row.pool.status}`]">{{ statusLabel(row.pool.status) }}</td>
+                    <td :class="['status', `st-${row.pool.status}`]">
+                      {{ statusLabel(row.pool.status) }}
+                    </td>
                   </tr>
                   <tr v-else class="last-row">
                     <td class="fig num">{{ num(ok.price.last, 2) }}</td>
@@ -834,8 +871,8 @@ const chartState = computed<string | null>(() => {
     <footer class="footnote">
       <p>
         Stop pools are inferred from price structure and bar volume — no order-book data. Nothing
-        here observes resting stop orders; zones mark where stops tend to sit beyond swings,
-        equal highs/lows, session extremes and value-area edges.
+        here observes resting stop orders; zones mark where stops tend to sit beyond swings, equal
+        highs/lows, session extremes and value-area edges.
       </p>
       <p v-if="ok">{{ profileNote }}</p>
       <p v-if="followThrough" :class="{ thin: !followThrough.enough }">

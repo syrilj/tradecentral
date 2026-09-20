@@ -2222,44 +2222,86 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
       <template v-if="deskHasChain">
         <!-- InsiderFinance Institutional Key Gamma Levels HUD -->
         <section
-          v-if="s?.call_wall != null || s?.put_wall != null || s?.gamma_flip != null || s?.pin_strike != null"
+          v-if="
+            s?.call_wall != null ||
+            s?.put_wall != null ||
+            s?.gamma_flip != null ||
+            s?.pin_strike != null
+          "
           class="options-gamma-hud rise"
           aria-label="Key gamma levels summary"
         >
-          <div v-if="s?.spot != null" class="hud-chip chip-spot" title="Current Underlying Spot Price">
+          <div
+            v-if="s?.spot != null"
+            class="hud-chip chip-spot"
+            title="Current Underlying Spot Price"
+          >
             <span class="hud-name label">SPOT PRICE</span>
             <span class="hud-val fig">{{ optUsd(s.spot) }}</span>
             <span class="hud-dist fig">{{ symbol }}</span>
           </div>
-          <div v-if="s?.total_gex_m != null" class="hud-chip chip-gex" :class="tone(s.total_gex_m)" title="Total Net Gamma Exposure">
+          <div
+            v-if="s?.total_gex_m != null"
+            class="hud-chip chip-gex"
+            :class="tone(s.total_gex_m)"
+            title="Total Net Gamma Exposure"
+          >
             <span class="hud-name label">NET GEX</span>
-            <span class="hud-val fig" :class="tone(s.total_gex_m)">{{ optSignedGex(s.total_gex_m, 1) }}</span>
+            <span class="hud-val fig" :class="tone(s.total_gex_m)">{{
+              optSignedGex(s.total_gex_m, 1)
+            }}</span>
             <span class="hud-dist fig">{{ (s?.regime ?? 'GAMMA').toUpperCase() }}</span>
           </div>
-          <div v-if="s?.call_wall != null" class="hud-chip chip-call" title="Major Call Wall (Dealer Resistance)">
+          <div
+            v-if="s?.call_wall != null"
+            class="hud-chip chip-call"
+            title="Major Call Wall (Dealer Resistance)"
+          >
             <span class="hud-name label">CALL WALL</span>
             <span class="hud-val fig call">${{ num(s.call_wall, 0) }}</span>
-            <span v-if="optWallDist(s.call_wall)" class="hud-dist fig call-tag">{{ optWallDist(s.call_wall) }}</span>
+            <span v-if="optWallDist(s.call_wall)" class="hud-dist fig call-tag">{{
+              optWallDist(s.call_wall)
+            }}</span>
           </div>
-          <div v-if="s?.put_wall != null" class="hud-chip chip-put" title="Major Put Wall (Dealer Support)">
+          <div
+            v-if="s?.put_wall != null"
+            class="hud-chip chip-put"
+            title="Major Put Wall (Dealer Support)"
+          >
             <span class="hud-name label">PUT WALL</span>
             <span class="hud-val fig put">${{ num(s.put_wall, 0) }}</span>
-            <span v-if="optWallDist(s.put_wall)" class="hud-dist fig put-tag">{{ optWallDist(s.put_wall) }}</span>
+            <span v-if="optWallDist(s.put_wall)" class="hud-dist fig put-tag">{{
+              optWallDist(s.put_wall)
+            }}</span>
           </div>
-          <div v-if="s?.gamma_flip != null" class="hud-chip chip-flip" title="Zero-Gamma Inflection Level">
+          <div
+            v-if="s?.gamma_flip != null"
+            class="hud-chip chip-flip"
+            title="Zero-Gamma Inflection Level"
+          >
             <span class="hud-name label">0-GAMMA / FLIP</span>
             <span class="hud-val fig accent">${{ num(s.gamma_flip, 0) }}</span>
-            <span v-if="optWallDist(s.gamma_flip)" class="hud-dist fig">{{ optWallDist(s.gamma_flip) }}</span>
+            <span v-if="optWallDist(s.gamma_flip)" class="hud-dist fig">{{
+              optWallDist(s.gamma_flip)
+            }}</span>
           </div>
-          <div v-if="s?.pin_strike != null" class="hud-chip chip-pin" title="Max Pain / Expected Pin Strike">
+          <div
+            v-if="s?.pin_strike != null"
+            class="hud-chip chip-pin"
+            title="Max Pain / Expected Pin Strike"
+          >
             <span class="hud-name label">MAX PAIN</span>
             <span class="hud-val fig">${{ num(s.pin_strike, 0) }}</span>
-            <span v-if="optWallDist(s.pin_strike)" class="hud-dist fig">{{ optWallDist(s.pin_strike) }}</span>
+            <span v-if="optWallDist(s.pin_strike)" class="hud-dist fig">{{
+              optWallDist(s.pin_strike)
+            }}</span>
           </div>
           <div v-if="optExpectedMove != null" class="hud-chip chip-em" title="1-Day Expected Move">
             <span class="hud-name label">1D MOVE</span>
             <span class="hud-val fig">&plusmn;${{ num(optExpectedMove.dollars, 2) }}</span>
-            <span v-if="optExpectedMove.pct != null" class="hud-dist fig">&plusmn;{{ num(optExpectedMove.pct, 1) }}%</span>
+            <span v-if="optExpectedMove.pct != null" class="hud-dist fig"
+              >&plusmn;{{ num(optExpectedMove.pct, 1) }}%</span
+            >
           </div>
         </section>
 
@@ -3426,13 +3468,22 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     </td>
                     <td class="fig dim tape-col-group expiry-cell">
                       {{ row.expiry ? shortDate(row.expiry) : '—' }}
-                      <small v-if="computeRowDte(row) != null" class="dte-sub"> {{ computeRowDte(row) }}d</small>
+                      <small v-if="computeRowDte(row) != null" class="dte-sub">
+                        {{ computeRowDte(row) }}d</small
+                      >
                     </td>
                     <td class="fig num-col strike-cell">
                       <div class="strike-lockup">
                         <span class="strike-val">{{ optUsd(row.strike) }}</span>
-                        <span class="type-chip label" :class="(row.right || row.activity_side || '').toLowerCase()">
-                          {{ (row.right || row.activity_side) ? (row.right || row.activity_side)!.toUpperCase() : '—' }}
+                        <span
+                          class="type-chip label"
+                          :class="(row.right || row.activity_side || '').toLowerCase()"
+                        >
+                          {{
+                            row.right || row.activity_side
+                              ? (row.right || row.activity_side)!.toUpperCase()
+                              : '—'
+                          }}
                         </span>
                       </div>
                     </td>
@@ -3625,7 +3676,11 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
               <span class="label dim">No prints on this feed — chain quotes shown instead</span>
             </div>
             <div class="chain-snap-scroll">
-              <table class="tape-table chain-snap-table" role="table" aria-label="Dated chain snapshot">
+              <table
+                class="tape-table chain-snap-table"
+                role="table"
+                aria-label="Dated chain snapshot"
+              >
                 <thead>
                   <tr>
                     <th class="num-col">Strike</th>
@@ -3646,15 +3701,23 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                       {{ row.right === 'call' ? 'CALL' : 'PUT' }}
                     </td>
                     <td class="fig num-col">{{ row.dte != null ? num(row.dte, 0) : '—' }}</td>
-                    <td class="fig num-col">{{ row.iv != null ? `${num(row.iv * 100, 1)}%` : '—' }}</td>
-                    <td class="fig num-col">{{ row.delta != null ? signed(row.delta, 3) : '—' }}</td>
-                    <td class="fig num-col">{{ row.gamma != null ? signed(row.gamma, 4) : '—' }}</td>
+                    <td class="fig num-col">
+                      {{ row.iv != null ? `${num(row.iv * 100, 1)}%` : '—' }}
+                    </td>
+                    <td class="fig num-col">
+                      {{ row.delta != null ? signed(row.delta, 3) : '—' }}
+                    </td>
+                    <td class="fig num-col">
+                      {{ row.gamma != null ? signed(row.gamma, 4) : '—' }}
+                    </td>
                     <td class="fig num-col">{{ num(row.volume, 0) }}</td>
                     <td class="fig num-col">{{ num(row.open_interest, 0) }}</td>
                     <td class="fig num-col">{{ signed(row.charm_flow, 1) }}</td>
                   </tr>
                   <tr v-if="!chainSnapshotRows.length">
-                    <td colspan="9" class="td-empty">No chain snapshot contracts found for this expiry.</td>
+                    <td colspan="9" class="td-empty">
+                      No chain snapshot contracts found for this expiry.
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -3885,7 +3948,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                     </td>
                     <td class="fig">
                       {{ row.expiry ? shortDate(row.expiry) : '—' }}
-                      <span v-if="computeRowDte(row) != null" class="dte-tag">({{ computeRowDte(row) }}d)</span>
+                      <span v-if="computeRowDte(row) != null" class="dte-tag"
+                        >({{ computeRowDte(row) }}d)</span
+                      >
                     </td>
                     <td class="fig num">{{ row.strike != null ? optUsd(row.strike) : '—' }}</td>
                     <td class="fig num">
@@ -6017,8 +6082,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-bands-row {
   display: flex;
   align-items: center;
-  gap: var(--s3);
-  padding: 4px var(--s3);
+  gap: var(--s2);
+  padding: 3px var(--s3);
   background: var(--glass-base);
   border-top: var(--hair) solid var(--glass-border-subtle);
   flex-wrap: wrap;
@@ -6087,14 +6152,14 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 /* Streaming Arrival Flash Animation */
 @keyframes printArrivalFlash {
   0% {
-    background-color: color-mix(in srgb, var(--phosphor) 28%, var(--glass-surface-hi));
+    background-color: color-mix(in srgb, var(--phosphor) 35%, var(--glass-surface-hi));
   }
   100% {
     background-color: transparent;
   }
 }
 .just-arrived {
-  animation: printArrivalFlash 3.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: printArrivalFlash 2.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .card-tier-tag {
@@ -6296,7 +6361,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-toolbar {
   display: flex;
   flex-direction: column;
-  min-height: 38px;
+  min-height: 34px;
   border-block: var(--hair) solid var(--glass-border);
   background: var(--glass-surface);
 }
@@ -6304,7 +6369,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .tape-toolbar-main {
   display: flex;
   align-items: stretch;
-  min-height: 38px;
+  min-height: 34px;
 }
 .tape-toolbar-right {
   display: flex;
@@ -6372,9 +6437,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  height: 32px;
-  padding: 0 10px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 9px;
   color: var(--ink-faint);
   border: var(--hair) solid transparent;
   white-space: nowrap;
@@ -6575,6 +6640,7 @@ td.num-col {
   min-width: 980px;
   border-collapse: separate;
   border-spacing: 0;
+  border-top: var(--hair) solid var(--rule-faint);
 }
 .tape-table th {
   padding: var(--s2) var(--s3);
@@ -6593,7 +6659,7 @@ td.num-col {
    on top of two-line date and spot cells put rows at 55px — ten prints on a
    laptop out of the fifteen hundred the panel header advertises. */
 .tape-table td {
-  padding: 5px var(--s3);
+  padding: 4px var(--s3);
   border-bottom: var(--hair) solid var(--border-subtle);
   vertical-align: middle;
 }
@@ -6603,6 +6669,9 @@ td.num-col {
 }
 .tape-table tbody tr:hover {
   background: var(--panel-hi);
+}
+.tape-table tbody tr:hover td {
+  border-bottom-color: var(--border-subtle);
 }
 .tape-table tbody tr.anomalous:hover {
   background: color-mix(in srgb, var(--warn) 14%, var(--panel-hi));
@@ -6733,8 +6802,8 @@ tr.isGoldenSweep td {
 /* Premium is the number this table exists to show — it gets the only
    large, bold figure in the row; everything else recedes around it. */
 .premium-cell {
-  font-size: var(--t-body);
-  font-weight: 700;
+  font-size: var(--t-lead);
+  font-weight: 800;
   letter-spacing: var(--track-tight);
 }
 .premium-cell .est {
@@ -7163,7 +7232,7 @@ tr.isMegaWhale:hover {
   min-width: 110px;
 }
 .strike-cell {
-  font-weight: 600;
+  font-weight: 700;
   white-space: nowrap;
 }
 .strike-lockup {
@@ -7412,8 +7481,8 @@ tr.isMegaWhale:hover {
    ========================================================================== */
 
 .tape-stalker-card.if-card {
-  gap: var(--s2);
-  padding: 12px 14px;
+  gap: 10px;
+  padding: 10px 12px;
   background: var(--glass-surface);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
@@ -7590,7 +7659,7 @@ tr.isMegaWhale:hover {
 .card-specs-matrix {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 4px;
   padding: 4px 0;
 }
 

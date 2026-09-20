@@ -407,7 +407,11 @@ const profileRows = computed<ProfileRow[]>(() =>
                 :y2="yScale(ok.composite.poc)"
                 class="ref-line poc-line"
               />
-              <text :x="chartRight + 4" :y="yScale(ok.composite.poc) + 3" class="ref-label poc-label">
+              <text
+                :x="chartRight + 4"
+                :y="yScale(ok.composite.poc) + 3"
+                class="ref-label poc-label"
+              >
                 POC {{ num(ok.composite.poc, 2) }}
               </text>
             </g>
@@ -419,7 +423,11 @@ const profileRows = computed<ProfileRow[]>(() =>
                 :y2="yScale(ok.composite.vah)"
                 class="ref-line vah-line"
               />
-              <text :x="chartRight + 4" :y="yScale(ok.composite.vah) + 3" class="ref-label vah-label">
+              <text
+                :x="chartRight + 4"
+                :y="yScale(ok.composite.vah) + 3"
+                class="ref-label vah-label"
+              >
                 VAH {{ num(ok.composite.vah, 2) }}
               </text>
             </g>
@@ -431,7 +439,11 @@ const profileRows = computed<ProfileRow[]>(() =>
                 :y2="yScale(ok.composite.val)"
                 class="ref-line val-line"
               />
-              <text :x="chartRight + 4" :y="yScale(ok.composite.val) + 3" class="ref-label val-label">
+              <text
+                :x="chartRight + 4"
+                :y="yScale(ok.composite.val) + 3"
+                class="ref-label val-label"
+              >
                 VAL {{ num(ok.composite.val, 2) }}
               </text>
             </g>
@@ -502,7 +514,9 @@ const profileRows = computed<ProfileRow[]>(() =>
         <p v-if="ok.trade_plan.risk_reward == null" class="rr-reason">
           {{ ok.trade_plan.risk_reward_unavailable_reason ?? 'Risk:reward not derivable.' }}
         </p>
-        <p class="invalidation"><span class="label">Invalidation</span> {{ ok.trade_plan.invalidation }}</p>
+        <p class="invalidation">
+          <span class="label">Invalidation</span> {{ ok.trade_plan.invalidation }}
+        </p>
         <ul v-if="ok.trade_plan.rules_applied.length" class="rules-applied">
           <li v-for="(r, i) in ok.trade_plan.rules_applied" :key="i">{{ r }}</li>
         </ul>
@@ -551,13 +565,21 @@ const profileRows = computed<ProfileRow[]>(() =>
           <Readout label="VAL rotations" :value="String(ok.rotation_stats.val_rotations)" />
           <Readout
             label="VAL rotation rate"
-            :value="ok.rotation_stats.val_rotation_rate == null ? DASH : pctFrac(ok.rotation_stats.val_rotation_rate)"
+            :value="
+              ok.rotation_stats.val_rotation_rate == null
+                ? DASH
+                : pctFrac(ok.rotation_stats.val_rotation_rate)
+            "
           />
           <Readout label="VAH attempts" :value="String(ok.rotation_stats.vah_attempts)" />
           <Readout label="VAH rotations" :value="String(ok.rotation_stats.vah_rotations)" />
           <Readout
             label="VAH rotation rate"
-            :value="ok.rotation_stats.vah_rotation_rate == null ? DASH : pctFrac(ok.rotation_stats.vah_rotation_rate)"
+            :value="
+              ok.rotation_stats.vah_rotation_rate == null
+                ? DASH
+                : pctFrac(ok.rotation_stats.vah_rotation_rate)
+            "
           />
         </div>
         <p class="note">{{ ok.rotation_stats.note }}</p>

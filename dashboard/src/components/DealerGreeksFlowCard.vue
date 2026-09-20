@@ -185,9 +185,9 @@ const callGexRatio = computed(() => {
           </div>
         </div>
         <div class="greek-sub">
-          Calls: {{ snap && snap.call_gex_m != null ? `+$${num(snap.call_gex_m, 1)}M` : DASH }} | Puts: {{
-            snap && snap.put_gex_m != null ? `-$${num(Math.abs(snap.put_gex_m), 1)}M` : DASH
-          }}
+          Calls: {{ snap && snap.call_gex_m != null ? `+$${num(snap.call_gex_m, 1)}M` : DASH }} |
+          Puts:
+          {{ snap && snap.put_gex_m != null ? `-$${num(Math.abs(snap.put_gex_m), 1)}M` : DASH }}
         </div>
         <!-- The map's headline is the curve read at live spot, which is a
              different measurement from the chain-wide strike sum above.
@@ -267,7 +267,12 @@ const callGexRatio = computed(() => {
         </div>
         <div class="greek-val font-mono">{{ snap ? optSigned(snap.net_chex_m, 2) : DASH }}M/d</div>
         <div class="greek-sub">
-          0DTE Charm Drift: {{ snap && snap.zero_dte_charm_drift_m != null ? `${optSigned(snap.zero_dte_charm_drift_m, 2)}M/day` : DASH }}
+          0DTE Charm Drift:
+          {{
+            snap && snap.zero_dte_charm_drift_m != null
+              ? `${optSigned(snap.zero_dte_charm_drift_m, 2)}M/day`
+              : DASH
+          }}
         </div>
       </div>
 

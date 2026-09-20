@@ -179,8 +179,8 @@ const squeezeDiagnostics = computed(() => {
   // 1. Long Gamma Dampening: dealers absorb moves, suppressing runaway squeeze cascades
   const isDampened = Boolean(
     sq?.long_gamma_dampened ||
-      (fm?.side === 'above' && reg.isPos) ||
-      (reg.isPos && !reg.isNeg && fm?.side !== 'below'),
+    (fm?.side === 'above' && reg.isPos) ||
+    (reg.isPos && !reg.isNeg && fm?.side !== 'below'),
   )
 
   // 2. Fuel is unsigned structure: short dealer gamma vs ADV. It is not a side.
@@ -318,7 +318,8 @@ const structureRange = computed(() => {
   const putNearCall =
     putWallPct != null && callWallPct != null && Math.abs(putWallPct - callWallPct) < 12
   const flipNearPut = flipPct != null && putWallPct != null && Math.abs(flipPct - putWallPct) < 12
-  const flipNearCall = flipPct != null && callWallPct != null && Math.abs(flipPct - callWallPct) < 12
+  const flipNearCall =
+    flipPct != null && callWallPct != null && Math.abs(flipPct - callWallPct) < 12
 
   const putTier = 1
   const callTier = putNearCall ? 2 : 1
@@ -391,10 +392,7 @@ const squeezeMeter = computed(() => {
   const ex = squeezeExpl.value
   const fromSqueeze = Boolean(props.squeeze)
   const raw = fromSqueeze ? ex.score : props.read.score
-  const has =
-    raw != null &&
-    Number.isFinite(raw) &&
-    (!fromSqueeze || ex.dirStatus !== 'degraded')
+  const has = raw != null && Number.isFinite(raw) && (!fromSqueeze || ex.dirStatus !== 'degraded')
   const clamped = has ? Math.max(-100, Math.min(100, raw as number)) : 0
   return {
     has,
@@ -513,7 +511,10 @@ const rulerTicks = Array.from({ length: 21 }, (_, i) => i * 5)
               <span class="sq-moment-label label">{{ leg.label }}</span>
               <strong class="sq-moment-val fig">{{ leg.display }}</strong>
               <span class="sq-moment-meter" aria-hidden="true">
-                <i v-if="leg.fill01 != null" :style="{ width: `${(leg.fill01 * 100).toFixed(1)}%` }" />
+                <i
+                  v-if="leg.fill01 != null"
+                  :style="{ width: `${(leg.fill01 * 100).toFixed(1)}%` }"
+                />
               </span>
             </div>
           </div>

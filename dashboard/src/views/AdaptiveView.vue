@@ -296,7 +296,14 @@ const weightBars = computed(() => {
                 @click="selectBoardSymbol(row.symbol)"
               >
                 <td class="row-select-cell fig">
-  <button type="button" class="row-select-btn" @click.stop="selectBoardSymbol(row.symbol)"><span class="sr-only">Select row</span></button>{{ row.attention_rank ?? DASH }}</td>
+                  <button
+                    type="button"
+                    class="row-select-btn"
+                    @click.stop="selectBoardSymbol(row.symbol)"
+                  >
+                    <span class="sr-only">Select row</span></button
+                  >{{ row.attention_rank ?? DASH }}
+                </td>
                 <td class="fig sym">{{ row.symbol }}</td>
                 <td :class="sideTone(row.side)">{{ row.side }}</td>
                 <td class="fig" :class="tone(row.composite_score)">

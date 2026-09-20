@@ -133,8 +133,10 @@ const regimeBadgeClass = computed(() => {
   if (props.customRegimeLabel) {
     const lbl = props.customRegimeLabel.toLowerCase()
     if (lbl.includes('bull') || lbl.includes('long')) return 'regime-bullish'
-    if (lbl.includes('bear') || lbl.includes('short') || lbl.includes('breakdown')) return 'regime-bearish'
-    if (lbl.includes('squeeze') || lbl.includes('breakout') || lbl.includes('flip')) return 'regime-warn'
+    if (lbl.includes('bear') || lbl.includes('short') || lbl.includes('breakdown'))
+      return 'regime-bearish'
+    if (lbl.includes('squeeze') || lbl.includes('breakout') || lbl.includes('flip'))
+      return 'regime-warn'
     return 'regime-neutral'
   }
   if (props.regime === 'long') return 'regime-bullish'
@@ -307,7 +309,11 @@ function levelDist(lvl: number | null): string {
           <!-- A negative DTE was clamped to 0, so a chain whose nearest expiry
                had already passed advertised itself as a 0DTE board. -->
           {{
-            nextExpiryDte == null ? DASH : nextExpiryDte < 0 ? `EXPIRED ${-nextExpiryDte}D` : `${nextExpiryDte}D`
+            nextExpiryDte == null
+              ? DASH
+              : nextExpiryDte < 0
+                ? `EXPIRED ${-nextExpiryDte}D`
+                : `${nextExpiryDte}D`
           }}
           <span class="pill-sub font-mono text-ink-dim">({{ nextExpiryDate || DASH }})</span>
         </span>
@@ -327,27 +333,51 @@ function levelDist(lvl: number | null): string {
       aria-label="Institutional key gamma levels"
     >
       <span class="strip-tag font-mono">KEY LEVELS</span>
-      <div v-if="callWall != null" class="level-chip chip-call" title="Major Call Wall (Dealer Resistance)">
+      <div
+        v-if="callWall != null"
+        class="level-chip chip-call"
+        title="Major Call Wall (Dealer Resistance)"
+      >
         <span class="lvl-name">CALL WALL</span>
         <span class="lvl-val font-mono font-bold">${{ num(callWall, 0) }}</span>
         <span v-if="levelDist(callWall)" class="lvl-dist font-mono">{{ levelDist(callWall) }}</span>
       </div>
-      <div v-if="putWall != null" class="level-chip chip-put" title="Major Put Wall (Dealer Support)">
+      <div
+        v-if="putWall != null"
+        class="level-chip chip-put"
+        title="Major Put Wall (Dealer Support)"
+      >
         <span class="lvl-name">PUT WALL</span>
         <span class="lvl-val font-mono font-bold">${{ num(putWall, 0) }}</span>
         <span v-if="levelDist(putWall)" class="lvl-dist font-mono">{{ levelDist(putWall) }}</span>
       </div>
-      <div v-if="gammaFlip != null" class="level-chip chip-flip" title="Zero-Gamma Inflection Level">
+      <div
+        v-if="gammaFlip != null"
+        class="level-chip chip-flip"
+        title="Zero-Gamma Inflection Level"
+      >
         <span class="lvl-name">0-GAMMA</span>
         <span class="lvl-val font-mono font-bold">${{ num(gammaFlip, 0) }}</span>
-        <span v-if="levelDist(gammaFlip)" class="lvl-dist font-mono">{{ levelDist(gammaFlip) }}</span>
+        <span v-if="levelDist(gammaFlip)" class="lvl-dist font-mono">{{
+          levelDist(gammaFlip)
+        }}</span>
       </div>
-      <div v-if="pinStrike != null" class="level-chip chip-pin" title="Max Pain / Expected Pin Strike">
+      <div
+        v-if="pinStrike != null"
+        class="level-chip chip-pin"
+        title="Max Pain / Expected Pin Strike"
+      >
         <span class="lvl-name">MAX PAIN</span>
         <span class="lvl-val font-mono font-bold">${{ num(pinStrike, 0) }}</span>
-        <span v-if="levelDist(pinStrike)" class="lvl-dist font-mono">{{ levelDist(pinStrike) }}</span>
+        <span v-if="levelDist(pinStrike)" class="lvl-dist font-mono">{{
+          levelDist(pinStrike)
+        }}</span>
       </div>
-      <div v-if="em1dDollars != null" class="level-chip chip-em" title="1-Day Expected Move (VIX / 16)">
+      <div
+        v-if="em1dDollars != null"
+        class="level-chip chip-em"
+        title="1-Day Expected Move (VIX / 16)"
+      >
         <span class="lvl-name">1D MOVE</span>
         <span class="lvl-val font-mono font-bold">
           &plusmn;${{ num(em1dDollars, 2) }}{{ em1dPct != null ? ` (${num(em1dPct, 1)}%)` : '' }}

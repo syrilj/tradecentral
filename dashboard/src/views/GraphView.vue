@@ -466,7 +466,9 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
                 @click="pickCommunity(c.id)"
               >
                 <td class="row-select-cell">
-  <button type="button" class="row-select-btn" @click.stop="pickCommunity(c.id)"><span class="sr-only">Select row</span></button>
+                  <button type="button" class="row-select-btn" @click.stop="pickCommunity(c.id)">
+                    <span class="sr-only">Select row</span>
+                  </button>
                   <span
                     class="swatch"
                     :class="{ tail: c.id === OTHER }"
@@ -513,7 +515,10 @@ const indexedAt = computed(() => payload.value?.generated_at ?? null)
                   @click="selected = e.other"
                 >
                   <td class="row-select-cell cname">
-  <button type="button" class="row-select-btn" @click.stop="selected = e.other"><span class="sr-only">Select row</span></button>{{ labelOf.get(e.other) ?? e.other }}</td>
+                    <button type="button" class="row-select-btn" @click.stop="selected = e.other">
+                      <span class="sr-only">Select row</span></button
+                    >{{ labelOf.get(e.other) ?? e.other }}
+                  </td>
                   <td class="fig num">{{ e.weight.toFixed(1) }}</td>
                 </tr>
               </tbody>

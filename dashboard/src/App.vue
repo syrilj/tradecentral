@@ -238,8 +238,15 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
-/** Fourteen operator destinations. Everything else lives in Tools. */
+/** Primary operator destinations. Everything else lives in Tools. */
 const primaryNav = [
+  {
+    name: 'decision',
+    title: 'Decision',
+    hint: 'TypeSafe live read',
+    icon: 'adaptive',
+    tab: true,
+  },
   {
     name: 'brief',
     title: 'Brief',
@@ -373,7 +380,13 @@ const marketTools = [
     icon: 'sectors',
   },
   { name: 'sentiment', idx: 'M2', title: 'Pulse', hint: 'Structure and outliers', icon: 'pulse' },
-  { name: 'momentum', idx: 'M3', title: 'Momentum', hint: 'Five pillars scan', icon: 'momentum' },
+  {
+    name: 'momentum',
+    idx: 'M3',
+    title: 'Momentum',
+    hint: 'Time-series & cross-sectional',
+    icon: 'momentum',
+  },
   { name: 'fintel', idx: 'M4', title: 'Fintel', hint: 'Short, borrow, owners', icon: 'fintel' },
   {
     name: 'insiders',
@@ -919,7 +932,9 @@ function openFearGreed(): void {
       v-else
       class="shell"
       :class="{ 'rail-collapsed': sidebarCollapsed, 'rail-expanded': !sidebarCollapsed }"
-      :style="{ '--rail-w': sidebarCollapsed ? '72px' : '236px' }"
+      :style="{
+        '--rail-w': sidebarCollapsed ? 'var(--rail-w-collapsed)' : 'var(--rail-w-expanded)',
+      }"
     >
       <a class="skip-link" href="#main-content">Skip to workspace</a>
 
@@ -1282,7 +1297,13 @@ function openFearGreed(): void {
           </button>
         </div>
 
-        <div v-if="stripWarning" class="strip-warn" :title="stripWarning">
+        <div
+          v-if="stripWarning"
+          class="strip-warn"
+          role="status"
+          aria-live="polite"
+          :title="stripWarning"
+        >
           <AppIcon name="alert" :size="14" />
           <span class="label">{{ stripWarning }}</span>
         </div>
@@ -1349,7 +1370,7 @@ function openFearGreed(): void {
             <span v-else class="strip-avatar-initials fig">{{ stripOperatorInitials }}</span>
             <span class="strip-operator-lamp" aria-hidden="true" />
           </div>
-          <span class="strip-profile-badge label">OP</span>
+          <span class="strip-profile-badge label">OPERATOR</span>
         </button>
       </header>
 
@@ -1471,7 +1492,6 @@ function openFearGreed(): void {
   min-height: 0;
   overflow: hidden;
   user-select: none;
-  transition: width var(--dur) var(--ease-out);
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -1531,6 +1551,13 @@ function openFearGreed(): void {
   background: var(--panel-hi);
   border-color: var(--glass-border-hi);
   color: var(--ink);
+}
+.rail-toggle-btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.rail-toggle-btn:active {
+  transform: scale(0.96);
 }
 
 .nav {
@@ -1652,6 +1679,13 @@ function openFearGreed(): void {
   border-color: var(--glass-border);
   text-decoration: none;
   transform: translateX(2px);
+}
+.nav-item:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.nav-item:active {
+  transform: scale(0.98);
 }
 .rail.is-collapsed .nav-item:hover {
   transform: scale(1.04);
@@ -1952,6 +1986,11 @@ function openFearGreed(): void {
   color: var(--ink);
   transform: translateX(2px);
 }
+.more-item:focus-visible,
+.more-search:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
 .more-item.on {
   color: var(--phosphor);
   background: var(--phosphor-wash);
@@ -2106,6 +2145,13 @@ function openFearGreed(): void {
 }
 .gauge-btn:hover .g-val {
   color: var(--phosphor);
+}
+.gauge-btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.gauge-btn:active {
+  transform: scale(0.98);
 }
 .gauge-btn.loading .g-val {
   color: var(--ink-dim);
@@ -2472,6 +2518,13 @@ function openFearGreed(): void {
   border-color: var(--glass-border-hi);
   box-shadow: var(--glass-specular);
 }
+.strip-search:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.strip-search:active {
+  transform: scale(0.98);
+}
 .strip-search .label {
   color: inherit;
 }
@@ -2522,6 +2575,13 @@ function openFearGreed(): void {
   border-color: var(--glass-border-hi);
   box-shadow: var(--glass-specular);
   color: var(--ink);
+}
+.strip-profile-btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.strip-profile-btn:active {
+  transform: scale(0.98);
 }
 .strip-profile-avatar {
   position: relative;

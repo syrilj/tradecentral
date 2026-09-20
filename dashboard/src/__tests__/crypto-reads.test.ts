@@ -47,7 +47,17 @@ describe('cryptoSpotRead', () => {
   it('uses cotLeanFromSpecNetZ cutoffs for the COT lean', () => {
     expect(COT_LEAN_Z_CUTOFF).toBe(0.5)
     const samples: Array<number | null | undefined> = [
-      0.5, 0.6, 2, -0.5, -0.6, 0, 0.49, -0.49, null, undefined, Number.NaN,
+      0.5,
+      0.6,
+      2,
+      -0.5,
+      -0.6,
+      0,
+      0.49,
+      -0.49,
+      null,
+      undefined,
+      Number.NaN,
     ]
     for (const z of samples) {
       const read = cryptoSpotRead({ cotSpecNetZ: z })

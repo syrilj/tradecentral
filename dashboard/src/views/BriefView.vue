@@ -212,7 +212,9 @@ function setupOf(play: PlaysDecision): SetupCard {
     side,
     sideWord: side === 'long' ? 'LONG' : side === 'short' ? 'SHORT' : 'FLAT',
     sideClass: side === 'long' ? 'pos' : side === 'short' ? 'neg' : 'flat',
-    strategy: String(play.strategy ?? '').replaceAll('_', ' ').toUpperCase(),
+    strategy: String(play.strategy ?? '')
+      .replaceAll('_', ' ')
+      .toUpperCase(),
     state,
     stateClass: state === 'ENTER' ? 'enter' : state === 'WATCH' ? 'watch' : 'flat',
     rank: Number(play.rank ?? 0),
@@ -679,18 +681,13 @@ function openSymbol(sym: string): void {
         <div class="setups-title-block">
           <h2 class="setups-title">Top setups right now</h2>
           <p class="setups-sub">
-            The funnel's own ranking, live: ENTER first, then the watchlist. Click a name to read
-            it in depth below.
+            The funnel's own ranking, live: ENTER first, then the watchlist. Click a name to read it
+            in depth below.
           </p>
         </div>
         <div class="setups-controls">
           <span v-if="playsMeta" class="label setups-meta">{{ playsMeta }}</span>
-          <button
-            type="button"
-            class="btn"
-            :disabled="runRunning"
-            @click="runTodayScan"
-          >
+          <button type="button" class="btn" :disabled="runRunning" @click="runTodayScan">
             {{ runRunning ? `${runJob?.progress ?? 0}% · SCANNING` : 'RUN SCAN' }}
           </button>
           <button

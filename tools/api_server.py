@@ -70,6 +70,11 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
       -> truth-preserving call/put activity, stock overlay, gamma-by-strike,
          risk-neutral range diagnostics, provenance, and filter accounting.
 
+  POST /api/typesafe/live-decision
+      -> TypeSafe System One synthesis of a compact options/regime/VPA/gate
+         snapshot. Final freshness and execution policy stays deterministic;
+         response is decision support only and never authorizes an order.
+
   GET  /api/price-attractors?symbol=X[&force=1][&rate=0.045][&max_dte=60]
       -> Real-time market regime classification, structural price magnet
          levels (Call/Put Walls, Gamma Flip, Max Pain, Kinematic Drift, POC),
@@ -6516,6 +6521,21 @@ def _execution_gate_payload(symbol: str, query: dict) -> tuple[dict, int]:
         },
     }
 
+    # Decision synthesis only needs the hard session policy. Returning here
+    # avoids repricing the same option chain that its options/regime lenses
+    # already fetched. The full endpoint remains unchanged by default.
+    session_only = str(query.get("session_only", ["0"])[0]).lower() in {"1", "true", "yes"}
+    if session_only:
+        payload["initial_balance"] = {
+            "measurable": False,
+            "reason": "Not requested in session-only mode.",
+        }
+        payload["contract"] = {
+            "measurable": False,
+            "reason": "Contract routing not requested in session-only mode.",
+        }
+        return payload, 200
+
     # Initial Balance, off the same 1m bars the 0DTE tape uses.
     try:
         bars = _lse_intraday_bars(sym, "1m")
@@ -9858,6 +9878,7 @@ _MUTATING_API_PATHS = frozenset(
         "/api/plays/run",
         "/api/options/backfill_oi",
         "/api/vpa/analyze",
+        "/api/typesafe/live-decision",
     }
 )
 
@@ -10296,6 +10317,30 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
                 payload, status = _options_payload(sym_or_err, query)
                 self._send_json(payload, status=status)
+
+            elif path == "/api/typesafe/live-decision":
+                try:
+                    body_data = json.loads((getattr(self, "_body_bytes", b"") or b"{}").decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    self._send_json(
+                        {"error": "request body must be valid JSON", "endpoint": path}, status=400
+                    )
+                    return
+                if not isinstance(body_data, dict):
+                    self._send_json(
+                        {"error": "request body must be a JSON object", "endpoint": path}, status=400
+                    )
+                    return
+                try:
+                    from research.typesafe_live_decision import evaluate_live_decision
+                except ImportError:
+                    from edge.research.typesafe_live_decision import evaluate_live_decision
+                try:
+                    result = evaluate_live_decision(body_data)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc), "endpoint": path}, status=400)
+                    return
+                self._send_json(result)
 
             elif path == "/api/vanna":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])

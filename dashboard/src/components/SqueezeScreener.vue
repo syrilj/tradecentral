@@ -156,7 +156,9 @@ const provDetail = computed(() => {
 
     <!-- measurement honesty + tape state: why the score looks the way it does -->
     <div v-if="ex.dirChip || tapeChip" class="chips">
-      <span v-if="ex.dirChip" class="chip label" :data-tone="ex.dirChip.tone">{{ ex.dirChip.text }}</span>
+      <span v-if="ex.dirChip" class="chip label" :data-tone="ex.dirChip.tone">{{
+        ex.dirChip.text
+      }}</span>
       <span v-if="tapeChip" class="chip label" :data-tone="tapeChip.tone">{{ tapeChip.text }}</span>
     </div>
 
@@ -179,7 +181,11 @@ const provDetail = computed(() => {
           :class="{ major: tk.major }"
           :style="{ left: `${tk.left}%` }"
         />
-        <span v-if="ex.markerPct != null" class="scale-marker" :style="{ left: `${ex.markerPct}%` }" />
+        <span
+          v-if="ex.markerPct != null"
+          class="scale-marker"
+          :style="{ left: `${ex.markerPct}%` }"
+        />
       </div>
       <div class="scale-legend label">
         <span>BEAR SQUEEZE</span>
@@ -197,7 +203,9 @@ const provDetail = computed(() => {
       <ol class="steps">
         <li v-for="(st, i) in ex.steps" :key="st.id" class="step" :class="`st-${st.tone}`">
           <div class="step-top">
-            <span class="step-op label" aria-hidden="true">{{ i === 0 ? '1' : i === 1 ? '×' : '=' }}</span>
+            <span class="step-op label" aria-hidden="true">{{
+              i === 0 ? '1' : i === 1 ? '×' : '='
+            }}</span>
             <span class="step-title label">{{ st.title }}</span>
             <span class="step-value">{{ st.value }}</span>
           </div>
@@ -212,12 +220,12 @@ const provDetail = computed(() => {
               <span class="dir-leg-label label">{{ leg.label }}</span>
               <span class="dir-leg-val">{{ leg.display }}</span>
               <span class="dir-leg-meter" aria-hidden="true">
-                <i v-if="leg.fill01 != null" :style="{ width: `${(leg.fill01 * 100).toFixed(1)}%` }" />
+                <i v-if="leg.fill01 != null" :style="{ transform: `scaleX(${leg.fill01})` }" />
               </span>
             </div>
           </div>
           <div v-else class="step-meter" aria-hidden="true">
-            <i v-if="st.fill01 != null" :style="{ width: `${(st.fill01 * 100).toFixed(1)}%` }" />
+            <i v-if="st.fill01 != null" :style="{ transform: `scaleX(${st.fill01})` }" />
           </div>
           <ul class="step-lines">
             <li v-for="(ln, j) in st.lines" :key="j">{{ ln }}</li>
@@ -512,7 +520,8 @@ const provDetail = computed(() => {
   display: block;
   height: 100%;
   background: var(--st-tone);
-  transition: width var(--dur) var(--ease-out);
+  transform-origin: left center;
+  transition: transform var(--dur) var(--ease-out);
 }
 .dir-legs {
   display: grid;

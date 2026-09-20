@@ -95,7 +95,9 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
       expect(appContent).toContain(
         "'rail-collapsed': sidebarCollapsed, 'rail-expanded': !sidebarCollapsed",
       )
-      expect(appContent).toContain("'--rail-w': sidebarCollapsed ? '72px' : '236px'")
+      expect(appContent).toContain(
+        "'--rail-w': sidebarCollapsed ? 'var(--rail-w-collapsed)' : 'var(--rail-w-expanded)'",
+      )
       expect(appContent).toContain(
         "'is-collapsed': sidebarCollapsed, 'is-expanded': !sidebarCollapsed",
       )

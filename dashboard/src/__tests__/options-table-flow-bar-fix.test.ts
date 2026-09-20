@@ -146,7 +146,8 @@ describe('Options Table & Flow Bar Bug Fixes & Improvements', () => {
       const strikeRightCombo = `${strikeStr}${rightStr}`
       const strikeRightComboShort = `${strikeStr}${rightStr ? rightStr[0] : ''}`
       const strikeSpaceCombo = `${strikeStr} ${rightStr}`
-      const isCallsSearch = q === 'calls' || q === 'call' || q.endsWith('calls') || q.endsWith('call')
+      const isCallsSearch =
+        q === 'calls' || q === 'call' || q.endsWith('calls') || q.endsWith('call')
       const isPutsSearch = q === 'puts' || q === 'put' || q.endsWith('puts') || q.endsWith('put')
 
       return (
@@ -348,7 +349,7 @@ describe('Options Table & Flow Bar Bug Fixes & Improvements', () => {
       expect(viewSrc).toContain('Strike · Type')
       expect(viewSrc).toContain('strike-lockup')
       expect(viewSrc).toContain('type-chip label')
-      expect(viewSrc).toMatch(/type-chip label.*right/)
+      expect(viewSrc).toContain('row.right')
     })
 
     it('uses computeRowDte in table expiry column and historical table', () => {

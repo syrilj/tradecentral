@@ -1131,7 +1131,9 @@ function navTo(name: string): void {
               @click="open(row.symbol)"
             >
               <td class="row-select-cell col-rank">
-  <button type="button" class="row-select-btn" @click.stop="open(row.symbol)"><span class="sr-only">Select row</span></button>
+                <button type="button" class="row-select-btn" @click.stop="open(row.symbol)">
+                  <span class="sr-only">Select row</span>
+                </button>
                 <span class="rank-idx fig">{{ String(row.activity_rank).padStart(2, '0') }}</span>
                 <span class="fig sym">{{ row.symbol }}</span>
               </td>

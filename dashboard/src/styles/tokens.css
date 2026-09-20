@@ -85,6 +85,15 @@
   --text-tertiary: var(--ink-faint);
   --action-focus: var(--phosphor);
   --selection: var(--phosphor);
+  --status-unknown: var(--ink-faint);
+  --status-halt: var(--halt);
+  --status-success: var(--long);
+  --status-warning: var(--warn);
+  --status-danger: var(--short);
+  --action-primary: var(--phosphor);
+  --action-primary-hover: var(--phosphor-dim);
+  --action-quiet: var(--rule);
+  --action-quiet-hover: var(--panel-hi);
   --status-live: var(--phosphor);
   --status-stale: var(--warn);
   --status-proxy: var(--call);
@@ -156,13 +165,16 @@
   --glass-surface-hi: rgba(32, 36, 46, 0.66);
   --glass-overlay: rgba(12, 14, 19, 0.72);
   --glass-tint: rgba(169, 196, 108, 0.08);
-  --glass-rail-bg: linear-gradient(180deg, var(--glass-tint), transparent 180px),
+  --glass-rail-bg:
+    linear-gradient(180deg, var(--glass-tint), transparent 180px),
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 120px),
     var(--glass-base);
-  --glass-strip-bg: linear-gradient(90deg, var(--glass-tint), transparent 360px),
+  --glass-strip-bg:
+    linear-gradient(90deg, var(--glass-tint), transparent 360px),
     linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 36px),
     var(--glass-surface);
-  --glass-profile-btn-bg: linear-gradient(180deg, var(--glass-tint), transparent 30px), var(--void-lift);
+  --glass-profile-btn-bg:
+    linear-gradient(180deg, var(--glass-tint), transparent 30px), var(--void-lift);
   --glass-drawer-bg: linear-gradient(180deg, var(--glass-tint), transparent 280px), var(--panel);
   --glass-border: rgba(255, 255, 255, 0.09);
   --glass-border-subtle: rgba(255, 255, 255, 0.055);
@@ -273,7 +285,9 @@
   --density-control-h: 28px;
 
   /* ---- geometry ---------------------------------------------------------- */
-  --rail-w: 80px;
+  --rail-w: var(--rail-w-expanded);
+  --rail-w-expanded: 236px;
+  --rail-w-collapsed: 72px;
   --strip-h: 60px;
   --tick: 8px;
   --hair: 1px;

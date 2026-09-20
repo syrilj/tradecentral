@@ -96,7 +96,8 @@ const filteredPrints = computed<FlowTapePrint[]>(() => {
 
 const tapeRead = computed(() => {
   if (sourcePrints.value.length === 0) return 'No option prints have arrived for this symbol yet.'
-  if (filteredPrints.value.length === 0) return `No ${filterMode.value.toLowerCase()} prints in the current window.`
+  if (filteredPrints.value.length === 0)
+    return `No ${filterMode.value.toLowerCase()} prints in the current window.`
   return `${filteredPrints.value.length} latest ${filterMode.value === 'All' ? '' : filterMode.value.toLowerCase() + ' '}prints shown. Premium color follows the signed trade side.`
 })
 </script>

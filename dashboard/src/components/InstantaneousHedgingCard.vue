@@ -63,7 +63,13 @@ const hedgingImpactIv = computed<number | null>(() => {
         </div>
         <span
           class="m-val font-mono font-bold"
-          :class="netPressureM == null ? 'text-ink-dim' : netPressureM >= 0 ? 'text-call-hi' : 'text-put-hi'"
+          :class="
+            netPressureM == null
+              ? 'text-ink-dim'
+              : netPressureM >= 0
+                ? 'text-call-hi'
+                : 'text-put-hi'
+          "
         >
           {{ netPressureM != null ? `${optSigned(netPressureM, 1)}M` : DASH }}
         </span>
@@ -100,7 +106,13 @@ const hedgingImpactIv = computed<number | null>(() => {
         <span class="m-label font-mono">Hedging Impact (Price)</span>
         <span
           class="m-val font-mono font-bold"
-          :class="hedgingImpactPrice == null ? 'text-ink-dim' : hedgingImpactPrice >= 0 ? 'text-call-hi' : 'text-put-hi'"
+          :class="
+            hedgingImpactPrice == null
+              ? 'text-ink-dim'
+              : hedgingImpactPrice >= 0
+                ? 'text-call-hi'
+                : 'text-put-hi'
+          "
         >
           {{ hedgingImpactPrice != null ? `${optSigned(hedgingImpactPrice, 2)}` : DASH }}
         </span>
@@ -111,7 +123,13 @@ const hedgingImpactIv = computed<number | null>(() => {
         <span class="m-label font-mono">Hedging Impact (IV)</span>
         <span
           class="m-val font-mono font-bold"
-          :class="hedgingImpactIv == null ? 'text-ink-dim' : hedgingImpactIv >= 0 ? 'text-call-hi' : 'text-put-hi'"
+          :class="
+            hedgingImpactIv == null
+              ? 'text-ink-dim'
+              : hedgingImpactIv >= 0
+                ? 'text-call-hi'
+                : 'text-put-hi'
+          "
         >
           {{ hedgingImpactIv != null ? `${optSigned(hedgingImpactIv, 2)}%` : DASH }}
         </span>

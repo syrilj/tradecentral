@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
 import { api, type SearchHit } from '@/api'
 import { debounce } from '@/composables/useResource'
 import { shortDate } from '@/format'
@@ -61,6 +61,8 @@ const cursor = ref(0)
 const busy = ref(false)
 const err = ref<string | null>(null)
 const input = ref<HTMLInputElement | null>(null)
+const paletteEl = ref<HTMLDivElement | null>(null)
+let previousFocus: HTMLElement | null = null
 
 function cleanTicker(term: string): string {
   return term
@@ -121,10 +123,44 @@ const run = debounce(async (term: string) => {
 
 watch(q, (v) => run(cleanTicker(v)))
 
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'Tab') return
+  const root = paletteEl.value
+  if (!root) return
+  const focusable = Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((el) => !el.hasAttribute('disabled') && el.getClientRects().length > 0)
+  if (!focusable.length) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!root.contains(document.activeElement)) {
+    e.preventDefault()
+    first.focus()
+    return
+  }
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+    return
+  }
+  if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+
 onMounted(async () => {
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   await nextTick()
   input.value?.focus()
   run('')
+})
+
+onUnmounted(() => {
+  previousFocus?.focus({ preventScroll: true })
+  previousFocus = null
 })
 
 function move(delta: number): void {
@@ -144,8 +180,15 @@ function commit(): void {
 </script>
 
 <template>
-  <div class="scrim" @click.self="emit('close')">
-    <div class="palette ticked" role="dialog" aria-modal="true" aria-label="Symbol search">
+  <div class="scrim" role="presentation" @click.self="emit('close')">
+    <div
+      ref="paletteEl"
+      class="palette ticked"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Symbol search"
+      @keydown="onKeydown"
+    >
       <div class="field">
         <AppIcon class="glyph" name="search" :size="18" />
         <input
@@ -153,27 +196,29 @@ function commit(): void {
           v-model="q"
           class="input"
           type="text"
+          aria-label="Search symbols and views"
           :placeholder="`Search ${symbolCount ?? 'all'} symbols · SPY · AAPL · NVDA`"
           autocomplete="off"
           spellcheck="false"
+          aria-describedby="search-results-count"
           @keydown.down.prevent="move(1)"
           @keydown.up.prevent="move(-1)"
           @keydown.enter.prevent="commit"
           @keydown.esc.prevent="emit('close')"
         />
-        <span class="label state">{{
+        <span id="search-results-count" class="label state" role="status" aria-live="polite">{{
           busy ? 'SCANNING' : `${displayHits.length} TICKER${displayHits.length === 1 ? '' : 'S'}`
         }}</span>
       </div>
 
-      <p v-if="err" class="err label">{{ err }}</p>
+      <p v-if="err" class="err label" role="alert" aria-live="assertive">{{ err }}</p>
 
       <div v-else class="results-scroll">
         <div v-if="matchingViews.length" class="section-block">
           <header class="section-head label">VIEWS &amp; COMMANDS</header>
           <ul class="cmd-list">
             <li v-for="v in matchingViews" :key="v.name">
-              <button class="cmd-hit" type="button" @click="openView(v.name)">
+              <button class="cmd-hit" type="button" @click="openView(v.name)" @focus="cursor = 0">
                 <span class="cmd-idx fig">{{ v.idx }}</span>
                 <span class="cmd-title label">{{ v.title }}</span>
                 <span class="cmd-hint label">{{ v.hint }}</span>
@@ -192,6 +237,7 @@ function commit(): void {
                 class="hit"
                 :class="{ on: i === cursor, free: !h.n_bars }"
                 @mouseenter="cursor = i"
+                @focus="cursor = i"
                 @click="emit('select', h.symbol)"
               >
                 <span class="sym fig">{{ h.symbol }}</span>
@@ -254,16 +300,6 @@ function commit(): void {
     var(--glass-specular);
   overflow: hidden;
   animation: rise var(--dur) var(--ease-out) both;
-}
-
-.field {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  padding: var(--s3) var(--s4);
-  border-bottom: var(--hair) solid var(--rule);
-  /* Solid child of the glass palette — no backdrop blur. */
-  background: var(--void-lift);
 }
 
 .field {
@@ -482,7 +518,7 @@ kbd {
 
 .cmd-hit:focus-visible,
 .hit:focus-visible {
-  outline: var(--hair) solid var(--phosphor);
+  outline: var(--focus-ring);
   outline-offset: -2px;
 }
 

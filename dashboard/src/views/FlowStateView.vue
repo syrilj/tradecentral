@@ -444,10 +444,7 @@ const staleReason = computed(() =>
 
     <template v-if="available">
       <!-- 2. Validation / phenomenon panel -->
-      <Panel
-        label="Validation: Matched-control phenomenon"
-        meta="Phase 2 statistical test, not ML"
-      >
+      <Panel label="Validation: Matched-control phenomenon" meta="Phase 2 statistical test, not ML">
         <template v-if="phenomenon?.tested">
           <div class="readout-grid">
             <Readout
@@ -477,7 +474,13 @@ const staleReason = computed(() =>
           </div>
 
           <div v-if="ciChart" ref="ciHostRef" class="ci-chart-host">
-            <svg role="img" aria-label="Flow state chart." :width="ciW" :height="ciH" class="ci-svg">
+            <svg
+              role="img"
+              aria-label="Flow state chart."
+              :width="ciW"
+              :height="ciH"
+              class="ci-svg"
+            >
               <line :x1="0" :x2="ciW" :y1="ciChart.midY" :y2="ciChart.midY" class="ci-axis" />
               <line :x1="ciChart.zeroX" :x2="ciChart.zeroX" :y1="6" :y2="ciH - 6" class="ci-zero" />
               <line
@@ -689,7 +692,13 @@ const staleReason = computed(() =>
       >
         <template v-if="barrierChart">
           <div ref="barrierHostRef" class="barrier-chart-host">
-            <svg role="img" aria-label="Flow state chart." :width="barW" :height="barH" class="barrier-svg">
+            <svg
+              role="img"
+              aria-label="Flow state chart."
+              :width="barW"
+              :height="barH"
+              class="barrier-svg"
+            >
               <g v-for="t in barrierChart.priceTicks" :key="t.y">
                 <line :x1="52" :x2="barW" :y1="t.y" :y2="t.y" class="barrier-gridline" />
                 <text :x="0" :y="t.y + 3" class="barrier-tick label">{{ t.label }}</text>
@@ -813,14 +822,16 @@ const staleReason = computed(() =>
       </Panel>
 
       <!-- 7. Impact response panel -->
-      <Panel
-        label="Impact response"
-        meta="event-study, pooled across symbols"
-        :delay="130"
-      >
+      <Panel label="Impact response" meta="event-study, pooled across symbols" :delay="130">
         <template v-if="impactChart">
           <div ref="impactHostRef" class="impact-chart-host">
-            <svg role="img" aria-label="Flow state chart." :width="impW" :height="impH" class="impact-svg">
+            <svg
+              role="img"
+              aria-label="Flow state chart."
+              :width="impW"
+              :height="impH"
+              class="impact-svg"
+            >
               <g v-for="t in impactChart.yTicks" :key="t.y">
                 <line :x1="44" :x2="impW" :y1="t.y" :y2="t.y" class="barrier-gridline" />
                 <text :x="0" :y="t.y + 3" class="barrier-tick label">{{ t.label }}</text>
@@ -843,8 +854,8 @@ const staleReason = computed(() =>
         <p v-else class="state label dim">No impact-curve samples in this run.</p>
         <p class="chart-caption label">
           Mean cumulative return at lags 1–10 sessions after a SHOCK, with a normal-approximation
-          95% band, pooled sample-size-weighted across symbols. Descriptive event-study curve, not
-          a causal impact estimate.
+          95% band, pooled sample-size-weighted across symbols. Descriptive event-study curve, not a
+          causal impact estimate.
         </p>
       </Panel>
 

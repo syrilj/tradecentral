@@ -1030,7 +1030,10 @@ const symbolInsight = computed(() => {
                 @click="loadSymbol(row.symbol)"
               >
                 <td class="row-select-cell fig sym">
-  <button type="button" class="row-select-btn" @click.stop="loadSymbol(row.symbol)"><span class="sr-only">Select row</span></button>{{ row.symbol }}</td>
+                  <button type="button" class="row-select-btn" @click.stop="loadSymbol(row.symbol)">
+                    <span class="sr-only">Select row</span></button
+                  >{{ row.symbol }}
+                </td>
                 <td class="fig num break-cell">
                   <span class="break-bar"
                     ><i :style="{ width: `${Math.min(100, Math.max(0, row.break_prob * 100))}%` }"

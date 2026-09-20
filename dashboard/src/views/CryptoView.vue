@@ -201,7 +201,9 @@ const kalmanSlopePct = computed(() => {
   return Number(v)
 })
 
-const kalmanAsOf = computed(() => kalmanPayload.value?.now?.date ?? kalmanPayload.value?.last_date ?? null)
+const kalmanAsOf = computed(
+  () => kalmanPayload.value?.now?.date ?? kalmanPayload.value?.last_date ?? null,
+)
 const kalmanGenerated = computed(() => kalmanPayload.value?.generated_at ?? null)
 const kalmanUnavailable = computed(() => {
   const d = kalmanPayload.value
@@ -292,7 +294,9 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
           </button>
         </div>
         <div class="combined" :class="cotLeanTone(spotRead.combined.lean)">
-          <span class="combined-kind label">{{ kindCopy(spotRead.combined.kind) }} combined read</span>
+          <span class="combined-kind label"
+            >{{ kindCopy(spotRead.combined.kind) }} combined read</span
+          >
           <span class="combined-value">{{ spotRead.combined.label }}</span>
           <span class="combined-evidence">
             <span class="ev">
@@ -388,10 +392,7 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
           text="Constant-velocity Kalman filter on the focus coin. The traded statistic is slope / rolling noise (z), scale-tested on ~$50k BTC so dollar level does not change the read. |z| ≥ 1.0 is trend; inside that band is chop. Non-finite scores render as unmeasured, never 0."
           align="right"
         />
-        <RouterLink
-          class="filter-btn label"
-          :to="{ name: 'kalman', query: { symbol: focusCoin } }"
-        >
+        <RouterLink class="filter-btn label" :to="{ name: 'kalman', query: { symbol: focusCoin } }">
           Open Kalman ↗
         </RouterLink>
       </template>
@@ -402,12 +403,15 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
       />
       <p v-else-if="kalmanRes.error.value" class="err">{{ kalmanRes.error.value }}</p>
       <p v-else-if="kalmanUnavailable" class="note pad">
-        Kalman unmeasured for {{ focusCoin }}{{ kalmanUnavailable ? ` — ${kalmanUnavailable}` : '' }}.
+        Kalman unmeasured for {{ focusCoin
+        }}{{ kalmanUnavailable ? ` — ${kalmanUnavailable}` : '' }}.
       </p>
       <template v-else>
         <div class="gauge-row">
           <div class="gauge-fig">
-            <span class="gauge-val fig" :class="kalmanTone">{{ num(spotRead.kalman.value, 2) }}</span>
+            <span class="gauge-val fig" :class="kalmanTone">{{
+              num(spotRead.kalman.value, 2)
+            }}</span>
             <span class="gauge-lab label">slope / noise z</span>
           </div>
           <ZGauge class="gauge" :value="spotRead.kalman.value" :cutoff="1" band-label="chop" />
@@ -426,7 +430,9 @@ const kalmanTone = computed<'pos' | 'neg' | 'flat'>(() => {
           <Readout
             label="Trend read"
             :value="trendCopy(spotRead.kalman.read)"
-            :sub="spotRead.kalman.read === 'UNMEASURED' ? 'unmeasured' : kindCopy(spotRead.kalman.kind)"
+            :sub="
+              spotRead.kalman.read === 'UNMEASURED' ? 'unmeasured' : kindCopy(spotRead.kalman.kind)
+            "
             :tone="kalmanTone"
             size="sm"
           />

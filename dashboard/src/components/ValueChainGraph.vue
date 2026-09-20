@@ -19,6 +19,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'select-node', symbol: string): void
+  (e: 'focus-node', symbol: string): void
 }>()
 
 const hoveredSymbol = ref<string | null>(null)
@@ -50,6 +51,8 @@ const columnLabels = [
   'Core Driver & Partners',
   'Downstream & Customers',
 ]
+
+const CANVAS_WIDTH = 1080
 
 interface LayoutNode extends SupplyChainNode {
   col: number
@@ -200,12 +203,18 @@ const computedEdges = computed((): ComputedEdge[] => {
         d = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`
       } else {
         // Same Column Lateral / Peer Arc (Arcs into gutter without crossing cards)
+        // Ensure curves for Column 3 and other columns stay comfortably within visible SVG viewport
+        const isLastCol = src.col === 3
+        const rowDiff = Math.abs(tgt.row - src.row)
+        // With cards ending at 960px in Column 3 and canvas width 1080px,
+        // we cap arcDist so cx1/cx2 never exceed 1005px, keeping >70px right padding
+        const maxArc = isLastCol ? 40 : 52
+        const arcDist = 20 + Math.min(maxArc - 20, rowDiff * 10)
+
         x1 = src.x + cardWidth
         y1 = src.y + (y1 < y2 ? 22 : 50)
         x2 = tgt.x + cardWidth + 5
         y2 = tgt.y + (y1 < y2 ? 50 : 22)
-        const rowDiff = Math.abs(tgt.row - src.row)
-        const arcDist = 26 + Math.min(36, rowDiff * 12)
         cx1 = x1 + arcDist
         cy1 = y1
         cx2 = x2 + arcDist
@@ -213,8 +222,9 @@ const computedEdges = computed((): ComputedEdge[] => {
         d = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`
       }
 
-      // Exact midpoint on cubic Bezier at t = 0.5
-      const midX = 0.125 * x1 + 0.375 * cx1 + 0.375 * cx2 + 0.125 * x2
+      // Exact midpoint on cubic Bezier at t = 0.5, clamped to keep pill within canvas bounds
+      const rawMidX = 0.125 * x1 + 0.375 * cx1 + 0.375 * cx2 + 0.125 * x2
+      const midX = Math.max(90, Math.min(CANVAS_WIDTH - 90, rawMidX))
       const midY = 0.125 * y1 + 0.375 * cy1 + 0.375 * cy2 + 0.125 * y2
 
       return {
@@ -331,8 +341,8 @@ function isNodeConnected(symbol: string): boolean {
         role="img"
         aria-label="Value chain graph: suppliers, the company, and its customers as linked nodes."
         class="graph-svg"
-        :style="{ height: `${totalHeight}px` }"
-        :viewBox="`0 0 1020 ${totalHeight}`"
+        :style="{ width: `${CANVAS_WIDTH}px`, height: `${totalHeight}px` }"
+        :viewBox="`0 0 ${CANVAS_WIDTH} ${totalHeight}`"
         preserveAspectRatio="xMinYMin meet"
       >
         <defs>
@@ -466,11 +476,15 @@ function isNodeConnected(symbol: string): boolean {
       </div>
 
       <!-- HTML Node Overlays for High-Density Interactive Cards -->
-      <div class="nodes-overlay" :style="{ height: `${totalHeight}px` }">
+      <div class="nodes-overlay" :style="{ width: `${CANVAS_WIDTH}px`, height: `${totalHeight}px` }">
         <div
           v-for="n in layoutNodes"
           :key="n.symbol"
           class="node-card"
+          tabindex="0"
+          role="button"
+          :aria-label="`Select ${n.symbol} - ${n.name}`"
+          :aria-pressed="selectedSymbol === n.symbol"
           :class="{
             selected: selectedSymbol === n.symbol,
             hovered: hoveredSymbol === n.symbol,
@@ -478,7 +492,11 @@ function isNodeConnected(symbol: string): boolean {
             focal: n.is_focus,
           }"
           :style="{ left: `${n.x}px`, top: `${n.y}px` }"
+          title="Click or press Enter to view citations, double-click to focus chain"
           @click="emit('select-node', n.symbol)"
+          @dblclick="emit('focus-node', n.symbol)"
+          @keydown.enter="emit('select-node', n.symbol)"
+          @keydown.space.prevent="emit('select-node', n.symbol)"
           @mouseenter="hoveredSymbol = n.symbol"
           @mouseleave="hoveredSymbol = null"
         >
@@ -500,6 +518,18 @@ function isNodeConnected(symbol: string): boolean {
             >
               Sens: {{ n.metrics.elasticity_score.toFixed(0) }}
             </span>
+            <button
+              v-if="!n.is_focus"
+              type="button"
+              class="node-focus-tag"
+              :aria-label="`Focus value chain on ${n.symbol}`"
+              title="Focus value chain on this stock"
+              @click.stop="emit('focus-node', n.symbol)"
+              @keydown.enter.stop="emit('focus-node', n.symbol)"
+              @keydown.space.stop.prevent="emit('focus-node', n.symbol)"
+            >
+              Focus
+            </button>
           </div>
         </div>
       </div>
@@ -625,6 +655,11 @@ function isNodeConnected(symbol: string): boolean {
   color: var(--phosphor);
 }
 
+.tier-filter-btn:focus-visible {
+  outline: 2px solid var(--accent, var(--phosphor));
+  outline-offset: 1px;
+}
+
 .graph-scroll-surface {
   position: relative;
   overflow-x: auto;
@@ -636,7 +671,7 @@ function isNodeConnected(symbol: string): boolean {
 }
 
 .graph-svg {
-  width: 1020px;
+  width: 1080px;
   display: block;
 }
 
@@ -691,7 +726,7 @@ function isNodeConnected(symbol: string): boolean {
   position: absolute;
   top: 0;
   left: 0;
-  width: 1020px;
+  width: 1080px;
   pointer-events: none;
 }
 
@@ -715,6 +750,12 @@ function isNodeConnected(symbol: string): boolean {
   background: var(--panel-hi);
   border-color: var(--rule-hi);
   transform: translateY(-1px);
+}
+
+.node-card:focus-visible {
+  outline: 2px solid var(--accent, var(--phosphor));
+  outline-offset: 2px;
+  z-index: 15;
 }
 
 .node-card.selected {
@@ -807,5 +848,29 @@ function isNodeConnected(symbol: string): boolean {
 .tone-down {
   background: var(--short-wash);
   color: var(--short);
+}
+
+.node-focus-tag {
+  background: var(--void-lift);
+  border: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--t-nano);
+  padding: 0.05rem 0.3rem;
+  cursor: pointer;
+  border-radius: 2px;
+  line-height: 1.1;
+  transition: all 0.15s ease;
+}
+
+.node-focus-tag:hover {
+  background: var(--phosphor-wash);
+  color: var(--phosphor);
+  border-color: var(--phosphor);
+}
+
+.node-focus-tag:focus-visible {
+  outline: 2px solid var(--accent, var(--phosphor));
+  outline-offset: 1px;
 }
 </style>

@@ -138,7 +138,9 @@ export interface PrimaryBadgeVisual {
 export function parsePrimaryRegimeBadge(
   regime: PrimaryRegimeType | string | null | undefined,
 ): PrimaryBadgeVisual {
-  const raw = String(regime || '').trim().toLowerCase()
+  const raw = String(regime || '')
+    .trim()
+    .toLowerCase()
   switch (raw) {
     case 'bull_trend':
     case 'bullish_trend':
@@ -315,11 +317,10 @@ export function parseAgreementVisuals(
   const totalModels =
     (agreement.agreeingModels?.length ?? 0) + (agreement.conflictingModels?.length ?? 0)
   const consensusRatio =
-    totalModels > 0
-      ? `${agreement.agreeingModels?.length ?? 0}/${totalModels}`
-      : `${scorePct}%`
+    totalModels > 0 ? `${agreement.agreeingModels?.length ?? 0}/${totalModels}` : `${scorePct}%`
   const summary =
-    agreement.divergenceSummary || (hasConflict ? 'Model divergence detected' : 'Models in consensus')
+    agreement.divergenceSummary ||
+    (hasConflict ? 'Model divergence detected' : 'Models in consensus')
 
   return {
     scorePct,

@@ -55,9 +55,7 @@ const emit = defineEmits<{
     </div>
 
     <div class="card-footer">
-      <button type="button" class="view-all-btn" @click="emit('view-all')">
-        View All Alerts
-      </button>
+      <button type="button" class="view-all-btn" @click="emit('view-all')">View All Alerts</button>
     </div>
   </div>
 </template>

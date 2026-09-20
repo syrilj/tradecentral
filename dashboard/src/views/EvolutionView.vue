@@ -137,7 +137,9 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
               @click="selectRun(r)"
             >
               <td class="row-select-cell fig name">
-  <button type="button" class="row-select-btn" @click.stop="selectRun(r)"><span class="sr-only">Select row</span></button>
+                <button type="button" class="row-select-btn" @click.stop="selectRun(r)">
+                  <span class="sr-only">Select row</span>
+                </button>
                 <div class="run-id">{{ r.run_id }}</div>
                 <div class="dim tiny">
                   {{ r.created_at ? age(String(r.created_at)) : DASH }} ago
@@ -165,7 +167,14 @@ function geneLine(g: import('@/api').GaGenes | Record<string, unknown> | undefin
         :delay="80"
         class="chart-panel"
       >
-        <svg v-if="spark" role="img" aria-label="Strategy evolution over time." class="spark" viewBox="0 0 280 56" preserveAspectRatio="none">
+        <svg
+          v-if="spark"
+          role="img"
+          aria-label="Strategy evolution over time."
+          class="spark"
+          viewBox="0 0 280 56"
+          preserveAspectRatio="none"
+        >
           <path :d="spark" fill="none" stroke="currentColor" stroke-width="1.5" />
         </svg>
         <p v-else class="note">Run an evolution job to plot best-fitness by generation.</p>

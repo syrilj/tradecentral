@@ -55,7 +55,12 @@ const title = computed(() => {
 
 const steps = computed<TrajectoryStep[]>(() => {
   const sym = props.symbol || 'SPY'
-  if (props.spot == null && props.gammaFlip == null && props.callWall == null && props.putWall == null) {
+  if (
+    props.spot == null &&
+    props.gammaFlip == null &&
+    props.callWall == null &&
+    props.putWall == null
+  ) {
     return []
   }
   const flip = props.gammaFlip

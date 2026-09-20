@@ -85,16 +85,26 @@ describe('suggest display helpers (shipped)', () => {
   it('keeps prices and source tags in separate display helpers', () => {
     expect(formatSetupPrice(490)).toBe('$490.00')
     expect(formatSetupPrice(null)).toBe(UNMEASURED)
-    expect(formatPriceList([{ price: 505, source: 'positions' }, { price: 495, source: 'options GEX' }])).toBe(
-      '$505.00 · $495.00',
-    )
-    expect(compactPriceList([{ price: 510, source: 'options GEX' }, { price: 525, source: 'positions' }])).toBe(
-      '$510.00 +1',
-    )
+    expect(
+      formatPriceList([
+        { price: 505, source: 'positions' },
+        { price: 495, source: 'options GEX' },
+      ]),
+    ).toBe('$505.00 · $495.00')
+    expect(
+      compactPriceList([
+        { price: 510, source: 'options GEX' },
+        { price: 525, source: 'positions' },
+      ]),
+    ).toBe('$510.00 +1')
     expect(compactPriceList([{ price: 510, source: 'options GEX' }])).toBe('$510.00')
     expect(levelSourceImplication('positions', 'strike', 'call')).toContain('Open-interest')
-    expect(levelSourceImplication('put_wall', 'invalidation', 'call')).toContain('long call is wrong')
-    expect(levelSourceImplication('options GEX', 'support', 'put')).toContain('harvest zone for a long put')
+    expect(levelSourceImplication('put_wall', 'invalidation', 'call')).toContain(
+      'long call is wrong',
+    )
+    expect(levelSourceImplication('options GEX', 'support', 'put')).toContain(
+      'harvest zone for a long put',
+    )
     expect(levelSourceImplication('call_wall', 'take_profit', 'call')).toContain('harvest zone')
     expect(gexMagnetCopy('call_wall', 'call')).toContain('take-profit magnet')
     expect(gexMagnetCopy('put_wall', 'call')).toContain('Invalidation for a long call')

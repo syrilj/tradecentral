@@ -20,6 +20,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'select-ticker', symbol: string): void
   (e: 'inspect-evidence', symbol: string): void
+  (e: 'focus-ticker', symbol: string): void
 }>()
 
 const router = useRouter()
@@ -247,6 +248,14 @@ function navMarket(symbol: string) {
 
             <td class="col-actions" @click.stop>
               <div class="action-buttons">
+                <button
+                  type="button"
+                  class="action-btn focus-chain-btn"
+                  title="Focus value chain on this stock"
+                  @click="emit('focus-ticker', n.symbol)"
+                >
+                  CHAIN
+                </button>
                 <button
                   type="button"
                   class="action-btn"
@@ -571,6 +580,17 @@ td {
   background: var(--panel-raise);
   color: var(--ink);
   border-color: var(--rule-hi);
+}
+
+.action-btn.focus-chain-btn {
+  background: var(--phosphor-wash);
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+}
+
+.action-btn.focus-chain-btn:hover {
+  background: var(--phosphor);
+  color: var(--void);
 }
 
 .empty-state {

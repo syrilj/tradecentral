@@ -40,13 +40,17 @@ const xOf = (h: number): number =>
 const icPad = 0.002
 const icLo = computed(() => Math.min(...model.value.rows.map((r) => r.meanIc)) - icPad)
 const icHi = computed(() => Math.max(...model.value.rows.map((r) => r.meanIc)) + icPad)
-const yOf = computed(() => (ic: number): number =>
-  PAD.t + ((icHi.value - ic) / (icHi.value - icLo.value)) * plotH,
+const yOf = computed(
+  () =>
+    (ic: number): number =>
+      PAD.t + ((icHi.value - ic) / (icHi.value - icLo.value)) * plotH,
 )
 
 const linePath = computed(() =>
   model.value.rows
-    .map((r, i) => `${i === 0 ? 'M' : 'L'}${xOf(r.days).toFixed(1)},${yOf.value(r.meanIc).toFixed(1)}`)
+    .map(
+      (r, i) => `${i === 0 ? 'M' : 'L'}${xOf(r.days).toFixed(1)},${yOf.value(r.meanIc).toFixed(1)}`,
+    )
     .join(''),
 )
 const areaPath = computed(

@@ -9,8 +9,11 @@ import {
   relationshipLabel,
   optionsSkewLabel,
   rankBeneficiaries,
+  formatContractValue,
+  strengthTone,
+  generateRelationshipNarrative,
 } from '@/chainDisplay'
-import type { SupplyChainNode } from '@/api'
+import type { SupplyChainEdge, SupplyChainNode } from '@/api'
 
 describe('chainDisplay helpers', () => {
   it('formats tier labels and badge classes properly', () => {
@@ -135,5 +138,64 @@ describe('chainDisplay helpers', () => {
 
     const highElasticity = rankBeneficiaries(mockNodes, undefined, 90)
     expect(highElasticity.map((n) => n.symbol)).toEqual(['AAOI', 'LITE'])
+  })
+
+  it('formats contract value and computes strength tone', () => {
+    expect(formatContractValue(null)).toBe('—')
+    expect(formatContractValue(undefined)).toBe('—')
+    expect(formatContractValue(Number.NaN)).toBe('—')
+    expect(formatContractValue(180)).toBe('$180M / yr')
+    expect(formatContractValue(1250)).toBe('$1.3B / yr')
+
+    expect(strengthTone(null)).toBe('mid')
+    expect(strengthTone(0.95)).toBe('high')
+    expect(strengthTone(0.8)).toBe('high')
+    expect(strengthTone(0.65)).toBe('mid')
+    expect(strengthTone(0.5)).toBe('mid')
+    expect(strengthTone(0.35)).toBe('low')
+  })
+
+  it('generates institutional relationship narrative', () => {
+    const edge: SupplyChainEdge = {
+      id: 'e1',
+      source: 'AAOI',
+      target: 'NVDA',
+      relationship: 'supplies_to',
+      strength: 0.9,
+      supply_category: '800G Transceivers',
+      annual_contract_value_est_m: 240,
+      evidence_count: 3,
+    }
+    const node: SupplyChainNode = {
+      symbol: 'AAOI',
+      name: 'Applied Optoelectronics',
+      sector: 'Technology',
+      sub_industry: 'Optical Transceivers',
+      tier: 'tier1_supplier',
+      market_cap_billions: 1.8,
+      metrics: {
+        elasticity_score: null,
+        capex_sensitivity: null,
+        revenue_concentration_pct: 35.5,
+        operating_leverage: null,
+        forward_pe: null,
+        peg_ratio: null,
+        gross_margin_trend: null,
+        yoy_revenue_growth: null,
+        next_earnings_date: null,
+        flow_sentiment_score: null,
+        options_skew: null,
+      },
+      evidence: [],
+    }
+
+    const narrative = generateRelationshipNarrative(edge, node)
+    expect(narrative).toContain('AAOI')
+    expect(narrative).toContain('NVDA')
+    expect(narrative).toContain('supplies to')
+    expect(narrative).toContain('800G Transceivers')
+    expect(narrative).toContain('90% dependency link')
+    expect(narrative).toContain('$240M')
+    expect(narrative).toContain('35.5%')
   })
 })

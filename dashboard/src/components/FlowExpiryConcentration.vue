@@ -18,7 +18,9 @@ const expanded = ref(false)
 const hasMoreExpiries = computed(() => props.concentration.expiries.length > VISIBLE_ROWS)
 
 const visibleExpiries = computed(() =>
-  expanded.value ? props.concentration.expiries : props.concentration.expiries.slice(0, VISIBLE_ROWS),
+  expanded.value
+    ? props.concentration.expiries
+    : props.concentration.expiries.slice(0, VISIBLE_ROWS),
 )
 
 const horizonBarLabel = computed(

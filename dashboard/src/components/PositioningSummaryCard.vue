@@ -51,7 +51,13 @@ const resolvedDealerBias = computed(() => {
         <span class="pos-label font-mono">Dealer Positioning</span>
         <span
           class="pos-pill font-mono font-bold"
-          :class="regime === 'long' ? 'pill-bullish' : regime === 'short' ? 'pill-bearish' : 'pill-neutral'"
+          :class="
+            regime === 'long'
+              ? 'pill-bullish'
+              : regime === 'short'
+                ? 'pill-bearish'
+                : 'pill-neutral'
+          "
         >
           {{ dealerPositioning }}
         </span>
@@ -62,7 +68,9 @@ const resolvedDealerBias = computed(() => {
         <span class="pos-label font-mono">Dealer Bias</span>
         <span
           class="pos-pill font-mono font-bold"
-          :class="regime === 'long' ? 'pill-bullish' : regime === 'short' ? 'pill-warn' : 'pill-neutral'"
+          :class="
+            regime === 'long' ? 'pill-bullish' : regime === 'short' ? 'pill-warn' : 'pill-neutral'
+          "
         >
           {{ resolvedDealerBias }}
         </span>
@@ -73,7 +81,13 @@ const resolvedDealerBias = computed(() => {
         <span class="pos-label font-mono">Crowd Positioning</span>
         <span
           class="pos-pill font-mono font-bold"
-          :class="crowdPositioning ? (crowdPositioning.toLowerCase().includes('bull') ? 'pill-bullish' : 'pill-bearish') : 'pill-neutral'"
+          :class="
+            crowdPositioning
+              ? crowdPositioning.toLowerCase().includes('bull')
+                ? 'pill-bullish'
+                : 'pill-bearish'
+              : 'pill-neutral'
+          "
         >
           {{ crowdPositioning ?? DASH }}
         </span>
@@ -84,7 +98,13 @@ const resolvedDealerBias = computed(() => {
         <span class="pos-label font-mono">Smart Money Flow</span>
         <span
           class="pos-pill font-mono font-bold"
-          :class="smartMoneyFlow ? (smartMoneyFlow.toLowerCase().includes('bull') ? 'pill-bullish' : 'pill-bearish') : 'pill-neutral'"
+          :class="
+            smartMoneyFlow
+              ? smartMoneyFlow.toLowerCase().includes('bull')
+                ? 'pill-bullish'
+                : 'pill-bearish'
+              : 'pill-neutral'
+          "
         >
           {{ smartMoneyFlow ?? DASH }}
         </span>
@@ -95,7 +115,9 @@ const resolvedDealerBias = computed(() => {
         <span class="pos-label font-mono">Net Delta (All Exp)</span>
         <span
           class="delta-val font-mono font-bold"
-          :class="netDeltaM == null ? 'text-ink-dim' : netDeltaM >= 0 ? 'text-call-hi' : 'text-put-hi'"
+          :class="
+            netDeltaM == null ? 'text-ink-dim' : netDeltaM >= 0 ? 'text-call-hi' : 'text-put-hi'
+          "
         >
           {{ netDeltaM != null ? `${optSigned(netDeltaM, 1)}M` : DASH }}
         </span>

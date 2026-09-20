@@ -259,9 +259,7 @@ export function formatRiskReward(rr: number | string | null | undefined): string
 /** Humanise snake_case detector IDs into readable signal names. */
 export function humaniseSignal(signal: string): string {
   if (!signal) return DASH
-  return signal
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
+  return signal.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 /** Normalise arbitrary bias or direction strings into a strict VpaStance. */
@@ -297,23 +295,14 @@ export function readVpa(result: VpaAnalysisResult | null | undefined): VpaRead |
   const stance = normaliseStance(biasStr || primaryDir || result.dominant_sentiment)
 
   const stanceTone: VpaTone =
-    stance === 'long'
-      ? 'pos'
-      : stance === 'short'
-        ? 'neg'
-        : cScore === null
-          ? 'flat'
-          : 'warn'
+    stance === 'long' ? 'pos' : stance === 'short' ? 'neg' : cScore === null ? 'flat' : 'warn'
 
-  const stanceLabel =
-    stance === 'long' ? 'LONG' : stance === 'short' ? 'SHORT' : 'NEUTRAL'
+  const stanceLabel = stance === 'long' ? 'LONG' : stance === 'short' ? 'SHORT' : 'NEUTRAL'
 
   // Summary headline
   const likelyMove = result.primary_scenario?.likely_move?.trim()
   const summaryHeadline =
-    likelyMove &&
-    likelyMove.length > 0 &&
-    !likelyMove.toLowerCase().includes('not computed')
+    likelyMove && likelyMove.length > 0 && !likelyMove.toLowerCase().includes('not computed')
       ? likelyMove
       : cScore === null
         ? 'No historical bars analysed — select an available timeframe or upload a chart'

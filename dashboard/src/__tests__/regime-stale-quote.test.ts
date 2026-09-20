@@ -48,7 +48,12 @@ describe('stale quote provenance in the regime ribbon', () => {
   })
 
   it('treats a missing quality as live rather than accusing a good quote', async () => {
-    const text = await render({ symbol: 'SPY', spot: 765.41, dayChangeDollar: 5.35, dayChangePct: 0.7 })
+    const text = await render({
+      symbol: 'SPY',
+      spot: 765.41,
+      dayChangeDollar: 5.35,
+      dayChangePct: 0.7,
+    })
     expect(text).not.toMatch(/STALE/)
   })
 })

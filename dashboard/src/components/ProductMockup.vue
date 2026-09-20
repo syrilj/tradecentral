@@ -94,7 +94,9 @@ const queue = [
               ><b>{{ g.sym }}</b
               ><small>{{ g.label }}</small></span
             >
-            <svg aria-hidden="true" viewBox="0 0 48 20" preserveAspectRatio="none"><path :d="g.d" /></svg>
+            <svg aria-hidden="true" viewBox="0 0 48 20" preserveAspectRatio="none">
+              <path :d="g.d" />
+            </svg>
           </span>
         </header>
 

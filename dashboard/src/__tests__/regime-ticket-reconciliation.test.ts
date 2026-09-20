@@ -52,14 +52,14 @@ describe('expected move basis labelling', () => {
     const em = computeRuleOf16ExpectedMove(168.2, 88.0, 15.7)!
     expect(em.ivBasis).toBe('atm_iv')
     expect(em.ivBasisLabel).toBe('ATM IV 88.0% / 16')
-    expect(em.em1dDollars).toBeCloseTo(168.2 * 0.88 / 16, 4)
+    expect(em.em1dDollars).toBeCloseTo((168.2 * 0.88) / 16, 4)
   })
 
   it('reports vix_proxy only when it actually fell back to VIX', () => {
     const em = computeRuleOf16ExpectedMove(168.2, null, 15.7)!
     expect(em.ivBasis).toBe('vix_proxy')
     expect(em.ivBasisLabel).toMatch(/^VIX 15\.7 \/ 16$/)
-    expect(em.em1dDollars).toBeCloseTo(168.2 * 0.157 / 16, 4)
+    expect(em.em1dDollars).toBeCloseTo((168.2 * 0.157) / 16, 4)
   })
 
   it('the two bases are not interchangeable at single-name IV levels', () => {
@@ -69,7 +69,9 @@ describe('expected move basis labelling', () => {
   })
 
   it('the panel caption is driven by the basis rather than hard-coded', () => {
-    expect(regimeSrc).toMatch(/expectedMove\?\.ivBasis === 'vix_proxy' \? 'VIX \/ 16' : 'ATM IV \/ 16'/)
+    expect(regimeSrc).toMatch(
+      /expectedMove\?\.ivBasis === 'vix_proxy' \? 'VIX \/ 16' : 'ATM IV \/ 16'/,
+    )
     expect(regimeSrc).toMatch(/expectedMove\?\.ivBasisLabel/)
   })
 })

@@ -55,11 +55,7 @@ const ticks = computed(() => {
         :class="{ major: t === 0 }"
         :style="{ left: `${clampPct(t)}%` }"
       />
-      <span
-        v-if="markerPct != null"
-        class="zg-marker"
-        :style="{ left: `${markerPct}%` }"
-      />
+      <span v-if="markerPct != null" class="zg-marker" :style="{ left: `${markerPct}%` }" />
       <span v-else class="zg-absent">unmeasured</span>
     </div>
     <div class="zg-scale">

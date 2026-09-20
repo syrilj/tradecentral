@@ -274,11 +274,7 @@ const deskAction = computed(() => {
           <strong class="fig">{{ premium.callPct }}%</strong>
         </div>
         <div class="premium-center-ratio label">
-          <span
-            class="ratio-pill"
-            :class="ratioBadge.cls"
-            :title="ratioBadge.title"
-          >
+          <span class="ratio-pill" :class="ratioBadge.cls" :title="ratioBadge.title">
             {{ ratioBadge.text }}
           </span>
         </div>
@@ -348,7 +344,8 @@ const deskAction = computed(() => {
   border: var(--hair) solid var(--glass-border);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
   color: var(--ink);
-  transition: border-color var(--dur-fast) var(--ease-out),
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
     box-shadow var(--dur-fast) var(--ease-out),
     background var(--dur-fast) var(--ease-out);
   position: relative;
@@ -534,7 +531,9 @@ const deskAction = computed(() => {
   background: var(--void);
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-xs);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .premium-track i {
   height: 100%;
@@ -597,7 +596,8 @@ const deskAction = computed(() => {
   background: var(--glass-base);
   border: var(--hair) solid var(--glass-border);
   color: var(--ink-dim);
-  transition: color var(--dur-fast) var(--ease-out),
+  transition:
+    color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out),
     background var(--dur-fast) var(--ease-out);
 }

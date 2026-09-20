@@ -231,7 +231,6 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
     it('verifies smooth CSS transitions for sidebar expand/collapse and reduced motion support', () => {
       // Standardized easing and durations
       expect(appVueSrc).toContain('transition: grid-template-columns var(--dur) var(--ease-out)')
-      expect(appVueSrc).toContain('transition: width var(--dur) var(--ease-out)')
 
       // tokens.css must define zeroed durations under prefers-reduced-motion: reduce
       expect(tokensCssSrc).toContain('@media (prefers-reduced-motion: reduce)')

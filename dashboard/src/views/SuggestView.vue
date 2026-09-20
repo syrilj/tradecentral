@@ -140,9 +140,7 @@ function suggestionOf(row: LiveOpportunityRow): FlowSuggestion | null {
 
 function freshnessCopy(row: LiveOpportunityRow): string {
   if (row.freshness?.pass) return 'LIVE'
-  return planningMode.value
-    ? 'CLOSED'
-    : freshnessLabel(row.freshness?.status, row.freshness?.pass)
+  return planningMode.value ? 'CLOSED' : freshnessLabel(row.freshness?.status, row.freshness?.pass)
 }
 
 function actionCopy(row: LiveOpportunityRow): string {
@@ -334,9 +332,9 @@ const meta = computed(() => {
       <div v-if="flowTapeUnmeasured" class="planning-strip flow-missing">
         <span class="label">Flow tape unmeasured</span>
         <p>
-          The market-wide options tape returned no rows. CALL/PUT plans that come from flow stay
-          off this board until that tape is available. Board structure names remain; use All to
-          see them.
+          The market-wide options tape returned no rows. CALL/PUT plans that come from flow stay off
+          this board until that tape is available. Board structure names remain; use All to see
+          them.
         </p>
       </div>
 
@@ -392,11 +390,7 @@ const meta = computed(() => {
                 @click="selectRow(row.symbol)"
               >
                 <td class="row-select-cell">
-                  <button
-                    type="button"
-                    class="row-select-btn"
-                    @click.stop="selectRow(row.symbol)"
-                  >
+                  <button type="button" class="row-select-btn" @click.stop="selectRow(row.symbol)">
                     <span class="sr-only">Select {{ row.symbol }}</span>
                   </button>
                   <span class="fig sym">{{ row.symbol }}</span>
@@ -440,7 +434,10 @@ const meta = computed(() => {
                   <span
                     class="action-chip label wraps"
                     :class="{ paper: suggestionOf(row)?.paper_actionable, ready: row.live_ready }"
-                    :title="suggestionOf(row)?.contract_plan?.action?.replaceAll('_', ' ') || actionCopy(row)"
+                    :title="
+                      suggestionOf(row)?.contract_plan?.action?.replaceAll('_', ' ') ||
+                      actionCopy(row)
+                    "
                   >
                     {{ actionCopy(row) }}
                   </span>
@@ -467,7 +464,10 @@ const meta = computed(() => {
           <p v-else class="reason mute">
             Suggested from {{ active.playbook?.direction_source || 'price/model context' }}.
           </p>
-          <p v-if="suggestion.bias_right && !suggestion.bias_confirmed" class="bias-watch label wraps">
+          <p
+            v-if="suggestion.bias_right && !suggestion.bias_confirmed"
+            class="bias-watch label wraps"
+          >
             UNSIGNED {{ suggestion.bias_right.toUpperCase() }} BIAS · PAPER CANDIDATE · SIZING
             LOCKED
           </p>

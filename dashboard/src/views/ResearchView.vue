@@ -355,7 +355,13 @@ const chartTab = ref<'ic' | 'quantile'>('ic')
         <!-- QUANTILE SPREAD tab -->
         <template v-else-if="chartTab === 'quantile'">
           <div v-if="qChart" class="qwrap">
-            <svg role="img" aria-label="Research result chart." :viewBox="`0 0 100 ${Q_H}`" class="chart qchart" preserveAspectRatio="none">
+            <svg
+              role="img"
+              aria-label="Research result chart."
+              :viewBox="`0 0 100 ${Q_H}`"
+              class="chart qchart"
+              preserveAspectRatio="none"
+            >
               <line
                 v-for="t in qChart.yTicks"
                 :key="`qg-${t}`"

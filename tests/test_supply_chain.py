@@ -284,3 +284,90 @@ def test_spcx_dedicated_aerospace_ecosystem():
     assert "space_defense" in bridge_ids
 
 
+def test_arbitrary_ticker_dynamic_synthesis_and_beneficiaries():
+    """Verify any arbitrary uncurated ticker dynamically resolves a multi-tier chain and scored beneficiaries."""
+    import time
+    for test_sym in ["INTC", "QCOM", "ARM", "BA", "NFLX", "RKLB", "XYZUNKNOWN"]:
+        t0 = time.perf_counter()
+        payload = build_supply_chain_payload(symbol=test_sym, force_refresh=True)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+
+        # Sub-second latency requirement (<500ms)
+        assert elapsed_ms < 500.0, f"Query for {test_sym} took {elapsed_ms:.1f}ms (>500ms limit)"
+
+        assert payload is not None
+        assert payload["focal_entity"]["symbol"] == test_sym
+        assert payload["focal_entity"]["is_focus"] is True
+        assert payload["focal_entity"]["tier"] == "mega_driver"
+
+        nodes = payload["nodes"]
+        symbols = {n["symbol"] for n in nodes}
+        assert test_sym in symbols
+        assert len(nodes) >= 6
+
+        # Check multi-tier representation
+        tiers = {n.get("tier") for n in nodes}
+        assert "tier2_supplier" in tiers
+        assert "tier1_supplier" in tiers
+        assert "horizontal_enabler" in tiers or "downstream_customer" in tiers
+
+        # Check directional edges
+        edges = payload["edges"]
+        assert len(edges) >= 5
+        assert any(e["source"] == test_sym or e["target"] == test_sym for e in edges)
+
+        # Beneficiary elasticity: top_beneficiaries must contain only valid non-null entries,
+        # and unmeasured metrics must properly reflect None (never fake fallback numbers).
+        summary = payload["thematic_summary"]
+        assert len(summary["top_beneficiaries"]) >= 3
+        node_map = {n["symbol"]: n for n in nodes}
+        for b_sym in summary["top_beneficiaries"]:
+            b_node = node_map.get(b_sym)
+            assert b_node is not None, f"Beneficiary {b_sym} not in nodes for {test_sym}"
+            score = b_node.get("metrics", {}).get("elasticity_score")
+            assert score is not None and score > 0.0, (
+                f"Beneficiary {b_sym} must have a valid positive elasticity score, got {score} for {test_sym}"
+            )
+
+        for n in nodes:
+            if not n.get("is_focus"):
+                score = n.get("metrics", {}).get("elasticity_score")
+                assert score is None or score > 0.0, f"Node {n['symbol']} has invalid score: {score}"
+                if score is None:
+                    assert n["symbol"] not in summary["top_beneficiaries"], (
+                        f"Unmeasured node {n['symbol']} must not be in top_beneficiaries for {test_sym}"
+                    )
+
+
+def test_data_honesty_unmeasured_nodes_metrics():
+    """Verify that unmeasured peer/supply chain nodes return None instead of fabricated mock numbers."""
+    from edge.tools.supply_chain import _peer_node
+
+    # Build a peer node for a novel/uncurated symbol
+    node = _peer_node("NOVELTICKER99")
+    assert node["symbol"] == "NOVELTICKER99"
+    metrics = node["metrics"]
+    # Verify unmeasured metrics are None, not fabricated mock constants
+    assert metrics["capex_sensitivity"] is None
+    assert metrics["revenue_concentration_pct"] is None
+    assert metrics["operating_leverage"] is None
+    assert metrics["flow_sentiment_score"] is None
+    assert metrics["peg_ratio"] is None
+    assert metrics["elasticity_score"] is None
+
+    # Verify calculate_beneficiary_elasticity returns None for unmeasured node
+    elasticity = calculate_beneficiary_elasticity(node, "NOVELTICKER99")
+    assert elasticity is None
+
+    # Verify build_supply_chain_payload preserves None and does not inject fake scores
+    payload = build_supply_chain_payload(symbol="NOVELTICKER99", force_refresh=True)
+    summary = payload["thematic_summary"]
+    for sym in summary["top_beneficiaries"]:
+        b_node = next((n for n in payload["nodes"] if n["symbol"] == sym), None)
+        assert b_node is not None
+        assert b_node["metrics"]["elasticity_score"] is not None
+        assert b_node["metrics"]["elasticity_score"] > 0.0
+
+
+
+

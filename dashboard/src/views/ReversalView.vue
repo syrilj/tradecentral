@@ -42,11 +42,17 @@ function cleanTicker(term: string): string {
     .slice(0, 10)
 }
 
-const symbol = ref(typeof route.query.symbol === 'string' && route.query.symbol ? cleanTicker(route.query.symbol) : 'SPY')
+const symbol = ref(
+  typeof route.query.symbol === 'string' && route.query.symbol
+    ? cleanTicker(route.query.symbol)
+    : 'SPY',
+)
 const symbolInput = ref(symbol.value)
 const tf = ref<ReversalTf>(route.query.tf === '1h' ? '1h' : '1d')
 
-const res = useResource<ReversalPayload>(() => api.reversal(symbol.value, { tf: tf.value }), { intervalMs: 120_000 })
+const res = useResource<ReversalPayload>(() => api.reversal(symbol.value, { tf: tf.value }), {
+  intervalMs: 120_000,
+})
 const scanRunning = ref(false)
 const scan: Resource<ReversalScanPayload> = useResource<ReversalScanPayload>(
   () =>
@@ -84,25 +90,45 @@ watch(
   { immediate: true },
 )
 const read = computed<ReversalSideRead | null>(() => d.value?.reads?.[focusSide.value] ?? null)
-const tfLabel = computed(() => (tf.value === '1h' ? '1h bars · daily HTF' : 'daily bars · weekly HTF'))
+const tfLabel = computed(() =>
+  tf.value === '1h' ? '1h bars · daily HTF' : 'daily bars · weekly HTF',
+)
 const barUnit = computed(() => (tf.value === '1h' ? 'bars (1h)' : 'sessions'))
 
 const setupHeadline = computed(() => {
   const s = d.value?.setup
-  if (s === 'bottom') return { text: 'BOTTOM WATCH', sub: 'down-leg ≥ 3 ATR, structure still down — call side', tone: 'call' as const }
-  if (s === 'top') return { text: 'TOP WATCH', sub: 'up-leg ≥ 3 ATR, structure still up — put side', tone: 'put' as const }
-  return { text: 'NO QUALIFYING LEG', sub: 'price is not 3+ ATR into a swing leg; the study has no read here', tone: 'flat' as const }
+  if (s === 'bottom')
+    return {
+      text: 'BOTTOM WATCH',
+      sub: 'down-leg ≥ 3 ATR, structure still down — call side',
+      tone: 'call' as const,
+    }
+  if (s === 'top')
+    return {
+      text: 'TOP WATCH',
+      sub: 'up-leg ≥ 3 ATR, structure still up — put side',
+      tone: 'put' as const,
+    }
+  return {
+    text: 'NO QUALIFYING LEG',
+    sub: 'price is not 3+ ATR into a swing leg; the study has no read here',
+    tone: 'flat' as const,
+  }
 })
 
-const firedWithEdge = computed(() => (read.value?.triggers ?? []).filter((t) => t.fired && t.measured_edge === 'helps'))
+const firedWithEdge = computed(() =>
+  (read.value?.triggers ?? []).filter((t) => t.fired && t.measured_edge === 'helps'),
+)
 const firedAny = computed(() => (read.value?.triggers ?? []).filter((t) => t.fired))
 
 const verdict = computed(() => {
   const r = read.value
   if (!r || !d.value) return ''
-  if (!d.value.study?.available) return 'No study artifact for this timeframe — signals are drawn but nothing is measured.'
+  if (!d.value.study?.available)
+    return 'No study artifact for this timeframe — signals are drawn but nothing is measured.'
   const side = focusSide.value === 'bottom' ? 'calls' : 'puts'
-  if (!r.candidate) return `Not in a ${focusSide.value === 'bottom' ? 'down' : 'up'}-leg, so no ${side} read. Showing what the study measured for reference.`
+  if (!r.candidate)
+    return `Not in a ${focusSide.value === 'bottom' ? 'down' : 'up'}-leg, so no ${side} read. Showing what the study measured for reference.`
   const rk = r.rank
   if (rk?.tier && rk.tier_edge === 'helps') {
     return `Model ranks this bar in its ${tierLabel(rk.tier)} of ${focusSide.value} setups. Out of sample that tier hit the 2:1 target ${pp(rk.tier_rate)} of the time vs ${pp(rk.base_rate_test)} for all leg bars — the strongest measured read for adding ${side}. Stop goes under the leg extreme.`
@@ -152,7 +178,10 @@ const priceTicks = computed(() => niceTicks(priceDomain.value[0], priceDomain.va
 
 const candleW = computed(() => Math.max(1, Math.min(9, x.value.step * 0.62)))
 
-function stepLine(key: 'svwap' | 'poc' | 'val' | 'vah', filter?: (b: ReversalBar) => boolean): string {
+function stepLine(
+  key: 'svwap' | 'poc' | 'val' | 'vah',
+  filter?: (b: ReversalBar) => boolean,
+): string {
   let path = ''
   let open = false
   bars.value.forEach((b, i) => {
@@ -205,7 +234,10 @@ const dateTicks = computed(() => {
   const out: { i: number; label: string }[] = []
   for (let i = 0; i < n; i += every) {
     const t = bars.value[i].t
-    out.push({ i, label: tf.value === '1h' ? `${t.slice(5, 10)} ${t.slice(11, 16)}` : shortDate(t.slice(0, 10)) })
+    out.push({
+      i,
+      label: tf.value === '1h' ? `${t.slice(5, 10)} ${t.slice(11, 16)}` : shortDate(t.slice(0, 10)),
+    })
   }
   return out
 })
@@ -227,11 +259,19 @@ function tierLabel(t: string | null | undefined): string {
   return m ? `top ${m[1]}%` : t
 }
 const rankTiers = computed(() =>
-  Object.entries(read.value?.rank?.tiers ?? {}).sort((a, b) => Number(/\d+/.exec(a[0])?.[0]) - Number(/\d+/.exec(b[0])?.[0])),
+  Object.entries(read.value?.rank?.tiers ?? {}).sort(
+    (a, b) => Number(/\d+/.exec(a[0])?.[0]) - Number(/\d+/.exec(b[0])?.[0]),
+  ),
 )
 function edgeLabel(e: MeasuredEdge | 'below_top_tiers'): string {
   if (e === 'below_top_tiers') return 'below tiers'
-  return e === 'helps' ? 'edge' : e === 'hurts' ? 'worse' : e === 'no_edge' ? 'no edge' : 'unmeasured'
+  return e === 'helps'
+    ? 'edge'
+    : e === 'hurts'
+      ? 'worse'
+      : e === 'no_edge'
+        ? 'no edge'
+        : 'unmeasured'
 }
 function pp(v: number | null | undefined, dp = 1): string {
   return v == null ? DASH : `${(v * 100).toFixed(dp)}%`
@@ -252,7 +292,11 @@ const scanRows = computed<ReversalScanRow[]>(() =>
 
 <template>
   <div class="view">
-    <Panel label="Reversal Timing" index="R1" :meta="d?.asof ? `as of ${d.asof.slice(0, 16).replace('T', ' ')} · ${tfLabel}` : tfLabel">
+    <Panel
+      label="Reversal Timing"
+      index="R1"
+      :meta="d?.asof ? `as of ${d.asof.slice(0, 16).replace('T', ' ')} · ${tfLabel}` : tfLabel"
+    >
       <div class="controls">
         <div class="ctl sym">
           <label class="label" for="rev-sym">Symbol</label>
@@ -272,18 +316,43 @@ const scanRows = computed<ReversalScanRow[]>(() =>
         <div class="ctl">
           <span class="label">Timeframe</span>
           <div class="seg" role="group" aria-label="Timeframe">
-            <button type="button" class="label" :class="{ on: tf === '1d' }" @click="tf = '1d'">Daily</button>
-            <button type="button" class="label" :class="{ on: tf === '1h' }" @click="tf = '1h'">1 hour</button>
+            <button type="button" class="label" :class="{ on: tf === '1d' }" @click="tf = '1d'">
+              Daily
+            </button>
+            <button type="button" class="label" :class="{ on: tf === '1h' }" @click="tf = '1h'">
+              1 hour
+            </button>
           </div>
         </div>
         <div class="ctl">
           <span class="label">Side</span>
           <div class="seg" role="group" aria-label="Reversal side">
-            <button type="button" class="label call-on" :class="{ on: focusSide === 'bottom' }" @click="focusSide = 'bottom'">Bottoms · calls</button>
-            <button type="button" class="label put-on" :class="{ on: focusSide === 'top' }" @click="focusSide = 'top'">Tops · puts</button>
+            <button
+              type="button"
+              class="label call-on"
+              :class="{ on: focusSide === 'bottom' }"
+              @click="focusSide = 'bottom'"
+            >
+              Bottoms · calls
+            </button>
+            <button
+              type="button"
+              class="label put-on"
+              :class="{ on: focusSide === 'top' }"
+              @click="focusSide = 'top'"
+            >
+              Tops · puts
+            </button>
           </div>
         </div>
-        <button type="button" class="btn label refresh" :disabled="res.loading.value" @click="res.refresh()">Refresh</button>
+        <button
+          type="button"
+          class="btn label refresh"
+          :disabled="res.loading.value"
+          @click="res.refresh()"
+        >
+          Refresh
+        </button>
       </div>
 
       <LoadingState v-if="res.loading.value && !d" label="Computing the chart stack" />
@@ -300,10 +369,14 @@ const scanRows = computed<ReversalScanRow[]>(() =>
         </div>
 
         <div class="readouts">
-          <Readout label="Close" :value="optNum(d.last?.close)" :sub="`ATR ${optNum(d.last?.atr)}`" />
+          <Readout
+            label="Close"
+            :value="optNum(d.last?.close)"
+            :sub="`ATR ${optNum(d.last?.atr)}`"
+          />
           <Readout
             label="Leg depth"
-            :value="`${num(focusSide === 'bottom' ? -(d.last?.off_high_atr ?? 0) : d.last?.off_low_atr ?? 0, 1)} ATR`"
+            :value="`${num(focusSide === 'bottom' ? -(d.last?.off_high_atr ?? 0) : (d.last?.off_low_atr ?? 0), 1)} ATR`"
             :sub="focusSide === 'bottom' ? 'below 50-bar high' : 'above 50-bar low'"
           />
           <Readout
@@ -312,11 +385,23 @@ const scanRows = computed<ReversalScanRow[]>(() =>
             :sub="`${d.last?.swing_dir === 1 ? 'structure up' : 'structure down'} · ${optNum(d.last?.svwap)}`"
             :tone="(d.last?.svwap_dist_atr ?? 0) >= 0 ? 'call' : 'put'"
           />
-          <Readout label="POC" :value="`${optSigned(d.last?.poc_dist_atr, 2)} ATR`" :sub="`VAL ${optNum(d.last?.val)} · VAH ${optNum(d.last?.vah)}`" />
-          <Readout label="MACD-HA" :value="optNum(d.last?.macd, 0)" :sub="`HTF ${optNum(d.last?.htf_macd, 0)} · SPY ${optNum(d.last?.mkt_macd, 0)}`" />
+          <Readout
+            label="POC"
+            :value="`${optSigned(d.last?.poc_dist_atr, 2)} ATR`"
+            :sub="`VAL ${optNum(d.last?.val)} · VAH ${optNum(d.last?.vah)}`"
+          />
+          <Readout
+            label="MACD-HA"
+            :value="optNum(d.last?.macd, 0)"
+            :sub="`HTF ${optNum(d.last?.htf_macd, 0)} · SPY ${optNum(d.last?.mkt_macd, 0)}`"
+          />
           <Readout
             label="Breadth"
-            :value="d.last?.breadth_below == null ? DASH : `${pp(d.last?.breadth_below, 0)} / ${pp(d.last?.breadth_above, 0)}`"
+            :value="
+              d.last?.breadth_below == null
+                ? DASH
+                : `${pp(d.last?.breadth_below, 0)} / ${pp(d.last?.breadth_above, 0)}`
+            "
             sub="universe < -100 / > +100"
           />
           <Readout
@@ -329,18 +414,25 @@ const scanRows = computed<ReversalScanRow[]>(() =>
                   ? 'no measured edge below top 20%'
                   : 'only ranked inside a qualifying leg'
             "
-            :tone="read?.rank?.tier_edge === 'helps' ? (focusSide === 'bottom' ? 'call' : 'put') : 'flat'"
+            :tone="
+              read?.rank?.tier_edge === 'helps' ? (focusSide === 'bottom' ? 'call' : 'put') : 'flat'
+            "
           />
           <Readout
             label="Probability"
             :value="read?.probability == null ? 'withheld' : pp(read.probability)"
-            :sub="read?.probability == null ? 'failed calibration gate' : `2:1 hit · base ${pp(read.base_rate_test)}`"
+            :sub="
+              read?.probability == null
+                ? 'failed calibration gate'
+                : `2:1 hit · base ${pp(read.base_rate_test)}`
+            "
             :tone="read?.probability == null ? 'flat' : 'accent'"
           />
         </div>
         <p v-if="read?.probability_reason" class="note">{{ read.probability_reason }}</p>
         <p v-if="d.missing_context?.length" class="note warn">
-          Live context unavailable on the last bar: {{ d.missing_context.join(', ') }} — the study had it; this read runs without it.
+          Live context unavailable on the last bar: {{ d.missing_context.join(', ') }} — the study
+          had it; this read runs without it.
         </p>
       </template>
     </Panel>
@@ -368,8 +460,17 @@ const scanRows = computed<ReversalScanRow[]>(() =>
         >
           <!-- price grid -->
           <g class="grid">
-            <line v-for="t in priceTicks" :key="`pt${t}`" :x1="PAD_L" :x2="W - PAD_R" :y1="yP(t)" :y2="yP(t)" />
-            <text v-for="t in priceTicks" :key="`pl${t}`" :x="W - PAD_R + 6" :y="yP(t) + 3">{{ num(t, t > 100 ? 0 : 2) }}</text>
+            <line
+              v-for="t in priceTicks"
+              :key="`pt${t}`"
+              :x1="PAD_L"
+              :x2="W - PAD_R"
+              :y1="yP(t)"
+              :y2="yP(t)"
+            />
+            <text v-for="t in priceTicks" :key="`pl${t}`" :x="W - PAD_R + 6" :y="yP(t) + 3">
+              {{ num(t, t > 100 ? 0 : 2) }}
+            </text>
           </g>
           <!-- profile levels -->
           <path :d="valPath" class="lvl va" />
@@ -390,7 +491,14 @@ const scanRows = computed<ReversalScanRow[]>(() =>
           <!-- candles -->
           <g v-for="(b, i) in bars" :key="`c${i}`">
             <template v-if="b.o != null && b.c != null && b.h != null && b.l != null">
-              <line :x1="x.at(i)" :x2="x.at(i)" :y1="yP(b.h)" :y2="yP(b.l)" class="wick" :class="b.c >= b.o ? 'call-stroke' : 'put-stroke'" />
+              <line
+                :x1="x.at(i)"
+                :x2="x.at(i)"
+                :y1="yP(b.h)"
+                :y2="yP(b.l)"
+                class="wick"
+                :class="b.c >= b.o ? 'call-stroke' : 'put-stroke'"
+              />
               <rect
                 :x="x.at(i) - candleW / 2"
                 :width="candleW"
@@ -404,8 +512,20 @@ const scanRows = computed<ReversalScanRow[]>(() =>
           <path :d="vwapDn" class="vwap put-stroke" />
           <!-- markers -->
           <g v-for="(b, i) in bars" :key="`m${i}`">
-            <circle v-if="b.reclaim && b.c != null" :cx="x.at(i)" :cy="yP(b.c)" r="4" class="mk call-fill" />
-            <circle v-if="b.reject && b.c != null" :cx="x.at(i)" :cy="yP(b.c)" r="4" class="mk put-fill" />
+            <circle
+              v-if="b.reclaim && b.c != null"
+              :cx="x.at(i)"
+              :cy="yP(b.c)"
+              r="4"
+              class="mk call-fill"
+            />
+            <circle
+              v-if="b.reject && b.c != null"
+              :cx="x.at(i)"
+              :cy="yP(b.c)"
+              r="4"
+              class="mk put-fill"
+            />
             <path
               v-if="b.bull_div && !bars[i - 1]?.bull_div && b.l != null"
               :d="`M${x.at(i)},${yP(b.l) + 8} l4,5 l-4,5 l-4,-5 z`"
@@ -435,13 +555,40 @@ const scanRows = computed<ReversalScanRow[]>(() =>
 
           <!-- MACD-HA pane -->
           <g>
-            <rect :x="PAD_L" :width="W - PAD_L - PAD_R" :y="yM(150)" :height="Math.max(0, yM(100) - yM(150))" class="zone put-zone" />
-            <rect :x="PAD_L" :width="W - PAD_L - PAD_R" :y="yM(-100)" :height="Math.max(0, yM(-150) - yM(-100))" class="zone call-zone" />
+            <rect
+              :x="PAD_L"
+              :width="W - PAD_L - PAD_R"
+              :y="yM(150)"
+              :height="Math.max(0, yM(100) - yM(150))"
+              class="zone put-zone"
+            />
+            <rect
+              :x="PAD_L"
+              :width="W - PAD_L - PAD_R"
+              :y="yM(-100)"
+              :height="Math.max(0, yM(-150) - yM(-100))"
+              class="zone call-zone"
+            />
             <line :x1="PAD_L" :x2="W - PAD_R" :y1="yM(0)" :y2="yM(0)" class="zero" />
-            <text v-for="t in [150, 100, 0, -100, -150]" :key="`mt${t}`" :x="W - PAD_R + 6" :y="yM(t) + 3" class="axis">{{ t }}</text>
+            <text
+              v-for="t in [150, 100, 0, -100, -150]"
+              :key="`mt${t}`"
+              :x="W - PAD_R + 6"
+              :y="yM(t) + 3"
+              class="axis"
+            >
+              {{ t }}
+            </text>
             <g v-for="(b, i) in bars" :key="`h${i}`">
               <template v-if="b.m_o != null && b.m_c != null && b.m_h != null && b.m_l != null">
-                <line :x1="x.at(i)" :x2="x.at(i)" :y1="yM(b.m_h)" :y2="yM(b.m_l)" class="wick" :class="b.m_c >= b.m_o ? 'call-stroke' : 'put-stroke'" />
+                <line
+                  :x1="x.at(i)"
+                  :x2="x.at(i)"
+                  :y1="yM(b.m_h)"
+                  :y2="yM(b.m_l)"
+                  class="wick"
+                  :class="b.m_c >= b.m_o ? 'call-stroke' : 'put-stroke'"
+                />
                 <rect
                   :x="x.at(i) - candleW / 2"
                   :width="candleW"
@@ -450,16 +597,40 @@ const scanRows = computed<ReversalScanRow[]>(() =>
                   :class="b.m_c >= b.m_o ? 'hollow call-stroke' : 'put-fill'"
                 />
               </template>
-              <path v-if="b.os && b.m_l != null" :d="`M${x.at(i)},${yM(b.m_l) + 6} l5,8 l-10,0 z`" class="mk call-fill" />
-              <path v-if="b.ob && b.m_h != null" :d="`M${x.at(i)},${yM(b.m_h) - 6} l5,-8 l-10,0 z`" class="mk put-fill" />
+              <path
+                v-if="b.os && b.m_l != null"
+                :d="`M${x.at(i)},${yM(b.m_l) + 6} l5,8 l-10,0 z`"
+                class="mk call-fill"
+              />
+              <path
+                v-if="b.ob && b.m_h != null"
+                :d="`M${x.at(i)},${yM(b.m_h) - 6} l5,-8 l-10,0 z`"
+                class="mk put-fill"
+              />
             </g>
             <path :d="macdSignalPath" class="sig" />
           </g>
 
           <!-- dates -->
-          <text v-for="t in dateTicks" :key="`d${t.i}`" :x="x.at(t.i)" :y="TOTAL_H - 4" class="axis" text-anchor="middle">{{ t.label }}</text>
+          <text
+            v-for="t in dateTicks"
+            :key="`d${t.i}`"
+            :x="x.at(t.i)"
+            :y="TOTAL_H - 4"
+            class="axis"
+            text-anchor="middle"
+          >
+            {{ t.label }}
+          </text>
 
-          <line v-if="hover != null" :x1="x.at(hover)" :x2="x.at(hover)" y1="0" :y2="TOTAL_H - 14" class="cross" />
+          <line
+            v-if="hover != null"
+            :x1="x.at(hover)"
+            :x2="x.at(hover)"
+            y1="0"
+            :y2="TOTAL_H - 14"
+            class="cross"
+          />
         </svg>
         <div v-if="hoverBar" class="tip label">
           <span class="fig">{{ hoverBar.t.slice(0, 16).replace('T', ' ') }}</span>
@@ -473,12 +644,23 @@ const scanRows = computed<ReversalScanRow[]>(() =>
     </Panel>
 
     <div v-if="d && ok && read" class="grid2">
-      <Panel label="Triggers — traded, vs no-signal baseline" index="R3" :meta="d.study?.available ? `full sample ${d.study.fit_period?.[0]} → ${d.study.test_period?.[1]} · late = 2nd half` : 'unmeasured'">
+      <Panel
+        label="Triggers — traded, vs no-signal baseline"
+        index="R3"
+        :meta="
+          d.study?.available
+            ? `full sample ${d.study.fit_period?.[0]} → ${d.study.test_period?.[1]} · late = 2nd half`
+            : 'unmeasured'
+        "
+      >
         <p class="note">
-          Each trigger is traded the way you'd trade it: enter on the close, stop just past the leg's extreme, target 2R.
-          <strong>Edge</strong> is its average R minus the average R of entering on ordinary leg bars under the same rule,
-          so market drift cancels out.
-          <HelpTip text="95% interval resamples whole dates. 'edge' only when the whole interval is above zero. Late = second half of the sample only, a stability check. R is the underlying's move in stop-distance units, before option premium and costs." />
+          Each trigger is traded the way you'd trade it: enter on the close, stop just past the
+          leg's extreme, target 2R.
+          <strong>Edge</strong> is its average R minus the average R of entering on ordinary leg
+          bars under the same rule, so market drift cancels out.
+          <HelpTip
+            text="95% interval resamples whole dates. 'edge' only when the whole interval is above zero. Late = second half of the sample only, a stability check. R is the underlying's move in stop-distance units, before option premium and costs."
+          />
         </p>
         <div class="tbl-wrap">
           <table class="tbl">
@@ -507,8 +689,14 @@ const scanRows = computed<ReversalScanRow[]>(() =>
                   <span class="ci">[{{ r(t.edge_r_lo) }}, {{ r(t.edge_r_hi) }}]</span>
                 </td>
                 <td class="num fig">{{ r(t.edge_r_late) }}</td>
-                <td class="num fig">{{ t.risk_atr_median == null ? DASH : `${num(t.risk_atr_median, 1)} ATR` }}</td>
-                <td><span class="chip" :class="t.measured_edge">{{ edgeLabel(t.measured_edge) }}</span></td>
+                <td class="num fig">
+                  {{ t.risk_atr_median == null ? DASH : `${num(t.risk_atr_median, 1)} ATR` }}
+                </td>
+                <td>
+                  <span class="chip" :class="t.measured_edge">{{
+                    edgeLabel(t.measured_edge)
+                  }}</span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -517,7 +705,10 @@ const scanRows = computed<ReversalScanRow[]>(() =>
 
       <Panel label="How late is each cue" index="R4" :meta="lag ? `${lag.flips} swing legs` : ''">
         <template v-if="lag">
-          <p class="note">Median distance from the true extreme, over every leg that flipped. Earlier is closer to 0 bars and 0 ATR.</p>
+          <p class="note">
+            Median distance from the true extreme, over every leg that flipped. Earlier is closer to
+            0 bars and 0 ATR.
+          </p>
           <div class="tbl-wrap">
             <table class="tbl">
               <thead>
@@ -557,18 +748,26 @@ const scanRows = computed<ReversalScanRow[]>(() =>
             </table>
           </div>
           <p class="note">
-            "Present" counts legs where the cue fired at all. Early cues also fire in legs that never turn — the trigger table
-            above is what says whether acting on them paid.
+            "Present" counts legs where the cue fired at all. Early cues also fire in legs that
+            never turn — the trigger table above is what says whether acting on them paid.
           </p>
         </template>
         <p v-else class="note">No lag measurement for this timeframe.</p>
       </Panel>
     </div>
 
-    <Panel v-if="d && ok && read" label="Signal checklist — 2:1 hit rate when on" index="R5" :meta="`base ${pp(read.base_rate_test)} · ${read.signals_on} on`">
+    <Panel
+      v-if="d && ok && read"
+      label="Signal checklist — 2:1 hit rate when on"
+      index="R5"
+      :meta="`base ${pp(read.base_rate_test)} · ${read.signals_on} on`"
+    >
       <p class="note">
-        Every bar in a qualifying leg, +{{ d.barrier?.win_atr }} ATR before −{{ d.barrier?.loss_atr }} ATR within {{ d.barrier?.horizon_bars }} {{ barUnit }}.
-        Lift is the hit rate when the signal is on minus the base rate, test period only.
+        Every bar in a qualifying leg, +{{ d.barrier?.win_atr }} ATR before −{{
+          d.barrier?.loss_atr
+        }}
+        ATR within {{ d.barrier?.horizon_bars }} {{ barUnit }}. Lift is the hit rate when the signal
+        is on minus the base rate, test period only.
       </p>
       <div class="tbl-wrap">
         <table class="tbl">
@@ -588,19 +787,29 @@ const scanRows = computed<ReversalScanRow[]>(() =>
               <td class="fig">{{ s.on ? 'ON' : DASH }}</td>
               <td class="num fig">{{ pp(s.test_rate) }}</td>
               <td class="num fig">
-                {{ spp(s.test_lift) }} <span class="ci">[{{ spp(s.test_lift_lo) }}, {{ spp(s.test_lift_hi) }}]</span>
+                {{ spp(s.test_lift) }}
+                <span class="ci">[{{ spp(s.test_lift_lo) }}, {{ spp(s.test_lift_hi) }}]</span>
               </td>
               <td class="num fig">{{ s.test_n ?? DASH }}</td>
-              <td><span class="chip" :class="s.measured_edge">{{ edgeLabel(s.measured_edge) }}</span></td>
+              <td>
+                <span class="chip" :class="s.measured_edge">{{ edgeLabel(s.measured_edge) }}</span>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
       <p v-if="read.model_auc" class="note">
-        Combined model ({{ read.model_chosen }}, picked on validation): test AUC {{ num(read.model_auc.auc, 3) }}
-        [{{ num(read.model_auc.lo, 3) }}, {{ num(read.model_auc.hi, 3) }}]. 0.50 is a coin flip.
+        Combined model ({{ read.model_chosen }}, picked on validation): test AUC
+        {{ num(read.model_auc.auc, 3) }} [{{ num(read.model_auc.lo, 3) }},
+        {{ num(read.model_auc.hi, 3) }}]. 0.50 is a coin flip.
         <template v-if="read.drivers?.length">
-          Biggest drivers: {{ read.drivers.slice(0, 4).map((x) => x.feature).join(', ') }}.
+          Biggest drivers:
+          {{
+            read.drivers
+              .slice(0, 4)
+              .map((x) => x.feature)
+              .join(', ')
+          }}.
         </template>
       </p>
       <div v-if="rankTiers.length" class="tbl-wrap">
@@ -615,21 +824,39 @@ const scanRows = computed<ReversalScanRow[]>(() =>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="[name, t] in rankTiers" :key="name" :class="{ lit: read.rank?.tier === name }">
+            <tr
+              v-for="[name, t] in rankTiers"
+              :key="name"
+              :class="{ lit: read.rank?.tier === name }"
+            >
               <td>{{ tierLabel(name) }} of leg bars</td>
               <td class="num fig">{{ pp(t.rate) }}</td>
-              <td class="num fig">{{ spp(t.lift) }} <span class="ci">[{{ spp(t.lift_lo) }}, {{ spp(t.lift_hi) }}]</span></td>
+              <td class="num fig">
+                {{ spp(t.lift) }}
+                <span class="ci">[{{ spp(t.lift_lo) }}, {{ spp(t.lift_hi) }}]</span>
+              </td>
               <td class="num fig">{{ t.n ?? DASH }}</td>
-              <td><span class="chip" :class="t.edge">{{ edgeLabel(t.edge) }}</span></td>
+              <td>
+                <span class="chip" :class="t.edge">{{ edgeLabel(t.edge) }}</span>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
     </Panel>
 
-    <Panel label="Scanner — symbols in a qualifying leg" index="R6" :meta="scan.data.value?.status === 'running' ? `scanning ${scan.data.value.done ?? 0}/${scan.data.value.total ?? '…'}` : `${scanRows.length} ${focusSide === 'bottom' ? 'down' : 'up'}-legs`">
+    <Panel
+      label="Scanner — symbols in a qualifying leg"
+      index="R6"
+      :meta="
+        scan.data.value?.status === 'running'
+          ? `scanning ${scan.data.value.done ?? 0}/${scan.data.value.total ?? '…'}`
+          : `${scanRows.length} ${focusSide === 'bottom' ? 'down' : 'up'}-legs`
+      "
+    >
       <p class="note">
-        {{ scan.data.value?.universe ?? 'Core universe' }}. Sorted by model rank — the one read with a measured out-of-sample edge.
+        {{ scan.data.value?.universe ?? 'Core universe' }}. Sorted by model rank — the one read with
+        a measured out-of-sample edge.
         <template v-if="tf === '1h'"> Local 1h bars can lag — check each row's as-of.</template>
       </p>
       <LoadingState v-if="!scan.data.value" compact label="Starting scan" />
@@ -652,7 +879,14 @@ const scanRows = computed<ReversalScanRow[]>(() =>
           <tbody>
             <tr v-for="row in scanRows" :key="row.symbol" :class="{ lit: row.symbol === symbol }">
               <td>
-                <button type="button" class="sym-btn fig" :aria-label="`Load ${row.symbol}`" @click="loadSymbol(row.symbol)">{{ row.symbol }}</button>
+                <button
+                  type="button"
+                  class="sym-btn fig"
+                  :aria-label="`Load ${row.symbol}`"
+                  @click="loadSymbol(row.symbol)"
+                >
+                  {{ row.symbol }}
+                </button>
               </td>
               <td class="fig">{{ row.asof.slice(0, tf === '1h' ? 16 : 10).replace('T', ' ') }}</td>
               <td class="num fig">{{ optNum(row.leg_atr, 1) }}</td>
@@ -660,19 +894,31 @@ const scanRows = computed<ReversalScanRow[]>(() =>
               <td class="num fig">{{ optSigned(row.poc_dist_atr, 1) }}</td>
               <td class="num fig">{{ optNum(row.macd, 0) }}</td>
               <td>
-                <span v-if="row.rank_tier" class="chip" :class="row.rank_tier_edge === 'helps' ? 'helps' : ''">
+                <span
+                  v-if="row.rank_tier"
+                  class="chip"
+                  :class="row.rank_tier_edge === 'helps' ? 'helps' : ''"
+                >
                   {{ tierLabel(row.rank_tier) }} · {{ pp(row.rank_tier_rate, 0) }}
                 </span>
                 <span v-else class="dim">{{ DASH }}</span>
               </td>
               <td>
-                <span v-for="t in row.triggers_fired" :key="t.trigger" class="chip" :class="t.measured_edge">{{ t.trigger }} · {{ t.bars_ago }}</span>
+                <span
+                  v-for="t in row.triggers_fired"
+                  :key="t.trigger"
+                  class="chip"
+                  :class="t.measured_edge"
+                  >{{ t.trigger }} · {{ t.bars_ago }}</span
+                >
                 <span v-if="!row.triggers_fired.length" class="dim">{{ DASH }}</span>
               </td>
               <td class="num fig">{{ row.signals_on.length }}</td>
             </tr>
             <tr v-if="scan.data.value.status === 'ready' && !scanRows.length">
-              <td colspan="9" class="dim">No symbol is in a qualifying {{ focusSide === 'bottom' ? 'down' : 'up' }}-leg.</td>
+              <td colspan="9" class="dim">
+                No symbol is in a qualifying {{ focusSide === 'bottom' ? 'down' : 'up' }}-leg.
+              </td>
             </tr>
           </tbody>
         </table>
@@ -680,8 +926,10 @@ const scanRows = computed<ReversalScanRow[]>(() =>
     </Panel>
 
     <p v-if="studyMeta?.available" class="foot label">
-      Study: {{ studyMeta.symbols }} symbols · fit {{ studyMeta.fit_period?.join(' → ') }} · validation {{ studyMeta.validation_period?.join(' → ') }} ·
-      test {{ studyMeta.test_period?.join(' → ') }} · generated {{ studyMeta.generated_at?.slice(0, 10) }}
+      Study: {{ studyMeta.symbols }} symbols · fit {{ studyMeta.fit_period?.join(' → ') }} ·
+      validation {{ studyMeta.validation_period?.join(' → ') }} · test
+      {{ studyMeta.test_period?.join(' → ') }} · generated
+      {{ studyMeta.generated_at?.slice(0, 10) }}
       <span v-if="d?.source"> · bars: {{ d.source }}</span>
     </p>
     <p v-else-if="studyMeta" class="foot label warn">{{ studyMeta.reason }}</p>
@@ -797,21 +1045,22 @@ const scanRows = computed<ReversalScanRow[]>(() =>
   margin: var(--s3) 0;
   padding: var(--s3);
   border: var(--hair) solid var(--rule);
-  border-left-width: 3px;
   border-radius: var(--r-sm);
   background: var(--panel-hi);
 }
 
 .headline.call {
-  border-left-color: var(--call);
+  border-color: color-mix(in srgb, var(--call) 25%, var(--rule));
+  background: var(--call-wash);
 }
 
 .headline.put {
-  border-left-color: var(--put);
+  border-color: color-mix(in srgb, var(--put) 25%, var(--rule));
+  background: var(--put-wash);
 }
 
 .headline.flat {
-  border-left-color: var(--rule-hi);
+  border-color: var(--rule-hi);
 }
 
 .setup {

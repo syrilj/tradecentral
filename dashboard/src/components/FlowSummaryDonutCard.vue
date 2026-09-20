@@ -103,7 +103,11 @@ const donutStroke = computed(() => (hasFlow.value ? 'var(--call)' : 'var(--rule-
     </div>
 
     <p class="summary-read" :class="{ 'is-muted': !hasFlow }">
-      {{ hasFlow ? `${mix.bullishLabel} of measured premium is bullish; ${mix.bearishLabel} is bearish.` : 'Directional mix is not measurable in this window.' }}
+      {{
+        hasFlow
+          ? `${mix.bullishLabel} of measured premium is bullish; ${mix.bearishLabel} is bearish.`
+          : 'Directional mix is not measurable in this window.'
+      }}
     </p>
   </div>
 </template>

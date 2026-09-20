@@ -301,7 +301,6 @@ onMounted(() => {
         },
       })
     })
-
   })
 
   if (!prefersReducedMotion) runScramble()
@@ -585,7 +584,6 @@ onUnmounted(() => {
               <span class="stat-val fig">{{ capability.statValue() }}</span>
             </div>
           </article>
-
         </div>
       </section>
 
@@ -720,7 +718,10 @@ onUnmounted(() => {
             <h3>Operator access</h3>
             <strong class="access-price">Free</strong>
             <p>Flow, positioning, and the research path for the current preview.</p>
-            <RouterLink class="button button-primary" :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }">
+            <RouterLink
+              class="button button-primary"
+              :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }"
+            >
               Join the access list
               <span aria-hidden="true">→</span>
             </RouterLink>
@@ -729,7 +730,10 @@ onUnmounted(() => {
             <p class="access-plan-kicker">NEXT</p>
             <h3>Pro workspaces</h3>
             <strong class="access-price">Coming soon</strong>
-            <p>Expanded research workspaces and deeper historical context will be announced before billing starts.</p>
+            <p>
+              Expanded research workspaces and deeper historical context will be announced before
+              billing starts.
+            </p>
             <span class="access-note">No payment details collected</span>
           </article>
         </div>
@@ -788,7 +792,10 @@ onUnmounted(() => {
               <rect x="15" y="8" width="4" height="4" />
             </svg>
           </RouterLink>
-          <small>Access requests are reviewed during the private preview. Pro workspaces are coming soon.</small>
+          <small
+            >Access requests are reviewed during the private preview. Pro workspaces are coming
+            soon.</small
+          >
         </div>
       </section>
     </main>
@@ -1011,11 +1018,17 @@ onUnmounted(() => {
   letter-spacing: -0.02em;
   color: var(--ink);
 }
+.section-head h2,
+.hero-headline,
+.hero-lede {
+  text-wrap: balance;
+}
 .section-lede {
   max-width: 640px;
   font-size: 18px;
   line-height: 1.6;
   color: var(--ink-dim);
+  text-wrap: pretty;
 }
 
 /* ── Buttons and links ────────────────────────────────────────────────────── */
@@ -1045,6 +1058,13 @@ onUnmounted(() => {
 .button-primary:hover {
   background: #26262c;
 }
+.button:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 2px;
+}
+.button:active {
+  transform: translateY(1px);
+}
 .button-ghost {
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
@@ -1052,6 +1072,14 @@ onUnmounted(() => {
 }
 .button-ghost:hover {
   background: var(--panel-hi);
+}
+.button-ghost:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 2px;
+}
+.px-link:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 4px;
 }
 .px-arrow {
   flex: none;
@@ -1147,6 +1175,11 @@ onUnmounted(() => {
   margin-right: 20px;
   text-decoration: none;
   color: var(--ink);
+  text-wrap: balance;
+}
+.section-head h2,
+.hero-headline {
+  text-wrap: balance;
 }
 .brand-mark {
   display: grid;
@@ -1222,6 +1255,10 @@ onUnmounted(() => {
 .sign-in:hover {
   color: var(--ink);
 }
+.sign-in:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 3px;
+}
 .masthead-actions .button {
   min-height: 40px;
   padding-inline: 16px;
@@ -1238,6 +1275,13 @@ onUnmounted(() => {
   background: transparent;
   color: var(--ink);
   cursor: pointer;
+}
+.nav-menu-btn:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 2px;
+}
+.nav-menu-btn:active {
+  transform: scale(0.98);
 }
 
 /* ── Hero ─────────────────────────────────────────────────────────────────── */
@@ -1270,6 +1314,7 @@ onUnmounted(() => {
   letter-spacing: -0.025em;
   color: var(--ink);
   margin-bottom: 22px;
+  text-wrap: balance;
 }
 .hero-line {
   display: block;
@@ -1291,6 +1336,7 @@ onUnmounted(() => {
   line-height: 1.6;
   color: var(--ink-dim);
   margin-bottom: 34px;
+  text-wrap: balance;
 }
 /* Every word occupies the same single grid cell, so the container is
    permanently as wide as the longest of them. Taking the inactive words out
@@ -1651,8 +1697,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   grid-auto-rows: minmax(88px, auto);
-  grid-template-areas:
-    'market market options options governance governance';
+  grid-template-areas: 'market market options options governance governance';
   border-top: var(--hair) solid var(--rule-hi);
   border-left: var(--hair) solid var(--rule-hi);
 }

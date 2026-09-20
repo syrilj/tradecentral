@@ -380,8 +380,7 @@ const activeTickerStats = computed(() => {
   }
 
   const callP =
-    finite(row.call_premium) ??
-    (finite(row.premium) ?? 0) * (1 - (finite(row.put_flow_pct) ?? 0.5))
+    finite(row.call_premium) ?? (finite(row.premium) ?? 0) * (1 - (finite(row.put_flow_pct) ?? 0.5))
   const putP =
     finite(row.put_premium) ?? (finite(row.premium) ?? 0) * (finite(row.put_flow_pct) ?? 0.5)
   const tot = callP + putP
@@ -1280,6 +1279,20 @@ const feedWindowLabel = computed(() => {
   const prints = coverage?.provider_prints ?? props.payload?.summary?.tape_print_count ?? 0
   const symbols = coverage?.observed_symbols ?? props.payload?.rows.length ?? 0
   return `${compact(prints)} PRINTS · ${compact(symbols)} SYMBOLS`
+})
+
+const controlStatusClass = computed(() => {
+  if (contractMismatch.value || props.error) return 'is-error'
+  const label = feedStatusLabel.value
+  if (label.includes('ERROR') || label.includes('FAULT')) return 'is-error'
+  if (
+    label.includes('STALE') ||
+    label.includes('WAITING') ||
+    providerFreshnessState.value === 'stale'
+  ) {
+    return 'is-warn'
+  }
+  return 'is-live'
 })
 
 const contractMismatch = computed(
@@ -2350,7 +2363,7 @@ function downloadHistoryTapeCsv(): void {
       </div>
 
       <div class="control-status label" aria-live="polite">
-        <span>
+        <span :class="controlStatusClass">
           {{
             contractMismatch ? 'BACKEND UPDATE REQUIRED' : `${feedStatusLabel} · ${feedWindowLabel}`
           }}
@@ -2410,12 +2423,12 @@ function downloadHistoryTapeCsv(): void {
       <div>
         <span class="label">No measured prints in the latest provider sample</span>
         <strong>The provider returned no contracts above ${{ compact(minPremium) }}.</strong>
-        <p>
-          {{
-            payload.feed_reason ||
-            payload.warnings?.[0] ||
-            'Try a lower threshold or request a fresh market-wide provider sample.'
-          }}
+        <div v-if="payload.feed_reason || payload.warnings?.[0]" class="empty-feed-warning-strip">
+          <span class="warning-tag label">FEED NOTICE</span>
+          <span class="warning-text">{{ payload.feed_reason || payload.warnings?.[0] }}</span>
+        </div>
+        <p v-else>
+          Try a lower threshold or request a fresh market-wide provider sample.
         </p>
         <ol class="empty-feed-sections label" aria-label="Sections waiting on measured prints">
           <li>Snapshot</li>
@@ -2434,7 +2447,6 @@ function downloadHistoryTapeCsv(): void {
     <template v-else>
       <!-- ── GEX-style Flow Hero ─────────────────────────────────────────── -->
       <section class="flow-hero-strip rise" aria-label="Flow snapshot">
-
         <!-- Row 1: Ticker identity bar -->
         <div class="fhs-identity-bar">
           <div class="fhs-ticker-group">
@@ -2443,7 +2455,9 @@ function downloadHistoryTapeCsv(): void {
               <span class="fhs-company label">{{ activeTickerStats.companyName }}</span>
               <div class="fhs-quote fig">
                 <span class="fhs-price">{{ activeTickerStats.spot }}</span>
-                <span class="fhs-delta" :class="activeTickerStats.moveTone">{{ activeTickerStats.move }}</span>
+                <span class="fhs-delta" :class="activeTickerStats.moveTone">{{
+                  activeTickerStats.move
+                }}</span>
                 <span class="fhs-range label">{{ activeTickerStats.dayRange }}</span>
               </div>
             </div>
@@ -2457,10 +2471,7 @@ function downloadHistoryTapeCsv(): void {
             </button>
           </div>
 
-          <span
-            class="fhs-sentiment-badge label"
-            :class="activeTickerStats.dominantState"
-          >
+          <span class="fhs-sentiment-badge label" :class="activeTickerStats.dominantState">
             <i class="fhs-pulse-dot" aria-hidden="true" />
             {{ activeTickerStats.dominantLabel }}
           </span>
@@ -2472,23 +2483,31 @@ function downloadHistoryTapeCsv(): void {
               class="fhs-pill label"
               :class="{ active: rightFilter === 'all' }"
               @click="rightFilter = 'all'"
-            >All</button>
+            >
+              All
+            </button>
             <button
               type="button"
               class="fhs-pill label fhs-pill--call"
               :class="{ active: rightFilter === 'call' }"
               @click="toggleCallFilter"
-            >Calls</button>
+            >
+              Calls
+            </button>
             <button
               type="button"
               class="fhs-pill label fhs-pill--put"
               :class="{ active: rightFilter === 'put' }"
               @click="togglePutFilter"
-            >Puts</button>
+            >
+              Puts
+            </button>
           </div>
 
           <div class="fhs-freshness label" title="Provider age">
-            <span class="fresh-state" :class="providerFreshnessState">{{ providerFreshnessState.toUpperCase() }}</span>
+            <span class="fresh-state" :class="providerFreshnessState">{{
+              providerFreshnessState.toUpperCase()
+            }}</span>
             <span class="fhs-age-copy">{{ providerFreshness }} · {{ providerAsOfLabel }}</span>
           </div>
         </div>
@@ -2498,7 +2517,9 @@ function downloadHistoryTapeCsv(): void {
           <div class="fhs-metric">
             <span class="fhs-metric-label">SPOT</span>
             <span class="fhs-metric-val">{{ activeTickerStats.spot }}</span>
-            <span class="fhs-metric-sub" :class="activeTickerStats.moveTone">{{ activeTickerStats.move }}</span>
+            <span class="fhs-metric-sub" :class="activeTickerStats.moveTone">{{
+              activeTickerStats.move
+            }}</span>
           </div>
           <div class="fhs-metric fhs-metric--call">
             <span class="fhs-metric-label">CALL FLOW</span>
@@ -2518,12 +2539,16 @@ function downloadHistoryTapeCsv(): void {
           <div class="fhs-metric">
             <span class="fhs-metric-label">CONTRACTS</span>
             <span class="fhs-metric-val">{{ compact(projectedSummary.totalContracts) }}</span>
-            <span class="fhs-metric-sub">{{ exactCount(projectedSummary.anomalyContracts) }} flagged</span>
+            <span class="fhs-metric-sub"
+              >{{ exactCount(projectedSummary.anomalyContracts) }} flagged</span
+            >
           </div>
           <div class="fhs-metric fhs-metric--sweep">
             <span class="fhs-metric-label">SWEEP PREM</span>
             <span class="fhs-metric-val">{{ moneyCompact(projectedSummary.sweepPremium) }}</span>
-            <span class="fhs-metric-sub">{{ exactCount(projectedSummary.sweepContracts) }} contracts</span>
+            <span class="fhs-metric-sub"
+              >{{ exactCount(projectedSummary.sweepContracts) }} contracts</span
+            >
           </div>
           <div class="fhs-metric fhs-metric--whale">
             <span class="fhs-metric-label">WHALES</span>
@@ -2540,18 +2565,20 @@ function downloadHistoryTapeCsv(): void {
               <strong class="fhs-split-title fig">{{ activeTickerStats.splitLabel }}</strong>
             </div>
             <div class="fhs-bar-wrap" aria-label="Call vs Put flow split">
-              <div
-                class="fhs-bar-call"
-                :style="{ width: `${distributionStats.callPct}%` }"
-              />
-              <div
-                class="fhs-bar-put"
-                :style="{ width: `${distributionStats.putPct}%` }"
-              />
+              <div class="fhs-bar-call" :style="{ width: `${distributionStats.callPct}%` }" />
+              <div class="fhs-bar-put" :style="{ width: `${distributionStats.putPct}%` }" />
             </div>
             <div class="fhs-bar-labels fig">
-              <span class="fhs-call-label">CALLS {{ moneyCompact(distributionStats.callPremium) }} ({{ distributionStats.callPct }}%)</span>
-              <span class="fhs-put-label">PUTS {{ moneyCompact(distributionStats.putPremium) }} ({{ distributionStats.putPct }}%)</span>
+              <span class="fhs-call-label"
+                >CALLS {{ moneyCompact(distributionStats.callPremium) }} ({{
+                  distributionStats.callPct
+                }}%)</span
+              >
+              <span class="fhs-put-label"
+                >PUTS {{ moneyCompact(distributionStats.putPremium) }} ({{
+                  distributionStats.putPct
+                }}%)</span
+              >
             </div>
 
             <!-- Net flow sparkline -->
@@ -2567,10 +2594,9 @@ function downloadHistoryTapeCsv(): void {
                 <path :d="flowTrendAreaPath" class="fhs-spark-area" />
                 <path :d="flowTrendSvgPath" class="fhs-spark-line" />
               </svg>
-              <span
-                class="fhs-net-val fig"
-                :class="netFlowTotal >= 0 ? 'pos' : 'neg'"
-              >{{ netFlowTotal >= 0 ? '+' : '' }}{{ moneyCompact(netFlowTotal) }}</span>
+              <span class="fhs-net-val fig" :class="netFlowTotal >= 0 ? 'pos' : 'neg'"
+                >{{ netFlowTotal >= 0 ? '+' : '' }}{{ moneyCompact(netFlowTotal) }}</span
+              >
             </div>
           </div>
 
@@ -2580,11 +2606,23 @@ function downloadHistoryTapeCsv(): void {
 
             <div class="fhs-signal-row">
               <span class="fhs-signal-name label">Sweeps</span>
-              <span class="fhs-signal-detail">{{ radarStats.sweeps }} sweep orders · {{ moneyCompact(radarStats.sweepPremium) }}</span>
+              <span class="fhs-signal-detail"
+                >{{ radarStats.sweeps }} sweep orders ·
+                {{ moneyCompact(radarStats.sweepPremium) }}</span
+              >
               <span
                 class="fhs-signal-badge"
-                :class="radarStats.sweeps > 10 ? 'fhs-badge--strong' : radarStats.sweeps > 4 ? 'fhs-badge--moderate' : 'fhs-badge--likely'"
-              >{{ radarStats.sweeps > 10 ? 'STRONG' : radarStats.sweeps > 4 ? 'MODERATE' : 'LIKELY' }}</span>
+                :class="
+                  radarStats.sweeps > 10
+                    ? 'fhs-badge--strong'
+                    : radarStats.sweeps > 4
+                      ? 'fhs-badge--moderate'
+                      : 'fhs-badge--likely'
+                "
+                >{{
+                  radarStats.sweeps > 10 ? 'STRONG' : radarStats.sweeps > 4 ? 'MODERATE' : 'LIKELY'
+                }}</span
+              >
             </div>
 
             <div class="fhs-signal-row">
@@ -2592,26 +2630,61 @@ function downloadHistoryTapeCsv(): void {
               <span class="fhs-signal-detail">{{ radarStats.whales }} orders ≥ $500k</span>
               <span
                 class="fhs-signal-badge"
-                :class="radarStats.whales > 5 ? 'fhs-badge--strong' : radarStats.whales > 2 ? 'fhs-badge--moderate' : 'fhs-badge--likely'"
-              >{{ radarStats.whales > 5 ? 'STRONG' : radarStats.whales > 2 ? 'MODERATE' : 'LIKELY' }}</span>
+                :class="
+                  radarStats.whales > 5
+                    ? 'fhs-badge--strong'
+                    : radarStats.whales > 2
+                      ? 'fhs-badge--moderate'
+                      : 'fhs-badge--likely'
+                "
+                >{{
+                  radarStats.whales > 5 ? 'STRONG' : radarStats.whales > 2 ? 'MODERATE' : 'LIKELY'
+                }}</span
+              >
             </div>
 
             <div class="fhs-signal-row">
               <span class="fhs-signal-name label">Vol &gt; OI</span>
-              <span class="fhs-signal-detail">{{ radarStats.volOi }} prints with unusual volume</span>
+              <span class="fhs-signal-detail"
+                >{{ radarStats.volOi }} prints with unusual volume</span
+              >
               <span
                 class="fhs-signal-badge"
-                :class="radarStats.volOi > 8 ? 'fhs-badge--strong' : radarStats.volOi > 3 ? 'fhs-badge--moderate' : 'fhs-badge--likely'"
-              >{{ radarStats.volOi > 8 ? 'STRONG' : radarStats.volOi > 3 ? 'MODERATE' : 'LIKELY' }}</span>
+                :class="
+                  radarStats.volOi > 8
+                    ? 'fhs-badge--strong'
+                    : radarStats.volOi > 3
+                      ? 'fhs-badge--moderate'
+                      : 'fhs-badge--likely'
+                "
+                >{{
+                  radarStats.volOi > 8 ? 'STRONG' : radarStats.volOi > 3 ? 'MODERATE' : 'LIKELY'
+                }}</span
+              >
             </div>
 
             <div class="fhs-signal-row">
               <span class="fhs-signal-name label">Golden Sweeps</span>
-              <span class="fhs-signal-detail">{{ radarStats.goldenSweeps }} vendor golden flags</span>
+              <span class="fhs-signal-detail"
+                >{{ radarStats.goldenSweeps }} vendor golden flags</span
+              >
               <span
                 class="fhs-signal-badge"
-                :class="radarStats.goldenSweeps > 3 ? 'fhs-badge--strong' : radarStats.goldenSweeps > 0 ? 'fhs-badge--moderate' : 'fhs-badge--likely'"
-              >{{ radarStats.goldenSweeps > 3 ? 'STRONG' : radarStats.goldenSweeps > 0 ? 'MODERATE' : 'LIKELY' }}</span>
+                :class="
+                  radarStats.goldenSweeps > 3
+                    ? 'fhs-badge--strong'
+                    : radarStats.goldenSweeps > 0
+                      ? 'fhs-badge--moderate'
+                      : 'fhs-badge--likely'
+                "
+                >{{
+                  radarStats.goldenSweeps > 3
+                    ? 'STRONG'
+                    : radarStats.goldenSweeps > 0
+                      ? 'MODERATE'
+                      : 'LIKELY'
+                }}</span
+              >
             </div>
 
             <!-- Probability score bar (like GEX's probability score) -->
@@ -2620,8 +2693,16 @@ function downloadHistoryTapeCsv(): void {
               <div class="fhs-prob-track">
                 <div
                   class="fhs-prob-bar"
-                  :style="{ width: `${Math.min(100, Math.round(((radarStats.sweeps + radarStats.whales + radarStats.goldenSweeps) / Math.max(1, qualifiedTapeRows.length)) * 100 * 8))}%` }"
-                  :class="distributionStats.callPct >= 55 ? 'fhs-prob--call' : distributionStats.putPct >= 55 ? 'fhs-prob--put' : 'fhs-prob--neutral'"
+                  :style="{
+                    width: `${Math.min(100, Math.round(((radarStats.sweeps + radarStats.whales + radarStats.goldenSweeps) / Math.max(1, qualifiedTapeRows.length)) * 100 * 8))}%`,
+                  }"
+                  :class="
+                    distributionStats.callPct >= 55
+                      ? 'fhs-prob--call'
+                      : distributionStats.putPct >= 55
+                        ? 'fhs-prob--put'
+                        : 'fhs-prob--neutral'
+                  "
                 />
               </div>
               <div class="fhs-prob-labels label">
@@ -3693,10 +3774,7 @@ function downloadHistoryTapeCsv(): void {
                               >{{ formatDteBadge(row.dte).label }}</span
                             >
                           </div>
-                          <span
-                            class="moneyness-tag label"
-                            :class="printMoneyness(row).className"
-                          >
+                          <span class="moneyness-tag label" :class="printMoneyness(row).className">
                             {{ printMoneyness(row).label }}
                           </span>
                         </div>
@@ -4192,7 +4270,8 @@ function downloadHistoryTapeCsv(): void {
                 <div>
                   <strong>No historical prints loaded.</strong>
                   <p>
-                    Enter a symbol and date range above, then click LOAD HISTORY to inspect fill-level prints.
+                    Enter a symbol and date range above, then click LOAD HISTORY to inspect
+                    fill-level prints.
                   </p>
                 </div>
               </div>
@@ -4521,13 +4600,20 @@ function downloadHistoryTapeCsv(): void {
           <div class="sidebar-card trend-card rise">
             <div class="sidebar-card-head">
               <span class="label section-kicker">Provider sample analytics</span>
-              <h3 class="sidebar-card-title">{{ isFilteredBySymbol ? `${activeSymbol} Flow Trend` : 'Market Flow Trend' }}</h3>
+              <h3 class="sidebar-card-title">
+                {{ isFilteredBySymbol ? `${activeSymbol} Flow Trend` : 'Market Flow Trend' }}
+              </h3>
             </div>
             <div class="trend-readout-row">
               <div>
                 <span class="label">Cumulative Net Flow</span>
-                <strong class="fig net-flow-val" :class="netFlowTotal > 0 ? 'pos' : netFlowTotal < 0 ? 'neg' : 'neutral'">
-                  {{ netFlowTotal > 0 ? '+' : netFlowTotal < 0 ? '−' : '' }}${{ compact(Math.abs(netFlowTotal)) }}
+                <strong
+                  class="fig net-flow-val"
+                  :class="netFlowTotal > 0 ? 'pos' : netFlowTotal < 0 ? 'neg' : 'neutral'"
+                >
+                  {{ netFlowTotal > 0 ? '+' : netFlowTotal < 0 ? '−' : '' }}${{
+                    compact(Math.abs(netFlowTotal))
+                  }}
                 </strong>
               </div>
               <button
@@ -4542,7 +4628,13 @@ function downloadHistoryTapeCsv(): void {
                 "
                 @click="netFlowTotal >= 0 ? toggleCallFilter() : togglePutFilter()"
               >
-                {{ netFlowTotal > 0 ? 'CALL DOMINANT' : netFlowTotal < 0 ? 'PUT DOMINANT' : 'BALANCED' }}
+                {{
+                  netFlowTotal > 0
+                    ? 'CALL DOMINANT'
+                    : netFlowTotal < 0
+                      ? 'PUT DOMINANT'
+                      : 'BALANCED'
+                }}
                 <span v-if="rightFilter !== 'all'" class="filter-on-tag">FILTERED</span>
               </button>
             </div>
@@ -5040,8 +5132,17 @@ function downloadHistoryTapeCsv(): void {
 }
 
 .control-status span:first-child {
-  color: var(--status-live);
   font-weight: 700;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.control-status span:first-child.is-live {
+  color: var(--status-live);
+}
+.control-status span:first-child.is-warn {
+  color: var(--warn);
+}
+.control-status span:first-child.is-error {
+  color: var(--short);
 }
 
 .refresh-button {
@@ -5134,6 +5235,33 @@ button:disabled {
 .feed-recovery.empty-feed {
   color: var(--meta-provenance);
   border-color: var(--border-strong);
+}
+
+.empty-feed-warning-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s2) 0;
+  padding: 4px 10px;
+  border-radius: var(--r-xs);
+  background: var(--warn-wash);
+  border: var(--hair) solid var(--warn);
+  color: var(--warn);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  max-width: 100%;
+}
+.empty-feed-warning-strip .warning-tag {
+  font-size: var(--t-nano);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--warn);
+  color: var(--void);
+}
+.empty-feed-warning-strip .warning-text {
+  color: var(--ink);
 }
 
 .empty-feed-sections {
@@ -5300,8 +5428,12 @@ button:disabled {
   font-size: var(--t-micro);
   font-weight: 750;
 }
-.fhs-delta.pos { color: var(--long); }
-.fhs-delta.neg { color: var(--short); }
+.fhs-delta.pos {
+  color: var(--long);
+}
+.fhs-delta.neg {
+  color: var(--short);
+}
 .fhs-range {
   color: var(--ink-faint);
   font-size: var(--t-nano, 10px);
@@ -5337,9 +5469,20 @@ button:disabled {
   border-radius: var(--r-sm);
   flex-shrink: 0;
 }
-.fhs-sentiment-badge.bullish { color: var(--long); border-color: var(--long); background: var(--long-wash); }
-.fhs-sentiment-badge.bearish { color: var(--short); border-color: var(--short); background: var(--short-wash); }
-.fhs-sentiment-badge.neutral { color: var(--ink-dim); border-color: var(--rule-hi); }
+.fhs-sentiment-badge.bullish {
+  color: var(--long);
+  border-color: var(--long);
+  background: var(--long-wash);
+}
+.fhs-sentiment-badge.bearish {
+  color: var(--short);
+  border-color: var(--short);
+  background: var(--short-wash);
+}
+.fhs-sentiment-badge.neutral {
+  color: var(--ink-dim);
+  border-color: var(--rule-hi);
+}
 
 .fhs-pulse-dot {
   display: inline-block;
@@ -5374,14 +5517,20 @@ button:disabled {
   font-weight: 700;
   cursor: pointer;
   letter-spacing: 0.04em;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .fhs-pill.active {
   background: var(--panel-raise);
   color: var(--ink);
 }
-.fhs-pill--call.active { color: var(--call-hi, var(--call)); }
-.fhs-pill--put.active  { color: var(--put-hi,  var(--put));  }
+.fhs-pill--call.active {
+  color: var(--call-hi, var(--call));
+}
+.fhs-pill--put.active {
+  color: var(--put-hi, var(--put));
+}
 
 /* Freshness indicator */
 .fhs-freshness {
@@ -5413,7 +5562,9 @@ button:disabled {
   padding: var(--s3) var(--s4);
   border-right: var(--hair) solid var(--border-subtle);
 }
-.fhs-metric:last-child { border-right: none; }
+.fhs-metric:last-child {
+  border-right: none;
+}
 
 .fhs-metric-label {
   font-family: var(--font-display);
@@ -5443,13 +5594,25 @@ button:disabled {
   color: var(--ink-faint);
   white-space: nowrap;
 }
-.fhs-metric-sub.pos { color: var(--long); }
-.fhs-metric-sub.neg { color: var(--short); }
+.fhs-metric-sub.pos {
+  color: var(--long);
+}
+.fhs-metric-sub.neg {
+  color: var(--short);
+}
 
-.fhs-metric--call .fhs-metric-val { color: var(--call-hi, var(--call)); }
-.fhs-metric--put  .fhs-metric-val { color: var(--put-hi,  var(--put));  }
-.fhs-metric--sweep .fhs-metric-val { color: var(--call); }
-.fhs-metric--whale .fhs-metric-val { color: var(--warn); }
+.fhs-metric--call .fhs-metric-val {
+  color: var(--call-hi, var(--call));
+}
+.fhs-metric--put .fhs-metric-val {
+  color: var(--put-hi, var(--put));
+}
+.fhs-metric--sweep .fhs-metric-val {
+  color: var(--call);
+}
+.fhs-metric--whale .fhs-metric-val {
+  color: var(--warn);
+}
 
 /* Row 3: Two-column body */
 .fhs-body {
@@ -5506,8 +5669,12 @@ button:disabled {
   font-size: var(--t-micro);
   font-weight: 750;
 }
-.fhs-call-label { color: var(--call-hi, var(--call)); }
-.fhs-put-label  { color: var(--put-hi,  var(--put));  }
+.fhs-call-label {
+  color: var(--call-hi, var(--call));
+}
+.fhs-put-label {
+  color: var(--put-hi, var(--put));
+}
 
 /* Sparkline */
 .fhs-spark-wrap {
@@ -5548,8 +5715,12 @@ button:disabled {
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
-.fhs-net-val.pos { color: var(--long); }
-.fhs-net-val.neg { color: var(--short); }
+.fhs-net-val.pos {
+  color: var(--long);
+}
+.fhs-net-val.neg {
+  color: var(--short);
+}
 
 /* Right column: Signal panel */
 .fhs-signals {
@@ -5604,9 +5775,21 @@ button:disabled {
   white-space: nowrap;
   flex-shrink: 0;
 }
-.fhs-badge--strong   { color: var(--call-hi); border-color: color-mix(in srgb, var(--call) 50%, transparent); background: var(--call-wash); }
-.fhs-badge--moderate { color: var(--warn);    border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: var(--warn-wash); }
-.fhs-badge--likely   { color: var(--ink-dim); border-color: var(--rule-hi); background: var(--wash-1); }
+.fhs-badge--strong {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call) 50%, transparent);
+  background: var(--call-wash);
+}
+.fhs-badge--moderate {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  background: var(--warn-wash);
+}
+.fhs-badge--likely {
+  color: var(--ink-dim);
+  border-color: var(--rule-hi);
+  background: var(--wash-1);
+}
 
 /* Flow conviction bar */
 .fhs-prob-wrap {
@@ -5636,9 +5819,15 @@ button:disabled {
   min-width: 8px;
   max-width: 100%;
 }
-.fhs-prob--call    { background: var(--call); }
-.fhs-prob--put     { background: var(--put);  }
-.fhs-prob--neutral { background: var(--ink-dim); }
+.fhs-prob--call {
+  background: var(--call);
+}
+.fhs-prob--put {
+  background: var(--put);
+}
+.fhs-prob--neutral {
+  background: var(--ink-dim);
+}
 .fhs-prob-labels {
   display: flex;
   justify-content: space-between;
@@ -5665,9 +5854,15 @@ button:disabled {
 }
 
 @media (max-width: 600px) {
-  .fhs-metric { flex: 0 0 50%; }
-  .fhs-identity-bar { gap: var(--s2); }
-  .fhs-filter-pills { margin-left: 0; }
+  .fhs-metric {
+    flex: 0 0 50%;
+  }
+  .fhs-identity-bar {
+    gap: var(--s2);
+  }
+  .fhs-filter-pills {
+    margin-left: 0;
+  }
 }
 
 /* ── Legacy sentinel hero (kept for test selectors, hidden from viewport) */
@@ -5682,7 +5877,6 @@ button:disabled {
   box-shadow: var(--shadow-1);
   overflow: hidden;
 }
-
 
 .sentiment-card {
   display: flex;

@@ -574,9 +574,7 @@ export function buildTheoryIdentity(squeeze: OptionsSqueeze | null | undefined):
           : `${weightedDte.toFixed(1)}D · ${urgency == null ? '—' : urgency.toFixed(2)}`,
       fill01: urgency == null ? 0 : Math.max(0, Math.min(1, urgency)),
       detail:
-        fullBookDte != null &&
-        weightedDte != null &&
-        Math.abs(fullBookDte - weightedDte) > 1
+        fullBookDte != null && weightedDte != null && Math.abs(fullBookDte - weightedDte) > 1
           ? `e^{−${URGENCY_C} · T_${urgencyDteBasis}}. Fuel uses ${weightedDte.toFixed(1)}D; full book is ${fullBookDte.toFixed(1)}D and does not drain this term.`
           : `e^{−${URGENCY_C} · T_${urgencyDteBasis}}. Near-dated gamma is more urgent; 45D is ~0.11.`,
       tone: 'fuel',
@@ -1154,7 +1152,9 @@ export function buildSqueezeExplanation(
     )
   }
   if (measurable && id.weightedDte != null && id.weightedDte < 1) {
-    watch.push('Most of this front-book gamma expires today — the fuel resets with the next expiry.')
+    watch.push(
+      'Most of this front-book gamma expires today — the fuel resets with the next expiry.',
+    )
   }
 
   const dirChip: SqueezeChip | null = !measurable

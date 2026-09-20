@@ -101,11 +101,11 @@ def _no_auth(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# FIX 2: GET must be rejected on mutating (job-starting) endpoints.
+# FIX 2: GET must be rejected on mutating or cost-incurring endpoints.
 # ---------------------------------------------------------------------------
 
 
-def test_mutating_paths_constant_matches_the_job_starting_endpoints():
+def test_mutating_paths_constant_matches_the_write_or_paid_compute_endpoints():
     # Greppable, explicit source of truth -- pin its contents so a future
     # edit can't silently drop or add an endpoint without a test failing.
     # /api/vpa/analyze joined the set when the VPA engine landed; the pin was
@@ -116,6 +116,7 @@ def test_mutating_paths_constant_matches_the_job_starting_endpoints():
             "/api/plays/run",
             "/api/options/backfill_oi",
             "/api/vpa/analyze",
+            "/api/typesafe/live-decision",
         }
     )
 

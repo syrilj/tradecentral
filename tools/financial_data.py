@@ -650,8 +650,11 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
     """Attach the report-native ML forecast. Never uses Street targets as labels."""
     try:
         from research.financials_ml_forecast import score_report_forecast
-    except ImportError:  # pragma: no cover - checkout-as-edge namespace
-        from edge.research.financials_ml_forecast import score_report_forecast
+    except Exception:  # pragma: no cover - checkout-as-edge namespace or dependency gap
+        try:
+            from edge.research.financials_ml_forecast import score_report_forecast
+        except Exception:
+            score_report_forecast = None
     out = dict(data)
     intel = resolve_forecast_intel(str(out.get("symbol") or ""))
     if intel.get("last_price"):
@@ -668,10 +671,10 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
                 "current_price",
                 "ret_1m",
                 "ret_3m",
-                "range_position",
-                "earnings_growth",
-                "revenue_growth",
-                "forward_eps",
+                "ret_6m",
+                "ret_12m",
+                "vol_realized_30d",
+                "fwd_pe",
                 "trailing_eps",
                 "spot_source",
                 "delayed_last_price",
@@ -680,7 +683,7 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
             if k in intel
         }
     intel = _with_treasury_intel(out, intel)
-    out["model_forecast"] = score_report_forecast(out, intel)
+    out["model_forecast"] = score_report_forecast(out, intel) if score_report_forecast else None
     return out
 
 

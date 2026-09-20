@@ -97,7 +97,10 @@ const zeroY = computed((): number | null => {
 
 /* ── marker dots pinned on both curves at the selected strike ─────────────── */
 const strikeIdx = computed(() =>
-  Math.min(Math.max(Math.round(((strike.value - K_LOW) / (K_HIGH - K_LOW)) * (N_PTS - 1)), 0), N_PTS - 1),
+  Math.min(
+    Math.max(Math.round(((strike.value - K_LOW) / (K_HIGH - K_LOW)) * (N_PTS - 1)), 0),
+    N_PTS - 1,
+  ),
 )
 const callDotY = computed(() => midY - (curves.value.call[strikeIdx.value]?.y ?? 0) * (plotH / 2))
 const putDotY = computed(() => midY - (curves.value.put[strikeIdx.value]?.y ?? 0) * (plotH / 2))
@@ -295,7 +298,14 @@ onBeforeUnmount(() => ctx?.revert())
           <line v-for="(x, i) in gridW" :key="`w${i}`" :x1="x" y1="28" :x2="x" :y2="VB_H - 32" />
         </g>
         <!-- zero line, only when the plotted range crosses zero -->
-        <line v-if="zeroY !== null" class="zero-line" x1="16" :y1="zeroY" :x2="VB_W - 16" :y2="zeroY" />
+        <line
+          v-if="zeroY !== null"
+          class="zero-line"
+          x1="16"
+          :y1="zeroY"
+          :x2="VB_W - 16"
+          :y2="zeroY"
+        />
 
         <!-- intrinsic payoff boundary: the expiry limit the smooth curves sit above -->
         <g v-if="boundaryPath" class="boundary">

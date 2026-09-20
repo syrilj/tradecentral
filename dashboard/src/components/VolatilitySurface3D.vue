@@ -179,13 +179,17 @@ const floorLines = computed(() => {
     const u = k / (K_STEPS - 1)
     const p1 = toXY(u, 0, 0)
     const p2 = toXY(u, 1, 0)
-    lines.push({ d: `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}` })
+    lines.push({
+      d: `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`,
+    })
   }
   for (let d = 0; d < T_STEPS; d += 2) {
     const v = d / (T_STEPS - 1)
     const p1 = toXY(0, v, 0)
     const p2 = toXY(1, v, 0)
-    lines.push({ d: `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}` })
+    lines.push({
+      d: `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`,
+    })
   }
   return lines
 })

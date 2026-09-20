@@ -379,7 +379,10 @@ const expandedNames = computed(() => {
           <tbody>
             <tr v-for="(w, i) in filteredWatch" :key="i" @click="open(w.symbol)">
               <td class="row-select-cell fig sym">
-  <button type="button" class="row-select-btn" @click.stop="open(w.symbol)"><span class="sr-only">Select row</span></button>{{ w.symbol }}</td>
+                <button type="button" class="row-select-btn" @click.stop="open(w.symbol)">
+                  <span class="sr-only">Select row</span></button
+                >{{ w.symbol }}
+              </td>
               <td class="label">{{ w.sector_hint }}</td>
               <td class="fig etf-sym">{{ w.etf }}</td>
               <td>

@@ -193,8 +193,8 @@ describe('Milestone 3: Workstation Preferences & Profile Drawer Suite', () => {
     })
 
     it('normalizes local-operator variants to OP rather than LO', () => {
-      expect(drawerContent).toContain('normPart !== \'local operator\' && normPart !== \'local\'')
-      expect(appContent).toContain('normPart !== \'local operator\' && normPart !== \'local\'')
+      expect(drawerContent).toContain("normPart !== 'local operator' && normPart !== 'local'")
+      expect(appContent).toContain("normPart !== 'local operator' && normPart !== 'local'")
     })
 
     it('features telemetry section with live API status, quant engine, and active desk', () => {

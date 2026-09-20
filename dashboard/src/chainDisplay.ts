@@ -1,4 +1,4 @@
-import type { RelationshipType, SupplyChainNode, SupplyTier } from './api'
+import type { RelationshipType, SupplyChainEdge, SupplyChainNode, SupplyTier } from './api'
 
 export function tierBadgeLabel(tier: SupplyTier | string | undefined): string {
   switch (tier) {
@@ -266,4 +266,40 @@ export function rankBeneficiaries(
   return list.sort(
     (a, b) => (b.metrics?.elasticity_score ?? 0) - (a.metrics?.elasticity_score ?? 0),
   )
+}
+
+export function formatContractValue(millions: number | null | undefined): string {
+  if (millions == null || !Number.isFinite(millions)) return '—'
+  if (millions >= 1000) return `$${(millions / 1000).toFixed(1)}B / yr`
+  return `$${millions.toFixed(0)}M / yr`
+}
+
+export function strengthTone(
+  strength: number | null | undefined,
+): 'high' | 'mid' | 'low' {
+  if (strength == null) return 'mid'
+  if (strength >= 0.8) return 'high'
+  if (strength >= 0.5) return 'mid'
+  return 'low'
+}
+
+export function generateRelationshipNarrative(
+  edge: SupplyChainEdge,
+  node?: SupplyChainNode | null,
+): string {
+  const relText = relationshipLabel(edge.relationship).toLowerCase()
+  const catText = edge.supply_category ? ` supplying ${edge.supply_category}` : ''
+  const strengthPct = Math.round(edge.strength * 100)
+  let narrative = `${edge.source} is a critical partner that ${relText} ${edge.target}${catText}, maintaining an estimated ${strengthPct}% dependency link.`
+  if (edge.annual_contract_value_est_m != null && Number.isFinite(edge.annual_contract_value_est_m)) {
+    narrative += ` Estimated annual procurement / contract value is ~${formatContractValue(edge.annual_contract_value_est_m)}.`
+  }
+  if (
+    node &&
+    node.metrics?.revenue_concentration_pct != null &&
+    Number.isFinite(node.metrics.revenue_concentration_pct)
+  ) {
+    narrative += ` Revenue concentration to key driver is ~${node.metrics.revenue_concentration_pct.toFixed(1)}%.`
+  }
+  return narrative
 }

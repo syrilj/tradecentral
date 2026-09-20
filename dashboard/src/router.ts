@@ -33,6 +33,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Brief', index: '00' },
   },
   {
+    path: '/decision',
+    name: 'decision',
+    component: () => import('@/views/DecisionView.vue'),
+    meta: { title: 'Live Decision', index: '00' },
+  },
+  {
     path: '/desk',
     name: 'desk',
     component: () => import('@/views/DeskView.vue'),

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   usePreferences,
   type DensityMode,
@@ -61,7 +61,9 @@ const {
 const sessionStartTime = ref(Date.now())
 const sessionUptime = ref('00:00:00')
 const isSigningOut = ref(false)
+const drawerEl = ref<HTMLElement | null>(null)
 let uptimeTimer: number | undefined
+let previousFocus: HTMLElement | null = null
 
 function updateUptime(): void {
   const elapsedSec = Math.max(0, Math.floor((Date.now() - sessionStartTime.value) / 1000))
@@ -95,6 +97,33 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && props.modelValue) {
     e.preventDefault()
     handleClose()
+    return
+  }
+  if (e.key === 'Tab') {
+    const root = drawerEl.value
+    if (!root) return
+    const focusable = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.hasAttribute('disabled') && el.getClientRects().length > 0)
+    if (!focusable.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (!root.contains(document.activeElement)) {
+      e.preventDefault()
+      first.focus()
+      return
+    }
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+      return
+    }
+    if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
   }
 }
 
@@ -103,11 +132,19 @@ watch(
   (open) => {
     if (open) {
       updateUptime()
+      previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      void nextTick(() => {
+        drawerEl.value?.querySelector<HTMLElement>('.btn-close')?.focus()
+      })
       if (typeof window !== 'undefined') {
         window.addEventListener('keydown', onKeydown)
       }
-    } else if (typeof window !== 'undefined') {
-      window.removeEventListener('keydown', onKeydown)
+    } else {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('keydown', onKeydown)
+      }
+      previousFocus?.focus({ preventScroll: true })
+      previousFocus = null
     }
   },
   { immediate: true },
@@ -160,6 +197,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
     <Transition name="drawer-slide">
       <aside
         v-if="modelValue"
+        ref="drawerEl"
         class="profile-drawer glass-panel"
         role="dialog"
         aria-modal="true"
@@ -195,7 +233,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
                   class="operator-avatar-img"
                 />
                 <span v-else class="operator-avatar-initials fig">{{ operatorInitials }}</span>
-                <span class="operator-live-lamp" :title="'Clearance: Verified Active'" />
+                <span class="operator-live-lamp" aria-hidden="true" />
               </div>
               <div class="operator-meta">
                 <div class="operator-name-row">
@@ -362,7 +400,13 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
 
         <!-- Footer / Sign-out -->
         <footer class="drawer-foot">
-          <button type="button" class="btn-signout" :disabled="isSigningOut" @click="handleSignOut">
+          <button
+            type="button"
+            class="btn-signout"
+            :disabled="isSigningOut"
+            :aria-busy="isSigningOut"
+            @click="handleSignOut"
+          >
             <AppIcon name="signout" :size="14" class="signout-btn-icon" />
             <span class="signout-btn-label label">
               {{ isSigningOut ? 'EXITING OPERATOR SESSION…' : 'SIGN OUT OF OPERATOR WORKSTATION' }}
@@ -405,7 +449,10 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   border-right: none !important;
   border-bottom: none !important;
   border-radius: 0 !important;
-  box-shadow: var(--glass-shadow-drawer), var(--glass-specular), inset 1px 0 0 var(--glass-tint);
+  box-shadow:
+    var(--glass-shadow-drawer),
+    var(--glass-specular),
+    inset 1px 0 0 var(--glass-tint);
   overflow: hidden;
 }
 
@@ -442,7 +489,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   justify-content: space-between;
   padding: var(--s4) var(--s5);
   border-bottom: var(--hair) solid var(--glass-border);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--glass-overlay);
 }
 .head-title-wrap {
   display: flex;
@@ -469,15 +516,22 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   height: 28px;
   border-radius: var(--r-sm);
   border: var(--hair) solid var(--glass-border);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--wash-1);
   color: var(--ink-dim);
   font-size: var(--t-small);
   transition: all var(--dur-fast) var(--ease-out);
 }
 .btn-close:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--wash-3);
   border-color: var(--glass-border-hi);
   color: var(--ink);
+}
+.btn-close:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.btn-close:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 /* Body */
@@ -506,7 +560,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
 
 .drawer-card {
   padding: var(--s3) var(--s4);
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--panel-wash);
   border: var(--hair) solid var(--glass-border);
   border-radius: var(--r-md);
   box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
@@ -517,7 +571,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   display: flex;
   flex-direction: column;
   gap: var(--s3);
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--panel-wash);
 }
 .operator-row {
   display: flex;
@@ -655,7 +709,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--panel-wash);
   padding: 3px;
   border-radius: var(--r-sm);
   border: var(--hair) solid var(--glass-border);
@@ -675,7 +729,14 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
 }
 .segment-btn:hover {
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--wash-2);
+}
+.segment-btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.segment-btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .segment-btn.active {
   color: var(--ink);
@@ -708,18 +769,29 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   padding: 6px 4px;
   border-radius: var(--r-sm);
   border: var(--hair) solid var(--glass-border);
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--panel-wash);
   color: var(--ink-dim);
   transition: all var(--dur-fast) var(--ease-out);
 }
 .accent-pill:hover {
   border-color: var(--glass-border-hi);
   color: var(--ink);
+  background: var(--wash-1);
+}
+.accent-pill:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.accent-pill:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .accent-pill.active {
   border-color: var(--glass-border-accent);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash-1);
   box-shadow: var(--glass-specular-subtle);
+  color: var(--ink);
+}
+.accent-pill.active .swatch-label {
   color: var(--ink);
 }
 .swatch-dot {
@@ -740,6 +812,9 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   gap: var(--s3);
   padding: var(--s2) 0;
   cursor: pointer;
+}
+.pref-toggle-row:focus-within {
+  color: var(--ink);
 }
 .toggle-meta {
   display: flex;
@@ -763,12 +838,19 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   flex: 0 0 36px;
   border-radius: 10px;
   border: var(--hair) solid var(--rule);
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--panel-wash);
   transition: all var(--dur-fast) var(--ease-out);
 }
 .toggle-switch.on {
   border-color: var(--phosphor-dim);
   background: var(--phosphor-wash);
+}
+.toggle-switch:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.toggle-switch:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .toggle-knob {
   position: absolute;
@@ -824,7 +906,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
 .drawer-foot {
   padding: var(--s4) var(--s5);
   border-top: var(--hair) solid var(--glass-border);
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--panel-wash);
 }
 .btn-signout {
   display: flex;
@@ -836,7 +918,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   padding: var(--s2) var(--s4);
   border-radius: var(--r-sm);
   border: var(--hair) solid var(--rule);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--wash-1);
   color: var(--ink-dim);
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-out);
@@ -845,6 +927,13 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   border-color: color-mix(in srgb, var(--short) 60%, var(--rule));
   background: var(--short-wash);
   color: var(--short);
+}
+.btn-signout:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.btn-signout:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .btn-signout:disabled {
   opacity: 0.5;

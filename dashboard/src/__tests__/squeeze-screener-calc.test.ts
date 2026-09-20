@@ -390,9 +390,7 @@ describe('7. Theory identity — fuel × flow × momentum, not a coin-flip forec
 
   it('uses payload fuel_scale in the formula and defaults to 25', () => {
     expect(buildTheoryIdentity(squeeze()).formula).toContain('tanh(25·SR)')
-    const legacy = buildTheoryIdentity(
-      squeeze({ theory: { ...squeeze().theory, fuel_scale: 40 } }),
-    )
+    const legacy = buildTheoryIdentity(squeeze({ theory: { ...squeeze().theory, fuel_scale: 40 } }))
     expect(legacy.fuelScale).toBe(40)
     expect(legacy.formula).toContain('tanh(40·SR)')
     expect(legacy.terms.find((t) => t.id === 'fuel')?.label).toBe('FUEL tanh(40·SR)')

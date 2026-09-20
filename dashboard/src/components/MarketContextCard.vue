@@ -40,7 +40,12 @@ const narrative = computed(() => {
   if (props.customNarrative) return props.customNarrative
   const sym = props.symbol || 'SPY'
 
-  if (props.spot == null && props.gammaFlip == null && props.vwap == null && props.netFlowM == null) {
+  if (
+    props.spot == null &&
+    props.gammaFlip == null &&
+    props.vwap == null &&
+    props.netFlowM == null
+  ) {
     return `${sym} market context unmeasured: live market metrics unavailable.`
   }
 

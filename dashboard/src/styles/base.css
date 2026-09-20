@@ -378,6 +378,7 @@ a:hover {
   letter-spacing: var(--track-label);
   text-transform: uppercase;
   z-index: 1;
+  background: var(--panel-hi);
 }
 
 .grid td {
@@ -407,9 +408,9 @@ td.num {
   justify-content: center;
   min-height: var(--density-control-h);
   padding: var(--s2) var(--s3);
-  border: var(--hair) solid var(--phosphor);
+  border: var(--hair) solid var(--action-primary);
   border-radius: var(--r-sm);
-  background: var(--phosphor);
+  background: var(--action-primary);
   color: var(--void);
   font-family: var(--font-ui);
   font-size: var(--t-tiny);
@@ -420,10 +421,18 @@ td.num {
     transform var(--dur-fast) var(--ease-out);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--phosphor-dim);
+  background: var(--action-primary-hover);
+}
+.btn-primary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 .btn-primary:active:not(:disabled) {
   transform: scale(0.98);
+}
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .btn-quiet {
@@ -432,7 +441,7 @@ td.num {
   justify-content: center;
   min-height: var(--density-control-h);
   padding: var(--s2) var(--s3);
-  border: var(--hair) solid var(--rule);
+  border: var(--hair) solid var(--action-quiet);
   border-radius: var(--r-sm);
   background: var(--wash-1);
   color: var(--ink-soft);
@@ -443,12 +452,20 @@ td.num {
   transition: all var(--dur-fast) var(--ease-out);
 }
 .btn-quiet:hover:not(:disabled) {
-  background: var(--panel-hi);
+  background: var(--action-quiet-hover);
   border-color: var(--rule-hi);
   color: var(--ink);
 }
+.btn-quiet:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
 .btn-quiet:active:not(:disabled) {
   transform: scale(0.98);
+}
+.btn-quiet:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ---- Clerk Dark Theme Institutional Overrides --------------------------- */

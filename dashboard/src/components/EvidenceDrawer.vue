@@ -1,23 +1,40 @@
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import type { SupplyChainNode } from '@/api'
+import type { SupplyChainEdge, SupplyChainNode } from '@/api'
 import {
   elasticityTone,
   formatCapExSensitivity,
   formatRevConcentration,
   formatMarketCap,
+  formatContractValue,
   optionsSkewLabel,
   tierBadgeLabel,
   tierColorClass,
+  relationshipLabel,
+  strengthTone,
+  generateRelationshipNarrative,
 } from '@/chainDisplay'
 
-const props = defineProps<{
-  node?: SupplyChainNode | null
-  open: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    node?: SupplyChainNode | null
+    open: boolean
+    edges?: SupplyChainEdge[]
+    focalNode?: SupplyChainNode | null
+    incidentEdges?: SupplyChainEdge[]
+  }>(),
+  {
+    node: null,
+    edges: () => [],
+    focalNode: null,
+    incidentEdges: () => [],
+  },
+)
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'focus-chain', symbol: string): void
 }>()
 
 const router = useRouter()
@@ -26,10 +43,57 @@ function nav(viewName: string) {
   if (!props.node?.symbol) return
   void router.push({ name: viewName, query: { symbol: props.node.symbol } })
 }
+
+const activeIncidentEdges = computed<SupplyChainEdge[]>(() => {
+  if (props.incidentEdges && props.incidentEdges.length > 0) {
+    return props.incidentEdges
+  }
+  if (props.edges && props.edges.length > 0 && props.node?.symbol) {
+    const sym = props.node.symbol
+    return props.edges.filter((e) => e.source === sym || e.target === sym)
+  }
+  return []
+})
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && props.open) {
+    emit('close')
+  }
+}
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', onGlobalKeydown)
+  }
+})
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', onGlobalKeydown)
+  }
+})
 </script>
 
 <template>
-  <aside class="evidence-drawer" :class="{ 'is-open': open && node }" data-test="evidence-drawer">
+  <!-- Backdrop scrim for dismissal & focus trapping context -->
+  <div
+    v-if="open && node"
+    class="drawer-backdrop"
+    data-test="drawer-backdrop"
+    aria-hidden="true"
+    @click="emit('close')"
+  />
+
+  <aside
+    class="evidence-drawer"
+    :class="{ 'is-open': open && node }"
+    data-test="evidence-drawer"
+    role="dialog"
+    aria-modal="true"
+    :aria-label="node ? `Entity Evidence and Supply Chain Details: ${node.symbol} - ${node.name}` : 'Entity Evidence and Supply Chain Details'"
+    tabindex="-1"
+    @keydown.esc="emit('close')"
+  >
     <div v-if="node" class="drawer-content">
       <!-- Drawer Header -->
       <div class="drawer-header">
@@ -46,7 +110,80 @@ function nav(viewName: string) {
           </div>
         </div>
 
-        <button type="button" class="close-btn" @click="emit('close')">✕</button>
+        <button
+          type="button"
+          class="close-btn"
+          aria-label="Close drawer"
+          title="Close drawer"
+          @click="emit('close')"
+        >
+          ✕
+        </button>
+      </div>
+
+      <!-- Prominent Relationship Rationale & Contract Context Section -->
+      <div class="relationship-section" data-test="relationship-rationale">
+        <div class="section-title">
+          <span>RELATIONSHIP RATIONALE & CONTRACT CONTEXT</span>
+        </div>
+
+        <div v-if="activeIncidentEdges.length" class="connections-list">
+          <div
+            v-for="edge in activeIncidentEdges"
+            :key="edge.id"
+            class="connection-card"
+          >
+            <div class="connection-header">
+              <span class="connection-pair font-mono">{{ edge.source }} ➔ {{ edge.target }}</span>
+              <span class="connection-rel-pill">
+                {{ relationshipLabel(edge.relationship) }}
+              </span>
+              <span v-if="edge.supply_category" class="connection-cat-badge">
+                {{ edge.supply_category }}
+              </span>
+            </div>
+
+            <div class="connection-metrics-grid">
+              <div class="conn-metric">
+                <span class="conn-k">Est. Annual Contract:</span>
+                <span class="conn-v font-mono">{{ formatContractValue(edge.annual_contract_value_est_m) }}</span>
+              </div>
+              <div class="conn-metric">
+                <span class="conn-k">Link Strength:</span>
+                <div class="strength-meter-wrap">
+                  <div class="strength-track">
+                    <div
+                      class="strength-fill"
+                      :class="`strength-${strengthTone(edge.strength)}`"
+                      :style="{ width: `${Math.round(edge.strength * 100)}%` }"
+                    />
+                  </div>
+                  <span class="strength-val font-mono">{{ Math.round(edge.strength * 100) }}%</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="connection-narrative">
+              {{ generateRelationshipNarrative(edge, node) }}
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="connection-fallback-panel">
+          <div class="fallback-header">
+            <span class="fallback-role-tag">
+              {{ node.is_focus || node.tier === 'mega_driver' ? 'CORE ECOSYSTEM ANCHOR' : tierBadgeLabel(node.tier) }}
+            </span>
+          </div>
+          <p class="fallback-narrative">
+            <template v-if="node.is_focus || node.tier === 'mega_driver'">
+              {{ node.name }} ({{ node.symbol }}) is the central anchor entity for this value chain. Capital expenditures, architectural roadmap decisions, and procurement volume flow through this driver to upstream Tier 1/2 suppliers and downstream enterprise customers.
+            </template>
+            <template v-else>
+              {{ node.name }} ({{ node.symbol }}) operates within {{ node.sub_industry }} ({{ node.sector }}). Financial elasticity and revenue concentration propagate through correlated demand shifts across connected supply chain nodes.
+            </template>
+          </p>
+        </div>
       </div>
 
       <!-- Quick Metric Tiles -->
@@ -139,6 +276,14 @@ function nav(viewName: string) {
 
       <!-- Trading Desk Navigation Links -->
       <div class="desk-actions">
+        <button
+          type="button"
+          class="desk-btn primary-focus-btn"
+          title="Focus value chain on this stock"
+          @click="emit('focus-chain', node.symbol)"
+        >
+          ⚡ Focus Value Chain on {{ node.symbol }}
+        </button>
         <button type="button" class="desk-btn" @click="nav('options')">
           Options Vol & GEX Tape →
         </button>
@@ -151,6 +296,16 @@ function nav(viewName: string) {
 </template>
 
 <style scoped>
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+  z-index: calc(var(--z-overlay, 120) - 1);
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
 .evidence-drawer {
   position: fixed;
   top: 0;
@@ -237,6 +392,11 @@ function nav(viewName: string) {
 .close-btn:hover {
   border-color: var(--ink);
   color: var(--ink);
+}
+
+.close-btn:focus-visible {
+  outline: 2px solid var(--accent, var(--phosphor));
+  outline-offset: 2px;
 }
 
 .metrics-grid {
@@ -420,6 +580,190 @@ function nav(viewName: string) {
   background: var(--phosphor-wash);
   border-color: var(--phosphor);
   color: var(--phosphor);
+}
+
+.primary-focus-btn {
+  background: var(--phosphor-wash);
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  font-weight: 600;
+}
+
+.primary-focus-btn:hover {
+  background: var(--phosphor);
+  color: var(--void);
+}
+
+.desk-btn:focus-visible,
+.primary-focus-btn:focus-visible {
+  outline: 2px solid var(--accent, var(--phosphor));
+  outline-offset: 2px;
+}
+
+.relationship-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.connections-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.connection-card {
+  background: var(--void-lift);
+  border: 1px solid var(--rule);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: border-color 0.15s ease;
+}
+
+.connection-card:hover {
+  border-color: var(--rule-hi);
+}
+
+.connection-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.connection-pair {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--phosphor);
+}
+
+.connection-rel-pill {
+  font-size: var(--t-nano);
+  padding: 0.1rem 0.35rem;
+  text-transform: uppercase;
+  background: var(--panel-raise);
+  color: var(--call-hi);
+  border: 1px solid var(--rule);
+  letter-spacing: 0.03em;
+}
+
+.connection-cat-badge {
+  font-size: var(--t-nano);
+  padding: 0.1rem 0.35rem;
+  background: var(--void);
+  border: 1px solid var(--rule);
+  color: var(--ink-dim);
+}
+
+.connection-metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  background: var(--void);
+  border: 1px solid var(--rule);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.7rem;
+}
+
+.conn-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.conn-k {
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.conn-v {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.strength-meter-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.strength-track {
+  flex: 1;
+  height: 6px;
+  background: var(--panel-raise);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.strength-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.strength-high {
+  background: var(--long);
+}
+
+.strength-mid {
+  background: var(--call-hi);
+}
+
+.strength-low {
+  background: var(--ink-dim);
+}
+
+.strength-val {
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  font-weight: 600;
+  min-width: 32px;
+  text-align: right;
+}
+
+.connection-narrative {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  line-height: 1.45;
+  background: rgba(0, 0, 0, 0.18);
+  border-left: 2px solid var(--phosphor);
+  padding: 0.45rem 0.6rem;
+}
+
+.connection-fallback-panel {
+  background: var(--void-lift);
+  border: 1px solid var(--rule);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.fallback-header {
+  display: flex;
+  align-items: center;
+}
+
+.fallback-role-tag {
+  font-size: var(--t-nano);
+  padding: 0.1rem 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--panel-raise);
+  border: 1px solid var(--rule);
+  color: var(--phosphor);
+  font-weight: 600;
+}
+
+.fallback-narrative {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+  line-height: 1.45;
 }
 
 .uppercase {

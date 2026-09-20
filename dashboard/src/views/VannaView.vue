@@ -39,14 +39,22 @@ const router = useRouter()
 function readSymbol(): string {
   const raw = route.query.symbol
   return typeof raw === 'string' && raw.trim()
-    ? raw.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+    ? raw
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9.-]/g, '')
+        .slice(0, 10)
     : 'SPY'
 }
 const symbol = ref(readSymbol())
 const symbolInput = ref(readSymbol())
 
 function loadSymbol(raw: string): void {
-  const clean = raw.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10)
+  const clean = raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
   if (!clean || clean === symbol.value) return
   symbol.value = clean
   symbolInput.value = clean
@@ -92,7 +100,9 @@ const unavailableReason = computed(() => {
   return null
 })
 
-const panelMeta = computed(() => (asof.value ? `snapshot ${shortDate(asof.value.slice(0, 10))}` : ''))
+const panelMeta = computed(() =>
+  asof.value ? `snapshot ${shortDate(asof.value.slice(0, 10))}` : '',
+)
 
 const source = computed(() => summary.value?.source ?? '')
 const skipped = computed(() => summary.value?.contracts_skipped ?? 0)
@@ -150,11 +160,11 @@ const flowMax = computed(() => {
   }
   return m > 0 ? m * 1.08 : 0
 })
-const yScale = computed(() =>
-  linearScale([-flowMax.value, flowMax.value], [CH.bottom, CH.top]),
-)
+const yScale = computed(() => linearScale([-flowMax.value, flowMax.value], [CH.bottom, CH.top]))
 const zeroY = computed(() => yScale.value(0))
-const yTicks = computed(() => (flowMax.value > 0 ? niceTicks(-flowMax.value, flowMax.value, 5) : []))
+const yTicks = computed(() =>
+  flowMax.value > 0 ? niceTicks(-flowMax.value, flowMax.value, 5) : [],
+)
 
 interface StrikeGeom {
   strike: number
@@ -197,10 +207,7 @@ const xForValue = computed(() => {
   if (!bars.length) return (_: number) => 0
   const lo = bars[0].strike
   const hi = bars[bars.length - 1].strike
-  return linearScale([lo, hi], [
-    bars[0].cx,
-    bars[bars.length - 1].cx,
-  ])
+  return linearScale([lo, hi], [bars[0].cx, bars[bars.length - 1].cx])
 })
 function guideX(v: number | null): number | null {
   if (v == null || !Number.isFinite(v) || !strikeBars.value.length) return null
@@ -270,8 +277,8 @@ function expiryLabel(e: string): string {
         </div>
         <p class="mechanic-caption">
           Vanna is ∂Δ/∂IV: dealer delta moves when implied vol moves. Net vanna flow below is the
-          dollar hedge that change forces — it is how an event-driven vol crush or spike turns
-          into mechanical buying and selling.
+          dollar hedge that change forces — it is how an event-driven vol crush or spike turns into
+          mechanical buying and selling.
         </p>
       </div>
 
@@ -280,8 +287,8 @@ function expiryLabel(e: string): string {
       <!-- Honest empty state: no chain, no fabricated numbers -->
       <div v-else-if="unavailableReason" class="unavailable-note label wraps">
         Vanna chain unavailable for <strong class="fig">{{ symbol }}</strong> —
-        {{ unavailableReason }}. No strike, expiry, or event readout is shown for an
-        unmeasured chain.
+        {{ unavailableReason }}. No strike, expiry, or event readout is shown for an unmeasured
+        chain.
       </div>
 
       <template v-else-if="payload">
@@ -303,36 +310,56 @@ function expiryLabel(e: string): string {
         <section class="summary-row">
           <div class="stat net-stat">
             <span class="label">NET VANNA FLOW</span>
-            <span class="fig big" :class="summary && summary.net_vanna_flow < 0 ? 'tone-put' : 'tone-call'">
+            <span
+              class="fig big"
+              :class="summary && summary.net_vanna_flow < 0 ? 'tone-put' : 'tone-call'"
+            >
               {{ gexMoney(summary?.net_vanna_flow) }}
             </span>
             <span class="label sub">$Δ per 1 vol pt</span>
           </div>
           <div class="stat split-stat">
             <span class="label">CALL / PUT SPLIT</span>
-            <div class="split-pair" role="img"
-              :aria-label="`call vanna ${gexMoney(split.callVal)}, put vanna ${gexMoney(split.putVal)}`">
+            <div
+              class="split-pair"
+              role="img"
+              :aria-label="`call vanna ${gexMoney(split.callVal)}, put vanna ${gexMoney(split.putVal)}`"
+            >
               <div class="split-side">
                 <span class="label">CALLS</span>
-                <div class="split-track"><div class="split-fill call" :style="{ width: split.call + '%' }" /></div>
+                <div class="split-track">
+                  <div class="split-fill call" :style="{ width: split.call + '%' }" />
+                </div>
                 <span class="fig sm">{{ gexMoney(split.callVal) }}</span>
               </div>
               <div class="split-side">
                 <span class="label">PUTS</span>
-                <div class="split-track"><div class="split-fill put" :style="{ width: split.put + '%' }" /></div>
+                <div class="split-track">
+                  <div class="split-fill put" :style="{ width: split.put + '%' }" />
+                </div>
                 <span class="fig sm">{{ gexMoney(split.putVal) }}</span>
               </div>
             </div>
           </div>
           <div class="stat dir-stat">
             <span class="label">DIRECTION</span>
-            <span class="dir-chip label" :class="`dir-${direction ?? 'none'}`">{{ directionLabel }}</span>
+            <span class="dir-chip label" :class="`dir-${direction ?? 'none'}`">{{
+              directionLabel
+            }}</span>
             <span class="dir-copy">{{ directionCopy }}</span>
           </div>
           <div class="stat meta-stat">
-            <div class="meta-line"><span class="label">SPOT</span><span class="fig">{{ payload.spot != null ? usd(payload.spot, 2) : DASH }}</span></div>
-            <div class="meta-line"><span class="label">ASOF</span><span class="fig">{{ asof ? shortDate(asof) : DASH }}</span></div>
-            <div class="meta-line"><span class="label">SOURCE</span><span class="fig sm">{{ source || DASH }}</span></div>
+            <div class="meta-line">
+              <span class="label">SPOT</span
+              ><span class="fig">{{ payload.spot != null ? usd(payload.spot, 2) : DASH }}</span>
+            </div>
+            <div class="meta-line">
+              <span class="label">ASOF</span
+              ><span class="fig">{{ asof ? shortDate(asof) : DASH }}</span>
+            </div>
+            <div class="meta-line">
+              <span class="label">SOURCE</span><span class="fig sm">{{ source || DASH }}</span>
+            </div>
             <div v-if="skipped > 0" class="meta-line skipped">
               <span class="label">CONTRACTS SKIPPED</span><span class="fig">{{ skipped }}</span>
             </div>
@@ -347,7 +374,9 @@ function expiryLabel(e: string): string {
         <section class="block">
           <header class="block-head">
             <h3 class="label">VANNA BY STRIKE</h3>
-            <span class="label legend"><i class="sw call" /> CALLS UP · <i class="sw put" /> PUTS DOWN</span>
+            <span class="label legend"
+              ><i class="sw call" /> CALLS UP · <i class="sw put" /> PUTS DOWN</span
+            >
             <span v-if="dominantStrike" class="label dominant">
               LARGEST LOAD <span class="fig">{{ usd(dominantStrike.strike, 0) }}</span>
             </span>
@@ -376,13 +405,7 @@ function expiryLabel(e: string): string {
                 :width="b.bw"
                 :height="b.callH"
               />
-              <rect
-                class="bar put"
-                :x="b.cx + 0.5"
-                :y="b.putY"
-                :width="b.bw"
-                :height="b.putH"
-              />
+              <rect class="bar put" :x="b.cx + 0.5" :y="b.putY" :width="b.bw" :height="b.putH" />
             </g>
 
             <!-- guides: spot + vanna pivot -->
@@ -411,8 +434,8 @@ function expiryLabel(e: string): string {
           <header class="block-head">
             <h3 class="label">VANNA BY EXPIRY</h3>
             <span v-if="dominantExpiry" class="label dominant">
-              DOMINANT <span class="fig">{{ expiryLabel(dominantExpiry.expiry) }}</span>
-              · {{ dominantExpiry.dte }}D
+              DOMINANT <span class="fig">{{ expiryLabel(dominantExpiry.expiry) }}</span> ·
+              {{ dominantExpiry.dte }}D
             </span>
           </header>
           <table class="expiry-table">
@@ -452,8 +475,8 @@ function expiryLabel(e: string): string {
             </tbody>
           </table>
           <p class="block-caption">
-            DTE ascending. The shortest dated load is what the event reprices first — on FOMC
-            week the front expiry dominates the board.
+            DTE ascending. The shortest dated load is what the event reprices first — on FOMC week
+            the front expiry dominates the board.
           </p>
         </section>
       </template>
@@ -520,16 +543,15 @@ function expiryLabel(e: string): string {
   gap: var(--s3) var(--s4);
   padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--rule);
-  border-left-width: 3px;
   border-radius: var(--r-md);
   margin-bottom: var(--s4);
 }
 .event-strip.phase-hot {
-  border-color: var(--rule-hi);
-  border-left-color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 25%, var(--rule));
+  background: var(--warn-wash);
 }
 .event-strip.phase-cool {
-  border-left-color: var(--rule-hi);
+  border-color: var(--rule-hi);
 }
 .event-badge {
   font-size: var(--t-micro);
@@ -568,7 +590,10 @@ function expiryLabel(e: string): string {
 /* ---- summary row ---- */
 .summary-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) minmax(220px, 1.4fr) minmax(220px, 1.4fr) minmax(160px, 1fr);
+  grid-template-columns: minmax(180px, 1.1fr) minmax(220px, 1.4fr) minmax(220px, 1.4fr) minmax(
+      160px,
+      1fr
+    );
   gap: var(--s4);
   padding: var(--s3) 0 var(--s2);
 }

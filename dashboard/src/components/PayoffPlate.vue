@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import {
-  payoffColumns,
-  structureGreeks,
-  type OptionLeg,
-} from '@/charts/landing-viz'
+import { payoffColumns, structureGreeks, type OptionLeg } from '@/charts/landing-viz'
 
 /**
  * Lab workbench plate: a real multi-leg payoff figure.
@@ -78,8 +74,9 @@ const yDomain = computed(() => {
   return { lo: lo - pad, hi: hi + pad }
 })
 const yOf = computed(
-  () => (v: number): number =>
-    PAD.t + ((yDomain.value.hi - v) / (yDomain.value.hi - yDomain.value.lo)) * plotH,
+  () =>
+    (v: number): number =>
+      PAD.t + ((yDomain.value.hi - v) / (yDomain.value.hi - yDomain.value.lo)) * plotH,
 )
 
 function toPath(values: number[]): string {
@@ -95,8 +92,7 @@ const expiryPath = computed(() => toPath(cols.value.expiry))
 const zeroY = computed(() => yOf.value(0))
 const spotX = computed(() => xOf(spot.value))
 const spotPnl = computed(
-  () =>
-    cols.value.expiry[Math.round(((spot.value - S_LOW) / (S_HIGH - S_LOW)) * (N - 1))] ?? 0,
+  () => cols.value.expiry[Math.round(((spot.value - S_LOW) / (S_HIGH - S_LOW)) * (N - 1))] ?? 0,
 )
 
 /* Max profit/loss at expiry across the ladder, for the boundary chips. */
@@ -133,8 +129,7 @@ const strikeLabels = computed(() => {
   )
 })
 
-const fmt$ = (v: number, digits = 2): string =>
-  `${v < 0 ? '−' : ''}$${Math.abs(v).toFixed(digits)}`
+const fmt$ = (v: number, digits = 2): string => `${v < 0 ? '−' : ''}$${Math.abs(v).toFixed(digits)}`
 const fmtSigned = (v: number, digits = 3): string =>
   `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}`
 </script>
@@ -160,7 +155,9 @@ const fmtSigned = (v: number, digits = 3): string =>
           {{ p.name }}
         </button>
       </div>
-      <span class="pp-params">T {{ Math.round(T * 365) }}D · σ {{ (SIGMA * 100).toFixed(0) }}%</span>
+      <span class="pp-params"
+        >T {{ Math.round(T * 365) }}D · σ {{ (SIGMA * 100).toFixed(0) }}%</span
+      >
     </div>
 
     <div class="chart-zone">

@@ -307,7 +307,6 @@ export interface BacktestTearsheet {
   basis?: string
 }
 
-
 /** Execution-side gates from `/api/execution-gate`: the clock, the expiry
  *  policy, today's opening range and the routed contract. Every section
  *  carries its own measurability -- an absent reading is never a permissive

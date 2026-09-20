@@ -106,4 +106,3 @@ describe('Vol Trend tab (volatility-targeted trend)', () => {
     expect(view).toContain('toggleTrackCurrent')
   })
 })
-

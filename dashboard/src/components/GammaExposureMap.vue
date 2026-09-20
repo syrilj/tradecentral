@@ -1332,7 +1332,10 @@ watch(
             <template v-else-if="viewMode === 'net'">
               <rect
                 v-if="bar.netH > 0"
-                :class="[bar.net >= 0 ? 'call-bar' : 'put-bar', { 'wall-highlight': bar.isCallWall || bar.isPutWall }]"
+                :class="[
+                  bar.net >= 0 ? 'call-bar' : 'put-bar',
+                  { 'wall-highlight': bar.isCallWall || bar.isPutWall },
+                ]"
                 :x="bar.cx - bar.thickness / 2"
                 :y="bar.net >= 0 ? zeroY - bar.netH : zeroY"
                 :width="bar.thickness"
@@ -1568,9 +1571,7 @@ watch(
               </td>
               <td class="num-col call-num">
                 {{ metricValue(bar.callVal) }}
-                <small v-if="metric === 'gex'" class="sub-num"
-                  >OI {{ compact(bar.call_oi) }}</small
-                >
+                <small v-if="metric === 'gex'" class="sub-num">OI {{ compact(bar.call_oi) }}</small>
               </td>
               <td class="num-col put-num">
                 {{ metricValue(bar.putVal) }}
