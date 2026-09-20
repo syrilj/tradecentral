@@ -21,8 +21,10 @@ from urllib.request import Request, urlopen
 
 
 TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-SCHEMA_VERSION = "typesafe-live-decision-v1"
+SCHEMA_VERSION = "typesafe-live-decision-v2"
 DEFAULT_MODEL = "jev-latest"
+_ACTIONS = ("buy", "sell")
+_ACTION_SET = set(_ACTIONS)
 
 _REQUEST_LOCKS = [threading.Lock() for _ in range(64)]
 _CACHE_LOCK = threading.Lock()
@@ -48,6 +50,47 @@ def _clamp01(value: Any, default: float = 0.0) -> float:
     if number is None:
         return default
     return max(0.0, min(1.0, number))
+
+
+def _risk_label(score: float) -> str:
+    if score >= 3.5:
+        return "EXTREME"
+    if score >= 2.5:
+        return "HIGH"
+    if score >= 1.5:
+        return "MODERATE"
+    if score >= 0.5:
+        return "LOW"
+    return "NONE"
+
+
+def _binary_probabilities(buy: float) -> dict[str, float]:
+    buy_r = round(max(0.0, min(1.0, buy)), 4)
+    return {"buy": buy_r, "sell": round(1.0 - buy_r, 4)}
+
+
+def _normalize_binary(raw: Mapping[str, Any]) -> dict[str, float]:
+    buy = _clamp01(raw.get("buy"))
+    sell = _clamp01(raw.get("sell"))
+    total = buy + sell
+    if total <= 0:
+        return {"buy": 0.5, "sell": 0.5}
+    return _binary_probabilities(buy / total)
+
+
+def _directional_sign(value: Any) -> float:
+    text = str(value or "").strip().lower()
+    if not text:
+        return 0.0
+    if text in {"up", "buy", "long"}:
+        return 1.0
+    if text in {"down", "sell", "short"}:
+        return -1.0
+    if any(token in text for token in ("bear", "short", "markdown", "distribut", "supply")):
+        return -1.0
+    if any(token in text for token in ("bull", "long", "markup", "accumul", "demand")):
+        return 1.0
+    return 0.0
 
 
 def _clean_symbol(value: Any) -> str:
@@ -158,15 +201,23 @@ def build_typesafe_request(state: Mapping[str, Any]) -> dict[str, Any]:
             "action": {
                 "type": "choice",
                 "instructions": (
-                    "What is the best directional posture for `symbol` using the source timestamps and freshness? "
-                    "Reconcile options flow, market regime, dealer microstructure, VPA, and the "
-                    "execution gate. Missing or conflicting evidence should favor wait. This is "
-                    "decision support, not permission to place an order."
+                    "Judge the next directional action for `symbol` from the measured evidence. "
+                    "Use source timestamps and freshness. Reconcile options flow, market regime, "
+                    "dealer microstructure, and VPA. Missing, stale, or conflicting evidence must "
+                    "lower confidence and raise risk; it must not produce a wait. Ignore the "
+                    "execution gate for this choice — code applies stay-out policy separately. "
+                    "If evidence is absent or balanced, still pick buy or sell with coin-flip "
+                    "confidence. This is decision support, not permission to place an order."
                 ),
                 "criteria": {
-                    "buy": "Fresh, measurable evidence aligns bullishly across multiple independent lenses.",
-                    "sell": "Fresh, measurable evidence aligns bearishly across multiple independent lenses.",
-                    "wait": "Evidence is mixed, stale, missing, low quality, transitional, or the gate is closed.",
+                    "buy": (
+                        "The next directional action is to buy: usable evidence favors rising "
+                        "prices, including a weak or contested bullish lean."
+                    ),
+                    "sell": (
+                        "The next directional action is to sell: usable evidence favors falling "
+                        "prices, including a weak or contested bearish lean."
+                    ),
                 },
             },
             "setup": {
@@ -195,8 +246,8 @@ def build_typesafe_request(state: Mapping[str, Any]) -> dict[str, Any]:
                 "type": "score",
                 "instructions": "How favorable is this exact moment for acting on the directional posture?",
                 "criteria": [
-                    "Do not act: closed gate, stale inputs, or no trigger",
-                    "Poor timing: wait for confirmation or a better level",
+                    "Unusable moment: closed gate, stale inputs, or no trigger",
+                    "Poor timing: confirmation or a better level is still missing",
                     "Neutral timing: watch closely",
                     "Good timing: current structure and trigger are supportive",
                     "Exceptional timing: fresh trigger, aligned structure, and open gate",
@@ -213,54 +264,455 @@ def build_typesafe_request(state: Mapping[str, Any]) -> dict[str, Any]:
                     "Extreme: closed gate, stale/failed sources, or disorderly conditions",
                 ],
             },
+            "vpa_direction": {
+                "type": "choice",
+                "instructions": (
+                    "Using only the VPA fields (`vpa.bias`, `vpa.scenario_direction`, "
+                    "`vpa.market_phase`, `vpa.effort_result`, `vpa.sentiment`), which "
+                    "directional action does volume-price analysis support? Ignore the "
+                    "execution gate and all non-VPA sources. Do not replace VPA math; "
+                    "judge the supplied fields. If VPA is missing, mixed, or neutral, "
+                    "still choose buy or sell with low confidence."
+                ),
+                "criteria": {
+                    "buy": (
+                        "VPA bias, phase, sentiment, or scenario direction favors buying "
+                        "(LONG, BULLISH, markup, accumulation)."
+                    ),
+                    "sell": (
+                        "VPA bias, phase, sentiment, or scenario direction favors selling "
+                        "(SHORT, BEARISH, markdown, distribution)."
+                    ),
+                },
+            },
+            "vpa_claim_support": {
+                "type": "score",
+                "instructions": (
+                    "How well does the measured VPA evidence support the stated VPA bias "
+                    "and market phase? Judge only the VPA fields. Do not replace VPA math; "
+                    "assess whether those supplied fields hang together."
+                ),
+                "criteria": [
+                    (
+                        "Unsupported: VPA fields are missing, failed, or empty, so the "
+                        "stated bias or phase has no measured backing."
+                    ),
+                    (
+                        "Weakly supported: a stated VPA bias or phase is present but almost "
+                        "no corroborating VPA field agrees with it."
+                    ),
+                    (
+                        "Mixed: some VPA fields back the stated bias or phase while others "
+                        "contradict it or read as congestion/neutral."
+                    ),
+                    (
+                        "Well supported: several independent VPA fields agree with the "
+                        "stated bias and phase, with only minor tension."
+                    ),
+                    (
+                        "Tightly supported: bias, scenario direction, market phase, "
+                        "sentiment, and effort-result all agree without contradiction."
+                    ),
+                ],
+            },
         },
+    }
+
+
+def _vpa_local_answers(state: Mapping[str, Any]) -> dict[str, Any]:
+    status = _mapping(state.get("source_status"))
+    ready = str(status.get("vpa") or "").lower() == "ready"
+    if not ready:
+        return {
+            "vpa_direction": {
+                "choice": "buy",
+                "confidence": 0.5,
+                "probabilities": {"buy": 0.5, "sell": 0.5},
+            },
+            "vpa_claim_support": {"score": 0.0, "confidence": 0.35},
+        }
+
+    vpa = _mapping(state.get("vpa"))
+    votes = [
+        _directional_sign(vpa.get("bias")),
+        _directional_sign(vpa.get("scenario_direction")),
+        _directional_sign(vpa.get("market_phase")),
+        _directional_sign(vpa.get("sentiment")),
+    ]
+    net = sum(votes)
+    nonzero = [vote for vote in votes if vote]
+    effort = str(vpa.get("effort_result") or "").lower()
+    effort_ok = "valid" in effort
+    effort_bad = "anoma" in effort or "mixed" in effort
+    present = any(
+        str(vpa.get(key) or "").strip()
+        for key in ("bias", "scenario_direction", "market_phase", "sentiment", "effort_result")
+    )
+    if not present:
+        support = 0.0
+    elif not nonzero:
+        support = 1.0
+    elif net == 0:
+        support = 2.0
+    else:
+        sign = 1.0 if net > 0 else -1.0
+        agree = sum(1 for vote in nonzero if vote == sign)
+        contradict = sum(1 for vote in nonzero if vote == -sign)
+        if contradict:
+            support = 2.0
+        elif agree >= 3 and effort_ok:
+            support = 4.0
+        elif agree >= 2:
+            support = 2.0 if effort_bad else 3.0
+        else:
+            support = 1.0
+
+    direction = "buy" if net > 0 else "sell" if net < 0 else "buy"
+    confidence = 0.5 if net == 0 else min(0.82, 0.42 + abs(net) * 0.12)
+    buy_p = 0.5 if net == 0 else max(0.05, min(0.95, 0.5 + net * 0.15))
+    return {
+        "vpa_direction": {
+            "choice": direction,
+            "confidence": confidence,
+            "probabilities": _binary_probabilities(buy_p),
+        },
+        "vpa_claim_support": {"score": support, "confidence": min(0.82, 0.35 + support * 0.12)},
+    }
+
+
+def _compute_model_votes(state: Mapping[str, Any]) -> tuple[dict[str, dict[str, Any]], float]:
+    """Extract continuous directional signals and weights from the four model lenses."""
+    status = _mapping(state.get("source_status"))
+    options = _mapping(state.get("options"))
+    regime = _mapping(state.get("regime"))
+    micro = _mapping(state.get("microstructure"))
+    vpa = _mapping(state.get("vpa"))
+
+    # 1. Flow model
+    flow = _number(options.get("signed_flow_imbalance"))
+    activity_lean = str(options.get("activity_lean") or "").lower()
+    gex_regime = str(options.get("gex_regime") or "").lower()
+    flow_ready = status.get("options") == "ready"
+    if not flow_ready:
+        flow_sig = 0.0
+        flow_label = "neutral"
+        flow_summary = "Options source unavailable or unmeasured"
+    elif flow is not None:
+        flow_sig = max(-1.0, min(1.0, flow * 2.0))
+        if "neg" in gex_regime and flow_sig != 0:
+            flow_sig = max(-1.0, min(1.0, flow_sig * 1.2))
+        flow_label = "bullish" if flow_sig > 0.10 else "bearish" if flow_sig < -0.10 else "neutral"
+        flow_summary = f"Signed flow imbalance {flow:+.2f} ({flow_label})"
+        if gex_regime:
+            flow_summary += f", {gex_regime} GEX"
+    else:
+        flow_sig = 0.8 if "bull" in activity_lean else -0.8 if "bear" in activity_lean else 0.0
+        flow_label = "bullish" if flow_sig > 0 else "bearish" if flow_sig < 0 else "neutral"
+        flow_summary = f"Activity lean {activity_lean or 'unmeasured'}"
+
+    # 2. Regime model
+    regime_ready = status.get("regime") == "ready"
+    primary = str(regime.get("primary") or "").lower()
+    bull_p = _number(regime.get("bullish_probability"))
+    bear_p = _number(regime.get("bearish_probability"))
+    if not regime_ready:
+        regime_sig = 0.0
+        regime_label = "neutral"
+        regime_summary = "Regime classifier unavailable"
+    elif bull_p is not None and bear_p is not None:
+        diff = bull_p - bear_p
+        regime_sig = max(-1.0, min(1.0, diff * 2.0))
+        regime_label = (
+            "bullish" if regime_sig > 0.10 else "bearish" if regime_sig < -0.10 else "neutral"
+        )
+        regime_summary = f"P(bull)={bull_p:.0%} vs P(bear)={bear_p:.0%} ({primary or 'measured'})"
+    else:
+        regime_sig = 0.85 if "bull" in primary else -0.85 if "bear" in primary else 0.0
+        regime_label = "bullish" if regime_sig > 0 else "bearish" if regime_sig < 0 else "neutral"
+        regime_summary = f"Regime {primary or 'unmeasured'}"
+
+    # 3. Microstructure model
+    micro_ready = status.get("microstructure") == "ready"
+    dealer_regime = str(micro.get("regime") or "").lower()
+    hedging = str(micro.get("dealer_hedging_action") or "").lower()
+    if not micro_ready:
+        micro_sig = 0.0
+        micro_label = "neutral"
+        micro_summary = "Dealer microstructure unavailable"
+    elif any(w in hedging for w in ("bull", "buy", "bid", "stabilizing_long", "up")):
+        micro_sig = 0.8
+        micro_label = "bullish"
+        micro_summary = f"Dealer hedging supportive ({hedging})"
+    elif any(w in hedging for w in ("bear", "sell", "ask", "accelerating_down", "down")):
+        micro_sig = -0.8
+        micro_label = "bearish"
+        micro_summary = f"Dealer hedging pressing ({hedging})"
+    elif "pos" in dealer_regime:
+        micro_sig = 0.25 if flow_sig > 0.1 else -0.25 if flow_sig < -0.1 else 0.0
+        micro_label = "bullish" if micro_sig > 0 else "bearish" if micro_sig < 0 else "neutral"
+        micro_summary = f"Positive gamma pin/stabilization ({dealer_regime})"
+    elif "neg" in dealer_regime:
+        micro_sig = 0.45 if flow_sig > 0.1 else -0.45 if flow_sig < -0.1 else 0.0
+        micro_label = "bullish" if micro_sig > 0 else "bearish" if micro_sig < 0 else "neutral"
+        micro_summary = f"Negative gamma acceleration ({dealer_regime})"
+    else:
+        micro_sig = 0.0
+        micro_label = "neutral"
+        micro_summary = f"Dealer regime {dealer_regime or 'unmeasured'}"
+
+    # 4. VPA model
+    vpa_ready = status.get("vpa") == "ready"
+    vpa_bias = str(vpa.get("bias") or vpa.get("scenario_direction") or "").lower()
+    market_phase = str(vpa.get("market_phase") or "").lower()
+    vpa_sentiment = str(vpa.get("sentiment") or "").lower()
+    if not vpa_ready:
+        vpa_sig = 0.0
+        vpa_label = "neutral"
+        vpa_summary = "VPA engine unavailable"
+    else:
+        v_score = 0.0
+        if any(w in vpa_bias for w in ("long", "bull", "up")):
+            v_score += 0.7
+        elif any(w in vpa_bias for w in ("short", "bear", "down")):
+            v_score -= 0.7
+        if "markup" in market_phase or "accum" in market_phase:
+            v_score += 0.35
+        elif "markdown" in market_phase or "distrib" in market_phase:
+            v_score -= 0.35
+        if "bull" in vpa_sentiment:
+            v_score += 0.15
+        elif "bear" in vpa_sentiment:
+            v_score -= 0.15
+        vpa_sig = max(-1.0, min(1.0, v_score))
+        vpa_label = "bullish" if vpa_sig > 0.10 else "bearish" if vpa_sig < -0.10 else "neutral"
+        vpa_summary = (
+            f"VPA bias {vpa_bias.upper() or 'neutral'} · {market_phase or 'phase unmeasured'}"
+        )
+
+    models = {
+        "options_flow": {
+            "signal": flow_label,
+            "score": round(flow_sig, 3),
+            "weight": 1.0 if flow_ready else 0.0,
+            "summary": flow_summary,
+        },
+        "regime": {
+            "signal": regime_label,
+            "score": round(regime_sig, 3),
+            "weight": 1.0 if regime_ready else 0.0,
+            "summary": regime_summary,
+        },
+        "microstructure": {
+            "signal": micro_label,
+            "score": round(micro_sig, 3),
+            "weight": 0.85 if micro_ready else 0.0,
+            "summary": micro_summary,
+        },
+        "vpa": {
+            "signal": vpa_label,
+            "score": round(vpa_sig, 3),
+            "weight": 1.0 if vpa_ready else 0.0,
+            "summary": vpa_summary,
+        },
+    }
+    total_w = sum(m["weight"] for m in models.values())
+    c_score = (
+        sum(m["score"] * m["weight"] for m in models.values()) / total_w if total_w > 0 else 0.0
+    )
+    c_score = max(-1.0, min(1.0, c_score))
+    return models, c_score
+
+
+def _build_brain(
+    state: Mapping[str, Any],
+    action: str,
+    confidence: float,
+    lean: str,
+    consensus_score: float | None = None,
+) -> dict[str, Any]:
+    models, computed_score = _compute_model_votes(state)
+    c_score = consensus_score if consensus_score is not None else computed_score
+    c_score = max(-1.0, min(1.0, c_score))
+
+    target_label = "bullish" if action == "buy" else "bearish"
+    agreeing = sum(1 for m in models.values() if m["weight"] > 0 and m["signal"] == target_label)
+    opposing = sum(
+        1
+        for m in models.values()
+        if m["weight"] > 0 and m["signal"] not in {target_label, "neutral"}
+    )
+    total_active = sum(1 for m in models.values() if m["weight"] > 0)
+
+    if agreeing >= 3 and opposing <= 1:
+        confluence = "HIGH"
+    elif agreeing >= 2 and opposing <= 1:
+        confluence = "MODERATE"
+    elif opposing >= 2:
+        confluence = "CONTESTED"
+    else:
+        confluence = "BALANCED"
+
+    if agreeing >= 3:
+        rationale = (
+            f"Broad confluence: {agreeing} of {total_active} models strongly agree on "
+            f"{action.upper()} posture with high stability."
+        )
+    elif agreeing >= 2:
+        rationale = (
+            f"Directional alignment: {agreeing} of {total_active} models favor "
+            f"{action.upper()} while {opposing} oppose; noise filtered."
+        )
+    elif total_active == 0:
+        rationale = "No active model inputs available; operating in cautious standby posture."
+    else:
+        rationale = (
+            f"Contested signals ({agreeing} {action.upper()} vs {opposing} opposing); "
+            "brain anchors to conservative risk threshold."
+        )
+
+    return {
+        "consensus_score": round(c_score, 3),
+        "confluence": confluence,
+        "stabilized": True,
+        "agreeing_models": agreeing,
+        "total_models": total_active,
+        "models": models,
+        "rationale": rationale,
     }
 
 
 def _local_judgments(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Deterministic outage fallback; explicit and deliberately conservative."""
+    """Deterministic outage fallback; multi-model consensus brain with hysteresis."""
+    models, c_score = _compute_model_votes(state)
+    total_active = sum(1 for m in models.values() if m["weight"] > 0)
 
-    score = 0.0
-    status = _mapping(state.get("source_status"))
-    options = _mapping(state.get("options")) if status.get("options") == "ready" else {}
-    regime = _mapping(state.get("regime")) if status.get("regime") == "ready" else {}
-    vpa = _mapping(state.get("vpa")) if status.get("vpa") == "ready" else {}
+    if total_active == 0:
+        action = "buy"
+        confidence = 0.55
+        probabilities = {"buy": 0.55, "sell": 0.45}
+        answers = {
+            "lean": {"choice": "unknown", "confidence": 0.0, "probabilities": {}},
+            "action": {"choice": action, "confidence": confidence, "probabilities": probabilities},
+            "setup": {"choice": "no_setup", "confidence": 0.0, "probabilities": {}},
+            "alignment": {"score": 0.0, "confidence": confidence},
+            "timing": {"score": 1.0, "confidence": confidence},
+            "risk": {"score": 3.5, "confidence": confidence},
+        }
+        answers.update(_vpa_local_answers(state))
+        answers["brain"] = _build_brain(state, action, confidence, "unknown", 0.0)
+        return answers
 
-    flow = _number(options.get("signed_flow_imbalance"))
-    if flow is not None:
-        score += 1.0 if flow >= 0.15 else -1.0 if flow <= -0.15 else 0.0
+    # Deadband hysteresis around zero to prevent second-guessing and jitter
+    if c_score > 0.035:
+        action = "buy"
+    elif c_score < -0.035:
+        action = "sell"
     else:
-        lean = str(options.get("activity_lean") or "").lower()
-        score += 0.75 if "bull" in lean else -0.75 if "bear" in lean else 0.0
+        # Tie-breaker when consensus is within neutral deadband [-0.035, +0.035]
+        regime = _mapping(state.get("regime"))
+        bull_p = _number(regime.get("bullish_probability"))
+        bear_p = _number(regime.get("bearish_probability"))
+        reg_diff = (bull_p - bear_p) if (bull_p is not None and bear_p is not None) else 0.0
+        options = _mapping(state.get("options"))
+        flow_val = _number(options.get("signed_flow_imbalance"))
+        vpa = _mapping(state.get("vpa"))
+        market_phase = str(vpa.get("market_phase") or "").lower()
 
+        if reg_diff > 0.02:
+            action = "buy"
+        elif reg_diff < -0.02:
+            action = "sell"
+        elif flow_val is not None and flow_val > 0.01:
+            action = "buy"
+        elif flow_val is not None and flow_val < -0.01:
+            action = "sell"
+        elif "markup" in market_phase or "accum" in market_phase:
+            action = "buy"
+        elif "markdown" in market_phase or "distrib" in market_phase:
+            action = "sell"
+        else:
+            action = "buy"
+
+    agreeing_bull = sum(1 for m in models.values() if m["weight"] > 0 and m["signal"] == "bullish")
+    agreeing_bear = sum(1 for m in models.values() if m["weight"] > 0 and m["signal"] == "bearish")
+    agreeing = agreeing_bull if action == "buy" else agreeing_bear
+    opposing = agreeing_bear if action == "buy" else agreeing_bull
+
+    if agreeing >= 3 and opposing <= 1:
+        confluence = "HIGH"
+        confidence = round(min(0.90, 0.76 + 0.14 * abs(c_score)), 4)
+        alignment = 3.5
+    elif agreeing >= 2 and opposing <= 1:
+        confluence = "MODERATE"
+        confidence = round(min(0.82, 0.68 + 0.12 * abs(c_score)), 4)
+        alignment = 2.6
+    elif opposing >= 2:
+        confluence = "CONTESTED"
+        confidence = round(max(0.60, min(0.70, 0.62 + 0.08 * abs(c_score))), 4)
+        alignment = 1.2
+    else:  # BALANCED
+        confluence = "BALANCED"
+        confidence = round(max(0.60, min(0.68, 0.62 + 0.08 * abs(c_score))), 4)
+        alignment = 1.5
+
+    lean = "bullish" if c_score > 0.08 else "bearish" if c_score < -0.08 else "neutral"
+
+    if action == "buy":
+        probabilities = {"buy": confidence, "sell": round(1.0 - confidence, 4)}
+    else:
+        probabilities = {"sell": confidence, "buy": round(1.0 - confidence, 4)}
+
+    timing = round(
+        min(
+            4.0,
+            max(
+                1.0,
+                2.2
+                + 1.2 * abs(c_score)
+                + (0.5 if agreeing >= 3 else 0.0)
+                - (0.5 if opposing >= 2 else 0.0),
+            ),
+        ),
+        3,
+    )
+    risk = round(max(1.0, min(3.8, 2.2 - abs(c_score) * 0.8 + opposing * 0.6)), 3)
+
+    options = _mapping(state.get("options"))
+    regime = _mapping(state.get("regime"))
+    micro = _mapping(state.get("microstructure"))
+    vpa = _mapping(state.get("vpa"))
+    gex_regime = str(options.get("gex_regime") or "").lower()
     primary = str(regime.get("primary") or "").lower()
-    score += 1.0 if "bull" in primary else -1.0 if "bear" in primary else 0.0
-    bias = str(vpa.get("bias") or vpa.get("scenario_direction") or "").lower()
-    score += 1.0 if "long" in bias or "bull" in bias or bias == "up" else 0.0
-    score -= 1.0 if "short" in bias or "bear" in bias or bias == "down" else 0.0
+    dealer_regime = str(micro.get("regime") or "").lower()
 
-    action = "buy" if score >= 2 else "sell" if score <= -2 else "wait"
-    confidence = min(0.82, 0.38 + abs(score) * 0.12) if action != "wait" else 0.45
-    probabilities = {
-        "buy": max(0.05, min(0.9, 0.33 + score * 0.14)),
-        "sell": max(0.05, min(0.9, 0.33 - score * 0.14)),
-        "wait": 0.34,
-    }
-    total = sum(probabilities.values())
-    probabilities = {key: round(value / total, 4) for key, value in probabilities.items()}
-    return {
+    if "neg" in gex_regime or "break" in primary:
+        setup = "breakout"
+    elif "pos" in dealer_regime and abs(c_score) < 0.4:
+        setup = "mean_reversion"
+    elif "revers" in str(vpa.get("scenario_direction") or "").lower():
+        setup = "pullback_reversal"
+    elif abs(c_score) >= 0.25:
+        setup = "trend_continuation"
+    else:
+        setup = "no_setup"
+
+    brain_data = _build_brain(state, action, confidence, lean, c_score)
+
+    answers = {
         "lean": {
-            "choice": ("bullish" if score > 0 else "bearish" if score < 0 else
-                       "neutral" if options or regime or vpa else "unknown"),
-            "confidence": 0.0,
+            "choice": lean,
+            "confidence": round(confidence, 4),
             "probabilities": {},
         },
         "action": {"choice": action, "confidence": confidence, "probabilities": probabilities},
-        "setup": {"choice": "no_setup", "confidence": 0.0, "probabilities": {}},
-        "alignment": {"score": min(4.0, abs(score)), "confidence": confidence},
-        "timing": {"score": 2.0 if action != "wait" else 1.0, "confidence": confidence},
-        "risk": {"score": 3.0 if action == "wait" else 2.0, "confidence": confidence},
+        "setup": {"choice": setup, "confidence": confidence, "probabilities": {}},
+        "alignment": {"score": alignment, "confidence": confidence},
+        "timing": {"score": timing, "confidence": confidence},
+        "risk": {"score": risk, "confidence": confidence},
+        "brain": brain_data,
     }
+    answers.update(_vpa_local_answers(state))
+    return answers
 
 
 def _call_typesafe(payload: Mapping[str, Any], api_key: str) -> tuple[dict[str, Any], str, int]:
@@ -319,15 +771,28 @@ def _choice(
     answers: Mapping[str, Any], key: str, allowed: set[str], default: str
 ) -> tuple[str, float, dict[str, float]]:
     answer = _mapping(answers.get(key))
-    value = str(answer.get("choice") or default)
-    if value not in allowed:
-        value = default
+    binary = allowed == _ACTION_SET
     confidence = _clamp01(answer.get("confidence"))
     probabilities = {
         str(name): _clamp01(probability)
         for name, probability in _mapping(answer.get("probabilities")).items()
         if str(name) in allowed
     }
+    if binary:
+        probabilities = _normalize_binary(probabilities)
+    reported = str(answer.get("choice") or "")
+    value = reported or default
+    if value not in allowed:
+        if binary:
+            value = "buy" if probabilities["buy"] >= probabilities["sell"] else "sell"
+        elif probabilities:
+            value = max(probabilities, key=probabilities.get)
+            if value not in allowed:
+                value = default
+        else:
+            value = default
+        if reported == "wait":
+            confidence = min(confidence, 0.5)
     return value, confidence, probabilities
 
 
@@ -339,7 +804,7 @@ def _score(answers: Mapping[str, Any], key: str, default: float) -> tuple[float,
     )
 
 
-def _compose_reasons(state: Mapping[str, Any], action: str) -> list[str]:
+def _compose_reasons(state: Mapping[str, Any], action: str, keep_out: bool) -> list[str]:
     reasons: list[str] = []
     options = _mapping(state.get("options"))
     regime = _mapping(state.get("regime"))
@@ -356,15 +821,16 @@ def _compose_reasons(state: Mapping[str, Any], action: str) -> list[str]:
         reasons.append(f"VPA: {vpa.get('bias') or vpa.get('scenario_direction')}.")
     if not reasons:
         reasons.append("No directional source supplied a usable read.")
-    if action == "wait":
-        reasons.append("Policy requires more alignment before taking directional risk.")
+    if keep_out:
+        note = f"Policy keeps the operator out while the directional call remains {action}."
+        reasons = reasons[:4] + [note]
     return reasons[:5]
 
 
 def _policy(answers: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
-    raw_action, confidence, probabilities = _choice(
-        answers, "action", {"buy", "sell", "wait"}, "wait"
-    )
+    raw_action, confidence, probabilities = _choice(answers, "action", _ACTION_SET, "buy")
+    action = raw_action if raw_action in _ACTION_SET else "buy"
+    probabilities = _normalize_binary(probabilities)
     setup, setup_confidence, _ = _choice(
         answers,
         "setup",
@@ -374,6 +840,10 @@ def _policy(answers: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
     alignment, alignment_confidence = _score(answers, "alignment", 0.0)
     timing, timing_confidence = _score(answers, "timing", 0.0)
     risk, risk_confidence = _score(answers, "risk", 4.0)
+    vpa_direction, vpa_confidence, vpa_probabilities = _choice(
+        answers, "vpa_direction", _ACTION_SET, "buy"
+    )
+    vpa_support, vpa_support_confidence = _score(answers, "vpa_claim_support", 0.0)
 
     gate = _mapping(state.get("execution_gate"))
     source_status = _mapping(state.get("source_status"))
@@ -394,9 +864,16 @@ def _policy(answers: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
     if risk >= 3.5:
         blockers.append("Near-term execution risk is extreme.")
 
-    action = "wait" if blockers else raw_action
-    if action == "wait" and raw_action == "wait" and not blockers:
-        blockers.append("The synthesized posture is wait.")
+    keep_out = bool(blockers) or risk >= 3.5 or confidence < 0.55 or alignment < 2.0 or timing < 2.0
+    risk_reasons = list(blockers)
+    if keep_out:
+        risk_reasons.append(f"Stay-out policy is active; directional call remains {action}.")
+    if vpa_support < 1.5:
+        risk_reasons.append("VPA claim is weakly supported by measured VPA fields.")
+    if vpa_direction != action:
+        risk_reasons.append(
+            f"VPA next action is {vpa_direction} while the composite call is {action}."
+        )
     lean, lean_confidence, lean_probabilities = _choice(
         answers, "lean", {"bullish", "bearish", "neutral", "unknown"}, "unknown"
     )
@@ -414,6 +891,22 @@ def _policy(answers: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
         "timing": {"score": round(timing, 3), "confidence": round(timing_confidence, 4)},
         "risk": {"score": round(risk, 3), "confidence": round(risk_confidence, 4)},
         "blockers": blockers,
+        "risk_assessment": {
+            "score": round(risk, 3),
+            "label": _risk_label(risk),
+            "reasons": risk_reasons,
+            "keep_out": keep_out,
+        },
+        "vpa_judgment": {
+            "direction": vpa_direction,
+            "confidence": round(vpa_confidence, 4),
+            "probabilities": _normalize_binary(vpa_probabilities),
+            "claim_support": {
+                "score": round(vpa_support, 3),
+                "confidence": round(vpa_support_confidence, 4),
+            },
+        },
+        "brain": answers.get("brain") or _build_brain(state, action, confidence, lean),
     }
 
 
@@ -483,7 +976,7 @@ def _evaluate_snapshot(
             "error": engine_error,
         },
         **policy,
-        "reasons": _compose_reasons(state, policy["action"]),
+        "reasons": _compose_reasons(state, policy["action"], policy["risk_assessment"]["keep_out"]),
         "source_status": state["source_status"],
         "decision_authorized": False,
         "notice": "Decision support only. No order is placed or authorized.",

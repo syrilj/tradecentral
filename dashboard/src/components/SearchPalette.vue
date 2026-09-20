@@ -53,6 +53,7 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'flowstate', title: 'Flow State', idx: '15', hint: 'Daily proxy research' },
   { name: 'vpa', title: 'VPA', idx: '17', hint: 'Volume Price Analysis & AI vision' },
   { name: 'amt', title: 'AMT', idx: '18', hint: 'Auction Market Theory · balance vs breakout' },
+  { name: 'decision', title: 'Decision', idx: '19', hint: 'TypeSafe live read · Decision Brain' },
 ]
 
 const q = ref('')

@@ -32,8 +32,15 @@ function cleanSymbol(value: unknown): string {
 
 const symbol = ref(cleanSymbol(route.query.symbol))
 const symbolInput = ref(symbol.value)
-const activated = ref(false)
+const activated = ref(true)
 const loadingLabel = ref('Reading market data…')
+
+const QUICK_SYMBOLS = ['SPY', 'QQQ', 'NVDA', 'AAPL', 'TSLA', 'MSFT', 'IWM'] as const
+
+function selectSymbol(sym: string): void {
+  symbolInput.value = sym
+  applySymbol()
+}
 
 interface DecisionBundle {
   decision: LiveDecisionPayload
@@ -168,7 +175,7 @@ async function loadDecision(): Promise<DecisionBundle> {
 
 const decisionRes = useResource<DecisionBundle>(loadDecision, {
   intervalMs: POLL_MS,
-  immediate: false,
+  immediate: true,
   enabled: () => activated.value,
 })
 
@@ -177,16 +184,56 @@ const decision = computed(() => bundle.value?.decision ?? null)
 const state = computed(() => bundle.value?.state ?? null)
 
 const actionLabel = computed(() => {
-  if (!decision.value) return 'STANDBY'
-  return decision.value.action === 'buy'
-    ? 'BUY BIAS'
-    : decision.value.action === 'sell'
-      ? 'SELL BIAS'
-      : 'WAIT'
+  if (decision.value?.action === 'buy') return 'BUY'
+  if (decision.value?.action === 'sell') return 'SELL'
+  return 'STANDBY'
 })
 
-const actionTone = computed(() => decision.value?.action ?? 'wait')
+const actionTone = computed(() => {
+  if (decision.value?.action === 'sell') return 'sell'
+  if (decision.value?.action === 'buy') return 'buy'
+  return 'standby'
+})
 const confidencePct = computed(() => Math.round((decision.value?.confidence ?? 0) * 100))
+
+const clampedConsensus = computed(() => {
+  const score = decision.value?.brain?.consensus_score ?? 0
+  return Math.max(-1, Math.min(1, score))
+})
+
+const meterPointerLeft = computed(() => `${50 + clampedConsensus.value * 50}%`)
+
+const meterFillStyle = computed(() => {
+  const score = clampedConsensus.value
+  const widthPct = Math.abs(score) * 50
+  return score >= 0
+    ? { left: '50%', width: `${widthPct}%` }
+    : { left: `${50 - widthPct}%`, width: `${widthPct}%` }
+})
+const showRiskAssessment = computed(() => {
+  const current = decision.value
+  if (!current) return false
+  return (
+    Boolean(current.risk_assessment?.keep_out) ||
+    current.blockers.length > 0 ||
+    current.risk.score >= 3 ||
+    (current.risk_assessment?.reasons?.length ?? 0) > 0
+  )
+})
+const riskReasons = computed(() => {
+  const current = decision.value
+  if (!current) return []
+  const assessed = current.risk_assessment?.reasons?.filter(Boolean) ?? []
+  if (assessed.length) return assessed
+  if (current.blockers.length) return current.blockers
+  if (current.risk.score >= 3) {
+    return [
+      current.risk_assessment?.label ||
+        `Execution risk is ${scoreLabel(current.risk.score).toLowerCase()}.`,
+    ]
+  }
+  return []
+})
 const readyCount = computed(
   () =>
     Object.values(decision.value?.source_status ?? {}).filter((value) => value === 'ready').length,
@@ -262,6 +309,21 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   { key: 'vpa', label: 'VPA' },
   { key: 'execution_gate', label: 'EXECUTION GATE' },
 ]
+
+function modelLabel(key: string): string {
+  switch (key) {
+    case 'options_flow':
+      return 'OPTIONS FLOW & GEX'
+    case 'regime':
+      return 'MARKET REGIME'
+    case 'microstructure':
+      return 'DEALER BOOK'
+    case 'vpa':
+      return 'VOLUME PRICE ANALYSIS'
+    default:
+      return String(key).toUpperCase()
+  }
+}
 </script>
 
 <template>
@@ -271,17 +333,36 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
         <div class="eyebrow fig">LIVE DECISION ENGINE · TYPESAFE SYSTEM ONE</div>
         <h1 class="title">One read. Every lens. Right now.</h1>
         <p class="subtitle">
-          Options flow, dealer positioning, market regime, VPA and execution policy reconciled into
-          a single posture. No order routing.
+          WAIT is not a posture. The read is buy or sell, with confidence. Issues become a risk
+          assessment. No order routing.
         </p>
       </div>
-      <form class="symbol-form" @submit.prevent="applySymbol">
-        <input v-model="symbolInput" aria-label="Ticker symbol" maxlength="10" spellcheck="false" />
-        <button type="submit">LOAD</button>
-      </form>
+      <div class="symbol-panel">
+        <div class="quick-chips" aria-label="Quick symbols">
+          <button
+            v-for="sym in QUICK_SYMBOLS"
+            :key="sym"
+            type="button"
+            class="chip-btn fig"
+            :class="{ active: symbol === sym }"
+            @click="selectSymbol(sym)"
+          >
+            {{ sym }}
+          </button>
+        </div>
+        <form class="symbol-form" @submit.prevent="applySymbol">
+          <input
+            v-model="symbolInput"
+            aria-label="Ticker symbol"
+            maxlength="10"
+            spellcheck="false"
+          />
+          <button type="submit">LOAD</button>
+        </form>
+      </div>
     </header>
 
-    <section v-if="!activated" class="launch-card">
+    <section v-if="!activated && !bundle" class="launch-card">
       <div class="launch-orbit" aria-hidden="true"><span>5</span></div>
       <div>
         <span class="launch-kicker fig">PAID LIVE SOURCES · OPERATOR ACTIVATED</span>
@@ -297,15 +378,18 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
 
     <template v-else>
       <div class="live-controls">
-        <span class="live-dot" />
-        <span class="fig">LIVE · {{ POLL_MS / 1000 }}S LOOP</span>
+        <span class="live-dot" :class="{ paused: !activated }" />
+        <span class="fig">{{
+          activated ? `LIVE · ${POLL_MS / 1000}S LOOP` : 'PAUSED · READ FROZEN'
+        }}</span>
         <span v-if="decisionRes.fetchedAt.value" class="muted fig">
           UPDATED {{ new Date(decisionRes.fetchedAt.value).toLocaleTimeString() }}
         </span>
         <button type="button" :disabled="decisionRes.loading.value" @click="decisionRes.refresh()">
           {{ decisionRes.loading.value ? 'READING…' : 'REFRESH NOW' }}
         </button>
-        <button type="button" class="quiet" @click="pause">PAUSE</button>
+        <button v-if="activated" type="button" class="quiet" @click="pause">PAUSE</button>
+        <button v-else type="button" class="quiet resume-btn" @click="activate">RESUME</button>
       </div>
 
       <LoadingState v-if="decisionRes.loading.value && !bundle" :label="loadingLabel" />
@@ -318,22 +402,27 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
           <div class="verdict-main">
             <div class="verdict-topline">
               <span class="engine-badge">{{ engineLabel }}</span>
+              <span
+                v-if="decision.brain"
+                class="brain-pill fig"
+                :class="decision.brain.confluence.toLowerCase()"
+              >
+                BRAIN: {{ decision.brain.confluence }}
+              </span>
               <span class="fig">{{ readyCount }}/5 SOURCES READY</span>
               <span class="fig">{{ decision.engine.latency_ms }}MS SYNTHESIS</span>
             </div>
             <div class="symbol-lockup fig">{{ decision.symbol }}</div>
             <div class="action fig">{{ actionLabel }}</div>
+            <p class="action-sub">{{ confidencePct }}% confident this is the next action</p>
             <p class="action-sub">
-              DIRECTIONAL LEAN · {{ (decision.lean ?? 'unknown').toUpperCase() }}
-            </p>
-            <p class="action-sub">
-              {{ decision.setup.replace(/_/g, ' ').toUpperCase() }} · {{ confidencePct }}% model
-              confidence
+              LEAN {{ (decision.lean ?? 'unknown').toUpperCase() }} ·
+              {{ decision.setup.replace(/_/g, ' ').toUpperCase() }}
             </p>
           </div>
 
           <div class="probability-stack" aria-label="Action probability distribution">
-            <div v-for="key in ['buy', 'wait', 'sell'] as const" :key="key" class="prob-row">
+            <div v-for="key in ['buy', 'sell'] as const" :key="key" class="prob-row">
               <div class="prob-head fig">
                 <span>{{ key }}</span
                 ><span>{{ pct(decision.probabilities[key]) }}</span>
@@ -347,6 +436,87 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
               the conservative local fallback.
             </p>
           </div>
+        </section>
+
+        <section v-if="decision.brain" class="brain-card">
+          <div class="brain-head">
+            <div class="brain-title-lockup">
+              <span class="brain-badge fig">DECISION BRAIN</span>
+              <span class="confluence-badge fig" :class="decision.brain.confluence.toLowerCase()">
+                {{ decision.brain.confluence }} CONFLUENCE
+              </span>
+              <span class="shield-badge fig">
+                <span class="shield-dot" /> STABILIZED · JITTER SHIELD ACTIVE
+              </span>
+            </div>
+            <div class="brain-score-lockup fig">
+              <span class="consensus-count"
+                >{{ decision.brain.agreeing_models }}/{{ decision.brain.total_models }} MODELS IN
+                CONSENSUS</span
+              >
+              <span class="consensus-score">
+                SCORE {{ decision.brain.consensus_score > 0 ? '+' : ''
+                }}{{ decision.brain.consensus_score.toFixed(2) }}
+              </span>
+            </div>
+          </div>
+
+          <div class="brain-meter-container">
+            <div class="meter-labels fig">
+              <span class="bear">MAX BEAR (-1.0)</span>
+              <span class="mid">0.0 BALANCED</span>
+              <span class="bull">MAX BULL (+1.0)</span>
+            </div>
+            <div class="meter-bar">
+              <div class="meter-center-axis" />
+              <div
+                class="meter-fill"
+                :class="clampedConsensus >= 0 ? 'bull' : 'bear'"
+                :style="meterFillStyle"
+              />
+              <div class="meter-pointer" :style="{ left: meterPointerLeft }" />
+            </div>
+          </div>
+
+          <div class="brain-rationale-box">
+            <span class="rationale-kicker fig">MODEL CONVERGENCE</span>
+            <p>{{ decision.brain.rationale }}</p>
+          </div>
+
+          <div class="model-cards-grid">
+            <article
+              v-for="(model, key) in decision.brain.models"
+              :key="key"
+              class="model-vote-card"
+              :class="`vote-${model.signal}`"
+            >
+              <div class="model-vote-header">
+                <span class="model-name fig">{{ modelLabel(key) }}</span>
+                <span class="model-vote-tag fig" :class="model.signal">
+                  {{ model.signal.toUpperCase() }}
+                </span>
+              </div>
+              <div class="model-contrib-row fig">
+                <span>SIGNAL IMPACT</span>
+                <strong>{{ model.score > 0 ? '+' : '' }}{{ model.score.toFixed(2) }}</strong>
+              </div>
+              <p class="model-desc">{{ model.summary }}</p>
+            </article>
+          </div>
+        </section>
+
+        <section v-if="showRiskAssessment" class="risk-assessment">
+          <div class="risk-head">
+            <span class="fig">RISK ASSESSMENT</span>
+            <span class="fig">
+              {{ (decision.risk_assessment?.score ?? decision.risk.score).toFixed(1) }}/4 ·
+              {{ decision.risk_assessment?.label ?? scoreLabel(decision.risk.score) }}
+            </span>
+          </div>
+          <p v-if="decision.risk_assessment?.keep_out" class="risk-keep-out fig">KEEP OUT</p>
+          <ul v-if="riskReasons.length" class="risk-reasons">
+            <li v-for="reason in riskReasons" :key="reason">{{ reason }}</li>
+          </ul>
         </section>
 
         <div class="metric-grid">
@@ -395,13 +565,17 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
                 </span>
               </div>
               <p>{{ sourceRead(source.key) }}</p>
+              <p v-if="source.key === 'vpa' && decision.vpa_judgment" class="vpa-next">
+                VPA next {{ decision.vpa_judgment.direction.toUpperCase() }} · support
+                {{ (decision.vpa_judgment.claim_support?.score ?? 0).toFixed(1) }}/4
+              </p>
             </article>
           </div>
         </Panel>
 
         <footer class="decision-footer fig">
-          {{ decision.notice }} · confidence is model certainty, not win probability · final policy
-          stays in code
+          {{ decision.notice }} · confidence is model certainty, not win probability · no order
+          routing · issues surface as risk
         </footer>
       </template>
     </template>
@@ -438,9 +612,39 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   letter-spacing: -0.045em;
 }
 .subtitle {
-  color: var(--ink-muted);
+  color: var(--ink-dim);
   max-width: 780px;
   margin: 0;
+}
+.symbol-panel {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.quick-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.chip-btn {
+  border: var(--hair) solid var(--rule);
+  background: var(--panel);
+  color: var(--ink-faint);
+  padding: 6px 10px;
+  font: 700 var(--t-nano) var(--font-data);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.chip-btn:hover {
+  background: var(--panel-hi);
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.chip-btn.active {
+  background: color-mix(in srgb, var(--phosphor) 15%, var(--panel));
+  color: var(--phosphor);
+  border-color: var(--phosphor);
 }
 .symbol-form {
   display: flex;
@@ -468,13 +672,7 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
 .launch-card {
   min-height: 380px;
   border: var(--hair) solid var(--rule);
-  background:
-    radial-gradient(
-      circle at 15% 50%,
-      color-mix(in srgb, var(--phosphor) 13%, transparent),
-      transparent 34%
-    ),
-    var(--panel);
+  background: var(--panel);
   display: grid;
   grid-template-columns: 160px 1fr auto;
   align-items: center;
@@ -488,7 +686,6 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   border-radius: 50%;
   display: grid;
   place-items: center;
-  box-shadow: 0 0 50px color-mix(in srgb, var(--phosphor) 18%, transparent);
 }
 .launch-orbit span {
   font: 700 3rem var(--font-data);
@@ -499,7 +696,7 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   font-size: clamp(1.8rem, 3vw, 3.3rem);
 }
 .launch-card p {
-  color: var(--ink-muted);
+  color: var(--ink-dim);
   max-width: 650px;
 }
 .launch-kicker {
@@ -513,7 +710,6 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   color: var(--void);
   font: 800 var(--t-small) var(--font-data);
   cursor: pointer;
-  box-shadow: 0 0 30px color-mix(in srgb, var(--phosphor) 20%, transparent);
 }
 .live-controls {
   display: flex;
@@ -537,7 +733,14 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   height: 8px;
   border-radius: 50%;
   background: var(--long);
-  box-shadow: 0 0 10px var(--long);
+}
+.live-dot.paused {
+  background: var(--ink-faint);
+  box-shadow: none;
+}
+.live-controls .resume-btn {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 40%, transparent);
 }
 .muted {
   color: var(--ink-faint);
@@ -585,6 +788,23 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   padding: 2px 7px;
   font: 700 var(--t-nano) var(--font-data);
 }
+.brain-pill {
+  border: var(--hair) solid var(--rule);
+  padding: 2px 7px;
+  font: 700 var(--t-nano) var(--font-data);
+}
+.brain-pill.high {
+  color: var(--long);
+  border-color: color-mix(in srgb, var(--long) 50%, transparent);
+}
+.brain-pill.moderate {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 50%, transparent);
+}
+.brain-pill.contested,
+.brain-pill.balanced {
+  color: var(--ink-faint);
+}
 .symbol-lockup {
   margin-top: var(--s3);
   color: var(--ink-faint);
@@ -603,8 +823,14 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
 .tone-sell .action {
   color: var(--short);
 }
+.tone-standby .action {
+  color: var(--ink);
+}
+.verdict-card.tone-standby::before {
+  background: var(--ink-faint);
+}
 .action-sub {
-  color: var(--ink-muted);
+  color: var(--ink-dim);
   margin: 0;
   letter-spacing: 0.05em;
 }
@@ -619,7 +845,7 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   justify-content: space-between;
   margin-bottom: 6px;
   text-transform: uppercase;
-  color: var(--ink-muted);
+  color: var(--ink-dim);
 }
 .prob-track {
   height: 8px;
@@ -637,10 +863,229 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
 .prob-track .sell {
   background: var(--short);
 }
-.fallback-note {
+.brain-card {
+  border: var(--hair) solid var(--rule);
+  background: var(--panel);
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  position: relative;
+}
+.brain-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--phosphor);
+}
+.brain-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  padding-bottom: var(--s2);
+  border-bottom: var(--hair) solid var(--rule-faint);
+}
+.brain-title-lockup {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.brain-badge {
+  color: var(--phosphor);
+  font: 800 var(--t-nano) var(--font-data);
+  letter-spacing: 0.12em;
+}
+.confluence-badge {
+  padding: 3px 8px;
+  font: 700 var(--t-nano) var(--font-data);
+  letter-spacing: 0.08em;
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule);
+}
+.confluence-badge.high {
+  color: var(--long);
+  border-color: color-mix(in srgb, var(--long) 40%, transparent);
+  background: var(--call-wash);
+}
+.confluence-badge.moderate {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 40%, transparent);
+}
+.confluence-badge.contested,
+.confluence-badge.balanced {
   color: var(--ink-faint);
-  font-size: var(--t-micro);
+}
+.shield-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-faint);
+  font: var(--t-nano) var(--font-data);
+}
+.shield-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--phosphor);
+}
+.brain-score-lockup {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  font-size: var(--t-nano);
+}
+.consensus-count {
+  color: var(--ink-dim);
+}
+.consensus-score {
+  color: var(--ink);
+  font-weight: 700;
+}
+.brain-meter-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.meter-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
+}
+.meter-labels .bear {
+  color: var(--short);
+}
+.meter-labels .bull {
+  color: var(--long);
+}
+.meter-bar {
+  height: 10px;
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule);
+  position: relative;
+  overflow: visible;
+}
+.meter-center-axis {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 50%;
+  width: 2px;
+  background: var(--ink-faint);
+  z-index: 2;
+}
+.meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition:
+    width 0.3s ease,
+    left 0.3s ease;
+}
+.meter-fill.bull {
+  background: color-mix(in srgb, var(--long) 70%, transparent);
+}
+.meter-fill.bear {
+  background: color-mix(in srgb, var(--short) 70%, transparent);
+}
+.meter-pointer {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  background: var(--ink);
+  transform: translateX(-50%);
+  z-index: 3;
+}
+.brain-rationale-box {
+  padding: var(--s2) var(--s3);
+  background: var(--panel-hi);
+  border-left: 2px solid var(--phosphor);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rationale-kicker {
+  color: var(--phosphor);
+  font: 700 var(--t-nano) var(--font-data);
+  letter-spacing: 0.1em;
+}
+.brain-rationale-box p {
+  margin: 0;
+  color: var(--ink-soft);
+  font: var(--t-micro) var(--font-data);
   line-height: 1.5;
+}
+.model-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--s2);
+}
+.model-vote-card {
+  padding: var(--s2);
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.2s;
+}
+.model-vote-card.vote-bullish {
+  border-left: 2px solid var(--long);
+}
+.model-vote-card.vote-bearish {
+  border-left: 2px solid var(--short);
+}
+.model-vote-card.vote-neutral {
+  border-left: 2px solid var(--rule-hi);
+}
+.model-vote-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.model-name {
+  font: 700 var(--t-nano) var(--font-data);
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+}
+.model-vote-tag {
+  font: 800 var(--t-nano) var(--font-data);
+  padding: 1px 5px;
+}
+.model-vote-tag.bullish {
+  color: var(--long);
+  background: var(--call-wash);
+}
+.model-vote-tag.bearish {
+  color: var(--short);
+  background: var(--put-wash);
+}
+.model-vote-tag.neutral {
+  color: var(--ink-faint);
+  background: var(--panel-raise);
+}
+.model-contrib-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--t-nano);
+  color: var(--ink-faint);
+}
+.model-contrib-row strong {
+  color: var(--ink);
+}
+.model-desc {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-nano);
+  line-height: 1.4;
 }
 .metric-grid {
   display: grid;
@@ -662,12 +1107,47 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   font-size: 0.35em;
 }
 .metric-grid article > span:last-child {
-  color: var(--ink-muted);
+  color: var(--ink-dim);
   font: var(--t-micro) var(--font-data);
 }
 .metric-grid article.danger strong,
 .metric-grid article.danger > span:last-child {
   color: var(--short);
+}
+.risk-assessment {
+  border: var(--hair) solid var(--short);
+  background: var(--put-wash);
+  padding: var(--s3) var(--s4);
+  display: grid;
+  gap: var(--s2);
+}
+.risk-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--s2);
+  color: var(--short);
+  font: 700 var(--t-nano) var(--font-data);
+  letter-spacing: 0.12em;
+}
+.risk-keep-out {
+  margin: 0;
+  color: var(--short);
+  letter-spacing: 0.14em;
+}
+.risk-reasons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s2);
+}
+.risk-reasons li {
+  padding: 10px 12px;
+  border-left: 2px solid var(--short);
+  background: var(--panel);
+  color: var(--ink);
+  font: var(--t-micro) var(--font-data);
 }
 .content-grid {
   display: grid;
@@ -730,9 +1210,16 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   background: var(--put-wash);
 }
 .source-grid p {
-  color: var(--ink-muted);
+  color: var(--ink-dim);
   font-size: var(--t-micro);
   line-height: 1.45;
+}
+.vpa-next {
+  color: var(--phosphor);
+  font: var(--t-nano) var(--font-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 6px 0 0;
 }
 .decision-footer {
   color: var(--ink-faint);
@@ -759,13 +1246,17 @@ const sourceRows: Array<{ key: SourceName; label: string }> = [
   .content-grid {
     grid-template-columns: 1fr;
   }
+  .model-cards-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .source-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (max-width: 620px) {
   .metric-grid,
-  .source-grid {
+  .source-grid,
+  .model-cards-grid {
     grid-template-columns: 1fr;
   }
   .live-controls {

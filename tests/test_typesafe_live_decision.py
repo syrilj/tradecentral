@@ -36,10 +36,23 @@ def test_request_batches_independent_typed_judgments():
     request = live.build_typesafe_request(_state())
 
     assert request["model"] == "jev-latest"
-    assert set(request["questions"]) == {"lean", "action", "setup", "alignment", "timing", "risk"}
+    assert set(request["questions"]) == {
+        "lean",
+        "action",
+        "setup",
+        "alignment",
+        "timing",
+        "risk",
+        "vpa_direction",
+        "vpa_claim_support",
+    }
     assert request["questions"]["action"]["type"] == "choice"
     assert request["questions"]["alignment"]["type"] == "score"
-    assert request["questions"]["action"]["criteria"]["wait"]
+    assert set(request["questions"]["action"]["criteria"]) == {"buy", "sell"}
+    assert "wait" not in request["questions"]["action"]["criteria"]
+    assert set(request["questions"]["vpa_direction"]["criteria"]) == {"buy", "sell"}
+    assert request["questions"]["vpa_claim_support"]["type"] == "score"
+    assert len(request["questions"]["vpa_claim_support"]["criteria"]) == 5
 
 
 def test_conservative_fallback_can_surface_aligned_buy_without_authorizing(monkeypatch):
@@ -48,21 +61,31 @@ def test_conservative_fallback_can_surface_aligned_buy_without_authorizing(monke
 
     result = live.evaluate_live_decision(_state())
 
+    assert result["schema_version"] == "typesafe-live-decision-v2"
     assert result["engine"]["mode"] == "deterministic_fallback"
     assert result["action"] == "buy"
     assert result["decision_authorized"] is False
     assert result["blockers"] == []
+    assert result["risk_assessment"]["keep_out"] is False
+    assert "wait" not in result["probabilities"]
+    assert set(result["probabilities"]) == {"buy", "sell"}
+    assert result["vpa_judgment"]["direction"] == "buy"
 
 
-def test_execution_gate_overrides_directional_model_answer(monkeypatch):
+def test_closed_gate_keeps_buy_and_sets_keep_out(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
 
     result = live.evaluate_live_decision(_state(may_enter=False))
 
+    assert result["lean"] == "bullish"
     assert result["raw_action"] == "buy"
-    assert result["action"] == "wait"
+    assert result["action"] == "buy"
+    assert result["action"] != "wait"
+    assert result["risk_assessment"]["keep_out"] is True
     assert "Entries closed" in result["blockers"]
+    assert "Entries closed" in result["risk_assessment"]["reasons"]
+    assert result["decision_authorized"] is False
 
 
 def test_typesafe_answers_are_parsed_but_final_policy_remains_in_code(monkeypatch):
@@ -84,6 +107,19 @@ def test_typesafe_answers_are_parsed_but_final_policy_remains_in_code(monkeypatc
         "alignment": {"type": "score", "score": 3.1, "confidence": 0.8},
         "timing": {"type": "score", "score": 3.0, "confidence": 0.75},
         "risk": {"type": "score", "score": 2.1, "confidence": 0.65},
+        "lean": {
+            "type": "choice",
+            "choice": "bearish",
+            "confidence": 0.8,
+            "probabilities": {"bearish": 0.8, "bullish": 0.2},
+        },
+        "vpa_direction": {
+            "type": "choice",
+            "choice": "sell",
+            "confidence": 0.72,
+            "probabilities": {"buy": 0.28, "sell": 0.72},
+        },
+        "vpa_claim_support": {"type": "score", "score": 2.4, "confidence": 0.6},
     }
     monkeypatch.setattr(live, "_call_typesafe", lambda payload, key: (answers, "jev-test", 17))
 
@@ -99,6 +135,34 @@ def test_typesafe_answers_are_parsed_but_final_policy_remains_in_code(monkeypatc
     }
     assert result["action"] == "sell"
     assert result["setup"] == "breakout"
+    assert result["decision_authorized"] is False
+    assert "wait" not in result["probabilities"]
+    assert set(result["probabilities"]) == {"buy", "sell"}
+    assert result["vpa_judgment"]["direction"] == "sell"
+    assert result["vpa_judgment"]["claim_support"]["score"] == pytest.approx(2.4)
+
+
+def test_parsed_answers_without_wait_key_still_work(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    answers = {
+        "action": {
+            "type": "choice",
+            "choice": "buy",
+            "confidence": 0.7,
+            "probabilities": {"buy": 0.7, "sell": 0.3},
+        },
+        "setup": {"type": "choice", "choice": "trend_continuation", "confidence": 0.6},
+        "alignment": {"type": "score", "score": 2.8, "confidence": 0.7},
+        "timing": {"type": "score", "score": 2.5, "confidence": 0.7},
+        "risk": {"type": "score", "score": 1.8, "confidence": 0.6},
+    }
+    monkeypatch.setattr(live, "_call_typesafe", lambda payload, key: (answers, "jev-test", 9))
+
+    result = live.evaluate_live_decision(_state())
+
+    assert result["action"] == "buy"
+    assert "wait" not in result["probabilities"]
     assert result["decision_authorized"] is False
 
 
@@ -161,7 +225,9 @@ def test_material_changes_invalidate_cache(cached_provider, monkeypatch, change)
     assert len(cached_provider) == 2
     assert result["cache"]["hit"] is False
     if change == "gate":
-        assert result["action"] == "wait"
+        assert result["action"] in {"buy", "sell"}
+        assert result["action"] != "wait"
+        assert result["risk_assessment"]["keep_out"] is True
 
 
 def test_http_auth_failure_is_identifiable_without_credentials(monkeypatch):
@@ -192,11 +258,46 @@ def test_cache_results_cannot_be_mutated_by_callers(cached_provider):
     assert second["source_status"]["options"] == "ready"
 
 
-def test_wait_preserves_directional_lean(monkeypatch):
+def test_closed_gate_preserves_directional_lean_and_action(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     result = live.evaluate_live_decision(_state(may_enter=False))
-    assert result["action"] == "wait"
+    assert result["action"] == "buy"
     assert result["lean"] == "bullish"
+    assert result["risk_assessment"]["keep_out"] is True
+
+
+def test_vpa_disagreement_is_risk_not_a_wait(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    answers = {
+        "action": {
+            "type": "choice",
+            "choice": "buy",
+            "confidence": 0.8,
+            "probabilities": {"buy": 0.8, "sell": 0.2},
+        },
+        "setup": {"type": "choice", "choice": "trend_continuation", "confidence": 0.6},
+        "alignment": {"type": "score", "score": 3.0, "confidence": 0.7},
+        "timing": {"type": "score", "score": 2.5, "confidence": 0.7},
+        "risk": {"type": "score", "score": 1.5, "confidence": 0.6},
+        "vpa_direction": {
+            "type": "choice",
+            "choice": "sell",
+            "confidence": 0.7,
+            "probabilities": {"buy": 0.3, "sell": 0.7},
+        },
+        "vpa_claim_support": {"type": "score", "score": 0.8, "confidence": 0.5},
+    }
+    monkeypatch.setattr(live, "_call_typesafe", lambda payload, key: (answers, "jev-test", 11))
+
+    result = live.evaluate_live_decision(_state())
+
+    assert result["action"] == "buy"
+    assert result["action"] != "wait"
+    assert result["vpa_judgment"]["direction"] == "sell"
+    reasons = result["risk_assessment"]["reasons"]
+    assert any("weakly supported" in reason for reason in reasons)
+    assert any("VPA next action is sell" in reason for reason in reasons)
 
 
 def test_missing_sources_do_not_create_fallback_lean(monkeypatch):
@@ -205,4 +306,92 @@ def test_missing_sources_do_not_create_fallback_lean(monkeypatch):
     state["source_status"] = {}
     result = live.evaluate_live_decision(state)
     assert result["lean"] == "unknown"
-    assert result["action"] == "wait"
+    assert result["action"] in {"buy", "sell"}
+    assert result["action"] != "wait"
+    assert "wait" not in result["probabilities"]
+    assert result["risk_assessment"]["keep_out"] is True
+    assert result["risk_assessment"]["label"] in {"HIGH", "EXTREME"}
+    assert result["risk"]["score"] >= 2.5
+    assert result["vpa_judgment"]["claim_support"]["score"] < 1.5
+
+
+def test_multi_model_confluence_elevates_confidence_and_stability(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    state = _state()
+    state["options"]["signed_flow_imbalance"] = 0.28
+    state["regime"]["probabilities"] = {"bullish": 0.75, "bearish": 0.12, "neutral": 0.13}
+    result = live.evaluate_live_decision(state)
+
+    assert result["action"] == "buy"
+    assert result["confidence"] >= 0.70
+    assert result["brain"]["confluence"] == "HIGH"
+    assert result["brain"]["agreeing_models"] >= 3
+    assert result["brain"]["models"]["options_flow"]["signal"] == "bullish"
+    assert result["brain"]["models"]["regime"]["signal"] == "bullish"
+
+
+def test_bearish_model_confluence_surfaces_confident_sell(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    state = _state()
+    state["options"]["activity_lean"] = "bearish"
+    state["options"]["signed_flow_imbalance"] = -0.35
+    state["regime"]["primary"] = "bear_trend"
+    state["regime"]["probabilities"] = {"bullish": 0.10, "bearish": 0.80, "neutral": 0.10}
+    state["microstructure"]["dealer_hedging_action"] = "accelerating_down"
+    state["vpa"]["bias"] = "SHORT"
+    state["vpa"]["market_phase"] = "markdown"
+    result = live.evaluate_live_decision(state)
+
+    assert result["action"] == "sell"
+    assert result["confidence"] >= 0.75
+    assert result["brain"]["confluence"] == "HIGH"
+    assert result["brain"]["agreeing_models"] >= 3
+    assert result["brain"]["models"]["regime"]["signal"] == "bearish"
+
+
+def test_brain_synthesis_reconciles_conflicting_signals_without_oscillation(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    state = _state()
+    # Flow slightly positive but within deadband, chop regime, neutral VPA
+    state["options"]["signed_flow_imbalance"] = 0.04
+    state["options"]["activity_lean"] = "mixed"
+    state["regime"]["primary"] = "chop"
+    state["regime"]["probabilities"] = {"bullish": 0.35, "bearish": 0.32, "neutral": 0.33}
+    state["vpa"]["bias"] = "NEUTRAL"
+    state["vpa"]["market_phase"] = "consolidation"
+    result = live.evaluate_live_decision(state)
+
+    assert result["brain"]["confluence"] == "BALANCED"
+    assert result["confidence"] >= 0.60
+    assert result["risk_assessment"]["keep_out"] is True
+
+
+def test_brain_jitter_shield_suppresses_micro_oscillation_flips(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    # Base state with quiet market chop
+    base = _state()
+    base["regime"]["primary"] = "chop"
+    base["regime"]["probabilities"] = {"bullish": 0.40, "bearish": 0.40, "neutral": 0.20}
+    base["microstructure"]["dealer_hedging_action"] = "neutral"
+    base["microstructure"]["regime"] = "positive_gamma"
+    base["vpa"]["bias"] = "NEUTRAL"
+    base["vpa"]["market_phase"] = "consolidation"
+
+    actions = []
+    confidences = []
+    # Test a sequence of micro flow fluctuations around neutral
+    for flow_val in [-0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03]:
+        s = live._compact_state(base)
+        s["options"]["signed_flow_imbalance"] = flow_val
+        res = live.evaluate_live_decision(s)
+        actions.append(res["action"])
+        confidences.append(res["confidence"])
+        assert res["confidence"] >= 0.60, f"Confidence dropped below 60% at flow={flow_val}"
+        assert res["brain"]["stabilized"] is True
+
+    # No erratic rapid sign-flipping inside deadband
+    assert all(c >= 0.60 for c in confidences)

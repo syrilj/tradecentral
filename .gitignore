@@ -134,3 +134,6 @@ dashboard/results.json
 
 # V8/node compile cache (local junk, regenerated)
 node-compile-cache/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

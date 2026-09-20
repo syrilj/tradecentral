@@ -238,15 +238,17 @@ provide('sectorFlow', {
   clear: sectorFlowRes.clear,
 })
 
-/** Primary operator destinations. Everything else lives in Tools. */
+/** Operator live decision destination. */
+const decisionDestination = {
+  name: 'decision',
+  title: 'Decision',
+  hint: 'TypeSafe live read',
+  icon: 'adaptive',
+  tab: true,
+} as const
+
+/** Fourteen operator destinations. Everything else lives in Tools. */
 const primaryNav = [
-  {
-    name: 'decision',
-    title: 'Decision',
-    hint: 'TypeSafe live read',
-    icon: 'adaptive',
-    tab: true,
-  },
   {
     name: 'brief',
     title: 'Brief',
@@ -453,6 +455,13 @@ const macroTools = [
     title: 'AMT',
     hint: 'Auction Market Theory',
     icon: 'amt',
+  },
+  {
+    name: 'decision',
+    idx: 'G3',
+    title: 'Decision',
+    hint: 'TypeSafe live read · Decision Brain',
+    icon: 'adaptive',
   },
 ] as const
 
@@ -672,6 +681,7 @@ const stripWarning = computed(() => {
   return null
 })
 function navAlert(name: string): boolean {
+  if (name === decisionDestination.name) return false
   if (name === 'desk') return enterCount.value > 0
   if (name === 'plays') return enterCount.value > 0
   if (name === 'flow') {

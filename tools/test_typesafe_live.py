@@ -30,6 +30,7 @@ def main() -> int:
     for attempt in range(2):
         started = time.perf_counter()
         result = evaluate_live_decision(state)
+        keep_out = bool((result.get("risk_assessment") or {}).get("keep_out"))
         print(
             json.dumps(
                 {
@@ -38,13 +39,18 @@ def main() -> int:
                     "engine": result["engine"],
                     "cache": result["cache"],
                     "action": result["action"],
+                    "keep_out": keep_out,
                     "decision_authorized": result["decision_authorized"],
                 }
             )
         )
-        if result["engine"]["mode"] != "typesafe" or result["action"] != "wait":
+        if result["engine"]["mode"] != "typesafe":
+            return 1
+        if result["action"] not in {"buy", "sell"} or result["action"] == "wait":
             return 1
         if result["decision_authorized"]:
+            return 1
+        if not keep_out:
             return 1
     return 0
 
