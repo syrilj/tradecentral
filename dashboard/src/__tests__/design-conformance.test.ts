@@ -39,6 +39,7 @@ const root = join(srcRoot, '..')
 const PAPER_FILES = new Set<string>([
   'src/views/LandingView.vue',
   'src/views/AuthView.vue',
+  'src/views/LegalView.vue',
   'src/components/LiveStateVisual.vue',
   'src/components/GexFlowVisual.vue',
   'src/components/ResearchLoopVisual.vue',

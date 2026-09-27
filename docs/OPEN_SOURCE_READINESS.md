@@ -55,8 +55,7 @@ before its access claims can be treated as verified.
    generated market data, model binaries, provider tokens, or environment files.
 2. Run Gitleaks over all Git history and inspect every result without posting
    credential values in an issue or log. Rotate any real credential discovered.
-3. Choose and add a `LICENSE`. Without one, a public repository is visible but
-   does not grant normal open source reuse rights.
+3. Choose and add a `LICENSE`. A formal Commercial Proprietary Software License and Evaluation Agreement has been added to `LICENSE` with explicit trade secret protections, UCC warranty disclaimers, liability caps, and in-app `/license` and `/terms` disclosures.
 4. Check provider data redistribution terms before adding dashboard screenshots
    or example snapshots to the public repository. Prefer screenshots with no
    account identifiers or licensed raw data.

@@ -22,6 +22,28 @@ const routes: RouteRecordRaw[] = [
     redirect: { name: 'landing' },
   },
   {
+    path: '/license',
+    name: 'license',
+    component: () => import('@/views/LegalView.vue'),
+    meta: {
+      documentTitle: 'TradeCentral · Software License Agreement',
+      description:
+        'Commercial proprietary software license and evaluation agreement for the TradeCentral quantitative workstation.',
+      public: true,
+    },
+  },
+  {
+    path: '/terms',
+    name: 'terms',
+    component: () => import('@/views/LegalView.vue'),
+    meta: {
+      documentTitle: 'TradeCentral · Terms of Service & Disclaimers',
+      description:
+        'Terms of service, market data latency notices, and regulatory safe harbor disclosures for TradeCentral.',
+      public: true,
+    },
+  },
+  {
     path: '/auth/:pathMatch(.*)*',
     name: 'auth',
     component: () => import('@/views/AuthView.vue'),

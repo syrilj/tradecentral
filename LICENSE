@@ -1,31 +1,164 @@
-# Copyright and License Notice
+# COMMERCIAL PROPRIETARY SOFTWARE LICENSE AND EVALUATION AGREEMENT
 
-Copyright (c) 2026 Syril Jacob. All Rights Reserved.
+**Effective Date:** September 26, 2026  
+**Licensor:** Syril Jacob ("Licensor", "Owner")  
+**Product:** TradeCentral Quantitative Market Research Workstation and Associated Software ("Software")
 
-## PROPRIETARY AND SOURCE-AVAILABLE (VIEW-ONLY) LICENSE
+---
 
-This software, including all source code, documentation, algorithms, mathematical models, architectural designs, user interface assets, and associated files (collectively, the "Software"), is the proprietary intellectual property of Syril Jacob ("Owner").
+### IMPORTANT — READ CAREFULLY
 
-### 1. Permitted Uses
-You are granted a limited, personal, revocable, non-exclusive, non-transferable, and royalty-free permission solely to:
-- View, browse, and inspect the source code for personal educational purposes, peer review, and architectural evaluation.
-- Fork or download a local copy solely as strictly necessary to view the source code for the aforementioned evaluation purposes.
+THIS COMMERCIAL PROPRIETARY SOFTWARE LICENSE AND EVALUATION AGREEMENT ("AGREEMENT") IS A LEGALLY BINDING CONTRACT BETWEEN YOU (WHETHER AN INDIVIDUAL OR A SINGLE LEGAL ENTITY, HEREINAFTER "LICENSEE" OR "YOU") AND SYRIL JACOB ("LICENSOR").
 
-### 2. Prohibited Uses
-Except as expressly authorized under Section 1, ALL RIGHTS ARE STRICTLY RESERVED. Without the express prior written consent of the Owner, you may NOT:
-- **Use or Execute**: Execute, deploy, host, run, or integrate this Software or any part thereof into any live, production, staging, development, automated trading, paper trading, commercial, or institutional environment.
-- **Copy or Distribute**: Copy, duplicate, mirror, reproduce, distribute, publish, sublicense, rent, lease, sell, or publicly display the Software or any portion thereof.
-- **Modify or Derive**: Modify, adapt, translate, decompile, disassemble, reverse engineer, or create derivative works based upon the Software, its quantitative models, heuristics, indicators, or algorithms.
-- **Commercial Exploitation**: Use the Software or any portion thereof directly or indirectly for any commercial purpose, for-profit service, subscription product, API service, or financial business.
-- **AI / Model Training**: Ingest, scrape, or process this Software, its models, strategies, or documentation to train, fine-tune, benchmark, or evaluate any artificial intelligence, machine learning model, or automated decision engine.
+BY CLONING, DOWNLOADING, ACCESSING, INSTALLING, COPYING, VIEWING, COMPILING, EXECUTING, OR OTHERWISE USING ANY PORTION OF THIS SOFTWARE (INCLUDING ITS SOURCE CODE, OBJECT CODE, ALGORITHMS, MATHEMATICAL MODELS, HEURISTICS, DATA SCHEMAS, CONFIGURATION FILES, USER INTERFACE ASSETS, AND ASSOCIATED DOCUMENTATION), YOU UNCONDITIONALLY AGREE TO BE BOUND BY ALL TERMS AND CONDITIONS OF THIS AGREEMENT.
 
-### 3. Proprietary Quantitative Research and Alpha
-The quantitative methods, evidence-fusion heuristics, volume price analysis codex, microstructure regime classification logic, dealer gamma exposure models, and signal pipelines contained within this Software represent proprietary research and trade secrets of the Owner.
+IF YOU DO NOT AGREE TO ALL OF THE TERMS AND CONDITIONS OF THIS AGREEMENT, YOU ARE NOT AUTHORIZED TO ACCESS, VIEW, DOWNLOAD, INSTALL, COPY, OR USE THE SOFTWARE FOR ANY PURPOSE WHATSOEVER. IN SUCH EVENT, YOU MUST IMMEDIATELY CEASE ALL USE AND DESTROY ALL COPIES OF THE SOFTWARE IN YOUR POSSESSION, CUSTODY, OR CONTROL.
 
-### 4. No Warranty & Financial Disclaimer
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+---
 
-IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE, INCLUDING BUT NOT LIMITED TO ANY FINANCIAL LOSS, TRADING LOSSES, LOST PROFITS, CAPITAL LOSS, OR SYSTEM INTERRUPTIONS. THIS SOFTWARE DOES NOT CONSTITUTE FINANCIAL, INVESTMENT, OR TRADING ADVICE.
+### 1. DEFINITIONS
 
-### 5. Licensing Inquiries
-For commercial licensing inquiries, permissions, or partnership requests, please contact the repository owner.
+1.1 **"Software"** means the TradeCentral software suite, including without limitation all computer code (source code, bytecode, executable scripts, markup, styles, and compiled binaries), mathematical algorithms, quantitative models, microstructure regime classifiers, dealer gamma exposure (GEX) calculation engines, options surface interpolators, volume-price analysis heuristics, decision tree configurations, database schemas, application programming interfaces (APIs), user interfaces, documentation, and research artifacts, whether embodied in physical media, electronic storage, or network transmission.
+
+1.2 **"Licensor"** means Syril Jacob, the sole and exclusive author, creator, and owner of all copyright, patent, trademark, trade secret, and other intellectual property rights in and to the Software.
+
+1.3 **"Licensee"** means the individual or single legal entity exercising permissions under this Agreement.
+
+1.4 **"Evaluation Purpose"** means the private, personal, non-commercial, non-production examination and architectural inspection of the source code strictly for evaluation, research peer review, and academic study.
+
+1.5 **"Quantitative Models and Alpha Pipelines"** means all mathematical formulas, regime transition matrices, causal envelopes, squeeze calculators, voltrend models, options pricing estimators, order flow feature extractors, and trade secret algorithms embodied in the Software.
+
+1.6 **"Commercial Purpose"** means any use intended to generate revenue, profit, commercial advantage, financial gain, or direct/indirect monetary return, including but not limited to fee-based services, subscription products, consulting, proprietary trading for profit, fund management, or SaaS hosting.
+
+---
+
+### 2. LIMITED LICENSE GRANT
+
+2.1 **Limited Evaluation License.** Subject to the terms, conditions, and strict restrictions of this Agreement, Licensor hereby grants to Licensee a personal, non-exclusive, non-transferable, non-sublicensable, revocable, royalty-free license solely to:
+- (a) Download or fork a single local copy of the Software source code onto Licensee's personal computer; and
+- (b) View, read, and inspect the source code in a private, non-production environment solely for the Evaluation Purpose.
+
+2.2 **No Production or Operational License.** This Agreement DOES NOT grant any license, right, or permission to execute the Software in any operational, commercial, multi-user, networked, institutional, or live trading setting.
+
+2.3 **Reservation of Rights.** All rights not expressly and unambiguously granted to Licensee in Section 2.1 are reserved exclusively by Licensor. No implied licenses, rights, or waivers are created or granted by implication, estoppel, exhaustion, or otherwise.
+
+---
+
+### 3. EXPLICIT RESTRICTIONS AND PROHIBITIONS
+
+Except as expressly authorized in Section 2.1, Licensee shall NOT, directly or indirectly, nor cause or permit any third party to:
+
+3.1 **No Live, Automated, or Algorithmic Trading Execution:**  
+Execute, integrate, or deploy the Software, or any signals, scores, metrics, or alerts generated thereby, into any live trading account, broker order routing system, algorithmic execution gateway, automated execution pipeline, or paper trading engine.
+
+3.2 **No Commercial Exploitation or Hosting:**  
+Sell, rent, lease, sublicense, distribute, assign, timeshare, host, deploy as a Software-as-a-Service (SaaS), Platform-as-a-Service (PaaS), application service provider (ASP), or otherwise commercially exploit or make the Software available to any third party over any local area network (LAN), wide area network (WAN), cloud hosting platform, or the public internet.
+
+3.3 **No Derivative Works or Reverse Engineering:**  
+Modify, adapt, translate, decompile, disassemble, reverse engineer, decrypt, extract, or create derivative works, competitive products, or parallel trading models based in whole or in part upon the Software, its Quantitative Models, or its mathematical formulas.
+
+3.4 **No Redistribution or Sublicensing:**  
+Copy, mirror, publish, republish, broadcast, syndicate, transfer, or redistribute the Software, in whole or in part, in any format or medium, without the express, prior written authorization of Licensor.
+
+3.5 **No Artificial Intelligence or Machine Learning Model Ingestion:**  
+Ingest, scrape, crawl, tokenize, process, embed, or use any portion of the Software, documentation, or Quantitative Models to train, fine-tune, align, benchmark, distill, or evaluate any artificial intelligence model, large language model (LLM), neural network, predictive model, or automated code-generation system.
+
+3.6 **No Removal of Proprietary Notices:**  
+Remove, alter, obscure, or deface any copyright notices, trademark legends, confidentiality notices, attribution headers, or proprietary rights markings appearing in or on any file of the Software.
+
+---
+
+### 4. INTELLECTUAL PROPERTY AND TRADE SECRET PROTECTION
+
+4.1 **Ownership.** Licensee acknowledges and agrees that Licensor is and shall remain the sole and exclusive owner of all right, title, and interest in and to the Software, including all worldwide intellectual property rights, copyrights, patents, trade dress, trademarks, and trade secrets therein. This Agreement constitutes a license to evaluate, not a sale or transfer of title.
+
+4.2 **Trade Secrets.** The Quantitative Models, alpha signals, microstructure classification heuristics, evidence-fusion algorithms, and volume-price analysis codex embodied within the Software represent confidential, proprietary information and trade secrets of Licensor under the Uniform Trade Secrets Act (UTSA) and the Defend Trade Secrets Act of 2016 (18 U.S.C. § 1836). Licensee agrees to safeguard the Software using at least the same degree of care Licensee uses for Licensee's own highly confidential materials, and in no event less than a reasonable standard of care.
+
+---
+
+### 5. DISCLAIMER OF WARRANTIES
+
+5.1 **"AS IS" BASIS.** TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITH ALL FAULTS, DEFECTS, AND ERRORS, AND WITHOUT WARRANTY OF ANY KIND.
+
+5.2 **STATUTORY DISCLAIMERS.** LICENSOR EXPRESSLY DISCLAIMS ALL WARRANTIES, WHETHER STATUTORY, EXPRESS, IMPLIED, OR OTHERWISE, INCLUDING WITHOUT LIMITATION:
+- (A) ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, QUIET ENJOYMENT, AND NON-INFRINGEMENT;
+- (B) ANY WARRANTIES ARISING FROM COURSE OF DEALING, USAGE, OR TRADE PRACTICE;
+- (C) ANY WARRANTY THAT THE SOFTWARE WILL BE UNINTERRUPTED, ACCURATE, ERROR-FREE, SECURE, FREE OF HARMFUL CODE, OR COMPATIBLE WITH ANY HARDWARE, SYSTEM, OR BROWSER; AND
+- (D) ANY WARRANTY REGARDING THE ACCURACY, TIMELINESS, VALIDITY, COMPLETENESS, SUITABILITY, OR RELIABILITY OF ANY MARKET DATA, VOLATILITY MEASUREMENT, OPTIONS GREEK, FLOW IDENTIFIER, OR QUANTITATIVE CALCULATION.
+
+---
+
+### 6. REGULATORY SAFE HARBOR AND FINANCIAL DISCLAIMERS
+
+6.1 **Publisher's Exclusion — Impersonal Research Only.** The Software constitutes an impersonal, generalized quantitative research and analytical software instrument. It is published regularly and distributed impersonally without regard to the individual financial circumstances, objectives, risk tolerance, or trading capabilities of any user. Licensor is NOT a registered investment adviser (RIA), commodity trading advisor (CTA), commodity pool operator (CPO), broker-dealer, or financial analyst under the Investment Advisers Act of 1940, the Commodity Exchange Act, or any state securities statute. Nothing contained in the Software constitutes financial, investment, legal, tax, or trading advice.
+
+6.2 **CFTC Rule 4.41 — Hypothetical and Simulated Performance Disclaimer.**  
+HYPOTHETICAL OR SIMULATED PERFORMANCE RESULTS HAVE CERTAIN INHERENT LIMITATIONS. UNLIKE AN ACTUAL PERFORMANCE RECORD, SIMULATED RESULTS DO NOT REPRESENT ACTUAL TRADING. ALSO, SINCE THE TRADES HAVE NOT ACTUALLY BEEN EXECUTED, THE RESULTS MAY HAVE UNDER- OR OVER-COMPENSATED FOR THE IMPACT, IF ANY, OF CERTAIN MARKET FACTORS, SUCH AS LACK OF LIQUIDITY. SIMULATED TRADING PROGRAMS IN GENERAL ARE ALSO SUBJECT TO THE FACT THAT THEY ARE DESIGNED WITH THE BENEFIT OF HINDSIGHT. NO REPRESENTATION IS BEING MADE THAT ANY ACCOUNT WILL OR IS LIKELY TO ACHIEVE PROFITS OR LOSSES SIMILAR TO THOSE SHOWN.
+
+6.3 **Substantial Risk of Loss.** Trading equities, options, futures, and derivative securities involves substantial financial risk, including the possible loss of principal and capital exceeding initial investment. Licensee assumes full, sole, and exclusive responsibility for all decisions and evaluations made.
+
+---
+
+### 7. LIMITATION OF LIABILITY
+
+7.1 **WAIVER OF CONSEQUENTIAL DAMAGES.** TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL LICENSOR BE LIABLE TO LICENSEE OR ANY THIRD PARTY FOR ANY DIRECT, INDIRECT, INCIDENTAL, CONSEQUENTIAL, SPECIAL, PUNITIVE, EXEMPLARY, OR CONTINGENT DAMAGES OF ANY KIND, INCLUDING BUT NOT LIMITED TO:
+- (A) TRADING LOSSES, CAPITAL DEPLETION, LOST PROFITS, OR LOST REVENUE;
+- (B) LOSS OF DATA, BUSINESS INTERRUPTION, LOSS OF GOODWILL, OR SYSTEM DOWNTIME;
+- (C) DAMAGES RESULTING FROM SOFTWARE DEFECTS, NUMERICAL OVERFLOWS, CALCULATION ERRORS, STALE DATA FEEDS, OR MODEL DRIFT; OR
+- (D) PROCUREMENT COSTS OF SUBSTITUTE GOODS OR SERVICES;
+REGARDLESS OF THE THEORY OF LIABILITY (WHETHER IN CONTRACT, TORT, STRICT LIABILITY, NEGLIGENCE, STATUTE, OR OTHERWISE), EVEN IF LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES, AND NOTWITHSTANDING THE FAILURE OF THE ESSENTIAL PURPOSE OF ANY LIMITED REMEDY.
+
+7.2 **AGGREGATE LIABILITY CAP.** LICENSOR'S TOTAL CUMULATIVE LIABILITY ARISING OUT OF OR RELATING TO THIS AGREEMENT OR THE SOFTWARE, UNDER ANY AND ALL LEGAL THEORIES, SHALL NOT EXCEED ZERO UNITED STATES DOLLARS ($0.00 USD), OR THE TOTAL AMOUNT ACTUALLY PAID BY LICENSEE TO LICENSOR SPECIFICALLY FOR THE EVALUATION LICENSE UNDER THIS AGREEMENT DURING THE TWELVE (12) MONTHS PRECEDING THE CLAIM.
+
+---
+
+### 8. INDEMNIFICATION
+
+Licensee agrees to defend, indemnify, and hold harmless Licensor, his affiliates, licensors, heirs, executors, and agents from and against any and all claims, liabilities, damages, losses, expenses, judgments, fines, and costs (including reasonable attorneys' fees and court costs) arising out of or related to:
+- (a) Licensee's breach or violation of any provision of this Agreement;
+- (b) Licensee's use, misuse, modification, or execution of the Software;
+- (c) Any trading, financial, or investment decision made by Licensee or any party associated with Licensee; or
+- (d) Any infringement, misappropriation, or violation of third-party intellectual property or privacy rights caused by Licensee.
+
+---
+
+### 9. INJUNCTIVE RELIEF
+
+Licensee acknowledges that any breach of Section 2, Section 3, or Section 4 will cause irreparable and irreversible harm to Licensor for which monetary damages alone would be inadequate. Accordingly, in the event of any actual or threatened breach, Licensor shall be entitled to seek immediate injunctive relief, specific performance, and other equitable remedies in any court of competent jurisdiction without the requirement of posting a bond, proving actual monetary damages, or demonstrating irreparable injury, in addition to any other rights or remedies available at law or in equity.
+
+---
+
+### 10. TERM AND TERMINATION
+
+10.1 **Term.** This Agreement is effective from the moment Licensee first downloads, clones, accesses, inspects, or uses the Software and remains in effect until terminated.
+
+10.2 **Termination by Licensor.** Licensor reserves the right to terminate this Agreement and revoke the license granted herein at any time, with or without cause, immediately upon notice or publication. This Agreement shall automatically terminate without notice if Licensee fails to comply with any provision of this Agreement.
+
+10.3 **Effect of Termination.** Upon termination, all rights and licenses granted to Licensee shall instantly cease, and Licensee must immediately and permanently delete and destroy all copies of the Software and all derivative data, documentation, and cached artifacts in Licensee's custody or control. Sections 1, 3, 4, 5, 6, 7, 8, 9, 10.3, and 11 shall survive termination of this Agreement for any reason.
+
+---
+
+### 11. GOVERNING LAW, JURISDICTION, AND GENERAL PROVISIONS
+
+11.1 **Governing Law.** This Agreement shall be governed by, construed, and enforced in accordance with the substantive laws of the State of Delaware, United States of America, without regard to its conflict of law principles. The United Nations Convention on Contracts for the International Sale of Goods (CISG) is expressly disclaimed and shall not apply.
+
+11.2 **Dispute Resolution and Binding Arbitration.** Any dispute, controversy, or claim arising out of or relating to this Agreement, or the breach, termination, or invalidity thereof, shall be settled by binding arbitration administered by the American Arbitration Association (AAA) under its Commercial Arbitration Rules. The place of arbitration shall be Wilmington, Delaware, and proceedings shall be conducted in the English language. Judgment on the award rendered by the arbitrator may be entered in any court having jurisdiction. Notwithstanding the foregoing, Licensor may seek injunctive or equitable relief in any court of competent jurisdiction to protect Licensor's intellectual property or trade secrets.
+
+11.3 **Class Action and Jury Waiver.** LICENSEE WAIVES ANY RIGHT TO COMMENCE, JOIN, OR PARTICIPATE IN ANY CLASS ACTION, COLLECTIVE ACTION, PRIVATE ATTORNEY GENERAL ACTION, OR REPRESENTATIVE PROCEEDING AGAINST LICENSOR. LICENSEE AND LICENSOR WAIVE ALL RIGHTS TO A JURY TRIAL.
+
+11.4 **Severability.** If any provision of this Agreement is held by a court or arbitrator of competent jurisdiction to be illegal, invalid, or unenforceable, such provision shall be enforced to the maximum extent permissible, and the remaining provisions shall remain in full force and effect.
+
+11.5 **Entire Agreement.** This Agreement constitutes the complete, final, and exclusive agreement between Licensor and Licensee with respect to the subject matter hereof, superseding all prior or contemporaneous oral or written proposals, understandings, representations, and communications. No modification or amendment of this Agreement shall be binding unless in writing and signed by an authorized representative of Licensor.
+
+11.6 **No Waiver.** No failure or delay by Licensor in exercising any right, power, or remedy under this Agreement shall operate as a waiver thereof, nor shall any single or partial exercise preclude any other or further exercise of any right, power, or remedy.
+
+11.7 **Export Compliance.** Licensee shall comply with all applicable United States and international export and re-export control laws and economic sanctions regulations.
+
+---
+
+### 12. COMMERCIAL LICENSING INQUIRIES
+
+For commercial licensing, enterprise deployment rights, integration partnerships, or custom model access permissions, contact:
+
+**Licensor:** Syril Jacob  
+**Repository:** https://github.com/syrilj/tradecentral  

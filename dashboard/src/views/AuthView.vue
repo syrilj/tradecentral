@@ -280,11 +280,22 @@ watch(
             workstation lock, not permission to expose the local API on a network.
           </template>
         </p>
+
+        <p class="legal-consent-notice">
+          By signing in or requesting access, you acknowledge and agree to the
+          <RouterLink to="/terms">Terms of Service</RouterLink> and
+          <RouterLink to="/license">Software License Agreement</RouterLink>. TradeCentral provides
+          quantitative research tools only and does not offer financial advice or broker execution.
+        </p>
       </section>
     </main>
 
     <footer class="auth-footer">
-      <span>TradeCentral · Research only</span>
+      <span>
+        TradeCentral · Research only ·
+        <RouterLink to="/license">License</RouterLink> ·
+        <RouterLink to="/terms">Terms</RouterLink>
+      </span>
       <span>No order routing · No investment advice</span>
     </footer>
   </div>
@@ -884,6 +895,23 @@ watch(
   line-height: 1.55;
 }
 
+.legal-consent-notice {
+  margin-top: 12px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.5;
+  color: #71717a;
+}
+.legal-consent-notice a {
+  color: #111110;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 500;
+}
+.legal-consent-notice a:hover {
+  color: #000000;
+}
+
 .auth-footer {
   min-height: 60px;
   display: flex;
@@ -896,6 +924,14 @@ watch(
   font-size: var(--t-nano);
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+.auth-footer a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.auth-footer a:hover {
+  color: #111110;
 }
 
 @media (max-width: 980px) {

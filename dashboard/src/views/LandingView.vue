@@ -847,6 +847,12 @@ onUnmounted(() => {
               >Request operator access</RouterLink
             >
           </nav>
+          <nav class="footer-col" aria-label="Legal">
+            <p class="footer-col-title">Legal</p>
+            <RouterLink to="/license">License agreement</RouterLink>
+            <RouterLink to="/terms">Terms of service</RouterLink>
+            <RouterLink to="/terms">Regulatory disclaimers</RouterLink>
+          </nav>
         </div>
 
         <div class="footer-watermark-wrap" aria-hidden="true">
@@ -873,8 +879,11 @@ onUnmounted(() => {
         </div>
 
         <div class="footer-base section-pad">
-          <span>© 2026 TradeCentral · Session {{ session }}</span>
-          <span>No order routing · No investment advice</span>
+          <span>© 2026 TradeCentral · All rights reserved · Session {{ session }}</span>
+          <span>
+            <RouterLink to="/license">License</RouterLink> ·
+            <RouterLink to="/terms">Terms</RouterLink> · No order routing · No investment advice
+          </span>
         </div>
       </div>
     </footer>
@@ -2230,8 +2239,8 @@ onUnmounted(() => {
 }
 .footer-cols {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
-  gap: 40px;
+  grid-template-columns: minmax(0, 1.8fr) repeat(4, minmax(0, 1fr));
+  gap: 36px;
   padding-block: clamp(48px, 6vw, 80px);
 }
 .footer-brand {
@@ -2296,6 +2305,14 @@ onUnmounted(() => {
   font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--ink-faint);
+}
+.footer-base a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.footer-base a:hover {
+  color: var(--ink);
 }
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */
