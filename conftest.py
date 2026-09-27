@@ -72,6 +72,46 @@ _MARKED_TESTS: dict[str, tuple[str, str]] = {
         "QuantRAGPipeline initializes LocalSentenceEmbeddingEngine which downloads "
         "the all-MiniLM-L6-v2 model weights from HuggingFace over live network.",
     ),
+    "tests/test_vpa_engine.py::test_vpa_health_shape": (
+        "needs_market_data_files",
+        "requires real OHLCV parquet files in data/1h and data/1d to verify data source counts",
+    ),
+    "tests/test_drift_backtest.py::test_load_symbol_daily_bars": (
+        "needs_market_data_files",
+        "reads real OHLCV daily parquet files from data/1d/*.parquet",
+    ),
+    "tests/test_drift_backtest.py::test_evaluate_systematic_execution": (
+        "needs_market_data_files",
+        "reads real OHLCV daily parquet files from data/1d/*.parquet",
+    ),
+    "tests/test_drift_backtest.py::test_evaluate_snapshot_signals": (
+        "needs_market_data_files",
+        "reads real OHLCV daily parquet files from data/1d/*.parquet",
+    ),
+    "tests/test_drift_backtest.py::test_run_drift_tab_backtests_smoke": (
+        "needs_market_data_files",
+        "reads real OHLCV daily parquet files from data/1d/*.parquet",
+    ),
+    "tests/research/test_regime_accuracy.py::test_spy_out_of_sample_institutional_metrics": (
+        "needs_market_data_files",
+        "reads data/1d/SPY.parquet to run out-of-sample backtest",
+    ),
+    "tests/test_decision_oos_capital.py::test_recorded_history_live_capital_stays_unauthorized": (
+        "needs_market_data_files",
+        "evaluates recorded capital against real data/1d daily parquet history",
+    ),
+    "tests/test_decision_tree_backtest.py::test_last_completed_week_is_a_strict_unseen_holdout": (
+        "needs_market_data_files",
+        "reads data/1d/*.parquet to evaluate last week holdout window",
+    ),
+    "tests/test_m3_adversarial_challenge.py::test_v90_signal_zero_numeric_drift_synthetic": (
+        "needs_market_data_files",
+        "requires gitignored model weights in models/v90/meta_xgb_long.json",
+    ),
+    "tests/test_m3_adversarial_challenge.py::test_standard_60_bars_and_252_bars_succeed_across_all_horizons": (
+        "needs_market_data_files",
+        "requires gitignored model weights in models/v90/meta_xgb_long.json",
+    ),
 }
 
 

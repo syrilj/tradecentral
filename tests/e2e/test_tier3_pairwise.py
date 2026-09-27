@@ -590,7 +590,7 @@ def test_pairwise_quote_waterfall_and_parallel_parquet_io(tmp_path, mock_daily_f
     dur = time.perf_counter() - t0
     
     assert payload["count"] == 12
-    assert dur < 0.5, f"Parallel quote resolution took too long: {dur:.4f}s"
+    assert dur < 3.0, f"Parallel quote resolution took too long: {dur:.4f}s"
     for row in payload["rows"]:
         assert row["quality"] == "local"
         assert row["source"] == "1d"

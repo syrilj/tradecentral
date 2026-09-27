@@ -340,7 +340,11 @@ def _load_hourly_frame(symbol: str):
         return None, None
     if df is None:
         return None, None
-    return df, str(path.relative_to(EDGE_ROOT))
+    try:
+        src = str(path.relative_to(EDGE_ROOT))
+    except (ValueError, TypeError):
+        src = str(path)
+    return df, src
 
 
 def _load_daily_frame(symbol: str):
@@ -364,8 +368,12 @@ def _load_daily_frame(symbol: str):
         if df is None:
             continue
         last = df.index.max()
+        try:
+            src = str(path.relative_to(EDGE_ROOT))
+        except (ValueError, TypeError):
+            src = str(path)
         if best is None or last > best_last:
-            best, best_last, best_src = df, last, str(path.relative_to(EDGE_ROOT))
+            best, best_last, best_src = df, last, src
     return best, best_src
 
 
