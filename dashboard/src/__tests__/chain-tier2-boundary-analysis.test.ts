@@ -73,7 +73,10 @@ describe('Tier 2: Boundary Value Analysis & Edge Cases', () => {
       expect(optionsSkewLabel('balanced_bullish')).toEqual({ label: 'Lean Bull', tone: 'warm' })
       expect(optionsSkewLabel('hedged')).toEqual({ label: 'Hedged', tone: 'cool' })
       expect(optionsSkewLabel('bearish_put_skew')).toEqual({ label: 'Put Skew', tone: 'down' })
-      expect(optionsSkewLabel('custom_skew_code')).toEqual({ label: 'custom_skew_code', tone: 'cool' })
+      expect(optionsSkewLabel('custom_skew_code')).toEqual({
+        label: 'custom_skew_code',
+        tone: 'cool',
+      })
     })
 
     it('assigns cool neutral tone to null elasticity scores without injecting arbitrary fallback values', () => {
@@ -326,7 +329,9 @@ describe('Tier 2: Boundary Value Analysis & Edge Cases', () => {
       expect(html).toContain('NOCITES')
       expect(html).toContain('No Citations Corp')
       expect(html).toContain('Tier 2 Supplier')
-      expect(html).toContain('No direct SEC or transcript quotation records attached for this node.')
+      expect(html).toContain(
+        'No direct SEC or transcript quotation records attached for this node.',
+      )
       // Verify no fake quote body is rendered
       expect(html).not.toContain('quote-body')
     })

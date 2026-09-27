@@ -22,7 +22,8 @@ if (publishableKey && !isLocalAuthMode()) {
     .use(clerkPlugin, {
       publishableKey,
       signInUrl: '/auth',
-      signUpUrl: '/auth',
+      signUpUrl: '/waitlist',
+      waitlistUrl: '/waitlist',
       signInFallbackRedirectUrl: '/flow',
       signUpFallbackRedirectUrl: '/flow',
       // Clerk appearance is anchored to the desk instrument tokens (tokens.css)

@@ -19,6 +19,13 @@ export no_proxy="127.0.0.1,localhost,*"
 
 cd "$EDGE_DIR"
 
+if [ -f "$EDGE_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$EDGE_DIR/.env"
+  set +a
+fi
+
 DASH="dashboard"
 PY="$EDGE_DIR/.venv-qlib/bin/python"
 if [ ! -x "$PY" ] || ! "$PY" -c 'import sys' >/dev/null 2>&1; then
@@ -86,7 +93,7 @@ backend_is_current() {
     code="$(curl -sS -o /dev/null -w '%{http_code}' "${base}${path}" 2>/dev/null || echo 000)"
     [ "$code" = "200" ] || return 1
   done
-  for path in "/api/company-profile?symbol=SPY" "/api/financials?symbol=SPY" "/api/insiders?symbol=SPY" "/api/government?symbol=SPY" "/api/ownership?symbol=SPY" "/api/vol-target-trend?symbol=SPY"; do
+  for path in "/api/company-profile?symbol=SPY" "/api/financials?symbol=SPY" "/api/insiders?symbol=SPY" "/api/government?symbol=SPY" "/api/ownership?symbol=SPY" "/api/vol-target-trend?symbol=SPY" "/api/kronos/evidence?symbol=SPY"; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' "${base}${path}" 2>/dev/null || echo 000)"
     [ "$code" = "200" ] || return 1
   done

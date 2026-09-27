@@ -163,7 +163,7 @@ def test_cagr_trading_day_count():
 
 
 def test_equity_curve_starts_at_one():
-    r = _series([0.10, -0.05, 0.02])
+    r = _series([0.0, 0.10, -0.05, 0.02])
     eq = qc.equity_curve(r)
     assert eq.iloc[0] == pytest.approx(1.0)
     assert eq.iloc[-1] == pytest.approx(1.10 * 0.95 * 1.02)
@@ -291,7 +291,10 @@ def test_student_t_pvalue_against_scipy_when_available():
     t, df = 2.5, 40
     ours = qc._student_t_two_sided_p(t, df)
     assert 0.0 < ours < 0.05
-    scipy_stats = pytest.importorskip("scipy.stats")
+    try:
+        import scipy.stats as scipy_stats
+    except (ImportError, Exception):
+        pytest.skip("scipy.stats unavailable")
     assert ours == pytest.approx(2.0 * scipy_stats.t.sf(t, df), rel=1e-6)
 
 

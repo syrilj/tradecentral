@@ -254,6 +254,8 @@
   --t-fig: 1.375rem; /* 22px — readout figures            */
   --t-fig-lg: 2.25rem; /* 36px — hero readout               */
   --t-display: 1.125rem; /* 18px — view titles                */
+  --t-view-title: clamp(1.5rem, 1.1rem + 1.4vw, 2rem); /* primary workspace headings */
+  --t-reading: 1rem; /* explanatory copy outside dense tables */
 
   --track-display: -0.02em; /* tight display tracking         */
   --track-label: 0.05em; /* balanced uppercase mono tracking */

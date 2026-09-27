@@ -67,7 +67,9 @@ const { getToken, isLoaded, isSignedIn } = localMode
   ? { getToken: computed(() => async () => null), isLoaded: ref(true), isSignedIn: ref(true) }
   : useAuth()
 const clerk = localMode ? ref(null) : useClerk()
-const { user } = localMode ? { user: ref<null>(null) } : useUser()
+const { isLoaded: isUserLoaded, user } = localMode
+  ? { isLoaded: ref(true), user: ref<null>(null) }
+  : useUser()
 const { preferences } = usePreferences()
 const profileDrawerOpen = ref(false)
 const publicRoute = computed(() => route.meta.public === true)
@@ -78,7 +80,7 @@ const operatorEmail = computed(() =>
         ?.trim() || 'local-operator'
     : (user.value?.primaryEmailAddress?.emailAddress ?? ''),
 )
-const operatorAllowed = computed(() => isAllowedOperatorEmail(operatorEmail.value))
+const operatorAllowed = computed(() => localMode || isAllowedOperatorEmail(operatorEmail.value))
 const stripOperatorInitials = computed(() => {
   if (localMode) return 'OP'
   const displayName = user.value?.fullName || user.value?.firstName
@@ -134,10 +136,14 @@ configureApiAuth(async () => {
 
 /* The shell owns the two feeds every view needs, and hands them down. A single
    poller for status beats four views each opening their own. */
-const authEnabled = () => isSignedIn.value === true && operatorAllowed.value
+const authEnabled = () =>
+  !publicRoute.value &&
+  (localMode || (isLoaded.value && isUserLoaded.value && isSignedIn.value === true)) &&
+  operatorAllowed.value
 const lastStatusDepth = ref<ScanDepth | undefined>(undefined)
 const status = useResource<StatusPayload>(() => api.status(lastStatusDepth.value), {
   intervalMs: 60_000,
+  immediate: false,
   enabled: authEnabled,
 })
 watch(
@@ -148,16 +154,18 @@ watch(
 )
 const readiness = useResource<Readiness>(() => api.readiness(), {
   intervalMs: 120_000,
+  immediate: false,
   enabled: authEnabled,
 })
 const marketClock = useResource<MarketClock>(() => api.marketClock(), {
   intervalMs: 30_000,
+  immediate: false,
   enabled: authEnabled,
 })
 /** Benchmark tape for the strip — SPY, Nasdaq (QQQ), Dow (DIA), Oil/energy (XLE). */
 const tapeMarks = useResource<ComparePayload>(
   () => api.compare(['SPY', 'QQQ', 'DIA', 'XLE'], '1m'),
-  { intervalMs: 120_000, enabled: authEnabled },
+  { intervalMs: 120_000, immediate: false, enabled: authEnabled },
 )
 
 /** Sector rotation re-runs on its own clock. Status polls must not rebuild
@@ -169,11 +177,12 @@ const sectorFlowRes = useResource<SectorFlowPayload>(
     sectorForceNext.value = false
     return api.sectorFlow({ force })
   },
-  { intervalMs: 180_000, enabled: authEnabled },
+  { intervalMs: 180_000, immediate: false, enabled: authEnabled },
 )
 /** Desk structure composite — shown as a fear/greed gauge. Not CNN. */
 const sentimentRes = useResource<SentimentPayload>(() => api.sentiment(), {
   intervalMs: 300_000,
+  immediate: false,
   enabled: authEnabled,
 })
 
@@ -187,33 +196,38 @@ watch([() => sectorFlowRes.data.value, () => status.data.value], ([flow, board])
   status.data.value = { ...board, sector_flow: flow }
 })
 
-watch(isSignedIn, (signedIn) => {
-  if (signedIn && operatorAllowed.value) {
-    void Promise.all([
-      status.refresh(),
-      readiness.refresh(),
-      marketClock.refresh(),
-      tapeMarks.refresh(),
-      refreshSectorFlow({ force: true }),
-      sentimentRes.refresh(),
-    ])
-  } else {
-    status.clear()
-    readiness.clear()
-    marketClock.clear()
-    tapeMarks.clear()
-    sectorFlowRes.clear()
-    sentimentRes.clear()
-  }
-})
+watch(
+  [isLoaded, isUserLoaded, isSignedIn, operatorAllowed, publicRoute],
+  () => {
+    if (authEnabled()) {
+      void Promise.all([
+        status.refresh(),
+        readiness.refresh(),
+        marketClock.refresh(),
+        tapeMarks.refresh(),
+        refreshSectorFlow({ force: true }),
+        sentimentRes.refresh(),
+      ])
+    } else {
+      status.clear()
+      readiness.clear()
+      marketClock.clear()
+      tapeMarks.clear()
+      sectorFlowRes.clear()
+      sentimentRes.clear()
+    }
+  },
+  { immediate: true },
+)
 
 watch(
-  [isLoaded, isSignedIn, operatorAllowed, () => route.name, () => route.fullPath],
+  [isLoaded, isUserLoaded, isSignedIn, operatorAllowed, () => route.name, () => route.fullPath],
   () => {
     if (localMode) return // the local operator session never redirects to /auth
     if (!isLoaded.value) return
-    if (isSignedIn.value && !operatorAllowed.value && route.name !== 'auth') {
-      void router.replace({ name: 'auth' })
+    if (isSignedIn.value && !isUserLoaded.value) return
+    if (isSignedIn.value && !operatorAllowed.value && route.name !== 'waitlist') {
+      void router.replace({ name: 'waitlist' })
       return
     }
     if (!isSignedIn.value && route.meta.public !== true) {
@@ -242,12 +256,12 @@ provide('sectorFlow', {
 const decisionDestination = {
   name: 'decision',
   title: 'Decision',
-  hint: 'TypeSafe live read',
+  hint: 'Live read · OOS audit',
   icon: 'adaptive',
   tab: true,
 } as const
 
-/** Fourteen operator destinations. Everything else lives in Tools. */
+/** Primary operator destinations. Everything secondary lives in Tools. */
 const primaryNav = [
   {
     name: 'brief',
@@ -256,6 +270,7 @@ const primaryNav = [
     icon: 'brief',
     tab: true,
   },
+  decisionDestination,
   {
     name: 'flow',
     title: 'Flow',
@@ -455,13 +470,6 @@ const macroTools = [
     title: 'AMT',
     hint: 'Auction Market Theory',
     icon: 'amt',
-  },
-  {
-    name: 'decision',
-    idx: 'G3',
-    title: 'Decision',
-    hint: 'TypeSafe live read · Decision Brain',
-    icon: 'adaptive',
   },
 ] as const
 
@@ -2830,6 +2838,8 @@ function openFearGreed(): void {
   }
   .nav li.tab-dest-li {
     display: flex;
+    /* Keep every workspace reachable by horizontal scrolling on narrow screens. */
+    flex: 0 0 72px;
   }
   .nav-hint {
     display: none !important;

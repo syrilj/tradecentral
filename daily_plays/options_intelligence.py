@@ -5,6 +5,7 @@ trade-tape mappings and returns JSON-safe diagnostics for the dashboard.  Call
 versus put activity is always observable; bought versus sold flow is only
 signed when the source includes an explicit aggressor field.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
@@ -71,14 +72,20 @@ def _first(row: Mapping[str, Any], *names: str) -> Any:
 
 def _right(value: Any) -> str | None:
     return {
-        "c": "call", "call": "call", "calls": "call",
-        "p": "put", "put": "put", "puts": "put",
+        "c": "call",
+        "call": "call",
+        "calls": "call",
+        "p": "put",
+        "put": "put",
+        "puts": "put",
     }.get(str(value or "").strip().lower())
 
 
 def _timestamp(value: Any) -> datetime | None:
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return (
+            value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        )
     if isinstance(value, date):
         return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
     if value is None:
@@ -144,7 +151,13 @@ def _normal_cdf(x: float) -> float:
 
 
 def _bs_gamma(
-    *, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0,
+    *,
+    spot: float,
+    strike: float,
+    years: float,
+    iv: float,
+    rate: float,
+    yield_rate: float = 0.0,
 ) -> float | None:
     """Black-Scholes gamma (dividend-adjusted).
 
@@ -161,14 +174,25 @@ def _bs_gamma(
     return math.exp(-yield_rate * years) * pdf_d1 / (spot * iv * root_t)
 
 
-def _bs_d1(*, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0) -> float | None:
+def _bs_d1(
+    *, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0
+) -> float | None:
     if spot <= 0 or strike <= 0 or years <= 0 or not 0.005 <= iv <= 5.0:
         return None
     root_t = math.sqrt(years)
     return (math.log(spot / strike) + (rate - yield_rate + 0.5 * iv * iv) * years) / (iv * root_t)
 
 
-def _bs_delta(*, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0, is_call: bool = True) -> float | None:
+def _bs_delta(
+    *,
+    spot: float,
+    strike: float,
+    years: float,
+    iv: float,
+    rate: float,
+    yield_rate: float = 0.0,
+    is_call: bool = True,
+) -> float | None:
     """Black-Scholes delta (dividend-adjusted)."""
     d1 = _bs_d1(spot=spot, strike=strike, years=years, iv=iv, rate=rate, yield_rate=yield_rate)
     if d1 is None:
@@ -178,7 +202,16 @@ def _bs_delta(*, spot: float, strike: float, years: float, iv: float, rate: floa
     return delta if is_call else delta - eq_t
 
 
-def _bs_charm_per_day(*, spot: float, strike: float, years: float, iv: float, rate: float, yield_rate: float = 0.0, is_call: bool = True) -> float | None:
+def _bs_charm_per_day(
+    *,
+    spot: float,
+    strike: float,
+    years: float,
+    iv: float,
+    rate: float,
+    yield_rate: float = 0.0,
+    is_call: bool = True,
+) -> float | None:
     """Charm = ∂Δ/∂t in delta-per-day (standard −∂Δ/∂τ convention, /365).
 
     Charmcall = e^{-qT} [ q·N(d1) − φ(d1)·(2(r−q)T − d2·σ√T) / (2σT√T) ]
@@ -200,7 +233,8 @@ def _bs_charm_per_day(*, spot: float, strike: float, years: float, iv: float, ra
     pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
     charm_year = eq_t * (
         yield_rate * nd1
-        - pdf_d1 * (2.0 * (rate - yield_rate) * years - d2 * iv * root_t)
+        - pdf_d1
+        * (2.0 * (rate - yield_rate) * years - d2 * iv * root_t)
         / (2.0 * iv * years * root_t)
     )
     if not is_call:
@@ -208,7 +242,9 @@ def _bs_charm_per_day(*, spot: float, strike: float, years: float, iv: float, ra
     return charm_year / 365.0
 
 
-def _bs_theta_per_day(*, spot: float, strike: float, years: float, iv: float, rate: float, is_call: bool = True) -> float | None:
+def _bs_theta_per_day(
+    *, spot: float, strike: float, years: float, iv: float, rate: float, is_call: bool = True
+) -> float | None:
     """Theta = ∂V/∂t in option-price-points-per-day (standard −∂V/∂τ, /365).
     Theta_call = −S·φ(d1)·σ / (2√T) − r·K·e^{−rT}·N(d2)
     Theta_put  = −S·φ(d1)·σ / (2√T) + r·K·e^{−rT}·N(−d2)
@@ -299,11 +335,20 @@ def _bucket_time(observed: datetime, selected_range: str) -> datetime:
     return observed.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _normalize_chain_row(row: Mapping[str, Any], *, asof: datetime, spot: float | None) -> dict[str, Any]:
+def _normalize_chain_row(
+    row: Mapping[str, Any], *, asof: datetime, spot: float | None
+) -> dict[str, Any]:
     expiry = _expiry(_first(row, "expiry", "expiration", "expiration_date"))
-    observed = _timestamp(_first(
-        row, "quote_asof_utc", "captured_utc", "asof_utc", "timestamp", "updated_at",
-    ))
+    observed = _timestamp(
+        _first(
+            row,
+            "quote_asof_utc",
+            "captured_utc",
+            "asof_utc",
+            "timestamp",
+            "updated_at",
+        )
+    )
     bid = _number(_first(row, "bid", "best_bid"))
     ask = _number(_first(row, "ask", "best_ask"))
     mid = ((bid + ask) / 2.0) if bid is not None and ask is not None and ask >= bid >= 0 else None
@@ -333,7 +378,11 @@ def _normalize_chain_row(row: Mapping[str, Any], *, asof: datetime, spot: float 
 
 
 def _filter_chain(
-    rows: Sequence[Mapping[str, Any]], *, asof: datetime, spot: float, filters: OptionsFilters,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    asof: datetime,
+    spot: float,
+    filters: OptionsFilters,
     selection_date: date | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any]]:
     included: list[dict[str, Any]] = []
@@ -379,9 +428,7 @@ def _filter_chain(
         measurable = [expiry for expiry in unexpired if expiry_oi.get(expiry, 0) > 0]
         if measurable:
             selected = measurable[0]
-            skipped_unmeasurable = [
-                expiry for expiry in unexpired if expiry < selected
-            ]
+            skipped_unmeasurable = [expiry for expiry in unexpired if expiry < selected]
         else:
             selected = unexpired[0] if unexpired else (available[-1] if available else None)
     elif filters.expiry != "all":
@@ -402,9 +449,7 @@ def _filter_chain(
         "selection_asof": selection_day.isoformat(),
         # Nearer expiries the feed listed but no OI reference covers. Named so
         # the desk can see the structure is scored one expiry out, not silently.
-        "skipped_unmeasurable_expiries": [
-            expiry.isoformat() for expiry in skipped_unmeasurable
-        ],
+        "skipped_unmeasurable_expiries": [expiry.isoformat() for expiry in skipped_unmeasurable],
         "available_expiries": [
             {
                 "expiry": expiry.isoformat(),
@@ -420,7 +465,10 @@ def _filter_chain(
 
 
 def _contract_focus(
-    rows: Sequence[Mapping[str, Any]], *, asof: datetime, spot: float,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    asof: datetime,
+    spot: float,
 ) -> dict[str, dict[str, Any]]:
     """Choose one inspectable long-option contract for each right.
 
@@ -429,12 +477,10 @@ def _contract_focus(
     0.45 absolute delta, a tight spread, and observed liquidity.  When delta
     is absent, distance from spot is the explicit fallback.
     """
-    normalized = [
-        _normalize_chain_row(raw, asof=asof, spot=spot)
-        for raw in rows
-    ]
+    normalized = [_normalize_chain_row(raw, asof=asof, spot=spot) for raw in rows]
     valid = [
-        row for row in normalized
+        row
+        for row in normalized
         if row.get("right") in {"call", "put"}
         and row.get("strike") is not None
         and row.get("expiry") is not None
@@ -462,7 +508,9 @@ def _contract_focus(
         live_quote_penalty = 0.0 if quote_observed and row.get("quote_live") else 1.0
         reference_quote_penalty = 0.0 if quote_observed else 1.0
         delta_missing = 0.0 if delta is not None and 0.05 <= abs(delta) <= 0.95 else 1.0
-        delta_distance = abs(abs(delta) - 0.45) if delta_missing == 0.0 else abs(strike / spot - 1.0)
+        delta_distance = (
+            abs(abs(delta) - 0.45) if delta_missing == 0.0 else abs(strike / spot - 1.0)
+        )
         delta_band_penalty = 0.0 if delta is not None and 0.25 <= abs(delta) <= 0.65 else 1.0
         preferred_dte_penalty = 0.0 if 7 <= dte <= 45 else 1.0
         liquidity_penalty = 0.0 if open_interest >= 100 and volume >= 10 else 1.0
@@ -500,20 +548,26 @@ def _contract_focus(
         open_interest = int(row.get("open_interest") or 0)
         dte = int(row["dte"]) if row.get("dte") is not None else None
         quote_observed = bool(
-            bid is not None and ask is not None and midpoint is not None
-            and midpoint > 0 and ask >= bid >= 0
+            bid is not None
+            and ask is not None
+            and midpoint is not None
+            and midpoint > 0
+            and ask >= bid >= 0
         )
         quote_live = bool(row.get("quote_live"))
         quote_complete = bool(
-            quote_observed and quote_live
-            and spread_pct is not None and spread_pct <= 0.25
+            quote_observed and quote_live and spread_pct is not None and spread_pct <= 0.25
         )
         liquidity_complete = bool(open_interest >= 100 and volume >= 10)
         tenor_complete = bool(dte is not None and 7 <= dte <= 45)
         rejection_reasons = [
-            label for failed, label in (
+            label
+            for failed, label in (
                 (not quote_observed, "two-sided quote missing"),
-                (quote_observed and not quote_live, "quote is delayed reference only; live two-sided quote required"),
+                (
+                    quote_observed and not quote_live,
+                    "quote is delayed reference only; live two-sided quote required",
+                ),
                 (quote_observed and quote_live and not quote_complete, "live spread is above 25%"),
                 (not liquidity_complete, "requires volume >= 10 and open interest >= 100"),
                 (not tenor_complete, "preferred contract tenor is 7–45 DTE"),
@@ -546,9 +600,12 @@ def _contract_focus(
             "quote_reference_only": bool(quote_observed and not quote_live),
             "quote_source": row.get("quote_source"),
             "quote_status": (
-                "live_two_sided" if quote_complete
-                else "delayed_reference" if quote_observed and not quote_live
-                else "live_spread_failed" if quote_observed
+                "live_two_sided"
+                if quote_complete
+                else "delayed_reference"
+                if quote_observed and not quote_live
+                else "live_spread_failed"
+                if quote_observed
                 else "missing"
             ),
             "liquidity_complete": liquidity_complete,
@@ -564,7 +621,9 @@ def _contract_focus(
     return selected
 
 
-def _latest_chain(rows: Sequence[Mapping[str, Any]]) -> tuple[list[Mapping[str, Any]], datetime | None]:
+def _latest_chain(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], datetime | None]:
     observed = [
         _timestamp(_first(row, "captured_utc", "asof_utc", "timestamp", "updated_at", "asof_date"))
         for row in rows
@@ -584,18 +643,45 @@ def _normalize_aggressor(row: Mapping[str, Any]) -> str | None:
     """
     raw = _first(
         row,
-        "aggressor", "trade_side", "order_side", "buy_sell", "aggressor_side",
-        "aggressor_label", "side", "bs",
+        "aggressor",
+        "trade_side",
+        "order_side",
+        "buy_sell",
+        "aggressor_side",
+        "aggressor_label",
+        "side",
+        "bs",
     )
     value = str(raw or "").strip().upper().replace("-", "_").replace(" ", "_")
     if value in {
-        "B", "BUY", "BOUGHT", "BUYER", "AT_ASK", "ASK", "ASK_BUY", "BUY_TO_OPEN",
-        "BUY_TO_CLOSE", "BOT", "HIT_ASK", "LIFT", "LIFTED",
+        "B",
+        "BUY",
+        "BOUGHT",
+        "BUYER",
+        "AT_ASK",
+        "ASK",
+        "ASK_BUY",
+        "BUY_TO_OPEN",
+        "BUY_TO_CLOSE",
+        "BOT",
+        "HIT_ASK",
+        "LIFT",
+        "LIFTED",
     }:
         return "buy"
     if value in {
-        "S", "SELL", "SOLD", "SELLER", "AT_BID", "BID", "BID_SELL", "SELL_TO_OPEN",
-        "SELL_TO_CLOSE", "SLD", "HIT_BID", "HIT",
+        "S",
+        "SELL",
+        "SOLD",
+        "SELLER",
+        "AT_BID",
+        "BID",
+        "BID_SELL",
+        "SELL_TO_OPEN",
+        "SELL_TO_CLOSE",
+        "SLD",
+        "HIT_BID",
+        "HIT",
     }:
         return "sell"
     # Free-text aggressor labels from some scanners.
@@ -619,7 +705,9 @@ def _vendor_sentiment_bias(row: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _normalize_trade_class(row: Mapping[str, Any], *, volume: int, premium: float) -> tuple[str, str]:
+def _normalize_trade_class(
+    row: Mapping[str, Any], *, volume: int, premium: float
+) -> tuple[str, str]:
     """Classify print as sweep / block / single when the vendor does not tag it.
 
     LSE does not emit an explicit sweep flag. Vendor strings (if present) win;
@@ -627,8 +715,14 @@ def _normalize_trade_class(row: Mapping[str, Any], *, volume: int, premium: floa
     """
     raw = _first(
         row,
-        "trade_class", "trade_type", "order_type", "condition", "print_type",
-        "execution_type", "tag", "tags",
+        "trade_class",
+        "trade_type",
+        "order_type",
+        "condition",
+        "print_type",
+        "execution_type",
+        "tag",
+        "tags",
     )
     text = str(raw or "").strip().lower()
     if text:
@@ -668,12 +762,20 @@ def _parse_occ_symbol(value: Any) -> dict[str, Any]:
         return {}
 
 
-def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = None) -> dict[str, Any] | None:
-    occ_symbol = _first(row, "occ_symbol", "contract_symbol", "contractSymbol", "ticker", "option_symbol")
+def _normalize_flow_row(
+    row: Mapping[str, Any], fallback_spot: float | None = None
+) -> dict[str, Any] | None:
+    occ_symbol = _first(
+        row, "occ_symbol", "contract_symbol", "contractSymbol", "ticker", "option_symbol"
+    )
     occ_info = _parse_occ_symbol(occ_symbol)
 
-    right = _right(_first(row, "contract_type", "option_type", "right", "type")) or occ_info.get("right")
-    observed = _timestamp(_first(row, "ts", "timestamp", "datetime", "time", "last_trade_at", "updated_at"))
+    right = _right(_first(row, "contract_type", "option_type", "right", "type")) or occ_info.get(
+        "right"
+    )
+    observed = _timestamp(
+        _first(row, "ts", "timestamp", "datetime", "time", "last_trade_at", "updated_at")
+    )
     volume_raw = _integer(_first(row, "volume", "volume_today", "size", "contracts", "quantity"))
     volume = int(volume_raw) if volume_raw is not None else 0
     price = _number(_first(row, "price", "last_price", "trade_price", "fill_price", "mid"))
@@ -697,7 +799,9 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     bias: str | None = None
     bias_source: str = "none"
     if aggressor:
-        bullish = (right == "call" and aggressor == "buy") or (right == "put" and aggressor == "sell")
+        bullish = (right == "call" and aggressor == "buy") or (
+            right == "put" and aggressor == "sell"
+        )
         signed = premium if bullish else -premium
         bias = "bullish" if bullish else "bearish"
         bias_source = "aggressor"
@@ -710,7 +814,9 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     # OTM distance is a contract-identity measurement, not directional evidence:
     # calls are OTM above spot and puts are OTM below spot. ITM/ATM contracts are
     # reported as 0 rather than a negative "OTM" percentage.
-    underlying_price = _number(_first(row, "underlying_price", "spot", "underlying_spot", "stock_price"))
+    underlying_price = _number(
+        _first(row, "underlying_price", "spot", "underlying_spot", "stock_price")
+    )
     if underlying_price is None and fallback_spot is not None:
         underlying_price = fallback_spot
     strike = _number(row.get("strike"))
@@ -725,15 +831,15 @@ def _normalize_flow_row(row: Mapping[str, Any], fallback_spot: float | None = No
     otm_pct: float | None = None
     if strike is not None and underlying_price is not None and underlying_price > 0:
         raw_otm = (
-            strike / underlying_price - 1.0
-            if right == "call"
-            else 1.0 - strike / underlying_price
+            strike / underlying_price - 1.0 if right == "call" else 1.0 - strike / underlying_price
         )
         otm_pct = max(0.0, raw_otm)
 
     # Always expose contract identity for the tape (CALL/PUT activity scan).
     activity_side = "call" if right == "call" else "put"
-    trade_class, trade_class_source = _normalize_trade_class(row, volume=volume, premium=float(premium))
+    trade_class, trade_class_source = _normalize_trade_class(
+        row, volume=volume, premium=float(premium)
+    )
     symbol = _underlying_from_row(row) or occ_info.get("symbol")
     return {
         "timestamp": observed,
@@ -788,10 +894,7 @@ def _robust_score(values: Sequence[float], value: float) -> float | None:
 def _annotate_tape_anomalies(tape: list[dict[str, Any]]) -> None:
     """Mark observable statistical outliers without inferring trade intent."""
     premiums = [float(row["premium"]) for row in tape]
-    volumes = [
-        float(row["volume"]) if row.get("volume") is not None else 0.0
-        for row in tape
-    ]
+    volumes = [float(row["volume"]) if row.get("volume") is not None else 0.0 for row in tape]
     premium_center = median(premiums) if premiums else 0.0
 
     clusters: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
@@ -844,12 +947,15 @@ def _annotate_tape_anomalies(tape: list[dict[str, Any]]) -> None:
                 row["trade_class"] = "sweep"
                 row["trade_class_source"] = "burst_heuristic"
         row["anomaly_flags"] = flags
-        row["anomaly_score"] = round(max(
-            0.0,
-            premium_score or 0.0,
-            volume_score or 0.0,
-            3.5 if id(row) in clustered_ids or id(row) in sweep_ids else 0.0,
-        ), 3)
+        row["anomaly_score"] = round(
+            max(
+                0.0,
+                premium_score or 0.0,
+                volume_score or 0.0,
+                3.5 if id(row) in clustered_ids or id(row) in sweep_ids else 0.0,
+            ),
+            3,
+        )
         row["premium_percentile"] = round(_percentile_rank(premiums, premium), 6)
         # Human-readable lean: signed BULL/BEAR when known, else CALL/PUT activity.
         if row.get("bias") == "bullish":
@@ -1057,8 +1163,14 @@ def classify_options_tape(
         if symbol:
             row["symbol"] = symbol
         identity = (
-            row["timestamp"], row["right"], row["strike"], row["expiry"],
-            round(row["premium"], 2), row["volume"], row["aggressor"], row.get("symbol"),
+            row["timestamp"],
+            row["right"],
+            row["strike"],
+            row["expiry"],
+            round(row["premium"], 2),
+            row["volume"],
+            row["aggressor"],
+            row.get("symbol"),
         )
         if identity in seen:
             continue
@@ -1075,11 +1187,17 @@ def filter_tape_preset(tape: Sequence[Mapping[str, Any]], preset: str) -> list[d
     return [dict(row) for row in tape if key in (row.get("presets") or ())]
 
 
-def _ticker_direction_share(prints: Sequence[Mapping[str, Any]]) -> tuple[float | None, float | None, str]:
+def _ticker_direction_share(
+    prints: Sequence[Mapping[str, Any]],
+) -> tuple[float | None, float | None, str]:
     signed = [row for row in prints if row.get("signed_premium") is not None]
     if signed:
-        bull = sum(float(row["signed_premium"]) for row in signed if float(row["signed_premium"]) > 0)
-        bear = sum(-float(row["signed_premium"]) for row in signed if float(row["signed_premium"]) < 0)
+        bull = sum(
+            float(row["signed_premium"]) for row in signed if float(row["signed_premium"]) > 0
+        )
+        bear = sum(
+            -float(row["signed_premium"]) for row in signed if float(row["signed_premium"]) < 0
+        )
         classified = bull + bear
         basis = "signed_premium"
         if classified <= 0:
@@ -1107,7 +1225,11 @@ def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, An
     for symbol, prints in by_symbol.items():
         unusual = [row for row in prints if row.get("is_unusual")]
         sweeps = [row for row in prints if row.get("is_sweep")]
-        momentum = [row for row in prints if row.get("is_momentum") or "momentum" in (row.get("presets") or ())]
+        momentum = [
+            row
+            for row in prints
+            if row.get("is_momentum") or "momentum" in (row.get("presets") or ())
+        ]
         bull, bear, basis = _ticker_direction_share(prints)
         signed_basis = basis == "signed_premium"
         call_share = None if signed_basis else bull
@@ -1116,28 +1238,39 @@ def build_options_top_tickers(tape: Sequence[Mapping[str, Any]]) -> dict[str, An
         bearish_share = bear if signed_basis else None
         metrics = {
             "unusual_otm": (
-                sum(float(row.get("otm_pct") or 0.0) * float(row.get("premium") or 0.0) for row in unusual)
+                sum(
+                    float(row.get("otm_pct") or 0.0) * float(row.get("premium") or 0.0)
+                    for row in unusual
+                )
                 / sum(float(row.get("premium") or 0.0) for row in unusual)
                 if unusual and sum(float(row.get("premium") or 0.0) for row in unusual) > 0
                 else 0.0
             ),
-            "unusual_volume": float(sum(int(row.get("contracts") or row.get("volume") or 0) for row in unusual)),
+            "unusual_volume": float(
+                sum(int(row.get("contracts") or row.get("volume") or 0) for row in unusual)
+            ),
             "unusual_premium": sum(float(row.get("premium") or 0.0) for row in unusual),
             "sweeps": sum(float(row.get("premium") or 0.0) for row in sweeps),
             "momentum": sum(float(row.get("premium") or 0.0) for row in momentum),
-            "call_premium": sum(float(row.get("premium") or 0.0) for row in prints if row.get("right") == "call"),
-            "put_premium": sum(float(row.get("premium") or 0.0) for row in prints if row.get("right") == "put"),
+            "call_premium": sum(
+                float(row.get("premium") or 0.0) for row in prints if row.get("right") == "call"
+            ),
+            "put_premium": sum(
+                float(row.get("premium") or 0.0) for row in prints if row.get("right") == "put"
+            ),
         }
-        tickers.append({
-            "symbol": symbol,
-            "bullish_share": bullish_share,
-            "bearish_share": bearish_share,
-            "call_share": call_share,
-            "put_share": put_share,
-            "share_basis": basis,
-            "print_count": len(prints),
-            "metrics": metrics,
-        })
+        tickers.append(
+            {
+                "symbol": symbol,
+                "bullish_share": bullish_share,
+                "bearish_share": bearish_share,
+                "call_share": call_share,
+                "put_share": put_share,
+                "share_basis": basis,
+                "print_count": len(prints),
+                "metrics": metrics,
+            }
+        )
 
     categories: dict[str, list[dict[str, Any]]] = {}
     for name in TOP_TICKER_CATEGORIES:
@@ -1222,7 +1355,8 @@ def _aggregate_sweep_bursts(tape_rows: list[dict[str, Any]]) -> list[dict[str, A
         ts0_raw = row.get("timestamp")
         try:
             ts0 = (
-                ts0_raw if isinstance(ts0_raw, datetime)
+                ts0_raw
+                if isinstance(ts0_raw, datetime)
                 else datetime.fromisoformat(str(ts0_raw).replace("Z", "+00:00"))
             )
         except (ValueError, AttributeError):
@@ -1242,7 +1376,8 @@ def _aggregate_sweep_bursts(tape_rows: list[dict[str, Any]]) -> list[dict[str, A
                 ts_raw = other.get("timestamp")
                 try:
                     ts_other = (
-                        ts_raw if isinstance(ts_raw, datetime)
+                        ts_raw
+                        if isinstance(ts_raw, datetime)
                         else datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
                     )
                     gap = abs((ts_other - ts0).total_seconds())
@@ -1274,10 +1409,13 @@ def _aggregate_sweep_bursts(tape_rows: list[dict[str, Any]]) -> list[dict[str, A
         # Build the aggregate fill list (preserve order, convert timestamps).
         def _fill_snapshot(r: dict[str, Any]) -> dict[str, Any]:
             out = {
-                "timestamp": r["timestamp"] if isinstance(r["timestamp"], str)
-                             else r["timestamp"].isoformat(),
+                "timestamp": r["timestamp"]
+                if isinstance(r["timestamp"], str)
+                else r["timestamp"].isoformat(),
                 "contracts": int(r.get("contracts") or r.get("volume") or 0),
-                "price": round(float(r.get("price") or 0.0), 4) if r.get("price") is not None else None,
+                "price": round(float(r.get("price") or 0.0), 4)
+                if r.get("price") is not None
+                else None,
                 "premium": round(float(r.get("premium") or 0.0), 2),
                 "anomaly_flags": list(r.get("anomaly_flags") or []),
             }
@@ -1302,12 +1440,12 @@ def _aggregate_sweep_bursts(tape_rows: list[dict[str, Any]]) -> list[dict[str, A
         # Merge anomaly flags from all fills (union, deduplicated).
         all_flags: list[str] = []
         seen_flags: set[str] = set()
-        for flag in (anchor.get("anomaly_flags") or []):
+        for flag in anchor.get("anomaly_flags") or []:
             if flag not in seen_flags:
                 all_flags.append(flag)
                 seen_flags.add(flag)
         for r in burst_rows:
-            for flag in (r.get("anomaly_flags") or []):
+            for flag in r.get("anomaly_flags") or []:
                 if flag not in seen_flags:
                     all_flags.append(flag)
                     seen_flags.add(flag)
@@ -1327,10 +1465,12 @@ def _aggregate_sweep_bursts(tape_rows: list[dict[str, Any]]) -> list[dict[str, A
             agg["relative_volume"] = round(total_contracts / float(oi), 2)
         # Why tag: combine aggregate summary with underlying fill reasons.
         fill_word = "fill" if len(burst_rows) == 1 else "fills"
-        why_list: list[str] = [f"sweep {len(burst_rows)} {fill_word} ≤{int(BURST_WINDOW_S)}s · burst aggregate"]
+        why_list: list[str] = [
+            f"sweep {len(burst_rows)} {fill_word} ≤{int(BURST_WINDOW_S)}s · burst aggregate"
+        ]
         seen_why = set(why_list)
         for r in burst_rows:
-            for w in (r.get("why") or []):
+            for w in r.get("why") or []:
                 if w not in seen_why:
                     why_list.append(w)
                     seen_why.add(w)
@@ -1348,7 +1488,10 @@ def _aggregate_sweep_bursts(tape_rows: list[dict[str, Any]]) -> list[dict[str, A
 #: tick test (price vs the previous print on the same contract, Lee-Ready's
 #: own fallback when no quote is available) is the weakest but still observed.
 PRESSURE_SIDE_WEIGHTS = {
-    "vendor": 1.0, "quote_rule_live": 0.8, "quote_rule_delayed": 0.5, "tick_rule": 0.4,
+    "vendor": 1.0,
+    "quote_rule_live": 0.8,
+    "quote_rule_delayed": 0.5,
+    "tick_rule": 0.4,
 }
 
 
@@ -1397,7 +1540,8 @@ def _tick_rule_sides(tape_rows: Sequence[dict[str, Any]]) -> None:
 
 
 def _infer_print_side(
-    row: Mapping[str, Any], quote: Mapping[str, Any] | None,
+    row: Mapping[str, Any],
+    quote: Mapping[str, Any] | None,
 ) -> tuple[str | None, str | None, float]:
     """(side, source, weight) for one print: who was the aggressor?
 
@@ -1463,7 +1607,13 @@ def _tape_channel_from_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]
     ``resolved_premium`` / ``total_premium`` is the unweighted coverage: how
     much of the tape actually had a side.
     """
-    mix = {"vendor": 0, "quote_rule_live": 0, "quote_rule_delayed": 0, "tick_rule": 0, "unresolved": 0}
+    mix = {
+        "vendor": 0,
+        "quote_rule_live": 0,
+        "quote_rule_delayed": 0,
+        "tick_rule": 0,
+        "unresolved": 0,
+    }
     signed = gross = resolved = total = buy = sell = 0.0
     n_signed = 0
     for row in rows:
@@ -1507,7 +1657,12 @@ def _flow_series(
     spot: float | None = None,
     chain_rows: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[
-    list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], list[float], list[float], dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+    list[float],
+    list[float],
+    dict[str, Any],
 ]:
     lower, upper = _flow_date_bounds(filters, asof, mode_requested=mode_requested)
     normalized: list[dict[str, Any]] = []
@@ -1530,8 +1685,13 @@ def _flow_series(
             rejected["invalid"] += 1
             continue
         identity = (
-            row["timestamp"], row["right"], row["strike"], row["expiry"],
-            round(row["premium"], 2), row["volume"], row["aggressor"],
+            row["timestamp"],
+            row["right"],
+            row["strike"],
+            row["expiry"],
+            round(row["premium"], 2),
+            row["volume"],
+            row["aggressor"],
         )
         if identity in seen:
             rejected["invalid"] += 1
@@ -1550,8 +1710,14 @@ def _flow_series(
             return "below_volume"
         if not lo <= row["timestamp"] <= hi:
             return "outside_range"
-        explicit_expiry_filter = selected_expiry if filters.expiry not in ("all", "nearest") else None
-        if explicit_expiry_filter and row["expiry"] is not None and row["expiry"].isoformat() != explicit_expiry_filter:
+        explicit_expiry_filter = (
+            selected_expiry if filters.expiry not in ("all", "nearest") else None
+        )
+        if (
+            explicit_expiry_filter
+            and row["expiry"] is not None
+            and row["expiry"].isoformat() != explicit_expiry_filter
+        ):
             return "outside_expiry"
         return None
 
@@ -1600,12 +1766,19 @@ def _flow_series(
     buckets: dict[datetime, dict[str, Any]] = {}
     for row in tape_rows:
         key = _bucket_time(row["timestamp"], filters.range)
-        bucket = buckets.setdefault(key, {
-            "t": key.isoformat(), "call_premium": 0.0, "put_premium": 0.0,
-            "signed_net_premium": 0.0, "signed_premium_observations": 0,
-            "signed_gross_premium": 0.0,
-            "print_count": 0, "unresolved_premium": 0.0,
-        })
+        bucket = buckets.setdefault(
+            key,
+            {
+                "t": key.isoformat(),
+                "call_premium": 0.0,
+                "put_premium": 0.0,
+                "signed_net_premium": 0.0,
+                "signed_premium_observations": 0,
+                "signed_gross_premium": 0.0,
+                "print_count": 0,
+                "unresolved_premium": 0.0,
+            },
+        )
         bucket[f"{row['right']}_premium"] += row["premium"]
         bucket["print_count"] += 1
         if row["signed_premium"] is None:
@@ -1650,10 +1823,16 @@ def _flow_series(
         if occ and str(occ).upper().strip() in chain_by_occ:
             matched = chain_by_occ[str(occ).upper().strip()]
         elif row.get("right") and row.get("strike") is not None and row.get("expiry"):
-            exp_str = row["expiry"].isoformat() if hasattr(row["expiry"], "isoformat") else str(row["expiry"])
+            exp_str = (
+                row["expiry"].isoformat()
+                if hasattr(row["expiry"], "isoformat")
+                else str(row["expiry"])
+            )
             matched = chain_by_key.get((row["right"], round(float(row["strike"]), 4), exp_str))
         if matched:
-            if (row.get("open_interest") is None or row.get("open_interest") == 0) and matched.get("open_interest"):
+            if (row.get("open_interest") is None or row.get("open_interest") == 0) and matched.get(
+                "open_interest"
+            ):
                 row["open_interest"] = matched["open_interest"]
             if row.get("implied_volatility") is None and matched.get("iv"):
                 row["implied_volatility"] = matched["iv"]
@@ -1711,22 +1890,35 @@ def _flow_series(
         if exp is not None and not isinstance(exp, str):
             row["expiry"] = exp.isoformat()
     return (
-        series, tape_rows[: filters.tape_limit], rejected, signed_observations,
-        activity_observations, tape_channel,
+        series,
+        tape_rows[: filters.tape_limit],
+        rejected,
+        signed_observations,
+        activity_observations,
+        tape_channel,
     )
 
 
-
 def _chain_activity_series(
-    rows: Sequence[Mapping[str, Any]], *, filters: OptionsFilters, asof: datetime,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    filters: OptionsFilters,
+    asof: datetime,
 ) -> list[dict[str, Any]]:
     """Fallback activity from daily cumulative chain volume, never signed flow."""
     lower, upper = _date_bounds(filters, asof)
     buckets: dict[datetime, dict[str, Any]] = {}
     for raw in rows:
-        observed = _timestamp(_first(
-            raw, "captured_utc", "asof_utc", "asof_date", "timestamp", "last_trade_asof_utc",
-        ))
+        observed = _timestamp(
+            _first(
+                raw,
+                "captured_utc",
+                "asof_utc",
+                "asof_date",
+                "timestamp",
+                "last_trade_asof_utc",
+            )
+        )
         right = _right(_first(raw, "right", "contract_type", "option_type", "type"))
         volume = _integer(_first(raw, "volume", "volume_today")) or 0
         bid, ask = _number(raw.get("bid")), _number(raw.get("ask"))
@@ -1735,17 +1927,30 @@ def _chain_activity_series(
         premium = _number(_first(raw, "premium_today", "session_premium"))
         if premium is None and mid:
             premium = mid * volume * 100.0
-        if not observed or not right or premium is None or volume < filters.min_volume or not lower <= observed <= upper:
+        if (
+            not observed
+            or not right
+            or premium is None
+            or volume < filters.min_volume
+            or not lower <= observed <= upper
+        ):
             continue
         if premium < filters.min_premium:
             continue
         key = _bucket_time(observed, "1m")
-        bucket = buckets.setdefault(key, {
-            "t": key.isoformat(), "call_premium": 0.0, "put_premium": 0.0,
-            "signed_net_premium": None, "signed_premium_observations": 0,
-            "signed_gross_premium": 0.0,
-            "print_count": 0, "unresolved_premium": 0.0,
-        })
+        bucket = buckets.setdefault(
+            key,
+            {
+                "t": key.isoformat(),
+                "call_premium": 0.0,
+                "put_premium": 0.0,
+                "signed_net_premium": None,
+                "signed_premium_observations": 0,
+                "signed_gross_premium": 0.0,
+                "print_count": 0,
+                "unresolved_premium": 0.0,
+            },
+        )
         bucket[f"{right}_premium"] += premium
         bucket["unresolved_premium"] += premium
         bucket["print_count"] += 1
@@ -1762,8 +1967,14 @@ def _chain_activity_series(
 
 
 def _gex_map(
-    rows: Sequence[Mapping[str, Any]], *, spot: float, asof: datetime, rate: float,
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, int], list[dict[str, Any]], list[dict[str, Any]]]:
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    spot: float,
+    asof: datetime,
+    rate: float,
+) -> tuple[
+    list[dict[str, Any]], dict[str, Any], dict[str, int], list[dict[str, Any]], list[dict[str, Any]]
+]:
     """Build strike GEX, summary levels, gamma source counts, by-expiry totals, and price profile.
 
     Wall convention (InsiderFinance / SpotGamma):
@@ -1798,33 +2009,45 @@ def _gex_map(
         multiplier = _integer(row.get("multiplier")) or 100
         sign = 1.0 if right == "call" else -1.0
         exposure = sign * gamma * oi * multiplier * spot * spot * 0.01 / 1_000_000.0
-        cell = by_strike.setdefault(strike, {"call_gex": 0.0, "put_gex": 0.0, "call_oi": 0.0, "put_oi": 0.0})
+        cell = by_strike.setdefault(
+            strike, {"call_gex": 0.0, "put_gex": 0.0, "call_oi": 0.0, "put_oi": 0.0}
+        )
         cell[f"{right}_gex"] += exposure
         cell[f"{right}_oi"] += oi
         expiry = row.get("expiry")
         if isinstance(expiry, date):
             exp_cell = by_expiry.setdefault(
-                expiry, {"call_gex": 0.0, "put_gex": 0.0, "call_oi": 0.0, "put_oi": 0.0, "contracts": 0.0},
+                expiry,
+                {"call_gex": 0.0, "put_gex": 0.0, "call_oi": 0.0, "put_oi": 0.0, "contracts": 0.0},
             )
             exp_cell[f"{right}_gex"] += exposure
             exp_cell[f"{right}_oi"] += oi
             exp_cell["contracts"] += 1
-        enriched.append({
-            **row, "iv": iv, "years": years, "sign": sign, "oi": oi,
-            "multiplier": multiplier, "strike": strike,
-        })
+        enriched.append(
+            {
+                **row,
+                "iv": iv,
+                "years": years,
+                "sign": sign,
+                "oi": oi,
+                "multiplier": multiplier,
+                "strike": strike,
+            }
+        )
 
     mapped = []
     for strike, value in sorted(by_strike.items()):
         net = value["call_gex"] + value["put_gex"]
-        mapped.append({
-            "strike": strike,
-            "call_gex_m": round(value["call_gex"], 6),
-            "put_gex_m": round(value["put_gex"], 6),
-            "net_gex_m": round(net, 6),
-            "call_oi": int(value["call_oi"]),
-            "put_oi": int(value["put_oi"]),
-        })
+        mapped.append(
+            {
+                "strike": strike,
+                "call_gex_m": round(value["call_gex"], 6),
+                "put_gex_m": round(value["put_gex"], 6),
+                "net_gex_m": round(net, 6),
+                "call_oi": int(value["call_oi"]),
+                "put_oi": int(value["put_oi"]),
+            }
+        )
     raw_call_wall = max(mapped, key=lambda row: row["call_gex_m"], default=None)
     raw_put_wall = min(mapped, key=lambda row: row["put_gex_m"], default=None)
     pin = max(mapped, key=lambda row: abs(row["net_gex_m"]), default=None)
@@ -1838,12 +2061,16 @@ def _gex_map(
     flip: float | None = None
     price_profile: list[dict[str, Any]] = []
     if enriched:
+
         def _calc_net_gex_at(test_spot: float) -> float:
             tot = 0.0
             for r in enriched:
                 gm = _bs_gamma(
-                    spot=test_spot, strike=float(r["strike"]), years=float(r["years"]),
-                    iv=float(r["iv"] or 0), rate=rate,
+                    spot=test_spot,
+                    strike=float(r["strike"]),
+                    years=float(r["years"]),
+                    iv=float(r["iv"] or 0),
+                    rate=rate,
                 )
                 if gm is not None:
                     tot += r["sign"] * gm * r["oi"] * r["multiplier"] * test_spot * test_spot * 0.01
@@ -1856,10 +2083,12 @@ def _gex_map(
             test_spot = spot * (0.80 + i * 0.005)
             total = _calc_net_gex_at(test_spot)
             grid.append((test_spot, total))
-            price_profile.append({
-                "spot": round(test_spot, 4),
-                "net_gex_m": round(total / 1_000_000.0, 6),
-            })
+            price_profile.append(
+                {
+                    "spot": round(test_spot, 4),
+                    "net_gex_m": round(total / 1_000_000.0, 6),
+                }
+            )
         crossings: list[float] = []
         for (x0, y0), (x1, y1) in zip(grid, grid[1:]):
             if y0 == 0:
@@ -1894,33 +2123,39 @@ def _gex_map(
             flip = min(crossings, key=lambda value: abs(value - spot))
             # If the flip sits outside the standard ±20% window, expand price_profile
             # so the zero crossing is visible on the profile chart.
-            if price_profile and (flip < price_profile[0]["spot"] or flip > price_profile[-1]["spot"]):
+            if price_profile and (
+                flip < price_profile[0]["spot"] or flip > price_profile[-1]["spot"]
+            ):
                 profile_lo = min(spot * 0.80, flip * 0.95)
                 profile_hi = max(spot * 1.20, flip * 1.05)
                 price_profile = []
                 for s_i in range(81):
                     ts = profile_lo + s_i * ((profile_hi - profile_lo) / 80)
                     tot = _calc_net_gex_at(ts)
-                    price_profile.append({
-                        "spot": round(ts, 4),
-                        "net_gex_m": round(tot / 1_000_000.0, 6),
-                    })
+                    price_profile.append(
+                        {
+                            "spot": round(ts, 4),
+                            "net_gex_m": round(tot / 1_000_000.0, 6),
+                        }
+                    )
 
     gex_by_expiry = []
     asof_day = asof.date() if isinstance(asof, datetime) else asof
     for expiry, value in sorted(by_expiry.items()):
         net = value["call_gex"] + value["put_gex"]
-        gex_by_expiry.append({
-            "expiry": expiry.isoformat(),
-            "dte": (expiry - asof_day).days if isinstance(asof_day, date) else None,
-            "call_gex_m": round(value["call_gex"], 6),
-            "put_gex_m": round(value["put_gex"], 6),
-            "net_gex_m": round(net, 6),
-            "abs_gex_m": round(abs(value["call_gex"]) + abs(value["put_gex"]), 6),
-            "call_oi": int(value["call_oi"]),
-            "put_oi": int(value["put_oi"]),
-            "contracts": int(value["contracts"]),
-        })
+        gex_by_expiry.append(
+            {
+                "expiry": expiry.isoformat(),
+                "dte": (expiry - asof_day).days if isinstance(asof_day, date) else None,
+                "call_gex_m": round(value["call_gex"], 6),
+                "put_gex_m": round(value["put_gex"], 6),
+                "net_gex_m": round(net, 6),
+                "abs_gex_m": round(abs(value["call_gex"]) + abs(value["put_gex"]), 6),
+                "call_oi": int(value["call_oi"]),
+                "put_oi": int(value["put_oi"]),
+                "contracts": int(value["contracts"]),
+            }
+        )
 
     total_gex = sum(row["net_gex_m"] for row in mapped)
     call_gex = sum(row["call_gex_m"] for row in mapped)
@@ -1929,15 +2164,15 @@ def _gex_map(
     put_oi = sum(int(row["put_oi"]) for row in mapped)
     call_wall_pct = (
         round((call_wall_strike - spot) / spot, 6)
-        if call_wall_strike is not None and spot > 0 else None
+        if call_wall_strike is not None and spot > 0
+        else None
     )
     put_wall_pct = (
         round((put_wall_strike - spot) / spot, 6)
-        if put_wall_strike is not None and spot > 0 else None
+        if put_wall_strike is not None and spot > 0
+        else None
     )
-    flip_pct = (
-        round((flip - spot) / spot, 6) if flip is not None and spot > 0 else None
-    )
+    flip_pct = round((flip - spot) / spot, 6) if flip is not None and spot > 0 else None
     summary = {
         "total_gex_m": round(total_gex, 4),
         "call_gex_m": round(call_gex, 4),
@@ -1959,7 +2194,10 @@ def _gex_map(
 
 
 def _charm_map(
-    rows: Sequence[Mapping[str, Any]], *, spot: float, rate: float,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    spot: float,
+    rate: float,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
     """Charm flow by strike + chain-level pressure diagnostics.
 
@@ -1982,7 +2220,9 @@ def _charm_map(
     # Why each contract could not be charmed — surfaced so the UI can say
     # "12 contracts expiring today" instead of a blank chart.
     skipped: dict[str, int] = {
-        "malformed_row": 0, "missing_dte": 0, "expiring_within_one_day": 0,
+        "malformed_row": 0,
+        "missing_dte": 0,
+        "expiring_within_one_day": 0,
         "missing_or_implausible_iv": 0,
     }
     for row in rows:
@@ -2010,7 +2250,11 @@ def _charm_map(
             skipped["expiring_within_one_day"] += 1
         else:
             charm = _bs_charm_per_day(
-                spot=spot, strike=strike, years=charm_years, iv=iv or 0, rate=rate,
+                spot=spot,
+                strike=strike,
+                years=charm_years,
+                iv=iv or 0,
+                rate=rate,
                 is_call=(right == "call"),
             )
             if charm is None:
@@ -2021,10 +2265,25 @@ def _charm_map(
         sign = 1.0 if right == "call" else -1.0
 
         # Calculate Delta and Gamma with BS or provider fallback
-        bs_delta_val = _bs_delta(spot=spot, strike=strike, years=greek_years, iv=iv or 0, rate=rate, is_call=(right == "call")) if (iv and iv > 0) else None
+        bs_delta_val = (
+            _bs_delta(
+                spot=spot,
+                strike=strike,
+                years=greek_years,
+                iv=iv or 0,
+                rate=rate,
+                is_call=(right == "call"),
+            )
+            if (iv and iv > 0)
+            else None
+        )
         delta_val = bs_delta_val if bs_delta_val is not None else _number(row.get("delta"))
 
-        bs_gamma_val = _bs_gamma(spot=spot, strike=strike, years=greek_years, iv=iv or 0, rate=rate) if (iv and iv > 0) else None
+        bs_gamma_val = (
+            _bs_gamma(spot=spot, strike=strike, years=greek_years, iv=iv or 0, rate=rate)
+            if (iv and iv > 0)
+            else None
+        )
         gamma_val = bs_gamma_val if bs_gamma_val is not None else _number(row.get("gamma"))
 
         if charm is not None:
@@ -2034,34 +2293,40 @@ def _charm_map(
             charm_source["unavailable"] += 1
             flow = 0.0
 
-        cell = by_strike.setdefault(strike, {"call_flow": 0.0, "put_flow": 0.0, "call_oi": 0.0, "put_oi": 0.0})
+        cell = by_strike.setdefault(
+            strike, {"call_flow": 0.0, "put_flow": 0.0, "call_oi": 0.0, "put_oi": 0.0}
+        )
         cell[f"{right}_flow"] += flow
         cell[f"{right}_oi"] += oi
 
-        chain_rows.append({
-            "strike": strike,
-            "right": right,
-            "dte": dte,
-            "iv": iv,
-            "open_interest": oi,
-            "volume": vol,
-            "delta": delta_val,
-            "gamma": gamma_val,
-            "charm_per_day": charm,
-            "charm_flow": flow,
-        })
+        chain_rows.append(
+            {
+                "strike": strike,
+                "right": right,
+                "dte": dte,
+                "iv": iv,
+                "open_interest": oi,
+                "volume": vol,
+                "delta": delta_val,
+                "gamma": gamma_val,
+                "charm_per_day": charm,
+                "charm_flow": flow,
+            }
+        )
 
     mapped = []
     for strike, value in sorted(by_strike.items()):
         net = value["call_flow"] + value["put_flow"]
-        mapped.append({
-            "strike": strike,
-            "call_charm_flow": round(value["call_flow"], 4),
-            "put_charm_flow": round(value["put_flow"], 4),
-            "net_charm_flow": round(net, 4),
-            "call_oi": int(value["call_oi"]),
-            "put_oi": int(value["put_oi"]),
-        })
+        mapped.append(
+            {
+                "strike": strike,
+                "call_charm_flow": round(value["call_flow"], 4),
+                "put_charm_flow": round(value["put_flow"], 4),
+                "net_charm_flow": round(net, 4),
+                "call_oi": int(value["call_oi"]),
+                "put_oi": int(value["put_oi"]),
+            }
+        )
 
     net_charm_flow = sum(row["net_charm_flow"] for row in mapped)
     call_flow = sum(row["call_charm_flow"] for row in mapped)
@@ -2070,9 +2335,7 @@ def _charm_map(
     # let opposite-signed strikes (charm flips sign either side of spot) cancel
     # first, understating gross flow by ~80% on a symmetric chain and making this
     # useless as a normalizer for the pressure gauge.
-    abs_flow = sum(
-        abs(row["call_charm_flow"]) + abs(row["put_charm_flow"]) for row in mapped
-    )
+    abs_flow = sum(abs(row["call_charm_flow"]) + abs(row["put_charm_flow"]) for row in mapped)
     summary = {
         "net_charm_flow": round(net_charm_flow, 4),
         "call_charm_flow": round(call_flow, 4),
@@ -2102,6 +2365,8 @@ PRESSURE_TAPE_FULL_PRINTS = 20
 PRESSURE_DIRECTION_THRESHOLD = 0.25
 PRESSURE_NEUTRAL_BAND = 0.10
 PRESSURE_UNDERLYING_BARS = 7
+PRESSURE_MAX_FRESH_AGE_SECONDS = 300.0  # 5-minute policy threshold for live source data freshness
+_UNSET = object()
 
 
 def _underlying_pressure(
@@ -2129,7 +2394,16 @@ def _underlying_pressure(
         v = _number(row.get("volume") or row.get("v"))
         if h is None or lo is None or c is None or h < lo:
             continue
-        parsed.append((str(row.get("t") or row.get("timestamp") or ""), o if o is not None else c, h, lo, c, v or 0.0))
+        parsed.append(
+            (
+                str(row.get("t") or row.get("timestamp") or ""),
+                o if o is not None else c,
+                h,
+                lo,
+                c,
+                v or 0.0,
+            )
+        )
     if len(parsed) < 3:
         return None
     window = parsed[-n_bars:]
@@ -2143,15 +2417,14 @@ def _underlying_pressure(
     if denominator <= 0:
         return None
     ratio = max(-1.0, min(1.0, numerator / denominator))
-    prior = parsed[-(n_bars + baseline_bars):-n_bars] if len(parsed) > n_bars else []
+    prior = parsed[-(n_bars + baseline_bars) : -n_bars] if len(parsed) > n_bars else []
     prior_vols = [v for *_, v in prior if v > 0]
-    rvol = (
-        (denominator / len(window)) / (sum(prior_vols) / len(prior_vols))
-        if prior_vols else None
-    )
+    rvol = (denominator / len(window)) / (sum(prior_vols) / len(prior_vols)) if prior_vols else None
     first_open = window[0][1]
     last_close = window[-1][4]
-    change_pct = ((last_close / first_open) - 1.0) * 100.0 if first_open and first_open > 0 else None
+    change_pct = (
+        ((last_close / first_open) - 1.0) * 100.0 if first_open and first_open > 0 else None
+    )
     timestamps = [_timestamp(t) for t, *_ in window]
     timestamps = [t for t in timestamps if t is not None]
     timeframe = None
@@ -2178,12 +2451,22 @@ def _underlying_pressure(
 
 
 def _pressure_gauge(
-    *, net_charm_flow: float, net_gex_m: float = 0.0, delta_weighted_call_vol: float = 0.0,
-    delta_weighted_put_vol: float = 0.0, abs_charm_flow: float | None = None,
-    abs_gex_m: float | None = None, tape: Mapping[str, Any] | None = None,
-    underlying: Mapping[str, Any] | None = None, charm_coverage: float | None = None,
-    mode_resolved: str = "live", spot_stale: bool = False,
-    alpha: float = 1.0, beta: float = 0.5,
+    *,
+    net_charm_flow: float,
+    net_gex_m: float = 0.0,
+    delta_weighted_call_vol: float = 0.0,
+    delta_weighted_put_vol: float = 0.0,
+    abs_charm_flow: float | None = None,
+    abs_gex_m: float | None = None,
+    tape: Mapping[str, Any] | None = None,
+    underlying: Mapping[str, Any] | None = None,
+    charm_coverage: float | None = None,
+    mode_resolved: str = "live",
+    spot_stale: bool = False,
+    source_age_seconds: float | None | object = _UNSET,
+    age_seconds: float | None | object = _UNSET,
+    alpha: float = 1.0,
+    beta: float = 0.5,
 ) -> dict[str, Any]:
     """Pressure read in [−1, +1] with the confidence to trade on it (or not).
 
@@ -2273,14 +2556,20 @@ def _pressure_gauge(
         }
         if n_total == 0:
             reasons.append("tape: no prints in the window")
-        elif raw_ratio is None or n_signed < PRESSURE_TAPE_MIN_PRINTS or coverage < PRESSURE_TAPE_MIN_COVERAGE:
+        elif (
+            raw_ratio is None
+            or n_signed < PRESSURE_TAPE_MIN_PRINTS
+            or coverage < PRESSURE_TAPE_MIN_COVERAGE
+        ):
             reasons.append(
                 f"tape: {n_signed} of {n_total} prints side-resolved ({coverage:.0%} of premium) — "
                 f"below the {PRESSURE_TAPE_MIN_PRINTS}-print / {PRESSURE_TAPE_MIN_COVERAGE:.0%} floor, so it abstains"
             )
         else:
             tape_ratio = raw_ratio
-            evidence = min(1.0, n_signed / PRESSURE_TAPE_FULL_PRINTS) * math.sqrt(coverage) * quality
+            evidence = (
+                min(1.0, n_signed / PRESSURE_TAPE_FULL_PRINTS) * math.sqrt(coverage) * quality
+            )
             channels.append(("tape", 1.0, tape_ratio, evidence))
             mix = tape.get("source_mix") or {}
             delayed = int(mix.get("quote_rule_delayed") or 0)
@@ -2317,7 +2606,8 @@ def _pressure_gauge(
     weight_total = sum(weight for _, weight, _, _ in channels)
     imbalance = (
         sum(weight * ratio for _, weight, ratio, _ in channels) / weight_total
-        if weight_total > eps else 0.0
+        if weight_total > eps
+        else 0.0
     )
     imbalance = max(-1.0, min(1.0, imbalance))
     if imbalance > PRESSURE_DIRECTION_THRESHOLD:
@@ -2338,20 +2628,26 @@ def _pressure_gauge(
             if head_sign == 0:
                 agree = 1.0 if channel_sign == 0 else 0.0
                 if abs(ratio) >= PRESSURE_DIRECTION_THRESHOLD:
-                    conflicts.append({
-                        "channel": name, "ratio": round(ratio, 6),
-                        "note": f"{name} reads {'buying' if ratio > 0 else 'selling'} but the blend is balanced",
-                    })
+                    conflicts.append(
+                        {
+                            "channel": name,
+                            "ratio": round(ratio, 6),
+                            "note": f"{name} reads {'buying' if ratio > 0 else 'selling'} but the blend is balanced",
+                        }
+                    )
             elif channel_sign == 0:
                 agree = 0.5
             elif channel_sign == head_sign:
                 agree = 1.0
             else:
                 agree = 0.0
-                conflicts.append({
-                    "channel": name, "ratio": round(ratio, 6),
-                    "note": f"{name} reads {'buying' if ratio > 0 else 'selling'} against the {direction} headline",
-                })
+                conflicts.append(
+                    {
+                        "channel": name,
+                        "ratio": round(ratio, 6),
+                        "note": f"{name} reads {'buying' if ratio > 0 else 'selling'} against the {direction} headline",
+                    }
+                )
             agree_weight += weight * agree
         agreement = agree_weight / weight_total
     if n_active == 1:
@@ -2362,7 +2658,8 @@ def _pressure_gauge(
 
     evidence_score = (
         0.6 * (sum(quality for *_, quality in channels) / n_active) + 0.4 * min(1.0, n_active / 3.0)
-        if channels else 0.0
+        if channels
+        else 0.0
     )
     magnitude = min(1.0, abs(imbalance) / 0.5)
     live = str(mode_resolved or "").lower() == "live"
@@ -2371,10 +2668,34 @@ def _pressure_gauge(
         freshness = max(0.0, freshness - 0.3)
         reasons.append("spot is stale")
     if not live:
-        reasons.append(f"{mode_resolved or 'history'} mode: delayed data caps confidence; not for live entries")
+        reasons.append(
+            f"{mode_resolved or 'history'} mode: delayed data caps confidence; not for live entries"
+        )
+
+    resolved_age: float | None | object = (
+        age_seconds if age_seconds is not _UNSET else source_age_seconds
+    )
+    is_stale_or_unknown = False
+    if resolved_age is not _UNSET:
+        if resolved_age is None:
+            is_stale_or_unknown = True
+            freshness = min(freshness, 0.4)
+            reasons.append(
+                "source age is unknown: unverified feed freshness cannot authorize a live entry"
+            )
+        elif resolved_age > PRESSURE_MAX_FRESH_AGE_SECONDS:
+            is_stale_or_unknown = True
+            freshness = max(
+                0.0, 0.4 - min(0.4, (resolved_age - PRESSURE_MAX_FRESH_AGE_SECONDS) / 3600.0)
+            )
+            reasons.append(
+                f"source data is stale ({resolved_age:.0f}s old): delayed feed cannot authorize a live entry"
+            )
+
     score = (
         0.40 * agreement + 0.25 * evidence_score + 0.15 * magnitude + 0.20 * freshness
-        if channels else 0.0
+        if channels
+        else 0.0
     )
     if score >= 0.70:
         band = "high"
@@ -2392,21 +2713,38 @@ def _pressure_gauge(
         band = "medium"
     # Sides that come only from the tick test (mean weight < 0.5) are real but
     # weak evidence; they can confirm a read, not make it "high".
-    if tape_ratio is not None and tape_out is not None and float(tape_out["quality"]) < 0.5 and band == "high":
+    if (
+        tape_ratio is not None
+        and tape_out is not None
+        and float(tape_out["quality"]) < 0.5
+        and band == "high"
+    ):
         band = "medium"
         reasons.append("tape: side evidence is tick-test only, so confidence is capped at medium")
 
-    hard_conflict = any(
-        weight >= 1.0 and abs(ratio) >= PRESSURE_DIRECTION_THRESHOLD and _sign(ratio) == -head_sign
-        for _, weight, ratio, _ in channels
-    ) if head_sign else False
+    hard_conflict = (
+        any(
+            weight >= 1.0
+            and abs(ratio) >= PRESSURE_DIRECTION_THRESHOLD
+            and _sign(ratio) == -head_sign
+            for _, weight, ratio, _ in channels
+        )
+        if head_sign
+        else False
+    )
     actionable = bool(
-        direction != "balanced" and band in {"high", "medium"} and live and not hard_conflict
+        direction != "balanced"
+        and band in {"high", "medium"}
+        and live
+        and not is_stale_or_unknown
+        and not hard_conflict
     )
     if hard_conflict:
         reasons.append("a full-weight channel reads the opposite way — no trade")
 
-    word = {"buying": "BUYING PRESSURE", "selling": "SELLING PRESSURE", "balanced": "BALANCED"}[direction]
+    word = {"buying": "BUYING PRESSURE", "selling": "SELLING PRESSURE", "balanced": "BALANCED"}[
+        direction
+    ]
     if actionable:
         verdict = f"{word} · {band.upper()} CONFIDENCE"
     elif direction != "balanced":
@@ -2454,8 +2792,10 @@ def _pressure_gauge(
             "gex_ratio": None if gex_ratio is None else round(gex_ratio, 6),
             "gex_regime": gex_regime,
             "follow_through": (
-                "moves extend (dealers hedge with the move)" if gex_regime == "amplifying"
-                else "moves fade (dealers hedge against the move)" if gex_regime == "dampening"
+                "moves extend (dealers hedge with the move)"
+                if gex_regime == "amplifying"
+                else "moves fade (dealers hedge against the move)"
+                if gex_regime == "dampening"
                 else "no gamma read"
             ),
         },
@@ -2535,12 +2875,24 @@ def _setup_from_gex_score(
 
     side_sign = 1.0 if side == "bullish" else -1.0
     factor_specs = [
-        ("regime_score", "Gamma Regime", 25, "Short-gamma fuel near spot (required for true squeeze)"),
-        ("call_prox_score" if side == "bullish" else "put_prox_score",
-         "Call Wall Proximity" if side == "bullish" else "Put Wall Proximity", 25,
-         "Distance to directional wall vs expected-move band"),
-        ("call_conc_score" if side == "bullish" else "put_conc_score",
-         "OTM Concentration", 20, "OTM call/put OI share of book"),
+        (
+            "regime_score",
+            "Gamma Regime",
+            25,
+            "Short-gamma fuel near spot (required for true squeeze)",
+        ),
+        (
+            "call_prox_score" if side == "bullish" else "put_prox_score",
+            "Call Wall Proximity" if side == "bullish" else "Put Wall Proximity",
+            25,
+            "Distance to directional wall vs expected-move band",
+        ),
+        (
+            "call_conc_score" if side == "bullish" else "put_conc_score",
+            "OTM Concentration",
+            20,
+            "OTM call/put OI share of book",
+        ),
         ("wall_asym_score", "Wall Asymmetry", 15, "Call-wall vs put-wall |GEX| ratio"),
         ("em_score", "Expected-Move Reach", 10, "Active wall inside 1σ band"),
         ("flip_score", "Flip Proximity", 5, "Spot near zero-gamma with aligned direction"),
@@ -2569,13 +2921,15 @@ def _setup_from_gex_score(
             fill = min(1.0, contrib / span) if span > 0 else 0.0
             detail_txt = f"{detail} · raw={raw_c:+.1f}"
         pts = int(round(max_pts * fill))
-        factors.append({
-            "id": key,
-            "label": label,
-            "score": pts,
-            "max": max_pts,
-            "detail": detail_txt,
-        })
+        factors.append(
+            {
+                "id": key,
+                "label": label,
+                "score": pts,
+                "max": max_pts,
+                "detail": detail_txt,
+            }
+        )
         factor_sum += pts
         max_sum += max_pts
 
@@ -2594,7 +2948,9 @@ def _setup_from_gex_score(
             + (f" ({wall_pct:+.2%})" if wall_pct is not None else "")
         )
     if dampened or fuel <= 0:
-        setup_analysis.append("Long / flat gamma environment — dampens squeeze (structure still shown)")
+        setup_analysis.append(
+            "Long / flat gamma environment — dampens squeeze (structure still shown)"
+        )
     if signed_score * side_sign >= 20:
         setup_analysis.append(f"gex_core signed score supports {side} ({signed_score:+.1f})")
     elif abs(signed_score) >= 20:
@@ -2602,7 +2958,9 @@ def _setup_from_gex_score(
             f"gex_core signed score opposes {side} ({signed_score:+.1f}) — structure only"
         )
     else:
-        setup_analysis.append(f"gex_core squeeze score quiet ({signed_score:+.1f}) — board is structure only")
+        setup_analysis.append(
+            f"gex_core squeeze score quiet ({signed_score:+.1f}) — board is structure only"
+        )
 
     for_stronger: list[str] = []
     if fuel < 0.35:
@@ -2612,7 +2970,9 @@ def _setup_from_gex_score(
     if side == "bearish" and abs(float(components.get("put_prox_score") or 0)) < 5:
         for_stronger.append("Spot nearer the put wall (inside EM band) would raise score")
     if dampened:
-        for_stronger.append("Long gamma dampens — wait for flip below zero-gamma or short-gamma pocket")
+        for_stronger.append(
+            "Long gamma dampens — wait for flip below zero-gamma or short-gamma pocket"
+        )
     if not for_stronger:
         for_stronger.append("Structure is set by gex_core — wait for price acceptance at walls")
 
@@ -2655,58 +3015,68 @@ def _build_signals(
     signals: list[dict[str, Any]] = []
     if regime == "negative":
         strength = "STRONG" if total_gex <= -5 else "MODERATE"
-        signals.append({
-            "kind": "volatility",
-            "strength": strength,
-            "title": "Volatility amplification",
-            "detail": "Price movements likely to be amplified — good backdrop for long volatility, poor for mean-reversion fades.",
-            "level": round(spot, 4),
-            "level_pct": 0.0,
-        })
+        signals.append(
+            {
+                "kind": "volatility",
+                "strength": strength,
+                "title": "Volatility amplification",
+                "detail": "Price movements likely to be amplified — good backdrop for long volatility, poor for mean-reversion fades.",
+                "level": round(spot, 4),
+                "level_pct": 0.0,
+            }
+        )
     elif regime == "positive":
-        signals.append({
-            "kind": "volatility",
-            "strength": "MODERATE" if total_gex >= 5 else "WEAK",
-            "title": "Volatility suppression",
-            "detail": "Positive dealer gamma tends to dampen moves; pinning near high-GEX strikes is more common.",
-            "level": round(spot, 4),
-            "level_pct": 0.0,
-        })
+        signals.append(
+            {
+                "kind": "volatility",
+                "strength": "MODERATE" if total_gex >= 5 else "WEAK",
+                "title": "Volatility suppression",
+                "detail": "Positive dealer gamma tends to dampen moves; pinning near high-GEX strikes is more common.",
+                "level": round(spot, 4),
+                "level_pct": 0.0,
+            }
+        )
 
     if put_wall is not None and put_wall < spot:
         dist = abs(put_wall_pct or 0)
         strength = "STRONG" if dist <= 0.03 else "MODERATE" if dist <= 0.06 else "WEAK"
-        signals.append({
-            "kind": "support",
-            "strength": strength,
-            "title": "Put wall support",
-            "detail": "Expect increased volatility / hedging demand if price falls through this put-gamma cluster.",
-            "level": round(put_wall, 4),
-            "level_pct": put_wall_pct,
-        })
+        signals.append(
+            {
+                "kind": "support",
+                "strength": strength,
+                "title": "Put wall support",
+                "detail": "Expect increased volatility / hedging demand if price falls through this put-gamma cluster.",
+                "level": round(put_wall, 4),
+                "level_pct": put_wall_pct,
+            }
+        )
 
     if call_wall is not None and call_wall > spot:
         dist = abs(call_wall_pct or 0)
         strength = "STRONG" if dist <= 0.03 else "MODERATE" if dist <= 0.06 else "WEAK"
-        signals.append({
-            "kind": "resistance",
-            "strength": strength,
-            "title": "Call wall resistance",
-            "detail": "Call-gamma concentration may act as resistance; dealer hedging can slow advances into the wall.",
-            "level": round(call_wall, 4),
-            "level_pct": call_wall_pct,
-        })
+        signals.append(
+            {
+                "kind": "resistance",
+                "strength": strength,
+                "title": "Call wall resistance",
+                "detail": "Call-gamma concentration may act as resistance; dealer hedging can slow advances into the wall.",
+                "level": round(call_wall, 4),
+                "level_pct": call_wall_pct,
+            }
+        )
 
     if gamma_flip is not None:
         flip_pct = _pct_from_spot(gamma_flip, spot)
-        signals.append({
-            "kind": "regime_flip",
-            "strength": "MODERATE",
-            "title": "Zero-gamma level",
-            "detail": "Crossing zero gamma can change character from pinned to volatile (or vice versa).",
-            "level": round(gamma_flip, 4),
-            "level_pct": flip_pct,
-        })
+        signals.append(
+            {
+                "kind": "regime_flip",
+                "strength": "MODERATE",
+                "title": "Zero-gamma level",
+                "detail": "Crossing zero gamma can change character from pinned to volatile (or vice versa).",
+                "level": round(gamma_flip, 4),
+                "level_pct": flip_pct,
+            }
+        )
 
     return signals[:4]
 
@@ -2782,15 +3152,17 @@ def _enrich_chain_for_theory(
             continue
         oi = _integer(row.get("open_interest") or row.get("openInterest") or row.get("oi")) or 0
         mult = _integer(row.get("multiplier")) or 100
-        out.append({
-            "right": right,
-            "strike": float(strike),
-            "gamma": float(gamma),
-            "open_interest": float(oi),
-            "multiplier": float(mult),
-            "dte": float(dte) if dte is not None else 30.0,
-            "iv": iv,
-        })
+        out.append(
+            {
+                "right": right,
+                "strike": float(strike),
+                "gamma": float(gamma),
+                "open_interest": float(oi),
+                "multiplier": float(mult),
+                "dte": float(dte) if dte is not None else 30.0,
+                "iv": iv,
+            }
+        )
     return out
 
 
@@ -2855,7 +3227,10 @@ def _squeeze_readout(
 
     rows = list(gex_rows)
     call_wall, put_wall = directional_walls(
-        rows, spot=spot, call_wall=raw_call_wall, put_wall=raw_put_wall,
+        rows,
+        spot=spot,
+        call_wall=raw_call_wall,
+        put_wall=raw_put_wall,
     )
     call_wall_pct = _pct_from_spot(call_wall, spot)
     put_wall_pct = _pct_from_spot(put_wall, spot)
@@ -2864,9 +3239,11 @@ def _squeeze_readout(
     # Fall back to the whole-chain total only when the ±5% band holds no strikes at
     # all. A band that genuinely nets to zero (calls cancelling puts) is a real
     # measurement of a flat regime and must not be overwritten by the full book.
-    near_band_populated = any(
-        spot * 0.95 <= float(r.get("strike") or 0) <= spot * 1.05 for r in rows
-    ) if spot > 0 else False
+    near_band_populated = (
+        any(spot * 0.95 <= float(r.get("strike") or 0) <= spot * 1.05 for r in rows)
+        if spot > 0
+        else False
+    )
     if not near_band_populated:
         near_net = total_gex
 
@@ -2877,9 +3254,7 @@ def _squeeze_readout(
     otm_put_oi = sum(
         float(r.get("put_oi") or 0) for r in rows if float(r.get("strike") or 0) < spot
     )
-    total_oi = sum(
-        float(r.get("call_oi") or 0) + float(r.get("put_oi") or 0) for r in rows
-    )
+    total_oi = sum(float(r.get("call_oi") or 0) + float(r.get("put_oi") or 0) for r in rows)
 
     by_strike = [
         {
@@ -2932,8 +3307,7 @@ def _squeeze_readout(
         if observed is not None
     ]
     price_age_days = (
-        max(0, (asof_dt.date() - max(price_times).date()).days)
-        if price_times else None
+        max(0, (asof_dt.date() - max(price_times).date()).days) if price_times else None
     )
     momentum_fresh = price_age_days is not None and price_age_days <= MOMENTUM_MAX_AGE_DAYS
     momentum = _price_momentum(prices, lookback=5) if momentum_fresh else 0.0
@@ -2941,11 +3315,7 @@ def _squeeze_readout(
     # Contract right is identity, not trade direction. Only an aggressor- or
     # vendor-signed premium imbalance can move the directional flow term.
     # Momentum may still identify the direction of an already-moving squeeze.
-    call_imb = (
-        float(directional_flow_imbalance)
-        if directional_flow_imbalance is not None
-        else 0.0
-    )
+    call_imb = float(directional_flow_imbalance) if directional_flow_imbalance is not None else 0.0
     # An unmeasured input must not vote. When the tape carries no aggressor side
     # (no signed prints, or zero confidence) the flow term used to enter the
     # conviction blend as a hard 0.0 at weight 0.5 — silently capping every
@@ -2957,7 +3327,10 @@ def _squeeze_readout(
     flow_weight = SQUEEZE_FLOW_WEIGHT if flow_measured else 0.0
 
     theory_chain = _enrich_chain_for_theory(
-        chain_rows or [], spot=spot, rate=rate, asof=asof_dt,
+        chain_rows or [],
+        spot=spot,
+        rate=rate,
+        asof=asof_dt,
     )
     theory = compute_theory_squeeze(
         chain_rows=theory_chain,
@@ -3024,10 +3397,7 @@ def _squeeze_readout(
     else:
         label = "quiet"
         primary = "quiet"
-        if (
-            float(theory.get("bullish_ui") or 0) > 8
-            and float(theory.get("bearish_ui") or 0) > 8
-        ):
+        if float(theory.get("bullish_ui") or 0) > 8 and float(theory.get("bearish_ui") or 0) > 8:
             label = "two_way"
             primary = "two_way"
 
@@ -3186,18 +3556,30 @@ def _weighted_iv(rows: Sequence[Mapping[str, Any]], *, spot: float, expiry: date
 
 
 def _probability_context(
-    rows: Sequence[Mapping[str, Any]], *, spot: float, asof: datetime, rate: float,
-    call_wall: float | None, put_wall: float | None,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    spot: float,
+    asof: datetime,
+    rate: float,
+    call_wall: float | None,
+    put_wall: float | None,
 ) -> dict[str, Any]:
     expiries = sorted({row.get("expiry") for row in rows if isinstance(row.get("expiry"), date)})
     if not expiries:
-        return {"available": False, "method": "risk-neutral lognormal; unavailable without expiry and IV"}
+        return {
+            "available": False,
+            "method": "risk-neutral lognormal; unavailable without expiry and IV",
+        }
     target = min(expiries, key=lambda value: abs((value - asof.date()).days - 30))
     horizon = max((target - asof.date()).days, 1)
     iv = _weighted_iv(rows, spot=spot, expiry=target)
     if iv is None:
-        return {"available": False, "expiry": target.isoformat(), "horizon_days": horizon,
-                "method": "risk-neutral lognormal; unavailable without usable IV"}
+        return {
+            "available": False,
+            "expiry": target.isoformat(),
+            "horizon_days": horizon,
+            "method": "risk-neutral lognormal; unavailable without usable IV",
+        }
     years = horizon / 365.0
     sigma = iv * math.sqrt(years)
     expected_move = spot * sigma
@@ -3232,16 +3614,26 @@ def _probability_context(
 
 
 def _gex_history(
-    rows: Sequence[Mapping[str, Any]], *, filters: OptionsFilters, asof: datetime,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    filters: OptionsFilters,
+    asof: datetime,
     selected_expiry: str | None,
 ) -> list[dict[str, Any]]:
     """Rebuild GEX independently at each captured snapshot; never backfill missing days."""
     lower, upper = _date_bounds(filters, asof)
     by_day: dict[date, list[tuple[datetime, Mapping[str, Any]]]] = {}
     for row in rows:
-        observed = _timestamp(_first(
-            row, "captured_utc", "asof_utc", "timestamp", "updated_at", "asof_date",
-        ))
+        observed = _timestamp(
+            _first(
+                row,
+                "captured_utc",
+                "asof_utc",
+                "timestamp",
+                "updated_at",
+                "asof_date",
+            )
+        )
         if observed is None or not lower <= observed <= upper:
             continue
         by_day.setdefault(observed.date(), []).append((observed, row))
@@ -3258,7 +3650,8 @@ def _gex_history(
         if not snapshot:
             continue
         spots = [
-            value for row in snapshot
+            value
+            for row in snapshot
             for value in (_number(_first(row, "spot", "underlying_price")),)
             if value is not None and value > 0
         ]
@@ -3266,26 +3659,37 @@ def _gex_history(
             continue
         spot = median(spots)
         filtered, _, context = _filter_chain(
-            snapshot, asof=latest, spot=spot, filters=history_filters,
+            snapshot,
+            asof=latest,
+            spot=spot,
+            filters=history_filters,
         )
         if not filtered:
             continue
         _, summary, _, _, _ = _gex_map(
-            filtered, spot=spot, asof=latest, rate=filters.risk_free_rate,
+            filtered,
+            spot=spot,
+            asof=latest,
+            rate=filters.risk_free_rate,
         )
-        history.append({
-            "t": day.isoformat(),
-            "observed_at": latest.isoformat(),
-            "spot": round(spot, 4),
-            "expiry": context["selected_expiry"],
-            "contracts": len(filtered),
-            **summary,
-        })
+        history.append(
+            {
+                "t": day.isoformat(),
+                "observed_at": latest.isoformat(),
+                "spot": round(spot, 4),
+                "expiry": context["selected_expiry"],
+                "contracts": len(filtered),
+                **summary,
+            }
+        )
     return history
 
 
 def _stacked_theta_vanna(
-    *, chain_rows: Sequence[Mapping[str, Any]], spot: float, rate: float,
+    *,
+    chain_rows: Sequence[Mapping[str, Any]],
+    spot: float,
+    rate: float,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], dict[str, Any], int]:
     """Theta and vanna exposure by strike + per-contract BS diagnostics.
     Theta flow = theta × OI × 100: option-price points/day decaying out of
@@ -3308,7 +3712,12 @@ def _stacked_theta_vanna(
             continue
         years = max(float(dte or 0), 0.5) / 365.0
         theta = _bs_theta_per_day(
-            spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate, is_call=(right == "call"),
+            spot=spot,
+            strike=strike,
+            years=years,
+            iv=iv or 0,
+            rate=rate,
+            is_call=(right == "call"),
         )
         vanna = _bs_vanna(spot=spot, strike=strike, years=years, iv=iv or 0, rate=rate)
         if theta is None or vanna is None:
@@ -3320,38 +3729,49 @@ def _stacked_theta_vanna(
         sign = 1.0 if right == "call" else -1.0
         theta_flow = theta * oi * multiplier
         vanna_flow = sign * vanna * oi * multiplier * spot
-        cell = by_strike.setdefault(strike, {
-            "call_theta": 0.0, "put_theta": 0.0, "call_vanna": 0.0, "put_vanna": 0.0,
-            "call_oi": 0.0, "put_oi": 0.0,
-        })
+        cell = by_strike.setdefault(
+            strike,
+            {
+                "call_theta": 0.0,
+                "put_theta": 0.0,
+                "call_vanna": 0.0,
+                "put_vanna": 0.0,
+                "call_oi": 0.0,
+                "put_oi": 0.0,
+            },
+        )
         cell[f"{right}_theta"] += theta_flow
         cell[f"{right}_vanna"] += vanna_flow
         cell[f"{right}_oi"] += oi
-        chain_rows_out.append({
-            "strike": strike,
-            "right": right,
-            "dte": dte,
-            "iv": iv,
-            "open_interest": oi,
-            "volume": _integer(row.get("volume")) or 0,
-            "theta_per_day": theta,
-            "theta_flow": theta_flow,
-            "vanna": vanna,
-            "vanna_flow": vanna_flow,
-        })
+        chain_rows_out.append(
+            {
+                "strike": strike,
+                "right": right,
+                "dte": dte,
+                "iv": iv,
+                "open_interest": oi,
+                "volume": _integer(row.get("volume")) or 0,
+                "theta_per_day": theta,
+                "theta_flow": theta_flow,
+                "vanna": vanna,
+                "vanna_flow": vanna_flow,
+            }
+        )
     mapped = []
     for strike, value in sorted(by_strike.items()):
-        mapped.append({
-            "strike": strike,
-            "call_theta_flow": round(value["call_theta"], 4),
-            "put_theta_flow": round(value["put_theta"], 4),
-            "net_theta_flow": round(value["call_theta"] + value["put_theta"], 4),
-            "call_vanna_flow": round(value["call_vanna"], 4),
-            "put_vanna_flow": round(value["put_vanna"], 4),
-            "net_vanna_flow": round(value["call_vanna"] + value["put_vanna"], 4),
-            "call_oi": int(value["call_oi"]),
-            "put_oi": int(value["put_oi"]),
-        })
+        mapped.append(
+            {
+                "strike": strike,
+                "call_theta_flow": round(value["call_theta"], 4),
+                "put_theta_flow": round(value["put_theta"], 4),
+                "net_theta_flow": round(value["call_theta"] + value["put_theta"], 4),
+                "call_vanna_flow": round(value["call_vanna"], 4),
+                "put_vanna_flow": round(value["put_vanna"], 4),
+                "net_vanna_flow": round(value["call_vanna"] + value["put_vanna"], 4),
+                "call_oi": int(value["call_oi"]),
+                "put_oi": int(value["put_oi"]),
+            }
+        )
     net_theta = sum(row["net_theta_flow"] for row in mapped)
     call_theta = sum(row["call_theta_flow"] for row in mapped)
     put_theta = sum(row["put_theta_flow"] for row in mapped)
@@ -3364,10 +3784,14 @@ def _stacked_theta_vanna(
         "put_theta_flow": round(put_theta, 4),
         "abs_theta_flow": round(abs(call_theta) + abs(put_theta), 4),
         "decay_side": (
-            "calls" if abs(call_theta) > abs(put_theta)
-            else "puts" if abs(put_theta) > abs(call_theta)
+            "calls"
+            if abs(call_theta) > abs(put_theta)
+            else "puts"
+            if abs(put_theta) > abs(call_theta)
             else "balanced"
-        ) if mapped else None,
+        )
+        if mapped
+        else None,
         "source": "black_scholes_theta",
     }
     # Vanna regime: net dealer delta sensitivity to a parallel IV shift.
@@ -3378,15 +3802,23 @@ def _stacked_theta_vanna(
         "call_vanna_flow": round(call_vanna, 4),
         "put_vanna_flow": round(put_vanna, 4),
         "regime": (
-            "iv_up_supportive" if net_vanna > 0 else "iv_up_pressuring" if net_vanna < 0 else "neutral"
-        ) if mapped else None,
+            "iv_up_supportive"
+            if net_vanna > 0
+            else "iv_up_pressuring"
+            if net_vanna < 0
+            else "neutral"
+        )
+        if mapped
+        else None,
         "source": "black_scholes_vanna",
     }
     return mapped, theta_summary, chain_rows_out, vanna_summary, source_counts["unavailable"]
 
 
 def _stacked_iv_surface(
-    *, chain_rows: Sequence[Mapping[str, Any]], spot: float,
+    *,
+    chain_rows: Sequence[Mapping[str, Any]],
+    spot: float,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """IV smile by strike + IV walls (where the options market prices uncertainty).
     An IV wall is the strike with peak quoted open interest AND elevated IV on
@@ -3402,7 +3834,9 @@ def _stacked_iv_surface(
             continue
         oi = _integer(row.get("open_interest")) or 0
         vol = _integer(row.get("volume")) or 0
-        cell = by_strike.setdefault(strike, {"call_iv_sum": 0.0, "call_iv_w": 0.0, "put_iv_sum": 0.0, "put_iv_w": 0.0})
+        cell = by_strike.setdefault(
+            strike, {"call_iv_sum": 0.0, "call_iv_w": 0.0, "put_iv_sum": 0.0, "put_iv_w": 0.0}
+        )
         key_sum, key_w = f"{right}_iv_sum", f"{right}_iv_w"
         # OI-weighted mean IV per side; volume as tiebreaker weight keeps a
         # dead-but-huge OI line from fully masking today's active quoting.
@@ -3413,37 +3847,52 @@ def _stacked_iv_surface(
     for strike, value in sorted(by_strike.items()):
         call_iv = value["call_iv_sum"] / value["call_iv_w"] if value["call_iv_w"] > 0 else None
         put_iv = value["put_iv_sum"] / value["put_iv_w"] if value["put_iv_w"] > 0 else None
-        rows_out.append({
-            "strike": strike,
-            "call_iv": round(call_iv, 6) if call_iv is not None else None,
-            "put_iv": round(put_iv, 6) if put_iv is not None else None,
-            "skew": round(call_iv - put_iv, 6) if call_iv is not None and put_iv is not None else None,
-            "distance_pct": round((strike - spot) / spot, 6) if spot > 0 else None,
-        })
+        rows_out.append(
+            {
+                "strike": strike,
+                "call_iv": round(call_iv, 6) if call_iv is not None else None,
+                "put_iv": round(put_iv, 6) if put_iv is not None else None,
+                "skew": round(call_iv - put_iv, 6)
+                if call_iv is not None and put_iv is not None
+                else None,
+                "distance_pct": round((strike - spot) / spot, 6) if spot > 0 else None,
+            }
+        )
     atm_iv: float | None = None
     if spot > 0 and rows_out:
         atm_row = min(rows_out, key=lambda row: abs(row["strike"] - spot))
         atm_candidates = [atm_row["call_iv"], atm_row["put_iv"]]
         atm_values = [value for value in atm_candidates if value is not None]
         atm_iv = sum(atm_values) / len(atm_values) if atm_values else None
+
     def peak(side: str) -> float | None:
         values = [row for row in rows_out if row[side] is not None]
         if not values:
             return None
         return max(values, key=lambda row: row[side])["strike"]
+
     def iv_wall(side: str) -> float | None:
         """Peak-OI strike on each side whose IV also sits above ATM IV."""
         candidates = [
-            row for row in rows_out
-            if row[side] is not None and atm_iv is not None and row[side] >= atm_iv
-            and ((side == "call_iv" and row["strike"] >= spot) or (side == "put_iv" and row["strike"] <= spot))
+            row
+            for row in rows_out
+            if row[side] is not None
+            and atm_iv is not None
+            and row[side] >= atm_iv
+            and (
+                (side == "call_iv" and row["strike"] >= spot)
+                or (side == "put_iv" and row["strike"] <= spot)
+            )
         ]
         if not candidates:
             return None
         # OI proxy: pick the candidate nearest the peak-IV strike among the
         # top quartile of distance — walls are where size and IV coexist.
-        top = sorted(candidates, key=lambda row: row[side] or 0.0, reverse=True)[: max(len(candidates) // 4, 3)]
+        top = sorted(candidates, key=lambda row: row[side] or 0.0, reverse=True)[
+            : max(len(candidates) // 4, 3)
+        ]
         return max(top, key=lambda row: abs(row["strike"] - spot))["strike"] if top else None
+
     summary = {
         "available": bool(rows_out),
         "atm_iv": round(atm_iv, 6) if atm_iv is not None else None,
@@ -3457,7 +3906,10 @@ def _stacked_iv_surface(
 
 
 def _iv_surface_by_expiry(
-    *, chain_rows: Sequence[Mapping[str, Any]], spot: float, asof: datetime,
+    *,
+    chain_rows: Sequence[Mapping[str, Any]],
+    spot: float,
+    asof: datetime,
 ) -> list[dict[str, Any]]:
     """One IV smile per expiry — the input a risk-neutral density actually needs.
 
@@ -3494,7 +3946,8 @@ def _iv_surface_by_expiry(
             # behind; including it lets a stale mark set the wing.
             continue
         cell = by_expiry.setdefault(expiry, {}).setdefault(
-            strike, {"call_iv_sum": 0.0, "call_iv_w": 0.0, "put_iv_sum": 0.0, "put_iv_w": 0.0},
+            strike,
+            {"call_iv_sum": 0.0, "call_iv_w": 0.0, "put_iv_sum": 0.0, "put_iv_w": 0.0},
         )
         cell[f"{right}_iv_sum"] += iv * weight
         cell[f"{right}_iv_w"] += weight
@@ -3507,34 +3960,41 @@ def _iv_surface_by_expiry(
             put_iv = value["put_iv_sum"] / value["put_iv_w"] if value["put_iv_w"] > 0 else None
             if call_iv is None and put_iv is None:
                 continue
-            points.append({
-                "strike": strike,
-                "call_iv": round(call_iv, 6) if call_iv is not None else None,
-                "put_iv": round(put_iv, 6) if put_iv is not None else None,
-            })
+            points.append(
+                {
+                    "strike": strike,
+                    "call_iv": round(call_iv, 6) if call_iv is not None else None,
+                    "put_iv": round(put_iv, 6) if put_iv is not None else None,
+                }
+            )
         # PCHIP needs four nodes; fewer is not a smile, it is a few quotes.
         if len(points) < 4:
             continue
         atm_row = min(points, key=lambda row: abs(row["strike"] - spot)) if spot > 0 else None
         atm_values = [
-            v for v in ((atm_row or {}).get("call_iv"), (atm_row or {}).get("put_iv")) if v is not None
+            v
+            for v in ((atm_row or {}).get("call_iv"), (atm_row or {}).get("put_iv"))
+            if v is not None
         ]
         dte = (expiry - asof_day).days if isinstance(asof_day, date) else None
-        out.append({
-            "expiry": expiry.isoformat(),
-            "dte": dte,
-            # A 0DTE expiry still has real intraday life; floor the horizon at a
-            # few hours rather than zero so sigma*sqrt(T) does not collapse.
-            "years": round(max(float(dte if dte is not None else 1), 0.25) / 365.0, 8),
-            "atm_iv": round(sum(atm_values) / len(atm_values), 6) if atm_values else None,
-            "strikes_measured": len(points),
-            "points": points,
-        })
+        out.append(
+            {
+                "expiry": expiry.isoformat(),
+                "dte": dte,
+                # A 0DTE expiry still has real intraday life; floor the horizon at a
+                # few hours rather than zero so sigma*sqrt(T) does not collapse.
+                "years": round(max(float(dte if dte is not None else 1), 0.25) / 365.0, 8),
+                "atm_iv": round(sum(atm_values) / len(atm_values), 6) if atm_values else None,
+                "strikes_measured": len(points),
+                "points": points,
+            }
+        )
     return out
 
 
 def _stacked_volume_profile(
-    *, price_series: Sequence[Mapping[str, Any]],
+    *,
+    price_series: Sequence[Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Volume-by-price histogram from the chart's own daily bars.
     POC = highest-volume price bin. Value area = standard 70% expansion around
@@ -3578,20 +4038,24 @@ def _stacked_volume_profile(
     profile = []
     for idx, volume in enumerate(volumes):
         bin_lo = low + idx * width
-        profile.append({
-            "price": round(bin_lo + width / 2.0, 4),
-            "low": round(bin_lo, 4),
-            "high": round(bin_lo + width, 4),
-            "volume": round(volume, 2),
-            "pct_of_peak": round(volume / peak_volume, 4) if peak_volume > 0 else None,
-            "in_value_area": lo_idx <= idx <= hi_idx,
-        })
+        profile.append(
+            {
+                "price": round(bin_lo + width / 2.0, 4),
+                "low": round(bin_lo, 4),
+                "high": round(bin_lo + width, 4),
+                "volume": round(volume, 2),
+                "pct_of_peak": round(volume / peak_volume, 4) if peak_volume > 0 else None,
+                "in_value_area": lo_idx <= idx <= hi_idx,
+            }
+        )
     # LVNs: interior local minima below 35% of peak, ignoring one-bin noise
     # by requiring both neighbours to be heavier.
     lvn_bins = [
-        idx for idx in range(1, bin_count - 1)
+        idx
+        for idx in range(1, bin_count - 1)
         if volumes[idx] < 0.35 * peak_volume
-        and volumes[idx] <= volumes[idx - 1] and volumes[idx] <= volumes[idx + 1]
+        and volumes[idx] <= volumes[idx - 1]
+        and volumes[idx] <= volumes[idx + 1]
     ]
     lvn_levels = [
         {
@@ -3623,10 +4087,17 @@ def _stacked_volume_profile(
 def _stacked_confluence(
     *,
     spot: float | None,
-    call_wall: float | None, put_wall: float | None, gamma_flip: float | None, pin_strike: float | None,
-    theta_decay_strike: float | None, vanna_pivot: float | None,
-    call_iv_wall: float | None, put_iv_wall: float | None,
-    poc: float | None, value_area_low: float | None, value_area_high: float | None,
+    call_wall: float | None,
+    put_wall: float | None,
+    gamma_flip: float | None,
+    pin_strike: float | None,
+    theta_decay_strike: float | None,
+    vanna_pivot: float | None,
+    call_iv_wall: float | None,
+    put_iv_wall: float | None,
+    poc: float | None,
+    value_area_low: float | None,
+    value_area_high: float | None,
 ) -> list[dict[str, Any]]:
     """Level confluence: which price zones multiple independent lenses name.
     A level named by ≥2 lenses is where the stacked picture gets its edge —
@@ -3674,23 +4145,34 @@ def _stacked_confluence(
                 used[j] = True
         avg = sum(value for _, _, value in members) / len(members)
         families = sorted({family for family, _, _ in members})
-        clusters.append({
-            "level": round(avg, 4),
-            "distance_pct": round((avg - spot) / spot, 6) if spot else None,
-            "supporting_lenses": families,
-            "lens_count": len(families),
-            "labels": [label for _, label, _ in members],
-            "above_spot": bool(spot and avg > spot),
-        })
+        clusters.append(
+            {
+                "level": round(avg, 4),
+                "distance_pct": round((avg - spot) / spot, 6) if spot else None,
+                "supporting_lenses": families,
+                "lens_count": len(families),
+                "labels": [label for _, label, _ in members],
+                "above_spot": bool(spot and avg > spot),
+            }
+        )
     clusters.sort(key=lambda cluster: (-cluster["lens_count"], abs(cluster["distance_pct"] or 9)))
     return clusters
 
 
 def build_options_intelligence(
-    *, symbol: str, chain_rows: Sequence[Mapping[str, Any]], flow_rows: Sequence[Mapping[str, Any]],
-    price_series: Sequence[Mapping[str, Any]], spot: float | None, filters: OptionsFilters,
-    mode_requested: str, mode_resolved: str, chain_source: str, flow_source: str,
-    asof_utc: datetime | None = None, warnings: Iterable[str] = (),
+    *,
+    symbol: str,
+    chain_rows: Sequence[Mapping[str, Any]],
+    flow_rows: Sequence[Mapping[str, Any]],
+    price_series: Sequence[Mapping[str, Any]],
+    spot: float | None,
+    filters: OptionsFilters,
+    mode_requested: str,
+    mode_resolved: str,
+    chain_source: str,
+    flow_source: str,
+    asof_utc: datetime | None = None,
+    warnings: Iterable[str] = (),
     open_interest_source: str = "provider",
     history_chain_rows: Sequence[Mapping[str, Any]] = (),
     underlying_bars: Sequence[Mapping[str, Any]] = (),
@@ -3704,16 +4186,20 @@ def build_options_intelligence(
     now = asof_utc or datetime.now(timezone.utc)
     latest_rows, chain_observed = _latest_chain(chain_rows)
     observed_spots = [
-        value for row in latest_rows
+        value
+        for row in latest_rows
         for value in (_number(_first(row, "spot", "underlying_price")),)
         if value is not None and value > 0
     ]
     resolved_spot = _number(spot) or (median(observed_spots) if observed_spots else None)
     if resolved_spot is None or resolved_spot <= 0:
         return {
-            "schema_version": "edge-options-intelligence-v1", "symbol": symbol.upper(),
-            "mode_requested": mode_requested, "mode_resolved": "unavailable",
-            "asof_utc": now.isoformat(), "filters": asdict(filters),
+            "schema_version": "edge-options-intelligence-v1",
+            "symbol": symbol.upper(),
+            "mode_requested": mode_requested,
+            "mode_resolved": "unavailable",
+            "asof_utc": now.isoformat(),
+            "filters": asdict(filters),
             "error": "No trustworthy underlying spot was available.",
             "warnings": list(dict.fromkeys(warnings)),
         }
@@ -3737,7 +4223,12 @@ def build_options_intelligence(
     spread_samples = [row["spread_pct"] for row in filtered_chain if row["spread_pct"] is not None]
     median_spread_pct = median(spread_samples) if spread_samples else None
     (
-        flow_series, tape, flow_rejected, signed_observations, activity_observations, tape_channel,
+        flow_series,
+        tape,
+        flow_rejected,
+        signed_observations,
+        activity_observations,
+        tape_channel,
     ) = _flow_series(
         flow_rows,
         filters=filters,
@@ -3793,22 +4284,32 @@ def build_options_intelligence(
         activity_basis = "chain_activity_proxy" if flow_series else "unavailable"
 
     gex, gex_summary, gamma_source, gex_by_expiry, gex_price_profile = _gex_map(
-        filtered_chain, spot=resolved_spot, asof=chain_asof, rate=filters.risk_free_rate,
+        filtered_chain,
+        spot=resolved_spot,
+        asof=chain_asof,
+        rate=filters.risk_free_rate,
     )
     charm_by_strike, charm_summary, charm_chain_rows = _charm_map(
-        filtered_chain, spot=resolved_spot, rate=filters.risk_free_rate,
+        filtered_chain,
+        spot=resolved_spot,
+        rate=filters.risk_free_rate,
     )
     # Stacked-signals lenses: theta/vanna exposure, IV surface, volume profile.
     theta_rows, theta_summary, tv_chain_rows, vanna_summary, tv_skipped = _stacked_theta_vanna(
-        chain_rows=filtered_chain, spot=resolved_spot, rate=filters.risk_free_rate,
+        chain_rows=filtered_chain,
+        spot=resolved_spot,
+        rate=filters.risk_free_rate,
     )
     iv_surface, iv_summary = _stacked_iv_surface(
-        chain_rows=filtered_chain, spot=resolved_spot,
+        chain_rows=filtered_chain,
+        spot=resolved_spot,
     )
     iv_surface_by_expiry = _iv_surface_by_expiry(
         # Same clock `_gex_map` dates its by-expiry totals from, so DTE is
         # consistent across every per-expiry block in the payload.
-        chain_rows=filtered_chain, spot=resolved_spot, asof=chain_asof,
+        chain_rows=filtered_chain,
+        spot=resolved_spot,
+        asof=chain_asof,
     )
     volume_profile, volume_profile_summary = _stacked_volume_profile(
         price_series=price_series,
@@ -3816,11 +4317,13 @@ def build_options_intelligence(
     # Strongest single-strike decay and vanna pivots feed the confluence map.
     max_theta_strike = (
         max(theta_rows, key=lambda row: abs(row["net_theta_flow"]))["strike"]
-        if theta_rows else None
+        if theta_rows
+        else None
     )
     vanna_pivot = (
         max(theta_rows, key=lambda row: abs(row["net_vanna_flow"]))["strike"]
-        if theta_rows else None
+        if theta_rows
+        else None
     )
     confluence = _stacked_confluence(
         spot=resolved_spot,
@@ -3833,8 +4336,12 @@ def build_options_intelligence(
         call_iv_wall=iv_summary.get("call_iv_wall"),
         put_iv_wall=iv_summary.get("put_iv_wall"),
         poc=volume_profile_summary.get("poc") if volume_profile_summary.get("available") else None,
-        value_area_low=volume_profile_summary.get("value_area_low") if volume_profile_summary.get("available") else None,
-        value_area_high=volume_profile_summary.get("value_area_high") if volume_profile_summary.get("available") else None,
+        value_area_low=volume_profile_summary.get("value_area_low")
+        if volume_profile_summary.get("available")
+        else None,
+        value_area_high=volume_profile_summary.get("value_area_high")
+        if volume_profile_summary.get("available")
+        else None,
     )
     # Delta-weighted live volume (supporting context for the pressure gauge).
     # Uses the same BS delta as charm so the gauge components share one model.
@@ -3849,77 +4356,20 @@ def build_options_intelligence(
             delta_weighted_call_vol += max(0.0, float(delta)) * volume
         else:
             delta_weighted_put_vol += abs(float(delta)) * volume
-    charm_contracts = int(charm_summary["contracts_measured"]) + int(charm_summary["contracts_skipped"])
-    pressure = _pressure_gauge(
-        net_charm_flow=charm_summary["net_charm_flow"],
-        net_gex_m=gex_summary["total_gex_m"],
-        delta_weighted_call_vol=delta_weighted_call_vol,
-        delta_weighted_put_vol=delta_weighted_put_vol,
-        # Gross magnitudes normalize each channel onto a common [-1, 1] scale;
-        # without them the charm term's raw units swamp everything else.
-        abs_charm_flow=charm_summary["abs_charm_flow"],
-        abs_gex_m=gex_summary.get("abs_gex_m"),
-        # Signed order flow from the tape and the underlying's own bars are the
-        # corroboration a positioning proxy needs before anyone trades on it.
-        tape=tape_channel if activity_basis == "trade_tape" else None,
-        underlying=_underlying_pressure(underlying_bars, asof=now) if underlying_bars else None,
-        charm_coverage=(
-            int(charm_summary["contracts_measured"]) / charm_contracts if charm_contracts else None
-        ),
-        mode_resolved=mode_resolved,
-    )
-    probability = _probability_context(
-        filtered_chain, spot=resolved_spot, asof=chain_asof, rate=filters.risk_free_rate,
-        call_wall=gex_summary["call_wall"], put_wall=gex_summary["put_wall"],
-    )
-    gex_history = _gex_history(
-        history_chain_rows,
-        filters=filters,
-        asof=now,
-        selected_expiry=chain_context["selected_expiry"],
-    )
-    # Always anchor history with the active chain snapshot so the strip is not
-    # empty when only one dated folder exists under data/option_chains.
-    active_day = (chain_asof.date() if chain_asof else now.date()).isoformat()
-    if gex_summary and not any(str(point.get("t")) == active_day for point in gex_history):
-        gex_history = list(gex_history) + [{
-            "t": active_day,
-            "observed_at": (chain_asof or now).isoformat(),
-            "spot": round(resolved_spot, 4),
-            "expiry": chain_context.get("selected_expiry"),
-            "contracts": len(filtered_chain),
-            "source": "active_snapshot",
-            **gex_summary,
-        }]
-    call_premium = sum(float(row["call_premium"]) for row in flow_series)
-    put_premium = sum(float(row["put_premium"]) for row in flow_series)
-    total_premium = call_premium + put_premium
-    signed_values = [row["signed_net_premium"] for row in flow_series if row["signed_net_premium"] is not None]
-    signed_net = sum(float(value) for value in signed_values) if signed_values else None
-    signed_gross = sum(float(row.get("signed_gross_premium") or 0.0) for row in flow_series)
-    signed_prints = sum(int(row.get("signed_premium_observations") or 0) for row in flow_series)
-    unresolved = sum(float(row["unresolved_premium"]) for row in flow_series)
-    activity_imbalance = (
-        (call_premium - put_premium) / total_premium if total_premium > 0 else None
-    )
-    activity_lean = describe_activity_lean(
-        signed_net_premium=signed_net,
-        signed_print_count=signed_prints,
-        call_premium=call_premium,
-        put_premium=put_premium,
-        call_put_imbalance=activity_imbalance,
+    charm_contracts = int(charm_summary["contracts_measured"]) + int(
+        charm_summary["contracts_skipped"]
     )
     # Tape age = newest *qualifying* print (what the desk list shows).
     # Feed age = newest provider print before min-premium/volume filters so a
     # live underlier is not marked TAPE STALE just because $25k+ whales are rare.
-    tape_asof = _best_observation_time(
-        [_timestamp(row.get("timestamp")) for row in tape]
+    tape_asof = _best_observation_time([_timestamp(row.get("timestamp")) for row in tape])
+    feed_asof = _best_observation_time(
+        [
+            _timestamp(flow_rejected.get("print_ts_max")),
+            _timestamp(flow_rejected.get("print_ts_min")),
+            tape_asof,
+        ]
     )
-    feed_asof = _best_observation_time([
-        _timestamp(flow_rejected.get("print_ts_max")),
-        _timestamp(flow_rejected.get("print_ts_min")),
-        tape_asof,
-    ])
     # Prefer the true max feed stamp even when it is a day-bucket if that is
     # all the provider sent; _best_observation_time already prefers precise.
     if feed_asof is None:
@@ -3943,6 +4393,73 @@ def build_options_intelligence(
     else:
         age_seconds = None
 
+    pressure = _pressure_gauge(
+        net_charm_flow=charm_summary["net_charm_flow"],
+        net_gex_m=gex_summary["total_gex_m"],
+        delta_weighted_call_vol=delta_weighted_call_vol,
+        delta_weighted_put_vol=delta_weighted_put_vol,
+        # Gross magnitudes normalize each channel onto a common [-1, 1] scale;
+        # without them the charm term's raw units swamp everything else.
+        abs_charm_flow=charm_summary["abs_charm_flow"],
+        abs_gex_m=gex_summary.get("abs_gex_m"),
+        # Signed order flow from the tape and the underlying's own bars are the
+        # corroboration a positioning proxy needs before anyone trades on it.
+        tape=tape_channel if activity_basis == "trade_tape" else None,
+        underlying=_underlying_pressure(underlying_bars, asof=now) if underlying_bars else None,
+        charm_coverage=(
+            int(charm_summary["contracts_measured"]) / charm_contracts if charm_contracts else None
+        ),
+        mode_resolved=mode_resolved,
+        source_age_seconds=age_seconds,
+    )
+    probability = _probability_context(
+        filtered_chain,
+        spot=resolved_spot,
+        asof=chain_asof,
+        rate=filters.risk_free_rate,
+        call_wall=gex_summary["call_wall"],
+        put_wall=gex_summary["put_wall"],
+    )
+    gex_history = _gex_history(
+        history_chain_rows,
+        filters=filters,
+        asof=now,
+        selected_expiry=chain_context["selected_expiry"],
+    )
+    # Always anchor history with the active chain snapshot so the strip is not
+    # empty when only one dated folder exists under data/option_chains.
+    active_day = (chain_asof.date() if chain_asof else now.date()).isoformat()
+    if gex_summary and not any(str(point.get("t")) == active_day for point in gex_history):
+        gex_history = list(gex_history) + [
+            {
+                "t": active_day,
+                "observed_at": (chain_asof or now).isoformat(),
+                "spot": round(resolved_spot, 4),
+                "expiry": chain_context.get("selected_expiry"),
+                "contracts": len(filtered_chain),
+                "source": "active_snapshot",
+                **gex_summary,
+            }
+        ]
+    call_premium = sum(float(row["call_premium"]) for row in flow_series)
+    put_premium = sum(float(row["put_premium"]) for row in flow_series)
+    total_premium = call_premium + put_premium
+    signed_values = [
+        row["signed_net_premium"] for row in flow_series if row["signed_net_premium"] is not None
+    ]
+    signed_net = sum(float(value) for value in signed_values) if signed_values else None
+    signed_gross = sum(float(row.get("signed_gross_premium") or 0.0) for row in flow_series)
+    signed_prints = sum(int(row.get("signed_premium_observations") or 0) for row in flow_series)
+    unresolved = sum(float(row["unresolved_premium"]) for row in flow_series)
+    activity_imbalance = (call_premium - put_premium) / total_premium if total_premium > 0 else None
+    activity_lean = describe_activity_lean(
+        signed_net_premium=signed_net,
+        signed_print_count=signed_prints,
+        call_premium=call_premium,
+        put_premium=put_premium,
+        call_put_imbalance=activity_imbalance,
+    )
+
     caveats = [
         "Call/put activity is not bought/sold direction. Signed net flow requires an explicit provider aggressor.",
         "Charting GEX uses call-positive/put-negative wall convention; squeeze theory uses short-premium dealer inventory (q=−OI). True dealer inventory is not public.",
@@ -3952,7 +4469,10 @@ def build_options_intelligence(
         "Implied probabilities are risk-neutral diagnostics from IV, not calibrated forecasts of where the stock will trade.",
     ]
     if activity_basis == "chain_activity_proxy":
-        caveats.insert(0, "No qualifying trade tape was available; activity uses provider session premium or cumulative chain volume × price and is unsigned.")
+        caveats.insert(
+            0,
+            "No qualifying trade tape was available; activity uses provider session premium or cumulative chain volume × price and is unsigned.",
+        )
 
     output_warnings = list(dict.fromkeys(warnings))
     selected_dte = chain_context["selected_dte"]
@@ -3965,8 +4485,14 @@ def build_options_intelligence(
         output_warnings.append(
             f"Near-expiry ({selected_dte}D) — gamma can reprice quickly; OI is prior-session."
         )
-    if filters.expiry not in {"nearest", "all"} and chain_context["selected_expiry"] and not filtered_chain:
-        output_warnings.append("The selected expiry has no contracts that pass the active quality filters.")
+    if (
+        filters.expiry not in {"nearest", "all"}
+        and chain_context["selected_expiry"]
+        and not filtered_chain
+    ):
+        output_warnings.append(
+            "The selected expiry has no contracts that pass the active quality filters."
+        )
     if flow_rejected.get("expiry_filter_relaxed"):
         output_warnings.append(
             f"The selected expiry {flow_rejected.get('requested_expiry')} had no qualified trade prints; "
@@ -4025,7 +4551,8 @@ def build_options_intelligence(
             last_age=tape_age_seconds,
             max_fresh_age=24.0 * 3600.0,
         )
-        if activity_observations else None
+        if activity_observations
+        else None
     )
     squeeze = _squeeze_readout(
         spot=resolved_spot,
@@ -4078,15 +4605,20 @@ def build_options_intelligence(
             # age_seconds = feed liveness for trade_tape (not filtered-whale lag).
             "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
             "feed_asof": feed_asof.isoformat() if feed_asof is not None else None,
-            "feed_age_seconds": round(feed_age_seconds, 3) if feed_age_seconds is not None else None,
+            "feed_age_seconds": round(feed_age_seconds, 3)
+            if feed_age_seconds is not None
+            else None,
             "tape_asof": tape_asof.isoformat() if tape_asof is not None else None,
-            "tape_age_seconds": round(tape_age_seconds, 3) if tape_age_seconds is not None else None,
+            "tape_age_seconds": round(tape_age_seconds, 3)
+            if tape_age_seconds is not None
+            else None,
         },
         "filters": asdict(filters),
         "chain_context": chain_context,
         "contract_focus": contract_focus,
         "provider": {
-            "chain": chain_source, "flow": flow_source,
+            "chain": chain_source,
+            "flow": flow_source,
             "open_interest": open_interest_source,
             "activity_basis": activity_basis,
             "signed_flow_available": bool(signed_values),
@@ -4096,7 +4628,9 @@ def build_options_intelligence(
             "call_premium": round(call_premium, 2),
             "put_premium": round(put_premium, 2),
             "call_put_ratio": round(call_premium / put_premium, 4) if put_premium > 0 else None,
-            "activity_imbalance": round(activity_imbalance, 6) if activity_imbalance is not None else None,
+            "activity_imbalance": round(activity_imbalance, 6)
+            if activity_imbalance is not None
+            else None,
             "activity_lean": activity_lean["activity_lean"],
             "activity_lean_source": activity_lean["activity_lean_source"],
             "activity_lean_label": activity_lean["activity_lean_label"],
@@ -4106,9 +4640,9 @@ def build_options_intelligence(
             "signed_flow_imbalance": signed_flow_imbalance,
             "signed_flow_confidence": round(imbalance_confidence, 6),
             "signed_flow_confidence_band": (
-                flow_shift_readout.confidence_band if flow_shift_readout is not None else (
-                    "low" if signed_prints < 2 else "medium"
-                )
+                flow_shift_readout.confidence_band
+                if flow_shift_readout is not None
+                else ("low" if signed_prints < 2 else "medium")
             ),
             "flow_shift": flow_shift_readout.to_dict() if flow_shift_readout is not None else None,
             "activity_shift": (
@@ -4117,10 +4651,13 @@ def build_options_intelligence(
                     "kind": "contract_activity",
                     "note": "call_plus_put_minus_persistence_not_aggressor",
                 }
-                if activity_shift_readout is not None else None
+                if activity_shift_readout is not None
+                else None
             ),
             "unresolved_premium": round(unresolved, 2),
-            "median_spread_pct": round(median_spread_pct, 6) if median_spread_pct is not None else None,
+            "median_spread_pct": round(median_spread_pct, 6)
+            if median_spread_pct is not None
+            else None,
             **gex_summary,
             "squeeze": squeeze,
         },
@@ -4141,7 +4678,8 @@ def build_options_intelligence(
             "chain_rejected": chain_rejected,
             "flow_prints_raw": len(flow_rows),
             "flow_prints_included": sum(int(row["print_count"]) for row in flow_series)
-            if activity_basis == "trade_tape" else 0,
+            if activity_basis == "trade_tape"
+            else 0,
             "signed_flow_prints": signed_prints,
             "flow_rejected": flow_rejected,
             "gamma_source": gamma_source,

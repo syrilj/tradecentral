@@ -1,111 +1,166 @@
-# Cloudflare deployment
+# Preview and production launch: owner access and waitlist
 
-TradeCentral runs the Python API and the Vue SPA from one Python process. That
-process cannot execute on Cloudflare Workers or Pages (pandas, local parquet
-files, threaded scan jobs), so the supported Cloudflare shape uses three pieces:
+## workers.dev preview
 
-- **Cloudflare Worker** (`tradecentral.syriltj1.workers.dev`) serves the built
-  SPA as static assets and proxies `/api/*` to the tunnel origin.
-- **Cloudflare Tunnel** exposes the local `api_server.py` (bound to
-  `127.0.0.1`) without opening any firewall port.
-- **Cloudflare Access** (Zero Trust) authenticates the browser at the edge and
-  restricts the Worker hostname to specific email addresses — the operator's
-  Cloudflare account email for a single-operator deployment.
+The connected accounts currently have a `tradecentral` Cloudflare Worker and
+only a **development** TradeCentral Clerk instance. Clerk requires a domain
+you control for a production instance; `workers.dev` is suitable here only
+as a preview. The Clerk development instance is configured for native
+Waitlist mode and has an existing owner account.
+Its live development settings have smart CAPTCHA and a sign-in lockout enabled.
 
-## Architecture
+The preview is deployed at `https://tradecentral.syriltj1.workers.dev`.
+Cloudflare Access makes `/`, `/waitlist`, `/auth`, `/auth/*`, and `/assets/*`
+public. Private dashboard paths and `/api/*` remain behind Access. The Worker
+also disables its API proxy, so even an Access-approved request cannot reach
+the local research service. The preview uses the owner-scoped Convex development
+deployment `exciting-jaguar-590` for small watchlist state. This Access
+configuration is account state; a Wrangler deployment alone does not recreate
+it.
 
-```mermaid
-flowchart LR
-  U["Browser"] -->|"HTTPS + Access JWT"| W["Worker<br/>(static SPA + API proxy)"]
-  W -->|"/api/* via fetch()"| T["cloudflared tunnel"]
-  W -->|"SPA assets"| A["Workers Assets"]
-  T -->|"http://127.0.0.1:8787"| P["TradeCentral API server"]
-  P --> D["Local market data + research artifacts"]
+The Access application sends users denied by its identity or other access
+rules to the public `/waitlist` page. A direct private URL still first shows
+Cloudflare Access sign-in; the deny redirect applies after that decision.
+
+The development Clerk instance has a `convex` JWT template with the
+`aud: convex` claim. The Convex deployment sets its issuer to that Clerk
+instance and `OWNER_CLERK_USER_ID` to the owner's exact development user ID.
+An owner token was accepted by the read function; anonymous reads and writes
+were denied. Use the production Clerk user ID and issuer on the separate
+production deployment when a custom domain is available.
+
+An untracked repo-root `.env.preview.local` should contain
+`VITE_EDGE_AUTH_MODE=clerk` and
+`VITE_CONVEX_URL=https://exciting-jaguar-590.convex.cloud`, plus the owner's
+email in `VITE_EDGE_ALLOWED_EMAILS`. The existing
+private `.env` supplies its `pk_test_...` Clerk key. Run
+`npm run build:preview` from `dashboard/`, then deploy with Wrangler. The
+Worker API proxy remains disabled. The landing page and waitlist can be public,
+but live research panels will show an unavailable API state. Do not use this
+development Clerk instance as the final production authentication boundary.
+
+## Current architecture
+
+The Cloudflare Worker serves the Vue app and Clerk's waitlist. Its API proxy is
+**disabled by default**; `/api/*` returns 503 without contacting the Python
+research process or a data provider. Clerk authenticates the owner. The Python
+API and Convex independently check the owner's Clerk user ID before serving
+private data. A copied dashboard URL does not grant access to research data.
+
+The Python process cannot run on Workers or Convex: it uses pandas, local
+Parquet/artifacts, provider adapters, and threaded jobs. Convex stores only a
+small owner watchlist. Do not put market data or provider keys in the browser,
+Worker variables, or Convex client code.
+
+## One-time account setup
+
+1. In the **Clerk production instance**, choose **Waitlist** sign-up mode and
+   invite the owner address from your private environment. Do not enable Clerk's paid identifier
+   Allowlist feature. Complete the owner's sign-in and copy that account's
+   Clerk user ID (`user_...`) from the Clerk Dashboard.
+2. Configure a Convex audience (`aud: convex`) in the Clerk production
+   instance, either with Clerk's Convex integration or a `convex` JWT template
+   matching the preview client. Record the production Frontend API/issuer URL
+   and publishable key.
+3. Use the existing **Convex Free** `tradecentral` project. Set
+   `CLERK_JWT_ISSUER_DOMAIN` to the production Clerk issuer and
+   `OWNER_CLERK_USER_ID` to the new production owner ID on the **production
+   Convex deployment**. From `dashboard/`, run `npx convex deploy`. Record its
+   `https://...convex.cloud` URL. The development deployment already has the
+   development issuer and owner ID and was verified with an owner token.
+4. Add a domain you control to Cloudflare and use it for the Clerk production
+   instance and the final app hostname. Configure Clerk's production allowed
+   origins and redirect URLs for that hostname. Review the existing Cloudflare
+   Access path exceptions when moving to the final hostname so public pages
+   and their assets load while research routes stay protected.
+
+Keep the production keys and user ID in private environment files or dashboard
+secrets. The publishable key and Convex URL are public identifiers; the Clerk
+secret key and Python JWT public key must be handled according to their roles.
+No Clerk secret key is needed in the browser or Convex source.
+
+## Build and publish static front door
+
+Create an untracked repo-root `.env.production.local` containing:
+
+```dotenv
+VITE_EDGE_AUTH_MODE=clerk
+VITE_CLERK_PUBLISHABLE_KEY=pk_live_...
+VITE_CONVEX_URL=https://your-production-deployment.convex.cloud
+VITE_EDGE_ALLOWED_EMAILS=owner@example.com
 ```
 
-The Python process stays bound to loopback. It never sees unauthenticated
-traffic because only `cloudflared` can reach it, and Cloudflare's edge enforces
-the Access policy before any request reaches the Worker.
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `cloudflare/wrangler.toml` | Worker config — static assets binding, API proxy variable |
-| `cloudflare/worker.js` | Worker entry point — SPA serving + `/api/*` reverse proxy |
-| `cloudflare/setup_tunnel.sh` | Creates the tunnel, routes DNS, writes cloudflared config |
-| `cloudflare/.env.cloudflare` | Environment template for the local API server |
-
-## Setup
-
-### 1. Deployed state
-
-The Worker is already live at `https://tradecentral.syriltj1.workers.dev` with
-Access gating confirmed (unauthenticated requests return a 302 to
-`syriltj1.cloudflareaccess.com`). What remains is wiring the API behind it.
-
-### 2. Set up the tunnel
+Then:
 
 ```bash
-brew install cloudflared
-cloudflared tunnel login
-bash cloudflare/setup_tunnel.sh tradecentral-api.syriltj1.workers.dev 8787
-```
-
-The API tunnel hostname can be a separate workers.dev subdomain or any domain
-routed through your Cloudflare account. The setup script creates the tunnel,
-adds DNS, writes `~/.cloudflared/config.yml`, and starts the tunnel.
-
-### 3. Point the Worker at the tunnel
-
-Edit `cloudflare/wrangler.toml` and set `API_UPSTREAM` to the tunnel hostname
-from step 2, then redeploy:
-
-```bash
-API_UPSTREAM="tradecentral-api.syriltj1.workers.dev"
-sed -i '' "s|API_UPSTREAM = \"\"|API_UPSTREAM = \"${API_UPSTREAM}\"|" cloudflare/wrangler.toml
-cd dashboard && npm run build && cd ..
+cd dashboard
+npm ci
+npm run build:public
+cd ..
 npx wrangler deploy -c cloudflare/wrangler.toml
 ```
 
-### 4. Configure the API server
+`build:public` rejects local mode, a development Clerk key, or a missing Convex
+URL. `cloudflare/wrangler.toml` keeps `API_PROXY_ENABLED=false`, so publication
+does not expose expensive API endpoints. Confirm the public landing page and
+waitlist, and a non-owner sign-in denied and sent to the waitlist. An
+unauthenticated `/api/status` request is redirected by Cloudflare Access;
+after Access, the disabled Worker API returns 503. Do not interpret a
+successful static launch as a working research API.
 
-Copy the environment template and start the server:
+## Optional live research API
 
-```bash
-cp cloudflare/.env.cloudflare .env.cloudflare
-set -a; source .env.cloudflare; set +a
-bash tools/run_dashboard.sh --serve
+Enable this only after the Python service passes the authenticated smoke tests.
+Start it with the private values in `cloudflare/.env.cloudflare`:
+
+```dotenv
+EDGE_HOST=127.0.0.1
+EDGE_AUTH_MODE=clerk
+EDGE_PUBLIC_DEPLOYMENT=1
+EDGE_REQUIRE_AUTH=1
+EDGE_BACKGROUND_JOBS=0
+EDGE_OWNER_USER_ID=user_...
+CLERK_JWT_KEY=-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----
+CLERK_AUTHORIZED_PARTIES=https://tradecentral.your-domain.example
+EDGE_CORS_ORIGINS=https://tradecentral.your-domain.example
 ```
 
-The critical settings:
+The server refuses to start in public mode without the Clerk public key,
+authorized party, exact owner ID, or with local auth. Use a dedicated
+Cloudflare Tunnel hostname for the loopback API; protect the tunnel hostname
+itself as well, because it is a separate public route. Configure the Worker
+with `API_PROXY_ENABLED=true`, `PUBLIC_ORIGIN` set to the exact Worker HTTPS
+origin, and `API_UPSTREAM` set to the exact tunnel HTTPS origin. Never put an
+API hostname in the committed `wrangler.toml` defaults.
 
-| Variable | Value | Why |
-|----------|-------|-----|
-| `EDGE_HOST` | `127.0.0.1` | Server stays loopback — only cloudflared reaches it |
-| `EDGE_AUTH_MODE` | `local` | Access at the edge is the gate; no Clerk JWT needed |
-| `EDGE_CORS_ORIGINS` | `https://tradecentral.syriltj1.workers.dev` | POST endpoints and preflight are not CSRF-blocked through the Worker |
-| `EDGE_REQUIRE_AUTH` | `0` | Server is loopback-only; auth is enforced by Access |
+Public mode disables the API's three unattended warm/sync jobs unless
+`EDGE_BACKGROUND_JOBS=1` is explicitly set. The owner can still request live
+research data; those requests can consume provider quota. This setting avoids
+provider work merely because the server is running.
 
-### 5. Verify
+Before enabling the Worker proxy, verify all of these directly against the
+tunnel and again through the Worker:
 
-1. Open `https://tradecentral.syriltj1.workers.dev` in a browser — you should
-   see the Access login, then the dashboard after authenticating.
-2. Confirm `/api/health` returns `{"status": "ok"}` through the same origin.
-3. Confirm a POST endpoint (e.g. trigger a quick scan) succeeds without a
-   cross-site-write error.
+- Missing bearer token and another valid Clerk user both receive 401 before
+  provider work begins.
+- The owner receives data with a valid session token; malformed/expired tokens
+  receive 401.
+- POST from a foreign Origin receives 403; GET cannot start a scan.
+- The browser renders missing/stale states when the API is offline.
 
-## Security notes
+## Cost boundaries
 
-- The Python server binds to `127.0.0.1`. It is unreachable from the network
-  even if the tunnel is down or misconfigured.
-- Cloudflare Access verifies the operator identity at the edge. The Worker and
-  the Python server do not re-verify the Access JWT (the tunnel is the only
-  path to the server), which is the same trust boundary as a loopback-only
-  deployment.
-- Mutating endpoints (`/api/trigger_scan`, `/api/plays/run`,
-  `/api/options/backfill_oi`, `/api/vpa/analyze`) check the `Origin` header
-  against `EDGE_CORS_ORIGINS` to block cross-site writes. The Worker hostname
-  must be allowlisted for POST to work through the proxy.
-- Provider credentials stay in the local `.env` and are never exposed to the
-  browser or Cloudflare.
+- Cloudflare Workers Free has a hard daily Worker request limit; static asset
+  requests are free and unlimited. Keep static assets asset-first and `/api/*`
+  Worker-first. See [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
+  and [static asset billing](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/).
+- Clerk Hobby is free for this single owner. Native Waitlist mode is used;
+  Clerk's identifier Allowlist is a paid feature. See [Clerk restrictions](https://clerk.com/docs/authentication/allowlist)
+  and [pricing](https://clerk.com/pricing).
+- Convex Free has hard resource caps. The only deployed functions read or write
+  one owner watchlist, with at most 40 symbols and no polling. See [Convex Free
+  limits](https://docs.convex.dev/production/state/limits) and
+  [pricing FAQ](https://www.convex.dev/pricing/faq).
+- Provider subscriptions and local compute are separate costs. Enabling a
+  public Python API can consume provider quota even when Cloudflare, Clerk,
+  and Convex remain within their free plans.

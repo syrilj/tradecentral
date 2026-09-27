@@ -4336,6 +4336,13 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   background: var(--void);
 }
 
+@media (max-width: 780px) {
+  .options-view {
+    /* The shell switches to 12px stage padding at this breakpoint. */
+    margin: calc(var(--s3) * -1);
+  }
+}
+
 .options-view :deep(.panel) {
   border-radius: var(--r-content);
   border: var(--hair) solid var(--rule);
@@ -4373,9 +4380,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 .command {
   display: flex;
   flex-direction: column;
-  gap: var(--s2);
-  min-height: 56px;
-  padding: var(--s2) var(--s4);
+  gap: var(--s3);
+  min-height: 72px;
+  padding: var(--s3) var(--s4);
   border: var(--hair) solid var(--glass-border);
   border-left: 1px solid var(--phosphor);
   /* Content-layer command bar: solid panel, no backdrop blur (glass piles). */
@@ -4585,9 +4592,9 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
   font-size: var(--t-micro);
 }
 .active-symbol {
-  font-size: var(--t-fig);
-  font-weight: 600;
-  letter-spacing: var(--track-tight);
+  font-size: var(--t-view-title);
+  font-weight: 700;
+  letter-spacing: var(--track-display);
   color: var(--ink);
 }
 .slash {
@@ -6258,7 +6265,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
 }
 
 .view-label {
-  font-size: var(--t-micro);
+  font-size: var(--t-tiny);
   color: var(--phosphor-dim);
   font-weight: 700;
   letter-spacing: 0.12em;

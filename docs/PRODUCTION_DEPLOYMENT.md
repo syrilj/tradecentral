@@ -40,7 +40,10 @@ npm --prefix dashboard run build
 python -m pytest -q tests/e2e/test_tier1_features.py tests/e2e/test_options_toolkit.py
 ```
 
-`VITE_CLERK_PUBLISHABLE_KEY`, `VITE_EDGE_ALLOWED_EMAILS`, and any `VITE_API_BASE_URL` must be present at frontend build time. Prefer same-origin API hosting and leave `VITE_API_BASE_URL` empty.
+Use `npm run build:public` for a public build. It requires a Clerk production
+publishable key, Clerk mode, and a production Convex URL. The owner email is
+fixed in the SPA; the API and Convex use the exact Clerk user ID. Prefer
+same-origin API hosting and leave `VITE_API_BASE_URL` empty.
 
 ## Server environment
 
@@ -50,10 +53,12 @@ Use the real HTTPS browser origin in both allowlists:
 EDGE_HOST=0.0.0.0
 PORT=8787
 EDGE_REQUIRE_AUTH=1
+EDGE_PUBLIC_DEPLOYMENT=1
+EDGE_AUTH_MODE=clerk
 CLERK_JWT_KEY="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
 CLERK_AUTHORIZED_PARTIES=https://trade.example.com
 EDGE_CORS_ORIGINS=https://trade.example.com
-EDGE_ALLOWED_USER_IDS=user_example
+EDGE_OWNER_USER_ID=user_example
 EDGE_MAX_CONCURRENT_REQUESTS=32
 EDGE_SOCKET_TIMEOUT_S=30
 EDGE_ACCESS_LOG=1
@@ -65,7 +70,7 @@ Start the built application with:
 python tools/api_server.py --no-browser
 ```
 
-The server refuses to bind to a non-loopback host unless backend JWT verification and an explicit non-wildcard CORS allowlist are configured. `/api/health` remains public for load-balancer health checks; all other API routes require a valid Clerk session token when `EDGE_REQUIRE_AUTH=1`.
+The server refuses to bind to a non-loopback host unless backend JWT verification and an explicit non-wildcard CORS allowlist are configured. Set `EDGE_PUBLIC_DEPLOYMENT=1` when a tunnel or proxy can reach a loopback listener; this requires Clerk mode and an exact owner ID too. `/api/health` remains public for load-balancer health checks; all other API routes require a valid Clerk session token.
 
 Clerk's backend verifier validates the RS256 signature, expiry/not-before claims, token type, and `azp` authorized-party claim locally using `CLERK_JWT_KEY`. `EDGE_ALLOWED_USER_IDS` adds an application-level operator allowlist. Rotate Clerk keys through the deployment secret store, never through the repository.
 

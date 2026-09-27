@@ -270,6 +270,7 @@ function expiryLabel(e: string): string {
               type="text"
               spellcheck="false"
               placeholder="TICKER"
+              aria-label="Underlier symbol"
               @keyup.enter="loadSymbol(symbolInput)"
             />
             <button type="button" class="btn label" @click="loadSymbol(symbolInput)">Load</button>
@@ -381,48 +382,55 @@ function expiryLabel(e: string): string {
               LARGEST LOAD <span class="fig">{{ usd(dominantStrike.strike, 0) }}</span>
             </span>
           </header>
-          <svg
-            class="strike-chart"
-            :viewBox="`0 0 ${CH.w} ${CH.h}`"
-            role="img"
-            aria-label="Diverging vanna flow by strike"
+          <div
+            class="chart-scroll"
+            role="region"
+            aria-label="Vanna flow by strike chart"
+            tabindex="0"
           >
-            <!-- gridlines + value axis -->
-            <g v-for="t in yTicks" :key="`y-${t}`" class="gridline">
-              <line :x1="CH.left" :x2="CH.w - CH.right" :y1="yScale(t)" :y2="yScale(t)" />
-              <text class="y-label" :x="CH.left - 8" :y="yScale(t) + 3.5" text-anchor="end">
-                {{ axisMoney(t) }}
-              </text>
-            </g>
-            <line class="zero-line" :x1="CH.left" :x2="CH.w - CH.right" :y1="zeroY" :y2="zeroY" />
+            <svg
+              class="strike-chart"
+              :viewBox="`0 0 ${CH.w} ${CH.h}`"
+              role="img"
+              aria-label="Diverging vanna flow by strike"
+            >
+              <!-- gridlines + value axis -->
+              <g v-for="t in yTicks" :key="`y-${t}`" class="gridline">
+                <line :x1="CH.left" :x2="CH.w - CH.right" :y1="yScale(t)" :y2="yScale(t)" />
+                <text class="y-label" :x="CH.left - 8" :y="yScale(t) + 3.5" text-anchor="end">
+                  {{ axisMoney(t) }}
+                </text>
+              </g>
+              <line class="zero-line" :x1="CH.left" :x2="CH.w - CH.right" :y1="zeroY" :y2="zeroY" />
 
-            <!-- bars: call column left of slot centre, put column right -->
-            <g v-for="b in strikeBars" :key="`s-${b.strike}`">
-              <rect
-                class="bar call"
-                :x="b.cx - b.bw - 0.5"
-                :y="b.callY"
-                :width="b.bw"
-                :height="b.callH"
-              />
-              <rect class="bar put" :x="b.cx + 0.5" :y="b.putY" :width="b.bw" :height="b.putH" />
-            </g>
+              <!-- bars: call column left of slot centre, put column right -->
+              <g v-for="b in strikeBars" :key="`s-${b.strike}`">
+                <rect
+                  class="bar call"
+                  :x="b.cx - b.bw - 0.5"
+                  :y="b.callY"
+                  :width="b.bw"
+                  :height="b.callH"
+                />
+                <rect class="bar put" :x="b.cx + 0.5" :y="b.putY" :width="b.bw" :height="b.putH" />
+              </g>
 
-            <!-- guides: spot + vanna pivot -->
-            <g v-if="spotX != null" class="guide spot-guide">
-              <line :x1="spotX" :x2="spotX" :y1="CH.top" :y2="CH.bottom" />
-              <text :x="spotX" :y="CH.top - 8" text-anchor="middle">SPOT</text>
-            </g>
-            <g v-if="pivotX != null" class="guide pivot-guide" data-testid="vanna-pivot-marker">
-              <line :x1="pivotX" :x2="pivotX" :y1="CH.top" :y2="CH.bottom" />
-              <text :x="pivotX" :y="CH.bottom + 18" text-anchor="middle">VANNA PIVOT</text>
-            </g>
+              <!-- guides: spot + vanna pivot -->
+              <g v-if="spotX != null" class="guide spot-guide">
+                <line :x1="spotX" :x2="spotX" :y1="CH.top" :y2="CH.bottom" />
+                <text :x="spotX" :y="CH.top - 8" text-anchor="middle">SPOT</text>
+              </g>
+              <g v-if="pivotX != null" class="guide pivot-guide" data-testid="vanna-pivot-marker">
+                <line :x1="pivotX" :x2="pivotX" :y1="CH.top" :y2="CH.bottom" />
+                <text :x="pivotX" :y="CH.bottom + 18" text-anchor="middle">VANNA PIVOT</text>
+              </g>
 
-            <!-- strike axis -->
-            <g v-for="t in strikeTicks" :key="`x-${t.strike}`" class="x-tick">
-              <text :x="t.x" :y="CH.h - 8" text-anchor="middle">{{ usd(t.strike, 0) }}</text>
-            </g>
-          </svg>
+              <!-- strike axis -->
+              <g v-for="t in strikeTicks" :key="`x-${t.strike}`" class="x-tick">
+                <text :x="t.x" :y="CH.h - 8" text-anchor="middle">{{ usd(t.strike, 0) }}</text>
+              </g>
+            </svg>
+          </div>
           <p class="block-caption">
             Call vanna above the midline, puts below (signed). The pivot is the strike where net
             vanna flips sign — the mechanical hedge impulse reverses as spot crosses it.
@@ -438,42 +446,44 @@ function expiryLabel(e: string): string {
               {{ dominantExpiry.dte }}D
             </span>
           </header>
-          <table class="expiry-table">
-            <thead>
-              <tr>
-                <th class="label">EXPIRY</th>
-                <th class="label">DTE</th>
-                <th class="label num">CALL</th>
-                <th class="label num">PUT</th>
-                <th class="label num">NET</th>
-                <th class="label">LOAD</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in expiryRows"
-                :key="row.expiry"
-                :class="{ 'is-dominant': dominantExpiry && row.expiry === dominantExpiry.expiry }"
-              >
-                <td class="fig">{{ expiryLabel(row.expiry) }}</td>
-                <td class="fig">{{ row.dte }}</td>
-                <td class="fig num">{{ gexMoney(row.call_vanna_flow) }}</td>
-                <td class="fig num">{{ gexMoney(row.put_vanna_flow) }}</td>
-                <td class="fig num" :class="row.net_vanna_flow < 0 ? 'tone-put' : 'tone-call'">
-                  {{ gexMoney(row.net_vanna_flow) }}
-                </td>
-                <td class="load-cell">
-                  <div class="load-track">
-                    <div
-                      class="load-fill"
-                      :class="row.net_vanna_flow < 0 ? 'put' : 'call'"
-                      :style="{ width: expiryNetWidth(row) + '%' }"
-                    />
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-scroll" role="region" aria-label="Vanna flow by expiry" tabindex="0">
+            <table class="expiry-table">
+              <thead>
+                <tr>
+                  <th class="label">EXPIRY</th>
+                  <th class="label">DTE</th>
+                  <th class="label num">CALL</th>
+                  <th class="label num">PUT</th>
+                  <th class="label num">NET</th>
+                  <th class="label">LOAD</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in expiryRows"
+                  :key="row.expiry"
+                  :class="{ 'is-dominant': dominantExpiry && row.expiry === dominantExpiry.expiry }"
+                >
+                  <td class="fig">{{ expiryLabel(row.expiry) }}</td>
+                  <td class="fig">{{ row.dte }}</td>
+                  <td class="fig num">{{ gexMoney(row.call_vanna_flow) }}</td>
+                  <td class="fig num">{{ gexMoney(row.put_vanna_flow) }}</td>
+                  <td class="fig num" :class="row.net_vanna_flow < 0 ? 'tone-put' : 'tone-call'">
+                    {{ gexMoney(row.net_vanna_flow) }}
+                  </td>
+                  <td class="load-cell">
+                    <div class="load-track">
+                      <div
+                        class="load-fill"
+                        :class="row.net_vanna_flow < 0 ? 'put' : 'call'"
+                        :style="{ width: expiryNetWidth(row) + '%' }"
+                      />
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <p class="block-caption">
             DTE ascending. The shortest dated load is what the event reprices first — on FOMC week
             the front expiry dominates the board.
@@ -509,10 +519,22 @@ function expiryLabel(e: string): string {
   background: var(--panel-hi);
   color: var(--ink);
   padding: 0 var(--s3);
+  transition:
+    border-color var(--dur-fast, 120ms) ease,
+    background-color var(--dur-fast, 120ms) ease,
+    color var(--dur-fast, 120ms) ease;
 }
 .btn {
   cursor: pointer;
   color: var(--ink-soft);
+}
+.btn:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+  background: var(--surface-base);
+}
+.btn:active {
+  background: var(--panel-hi);
 }
 .btn:focus-visible,
 .input:focus-visible {
@@ -692,6 +714,7 @@ function expiryLabel(e: string): string {
   align-items: baseline;
   gap: var(--s4);
   margin-bottom: var(--s2);
+  flex-wrap: wrap;
 }
 .block-head h3 {
   margin: 0;
@@ -731,6 +754,19 @@ function expiryLabel(e: string): string {
   width: 100%;
   height: auto;
   display: block;
+}
+.chart-scroll,
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: var(--rule-hi) transparent;
+  scrollbar-width: thin;
+}
+.chart-scroll:focus-visible,
+.table-scroll:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 .gridline line {
   stroke: var(--grid);
@@ -827,8 +863,47 @@ function expiryLabel(e: string): string {
   }
 }
 @media (max-width: 640px) {
+  .controls {
+    gap: var(--s3);
+    align-items: stretch;
+  }
+  .symbol-ctl {
+    flex: 1 1 100%;
+  }
+  .sym-row .input {
+    flex: 1;
+    min-width: 0;
+  }
+  .mechanic-caption {
+    flex-basis: 100%;
+  }
+  .event-strip {
+    gap: var(--s2);
+    padding: var(--s2) var(--s3);
+  }
+  .event-facts {
+    flex-wrap: wrap;
+    gap: var(--s1) var(--s2);
+  }
   .summary-row {
     grid-template-columns: 1fr;
+    gap: var(--s3);
+  }
+  .stat {
+    padding: var(--s2) 0;
+    border-bottom: var(--hair) solid var(--rule-faint);
+  }
+  .stat:last-child {
+    border-bottom: 0;
+  }
+  .strike-chart {
+    min-width: 620px;
+  }
+  .expiry-table {
+    min-width: 560px;
+  }
+  .label.dominant {
+    margin-left: 0;
   }
 }
 </style>

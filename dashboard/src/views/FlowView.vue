@@ -137,7 +137,7 @@ const flowTapeStats = computed(() => {
 </script>
 
 <template>
-  <div class="flow-view">
+  <div class="flow-view" :aria-busy="unusual.loading.value">
     <!-- ── Slim control strip (replaces verbose header + HUD) ─────────────── -->
     <!-- Scope: PROVIDER TAPE · SWEEPS & BLOCKS · HEURISTIC FLAGS · POWER ALERTS · WATCHLIST ALERTS · 15s POLL -->
     <header class="fv-strip" aria-label="Options flow control strip">
@@ -235,6 +235,7 @@ const flowTapeStats = computed(() => {
   border-radius: var(--r-lg);
   background: var(--surface-base);
   box-shadow: var(--shadow-1);
+  transition: border-color var(--dur-fast, 120ms) ease;
 }
 
 /* ── Live indicator ──────────────────────────────────────────────────────── */
@@ -298,6 +299,7 @@ const flowTapeStats = computed(() => {
   gap: 1px;
   padding: 3px var(--s3);
   border-right: var(--hair) solid var(--rule);
+  transition: background-color var(--dur-fast, 120ms) ease;
 }
 .fv-chip:last-child {
   border-right: none;
@@ -359,6 +361,33 @@ const flowTapeStats = computed(() => {
   }
   .fv-live-sub {
     display: none;
+  }
+  .fv-live {
+    padding-right: var(--s2);
+  }
+  .fv-chips {
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+    border-top: var(--hair) solid var(--rule);
+    padding-top: var(--s1);
+  }
+  .fv-chip {
+    padding: var(--s1) var(--s2);
+    border-right: 0;
+    border-left: var(--hair) solid var(--rule);
+  }
+  .fv-chip:hover {
+    background: var(--panel-hi);
+  }
+}
+
+@media (max-width: 420px) {
+  .fv-strip {
+    padding-inline: var(--s2);
+  }
+  .fv-chip-val {
+    font-size: var(--t-tiny);
   }
 }
 </style>

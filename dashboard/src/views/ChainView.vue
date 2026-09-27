@@ -16,7 +16,8 @@ export interface SuggestionItem {
   isCurated: boolean
 }
 
-export type LoadingStage = 'idle' | 'resolving' | 'fetching' | 'mapping' | 'rendering' | 'complete' | 'error'
+export type LoadingStage =
+  'idle' | 'resolving' | 'fetching' | 'mapping' | 'rendering' | 'complete' | 'error'
 
 export interface LoadingStageItem {
   id: 'resolving' | 'fetching' | 'mapping' | 'rendering'
@@ -27,9 +28,24 @@ export interface LoadingStageItem {
 
 const STAGES: readonly LoadingStageItem[] = [
   { id: 'resolving', shortLabel: 'Taxonomy', label: 'Resolving symbol & sector taxonomy', pct: 20 },
-  { id: 'fetching', shortLabel: 'Discovery', label: 'Discovering multi-tier suppliers & customers', pct: 50 },
-  { id: 'mapping', shortLabel: 'Elasticity', label: 'Computing elasticity & CapEx exposure', pct: 75 },
-  { id: 'rendering', shortLabel: 'Topology', label: 'Compiling topology & rendering graph', pct: 90 },
+  {
+    id: 'fetching',
+    shortLabel: 'Discovery',
+    label: 'Discovering multi-tier suppliers & customers',
+    pct: 50,
+  },
+  {
+    id: 'mapping',
+    shortLabel: 'Elasticity',
+    label: 'Computing elasticity & CapEx exposure',
+    pct: 75,
+  },
+  {
+    id: 'rendering',
+    shortLabel: 'Topology',
+    label: 'Compiling topology & rendering graph',
+    pct: 90,
+  },
 ] as const
 
 const CURATED_TICKERS: Record<string, { name: string; sector: string }> = {
@@ -786,7 +802,9 @@ onBeforeUnmount(() => {
                 aria-autocomplete="list"
                 :aria-expanded="showSuggestions && suggestions.length > 0"
                 aria-controls="suggestions-list"
-                :aria-activedescendant="highlightedIndex >= 0 ? `suggestion-opt-${highlightedIndex}` : undefined"
+                :aria-activedescendant="
+                  highlightedIndex >= 0 ? `suggestion-opt-${highlightedIndex}` : undefined
+                "
                 aria-label="Search equity symbol"
                 placeholder="Type Any Stock (AAPL, AMD, COHR, UBER)..."
                 class="sym-search-input"
@@ -932,12 +950,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Resilient Dismissible Error Banner (decoupled from !payload) -->
-    <div
-      v-if="activeError"
-      class="error-banner"
-      data-test="error-banner"
-      role="alert"
-    >
+    <div v-if="activeError" class="error-banner" data-test="error-banner" role="alert">
       <div class="error-msg-wrap">
         <span class="error-icon" aria-hidden="true">⚠</span>
         <div class="error-text-block">

@@ -274,9 +274,7 @@ export function formatContractValue(millions: number | null | undefined): string
   return `$${millions.toFixed(0)}M / yr`
 }
 
-export function strengthTone(
-  strength: number | null | undefined,
-): 'high' | 'mid' | 'low' {
+export function strengthTone(strength: number | null | undefined): 'high' | 'mid' | 'low' {
   if (strength == null) return 'mid'
   if (strength >= 0.8) return 'high'
   if (strength >= 0.5) return 'mid'
@@ -291,7 +289,10 @@ export function generateRelationshipNarrative(
   const catText = edge.supply_category ? ` supplying ${edge.supply_category}` : ''
   const strengthPct = Math.round(edge.strength * 100)
   let narrative = `${edge.source} is a critical partner that ${relText} ${edge.target}${catText}, maintaining an estimated ${strengthPct}% dependency link.`
-  if (edge.annual_contract_value_est_m != null && Number.isFinite(edge.annual_contract_value_est_m)) {
+  if (
+    edge.annual_contract_value_est_m != null &&
+    Number.isFinite(edge.annual_contract_value_est_m)
+  ) {
     narrative += ` Estimated annual procurement / contract value is ~${formatContractValue(edge.annual_contract_value_est_m)}.`
   }
   if (

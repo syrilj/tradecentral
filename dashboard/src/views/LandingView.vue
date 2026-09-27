@@ -2,9 +2,8 @@
 import { computed, inject, onMounted, onUnmounted, ref } from 'vue'
 import gsap from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
-import type { Readiness, StatusPayload } from '@/api'
-import { api, type MarketClock } from '@/api'
-import { useResource, type Resource } from '@/composables/useResource'
+import { type MarketClock, type Readiness, type StatusPayload } from '@/api'
+import { type Resource } from '@/composables/useResource'
 import { num, DASH } from '@/format'
 
 import AppIcon from '@/components/AppIcon.vue'
@@ -14,8 +13,8 @@ import GexFlowVisual from '@/components/GexFlowVisual.vue'
 import McLiveHero from '@/components/McLiveHero.vue'
 import PrincipleDiagram from '@/components/PrincipleDiagram.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
-import DeskTelemetryPlate from '@/components/DeskTelemetryPlate.vue'
 import PayoffPlate from '@/components/PayoffPlate.vue'
+import optionsPositioningCapture from '@/assets/showcase/options-positioning.png'
 
 import { impliedRange } from '@/charts/landing-math'
 
@@ -30,8 +29,9 @@ gsap.registerPlugin(ScrollTrigger)
  * with pixel arrows, orange/yellow accents, and navy bands for the evidence
  * and closing sections. Blocks fall into place; the headline decodes.
  *
- * Market figures shown here come from the same loopback resources as the
- * operator shell. Product diagrams carry only labels and system boundaries;
+ * Market figures, when available to an authenticated operator, come from the
+ * same resources as the operator shell. Public visitors do not trigger market
+ * data requests. Product diagrams carry only labels and system boundaries;
  * there are no illustrative quotes, returns, or invented model scores.
  *
  * The hero is a LIVE Monte Carlo simulation (McLiveHero): GBM paths draw in
@@ -39,11 +39,12 @@ gsap.registerPlugin(ScrollTrigger)
  * closed-form lognormal density. Below, an interactive Black-Scholes
  * workbench (BsLab) lets a visitor drag volatility/expiry/strike and watch
  * real Greeks respond. Scroll animation is driven by GSAP; the scramble and
- * fall-in entrances are rAF/IntersectionObserver. No mockup images anywhere.
+ * fall-in entrances are rAF/IntersectionObserver. The workstation tab shows a
+ * capture from an actual local research session.
  */
 const status = inject<Resource<StatusPayload>>('status')!
 const readiness = inject<Resource<Readiness>>('readiness')!
-const clock = useResource<MarketClock>(() => api.marketClock(), { intervalMs: 60_000 })
+const clock = inject<Resource<MarketClock>>('marketClock')!
 
 const session = computed(() => {
   switch (clock.data.value?.market_session) {
@@ -71,7 +72,7 @@ const shadow = computed(() => {
 })
 
 /* ── Interactive view modes for hero and flow visual banners ────────────── */
-const heroViewMode = ref<'mc' | 'workstation'>('mc')
+const heroViewMode = ref<'mc' | 'workstation'>('workstation')
 
 /* ── Rotating word in the hero lede ────────────────────────────────────────── */
 /* The rotating slot is sized to the longest of these and never resizes (see
@@ -363,7 +364,7 @@ onUnmounted(() => {
           </RouterLink>
           <RouterLink
             class="button button-primary"
-            :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }"
+            :to="{ name: 'waitlist', query: { redirect: '/flow' } }"
           >
             Join now
             <svg
@@ -429,7 +430,7 @@ onUnmounted(() => {
           <div class="hero-actions">
             <RouterLink
               class="button button-primary"
-              :to="{ name: 'auth', query: { redirect: '/flow' } }"
+              :to="{ name: 'waitlist', query: { redirect: '/flow' } }"
             >
               Request operator access
               <svg
@@ -475,11 +476,11 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- ── live Monte Carlo hero instrument & workstation preview ─────── -->
+        <!-- ── actual workstation capture and interactive Monte Carlo ─────── -->
         <div class="hero-visual">
           <figure
             class="instrument-frame"
-            aria-label="Live Monte Carlo simulation and quantitative workstation preview. Structural model and operational interface telemetry."
+            aria-label="Actual options workstation capture and interactive Monte Carlo simulation"
           >
             <figcaption>
               <div class="fig-toggle-group" role="tablist" aria-label="Hero visual view">
@@ -507,7 +508,7 @@ onUnmounted(() => {
               <span class="fig-state">{{
                 heroViewMode === 'mc'
                   ? `STRUCTURAL · 1σ [${heroRange.p1Low.toFixed(1)}–${heroRange.p1High.toFixed(1)}]`
-                  : 'OPERATOR TELEMETRY'
+                  : 'ACTUAL WORKSPACE · SPY'
               }}</span>
             </figcaption>
 
@@ -525,9 +526,14 @@ onUnmounted(() => {
             </div>
 
             <div v-else class="hero-desk-stage">
-              <!-- Live structural desk plate: every level on it is computed
-                   by structuralGexProfile, not painted. -->
-              <DeskTelemetryPlate />
+              <img
+                :src="optionsPositioningCapture"
+                alt="Actual TradeCentral options positioning view for SPY, showing gamma exposure by strike, dealer positioning, and source status"
+                width="1200"
+                height="750"
+                decoding="async"
+                fetchpriority="high"
+              />
             </div>
 
             <footer>
@@ -543,11 +549,17 @@ onUnmounted(() => {
                 >
               </template>
               <template v-else>
-                <span class="fig-legend"><i class="leg-path" />Γ by strike</span>
-                <span class="fig-legend"><i class="leg-hist" />Flip boundary</span>
-                <span class="fig-legend"><i class="leg-trace" />Walls</span>
-                <span class="fig-legend"><i class="leg-med" />Regime ribbon</span>
-                <strong>STRUCTURAL · S₀=100 · σ=30% · computed in-browser</strong>
+                <span>Captured local research session · Sep 2026</span>
+                <strong>Historical source context shown in app</strong>
+                <a
+                  class="capture-link"
+                  :href="optionsPositioningCapture"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Open full size options positioning screenshot in a new tab"
+                >
+                  View full capture ↗
+                </a>
               </template>
             </footer>
           </figure>
@@ -720,7 +732,7 @@ onUnmounted(() => {
             <p>Flow, positioning, and the research path for the current preview.</p>
             <RouterLink
               class="button button-primary"
-              :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }"
+              :to="{ name: 'waitlist', query: { redirect: '/flow' } }"
             >
               Join the access list
               <span aria-hidden="true">→</span>
@@ -775,7 +787,7 @@ onUnmounted(() => {
           </p>
           <RouterLink
             class="button button-primary"
-            :to="{ name: 'auth', query: { redirect: '/flow' } }"
+            :to="{ name: 'waitlist', query: { redirect: '/flow' } }"
           >
             Join the access list
             <svg
@@ -1456,6 +1468,17 @@ onUnmounted(() => {
   margin-left: auto;
   font-weight: 400;
   color: var(--ink-faint);
+}
+.capture-link {
+  color: var(--ink);
+  text-underline-offset: 3px;
+}
+.capture-link:hover {
+  color: var(--tc-orange, #ff5229);
+}
+.capture-link:focus-visible {
+  outline: 2px solid var(--tc-orange, #ff5229);
+  outline-offset: 3px;
 }
 .fig-legend {
   display: inline-flex;
@@ -2491,6 +2514,13 @@ onUnmounted(() => {
   height: 360px;
   overflow: hidden;
   border-bottom: var(--hair) solid var(--rule);
+}
+.hero-desk-stage img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
 }
 
 .pf-visual-stack {

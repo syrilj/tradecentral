@@ -75,6 +75,11 @@ Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Al
          snapshot. Final freshness and execution policy stays deterministic;
          response is decision support only and never authorizes an order.
 
+  GET  /api/decision-tree/backtest[?force=1]
+      -> Strict last-completed-week holdout for a causal daily CART model.
+         Features stop at t close; simulated fills use t+1 open-to-close;
+         model selection and calibration end before the holdout starts.
+
   GET  /api/price-attractors?symbol=X[&force=1][&rate=0.045][&max_dte=60]
       -> Real-time market regime classification, structural price magnet
          levels (Call/Put Walls, Gamma Flip, Max Pain, Kinematic Drift, POC),
@@ -241,6 +246,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 import argparse
+import copy
 from dataclasses import asdict
 import gzip
 import http.server
@@ -251,6 +257,7 @@ import os
 import re
 import socket
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -340,6 +347,14 @@ RUNS_DIR = EDGE_DIR / "runs"
 DOCS_DIR = EDGE_DIR / "docs"
 TOOLS_DIR = EDGE_DIR / "tools"
 DIST_DIR = RUNS_DIR / "dashboard_dist"
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(EDGE_DIR / ".env")
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
 
 PORT = 8787
 LOOPBACK_HOST = "127.0.0.1"
@@ -637,12 +652,22 @@ def _local_auth_mode() -> bool:
 
 
 def _auth_required() -> bool:
-    # Local workstation mode keeps backend JWT verification optional because
-    # the API only binds to loopback; every other posture defers to
-    # EDGE_REQUIRE_AUTH.
+    # A public Worker/Tunnel deployment can still reach a loopback listener.
+    # Make that posture explicit and fail closed even if local mode was left in
+    # an old .env file.
+    if _env_bool("EDGE_PUBLIC_DEPLOYMENT", default=False):
+        return True
     if _local_auth_mode():
         return False
     return _env_bool("EDGE_REQUIRE_AUTH", default=False)
+
+
+def _background_jobs_enabled() -> bool:
+    """Avoid provider calls without an owner request on public previews."""
+    return _env_bool(
+        "EDGE_BACKGROUND_JOBS",
+        default=not _env_bool("EDGE_PUBLIC_DEPLOYMENT", default=False),
+    )
 
 
 def _cors_origins() -> list[str]:
@@ -656,7 +681,10 @@ def _runtime_config_errors(host: str) -> list[str]:
     """Return unsafe deployment settings so startup can fail before binding."""
     errors: list[str] = []
     exposed = not _is_loopback_host(host)
+    public = _env_bool("EDGE_PUBLIC_DEPLOYMENT", default=False)
     require_auth = _auth_required()
+    if public and _local_auth_mode():
+        errors.append("EDGE_AUTH_MODE=clerk is required for a public deployment")
     if exposed and not require_auth:
         errors.append("EDGE_REQUIRE_AUTH=1 is required when EDGE_HOST is not loopback")
     if require_auth:
@@ -664,6 +692,8 @@ def _runtime_config_errors(host: str) -> list[str]:
             errors.append("CLERK_JWT_KEY is required when EDGE_REQUIRE_AUTH=1")
         if not _env_csv("CLERK_AUTHORIZED_PARTIES"):
             errors.append("CLERK_AUTHORIZED_PARTIES is required when EDGE_REQUIRE_AUTH=1")
+    if public and not os.environ.get("EDGE_OWNER_USER_ID", "").strip():
+        errors.append("EDGE_OWNER_USER_ID is required for a public deployment")
     elif _local_auth_mode() and not _is_loopback_host(host):
         # Belt and braces: local mode must never silently serve off-loopback.
         errors.append("EDGE_AUTH_MODE=local is only valid when EDGE_HOST is a loopback address")
@@ -719,6 +749,11 @@ def _verify_clerk_request(request: Any) -> tuple[bool, str | None, str | None]:
 
     payload = state.payload if isinstance(state.payload, Mapping) else {}
     user_id = str(payload.get("sub") or "")
+    owner_user_id = os.environ.get("EDGE_OWNER_USER_ID", "").strip()
+    if _env_bool("EDGE_PUBLIC_DEPLOYMENT", default=False) and not owner_user_id:
+        return False, user_id or None, "Server owner authorization is not configured"
+    if owner_user_id and user_id != owner_user_id:
+        return False, user_id or None, "Operator is not authorized for this service"
     allowed_users = set(_env_csv("EDGE_ALLOWED_USER_IDS"))
     if allowed_users and user_id not in allowed_users:
         return False, user_id or None, "Operator is not authorized for this service"
@@ -2362,7 +2397,11 @@ def _vol_target_trend_payload(
     now_ann_vol = float(result.ann_vol[last_i]) if math.isfinite(result.ann_vol[last_i]) else None
     now_lev = float(result.leverage[last_i]) if math.isfinite(result.leverage[last_i]) else None
     now_px = float(close_arr[last_i])
-    target_qty = (capital * now_lev / now_px) if (now_lev is not None and now_lev > 0 and now_px > 0) else 0.0
+    target_qty = (
+        (capital * now_lev / now_px)
+        if (now_lev is not None and now_lev > 0 and now_px > 0)
+        else 0.0
+    )
 
     current_up = bool(result.up_trend[last_i])
     current_signal = "BUY" if (current_up and (now_lev is not None and now_lev > 0)) else "SELL"
@@ -2386,8 +2425,16 @@ def _vol_target_trend_payload(
         "signal_px": _safe_round(signal_px, 4),
         "signal_bars": int(signal_bars),
         "signal_pnl_pct": _safe_round(signal_pnl_pct, 2),
-        "ema_fast": _safe_round(float(result.ema_fast[last_i]), 4) if math.isfinite(result.ema_fast[last_i]) else None,
-        "ema_slow": _safe_round(float(result.ema_slow[last_i]), 4) if math.isfinite(result.ema_slow[last_i]) else None,
+        "ema_fast": (
+            _safe_round(float(result.ema_fast[last_i]), 4)
+            if math.isfinite(result.ema_fast[last_i])
+            else None
+        ),
+        "ema_slow": (
+            _safe_round(float(result.ema_slow[last_i]), 4)
+            if math.isfinite(result.ema_slow[last_i])
+            else None
+        ),
         "ann_vol": _safe_round(now_ann_vol, 4) if now_ann_vol is not None else None,
         "target_vol": target_vol,
         "leverage": _safe_round(now_lev, 3) if now_lev is not None else None,
@@ -3111,7 +3158,9 @@ def _systematic_signals_payload(symbol: str, query: dict) -> tuple[dict, int]:
 def _systematic_backtest_payload(symbol: str, query: dict) -> tuple[dict, int]:
     """Run full event-driven backtest simulation for systematic microstructure strategy."""
     np = _get_np()
-    window = query.get("window", ["1y"])[0]
+    window = str(query.get("window", ["1y"])[0]).lower()
+    if window == "all":
+        window = "max"
     if window not in WINDOW_OFFSETS:
         window = "1y"
     capital = _safe_float(
@@ -3495,10 +3544,15 @@ def _sync_market_data(force: bool = False) -> dict[str, Any]:
                 df_new = fetch_vol_data(start_date="2015-01-01", end_date=today)
                 if df_new is not None and not df_new.empty:
                     updated_items.append("vol_complex")
-                    print(f"[api_server] auto-sync: vol_complex updated ({len(df_new)} rows)", flush=True)
+                    print(
+                        f"[api_server] auto-sync: vol_complex updated ({len(df_new)} rows)",
+                        flush=True,
+                    )
             except Exception as e:  # noqa: BLE001
                 errors.append(f"vol_complex: {e}")
-                print(f"[api_server] auto-sync vol_complex failed: {e}", file=sys.stderr, flush=True)
+                print(
+                    f"[api_server] auto-sync vol_complex failed: {e}", file=sys.stderr, flush=True
+                )
 
         # 2. Check & update 1d OHLCV parquets for core active universe
         core_symbols = ["SPY", "QQQ", "DIA", "IWM", "CRDO", "NVDA", "TSLA", "AAPL", "MSFT"]
@@ -3521,7 +3575,10 @@ def _sync_market_data(force: bool = False) -> dict[str, Any]:
             try:
                 from tools.fetch_universe import fetch_one, maybe_write
 
-                print(f"[api_server] auto-sync: refreshing 1d OHLCV for {stale_symbols}...", flush=True)
+                print(
+                    f"[api_server] auto-sync: refreshing 1d OHLCV for {stale_symbols}...",
+                    flush=True,
+                )
                 for sym in stale_symbols:
                     try:
                         df_bar = fetch_one(sym, "1d")
@@ -3533,7 +3590,9 @@ def _sync_market_data(force: bool = False) -> dict[str, Any]:
                         errors.append(f"{sym}: {sym_err}")
             except Exception as e:  # noqa: BLE001
                 errors.append(f"fetch_universe: {e}")
-                print(f"[api_server] auto-sync 1d parquets failed: {e}", file=sys.stderr, flush=True)
+                print(
+                    f"[api_server] auto-sync 1d parquets failed: {e}", file=sys.stderr, flush=True
+                )
 
         # 3. Flush caches and warm status
         if updated_items or force:
@@ -3547,9 +3606,16 @@ def _sync_market_data(force: bool = False) -> dict[str, Any]:
                 _YF_FAST_QUOTE_CACHE.clear()
             try:
                 get_dashboard_data(force=True)
-                print("[api_server] auto-sync: dashboard status refreshed with current data", flush=True)
+                print(
+                    "[api_server] auto-sync: dashboard status refreshed with current data",
+                    flush=True,
+                )
             except Exception as e:  # noqa: BLE001
-                print(f"[api_server] auto-sync get_dashboard_data failed: {e}", file=sys.stderr, flush=True)
+                print(
+                    f"[api_server] auto-sync get_dashboard_data failed: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         return {
             "status": "ok",
@@ -3568,7 +3634,11 @@ def _auto_sync_market_data_worker():
             if res.get("updated_items"):
                 print(f"[api_server] auto-sync completed: {res['updated_items']}", flush=True)
         except Exception as e:  # noqa: BLE001
-            print(f"[api_server] auto-sync background worker exception: {e}", file=sys.stderr, flush=True)
+            print(
+                f"[api_server] auto-sync background worker exception: {e}",
+                file=sys.stderr,
+                flush=True,
+            )
         time.sleep(1800.0)
 
 
@@ -4034,6 +4104,7 @@ WINDOW_OFFSETS = {
     "3m": _get_pd().DateOffset(months=3),
     "6m": _get_pd().DateOffset(months=6),
     "1y": _get_pd().DateOffset(years=1),
+    "2y": _get_pd().DateOffset(years=2),
     "3y": _get_pd().DateOffset(years=3),
     "5y": _get_pd().DateOffset(years=5),
     "max": None,
@@ -4481,6 +4552,133 @@ def _sanitize_symbol(raw: str) -> tuple[bool, str]:
     if not _SYMBOL_RE.match(s):
         return False, f"invalid symbol '{raw}': must match [A-Z0-9.-]{{1,10}}"
     return True, s
+
+
+def _load_kronos_evidence(symbol: str, asof_utc: datetime):
+    """Load point-in-time Kronos research evidence without running its model."""
+    try:
+        from daily_plays.adapters.kronos import load_point_in_time_kronos
+        from daily_plays.clock import RunContext
+    except ImportError:
+        from edge.daily_plays.adapters.kronos import load_point_in_time_kronos
+        from edge.daily_plays.clock import RunContext
+    return load_point_in_time_kronos(symbol, context=RunContext.create(asof_utc=asof_utc))
+
+
+_DECISION_BACKTEST_LOCK = threading.Lock()
+_DECISION_BACKTEST_CACHE: tuple[float, dict] | None = None
+_DECISION_BACKTEST_TTL_S = 900.0
+
+
+def _run_decision_tree_backtest_isolated() -> dict:
+    """Keep the CPU-heavy audit from starving behind startup scanner threads.
+
+    The API process warms several research surfaces at boot. Running CART in
+    that same interpreter can stretch a seven-second audit beyond the browser
+    timeout because those workers contend for the GIL. A fixed, local-only
+    child command gives the audit its own interpreter and keeps request latency
+    bounded without accepting any command input from the client.
+    """
+
+    pythonpath = f"{EDGE_DIR}:{EDGE_DIR.parent}"
+    if "PYTHONPATH" in os.environ and os.environ["PYTHONPATH"]:
+        pythonpath = f"{pythonpath}:{os.environ['PYTHONPATH']}"
+    env = {**os.environ, "PYTHONPATH": pythonpath}
+    command = (
+        "import json\n"
+        "try:\n"
+        "    from research.decision_tree_backtest import run_last_week_backtest\n"
+        "except ImportError:\n"
+        "    from edge.research.decision_tree_backtest import run_last_week_backtest\n"
+        "print(json.dumps(run_last_week_backtest(), separators=(',', ':'), allow_nan=False))"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=EDGE_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or "isolated audit failed").strip().splitlines()[-1]
+        raise RuntimeError(detail)
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, dict):
+        raise RuntimeError("isolated audit returned an invalid payload")
+    return payload
+
+
+_LIVE_DECISION_MODEL_LOCK = threading.Lock()
+_LIVE_DECISION_MODEL_CACHE: dict[tuple[str, str | None], tuple[float, dict]] = {}
+_LIVE_DECISION_MODEL_TTL_S = 15.0
+
+
+def _decision_model_for_live(symbol: str, decision_asof: str | None) -> dict:
+    """Score the symbol with the same as-of model as the backtest. Never an order."""
+
+    abstain = {
+        "symbol": symbol,
+        "action": None,
+        "confidence": None,
+        "trade": False,
+        "abstain": True,
+        "reason": "decision_model_unavailable",
+        "decision_authorized": False,
+        "order": None,
+    }
+    cleaned = str(symbol or "").upper().strip()
+    if not cleaned:
+        return abstain
+
+    now = time.time()
+    cache_key = (cleaned, decision_asof)
+    with _LIVE_DECISION_MODEL_LOCK:
+        hit = _LIVE_DECISION_MODEL_CACHE.get(cache_key)
+        if hit is not None and now - hit[0] < _LIVE_DECISION_MODEL_TTL_S:
+            return copy.deepcopy(hit[1])
+
+    try:
+        from research.decision_tree_backtest import score_realtime_decision
+    except ImportError:
+        from edge.research.decision_tree_backtest import score_realtime_decision
+
+    _futures = _get_concurrent_futures()
+    pool = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="decision-model")
+    try:
+        scored = pool.submit(score_realtime_decision, cleaned, decision_asof).result(timeout=4.0)
+    except Exception:
+        return abstain
+    finally:
+        pool.shutdown(wait=False)
+
+    if not isinstance(scored, dict):
+        return abstain
+    scored["decision_authorized"] = False
+    scored["order"] = None
+
+    with _LIVE_DECISION_MODEL_LOCK:
+        _LIVE_DECISION_MODEL_CACHE[cache_key] = (now, scored)
+        if len(_LIVE_DECISION_MODEL_CACHE) > 64:
+            oldest = min(_LIVE_DECISION_MODEL_CACHE, key=lambda k: _LIVE_DECISION_MODEL_CACHE[k][0])
+            _LIVE_DECISION_MODEL_CACHE.pop(oldest, None)
+
+    return scored
+
+
+def _decision_tree_backtest_payload(*, force: bool = False) -> dict:
+    """Run or reuse the bounded, read-only last-week decision-tree audit."""
+
+    global _DECISION_BACKTEST_CACHE
+    now = time.time()
+    with _DECISION_BACKTEST_LOCK:
+        hit = _DECISION_BACKTEST_CACHE
+        if not force and hit is not None and now - hit[0] < _DECISION_BACKTEST_TTL_S:
+            return {**hit[1], "cache": {"hit": True, "age_seconds": round(now - hit[0], 1)}}
+        payload = _run_decision_tree_backtest_isolated()
+        _DECISION_BACKTEST_CACHE = (time.time(), payload)
+        return {**payload, "cache": {"hit": False, "age_seconds": 0.0}}
 
 
 # --------------------------------------------------------------------------
@@ -5114,6 +5312,7 @@ def _fetch_yfinance_fast_quote(symbol: str) -> tuple[float | None, float | None,
 
     def _do_lookup():
         import yfinance as yf
+
         t = yf.Ticker(yf_sym)
         fi = getattr(t, "fast_info", None)
         last_val: float | None = None
@@ -5147,12 +5346,16 @@ def _fetch_yfinance_fast_quote(symbol: str) -> tuple[float | None, float | None,
     last: float | None = None
     prev: float | None = None
     asof: str | None = None
+    pool = None
     try:
         futures = _get_concurrent_futures()
-        with futures.ThreadPoolExecutor(max_workers=1) as pool:
-            last, prev, asof = pool.submit(_do_lookup).result(timeout=_YF_SPOT_DEADLINE_S)
+        pool = futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="yf-fast-quote")
+        last, prev, asof = pool.submit(_do_lookup).result(timeout=min(2.5, _YF_SPOT_DEADLINE_S))
     except Exception:
         last, prev, asof = None, None, None
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False)
 
     with _YF_FAST_QUOTE_LOCK:
         _YF_FAST_QUOTE_CACHE[key] = (now, last, prev, asof)
@@ -5880,7 +6083,9 @@ def _fetch_live_option_inputs(
         # delayed snapshot in-process instead, then redo the exact-OCC join, so
         # structure is measured on first load for any symbol with a listed chain.
         same_day_snapshot = latest_label == request_clock.date().isoformat()
-        if not live_oi_available and (not oi_matches or not same_day_snapshot or oi_matches < len(chain_rows) * 0.25):
+        if not live_oi_available and (
+            not oi_matches or not same_day_snapshot or oi_matches < len(chain_rows) * 0.25
+        ):
             capture_dte = min(max(int(filters.max_dte or 60), 60), 365)
             captured, capture_err = _ensure_delayed_chain_snapshot(
                 symbol,
@@ -6632,16 +6837,18 @@ def _execution_gate_payload(symbol: str, query: dict) -> tuple[dict, int]:
         "direction": direction,
         "reason": choice.reason,
         "warnings": choice.warnings,
-        "spread": None
-        if choice.spread is None
-        else {
-            "measurable": choice.spread.measurable,
-            "ratio_pct": choice.spread.ratio_pct,
-            "cap_pct": choice.spread.cap_pct,
-            "passes": choice.spread.passes,
-            "mid": choice.spread.mid,
-            "reason": choice.spread.reason,
-        },
+        "spread": (
+            None
+            if choice.spread is None
+            else {
+                "measurable": choice.spread.measurable,
+                "ratio_pct": choice.spread.ratio_pct,
+                "cap_pct": choice.spread.cap_pct,
+                "passes": choice.spread.passes,
+                "mid": choice.spread.mid,
+                "reason": choice.spread.reason,
+            }
+        ),
     }
     return payload, 200
 
@@ -8162,9 +8369,7 @@ def _rank_suggestion_rows(payload: dict) -> dict:
                     else (
                         "PAPER"
                         if score >= 45
-                        else "NEW / CHURNING"
-                        if right in {"call", "put"}
-                        else "WATCH"
+                        else "NEW / CHURNING" if right in {"call", "put"} else "WATCH"
                     )
                 )
             )
@@ -9253,7 +9458,9 @@ def _absorption_symbol_payload(symbol: str, limit: int | None = None) -> dict:
         if matrix_bars is not None and len(matrix_bars) > 0:
             matrix_readouts = readouts if source == "bars" else None
             matrix = build_orderflow_matrix(matrix_bars, matrix_readouts)
-    except Exception as exc:  # noqa: BLE001 - the matrix is additive; never break the series payload
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - the matrix is additive; never break the series payload
         print(f"[absorption_matrix] build failed for {symbol}: {exc}", flush=True)
         matrix = None
     series_total = len(readouts)
@@ -10257,6 +10464,111 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
                 self._send_json(analyze_symbol_adhoc(sym_or_err))
 
+            elif path == "/api/kronos/evidence":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+
+                now = datetime.now(timezone.utc)
+                asof_utc = now.isoformat().replace("+00:00", "Z")
+                status = "error"
+                evidence = None
+                reason = None
+                try:
+                    loaded = _load_kronos_evidence(sym_or_err, now)
+                    warning = str(loaded.get("_evidence_warning") or "")
+                    if warning:
+                        if warning in {
+                            "kronos_same_session_artifact_missing",
+                            "kronos_symbol_not_in_same_session_artifact",
+                        }:
+                            status = "missing"
+                        elif warning in {
+                            "kronos_artifact_stale_or_wrong_session",
+                            "kronos_artifact_from_future",
+                        }:
+                            status = "stale"
+                        else:
+                            status = "error"
+                        reason = warning
+                    elif isinstance(loaded, dict) and isinstance(loaded.get("forecast"), dict):
+                        source_forecast = loaded["forecast"]
+                        confidence = loaded.get("research_confidence")
+                        confidence = confidence if isinstance(confidence, dict) else {}
+                        provenance = loaded.get("provenance")
+                        provenance = provenance if isinstance(provenance, dict) else {}
+                        gex = loaded.get("gex")
+                        gex = gex if isinstance(gex, dict) else {}
+                        interval = source_forecast.get("interval_80")
+                        interval_80 = None
+                        if isinstance(interval, (list, tuple)) and len(interval) == 2:
+                            bounds = [_safe_round(value, 6) for value in interval]
+                            if all(value is not None for value in bounds):
+                                interval_80 = bounds
+                        direction = str(loaded.get("direction") or "neutral").strip().lower()
+                        if direction not in {"long", "short", "neutral"}:
+                            direction = "neutral"
+                        regime = loaded.get("regime")
+                        evidence = {
+                            "source": "kronos",
+                            "symbol": sym_or_err,
+                            "asof_utc": str(loaded.get("asof_utc") or "")[:64] or None,
+                            "direction": direction,
+                            "forecast": {
+                                "horizon": str(source_forecast.get("horizon") or "")[:40] or None,
+                                "point": _safe_round(source_forecast.get("point"), 6),
+                                "point_pct": _safe_round(source_forecast.get("point_pct"), 6),
+                                "interval_80": interval_80,
+                                "point_tag": str(source_forecast.get("point_tag") or "")[:48]
+                                or None,
+                            },
+                            "regime": str(regime)[:64] if regime is not None else None,
+                            "gex": {
+                                "regime": (
+                                    str(gex.get("regime"))[:48]
+                                    if gex.get("regime") is not None
+                                    else None
+                                ),
+                                "call_wall": _safe_round(gex.get("call_wall"), 6),
+                                "put_wall": _safe_round(gex.get("put_wall"), 6),
+                            },
+                            "research_confidence": {
+                                "kind": str(confidence.get("kind") or "ordinal_score")[:32],
+                                "score": _safe_round(confidence.get("score"), 6),
+                                "label": str(confidence.get("label") or "")[:48] or None,
+                                "selective_actionable": (
+                                    confidence.get("selective_actionable") is True
+                                ),
+                            },
+                            "provenance": (
+                                {"raw_source": str(provenance.get("raw_source") or "")[:120]}
+                                if provenance.get("raw_source")
+                                else {}
+                            ),
+                        }
+                        status = "ready"
+                    else:
+                        status = "error"
+                        reason = "kronos_evidence_invalid"
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 - read endpoint returns a stable unavailable envelope
+                    status = "error"
+                    reason = f"kronos_adapter_error:{type(exc).__name__}"
+
+                self._send_json(
+                    {
+                        "schema_version": "kronos-evidence-v1",
+                        "symbol": sym_or_err,
+                        "asof_utc": asof_utc,
+                        "status": status,
+                        "evidence": evidence,
+                        "reason": reason,
+                        "decision_authorized": False,
+                    }
+                )
+
             elif path == "/api/sector-flow":
                 force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
                 self._send_json(get_sector_flow(force=force))
@@ -10320,7 +10632,9 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/typesafe/live-decision":
                 try:
-                    body_data = json.loads((getattr(self, "_body_bytes", b"") or b"{}").decode("utf-8"))
+                    body_data = json.loads(
+                        (getattr(self, "_body_bytes", b"") or b"{}").decode("utf-8")
+                    )
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     self._send_json(
                         {"error": "request body must be valid JSON", "endpoint": path}, status=400
@@ -10328,7 +10642,8 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
                 if not isinstance(body_data, dict):
                     self._send_json(
-                        {"error": "request body must be a JSON object", "endpoint": path}, status=400
+                        {"error": "request body must be a JSON object", "endpoint": path},
+                        status=400,
                     )
                     return
                 try:
@@ -10340,7 +10655,29 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                 except ValueError as exc:
                     self._send_json({"error": str(exc), "endpoint": path}, status=400)
                     return
+                asof = body_data.get("decision_asof")
+                result["decision_model"] = _decision_model_for_live(
+                    str(result.get("symbol") or ""),
+                    asof if isinstance(asof, str) else None,
+                )
+                result["decision_authorized"] = False
+                result["order"] = None
                 self._send_json(result)
+
+            elif path == "/api/decision-tree/backtest":
+                force = str(query.get("force", ["0"])[0]).lower() in {"1", "true", "yes"}
+                try:
+                    self._send_json(_decision_tree_backtest_payload(force=force))
+                except Exception as exc:  # noqa: BLE001 - stable read-only failure envelope
+                    self._send_json(
+                        {
+                            "schema_version": "decision-tree-oos-v1",
+                            "status": "error",
+                            "error": f"backtest_unavailable:{type(exc).__name__}",
+                            "decision_authorized": False,
+                        },
+                        status=500,
+                    )
 
             elif path == "/api/vanna":
                 ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
@@ -11414,7 +11751,8 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f"[api_server] status cache warm failed: {e}", file=sys.stderr, flush=True)
 
-    threading.Thread(target=_warm_status_cache, daemon=True, name="status-warm").start()
+    if _background_jobs_enabled():
+        threading.Thread(target=_warm_status_cache, daemon=True, name="status-warm").start()
 
     def _market_regime_warm_interval_s() -> float:
         """Seconds to wait before the next regime warm, by market session.
@@ -11463,13 +11801,14 @@ def main():
                 print(f"[api_server] market-regime warm failed: {e}", file=sys.stderr, flush=True)
             time.sleep(_market_regime_warm_interval_s())
 
-    threading.Thread(
-        target=_warm_market_regime_cache, daemon=True, name="market-regime-warm"
-    ).start()
+    if _background_jobs_enabled():
+        threading.Thread(
+            target=_warm_market_regime_cache, daemon=True, name="market-regime-warm"
+        ).start()
 
-    threading.Thread(
-        target=_auto_sync_market_data_worker, daemon=True, name="auto-data-sync"
-    ).start()
+        threading.Thread(
+            target=_auto_sync_market_data_worker, daemon=True, name="auto-data-sync"
+        ).start()
 
     if not args.no_browser and _is_loopback_host(host):
         threading.Thread(

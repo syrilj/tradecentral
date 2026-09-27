@@ -37,16 +37,15 @@ describe('Milestone 4: Options Chain & Charm / Greeks Positioning Overhaul (R3)'
   })
 
   describe('2. DriftView Charm (∂Δ/∂t) and Greeks Positioning Analytics', () => {
-    it('contains mathematical formulas and structure for Black-Scholes Charm and Greeks breakdown', () => {
+    it('presents Charm and Greeks as structural evidence with explicit model limits', () => {
       const driftViewPath = resolve(__dirname, '..', '..', 'src/views/DriftView.vue')
       const content = readFileSync(driftViewPath, 'utf-8')
 
-      // Check charm formula & factor breakdowns
+      // Current screen separates modeled positioning from observed tape.
       expect(content).toContain('CHARM &amp; DEALER HEDGING DYNAMICS')
-      expect(content).toContain('1. CHARM TIME DECAY')
-      expect(content).toContain('2. GEX REGIME')
-      expect(content).toContain('3. TAPE BUYERS VS SELLERS')
-      expect(content).toContain('4. UNDERLYING VOLUME READ')
+      expect(content).toContain('PRIMARY STRUCTURAL READ')
+      expect(content).toContain('Evidence and model limits')
+      expect(content).toContain('not observed stock buying or selling')
       expect(content).toContain('NET CHARM FLOW')
 
       // Check dense call/put strike grid columns
@@ -58,10 +57,9 @@ describe('Milestone 4: Options Chain & Charm / Greeks Positioning Overhaul (R3)'
       expect(content).toContain('net-charm-cell')
       expect(content).toContain('gex-cell')
 
-      // Check institutional playbook / actionable strategies
-      expect(content).toContain('assessment-box')
-      expect(content).toContain('strategies-grid')
-      expect(content).toContain('strategy-card')
+      expect(content).toContain('dealer-evidence')
+      expect(content).toContain('charmAllSkipped')
+      expect(content).not.toContain('IF / THEN LEVEL WATCH &amp; EXECUTION TRIGGERS')
     })
   })
 

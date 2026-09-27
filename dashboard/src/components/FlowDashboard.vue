@@ -2427,9 +2427,7 @@ function downloadHistoryTapeCsv(): void {
           <span class="warning-tag label">FEED NOTICE</span>
           <span class="warning-text">{{ payload.feed_reason || payload.warnings?.[0] }}</span>
         </div>
-        <p v-else>
-          Try a lower threshold or request a fresh market-wide provider sample.
-        </p>
+        <p v-else>Try a lower threshold or request a fresh market-wide provider sample.</p>
         <ol class="empty-feed-sections label" aria-label="Sections waiting on measured prints">
           <li>Snapshot</li>
           <li>Leaders</li>

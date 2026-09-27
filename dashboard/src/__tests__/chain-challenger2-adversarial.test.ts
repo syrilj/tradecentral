@@ -325,7 +325,9 @@ describe('Challenger 2: Adversarial Layout, SVG Geometry & Workload Stress', () 
       const html = await renderGraph({ nodes, edges, selectedSymbol: 'CLOUD_A' })
 
       // Find all SVG path tags
-      const pathMatches = [...html.matchAll(/<path[^>]*\bd="([^"]+)"[^>]*class="[^"]*flow-peer[^"]*"/g)]
+      const pathMatches = [
+        ...html.matchAll(/<path[^>]*\bd="([^"]+)"[^>]*class="[^"]*flow-peer[^"]*"/g),
+      ]
       expect(pathMatches.length).toBe(3)
 
       for (const match of pathMatches) {
@@ -387,7 +389,9 @@ describe('Challenger 2: Adversarial Layout, SVG Geometry & Workload Stress', () 
 
       const html = await renderGraph({ nodes, edges, selectedSymbol: 'T2_MAT_A' })
 
-      const pathMatches = [...html.matchAll(/<path[^>]*\bd="([^"]+)"[^>]*class="[^"]*flow-peer[^"]*"/g)]
+      const pathMatches = [
+        ...html.matchAll(/<path[^>]*\bd="([^"]+)"[^>]*class="[^"]*flow-peer[^"]*"/g),
+      ]
       expect(pathMatches.length).toBe(2)
 
       for (const match of pathMatches) {
@@ -477,7 +481,9 @@ describe('Challenger 2: Adversarial Layout, SVG Geometry & Workload Stress', () 
         expect(html).toContain('floating-edge-pill')
 
         // Extract left and top inline styles: left: (\d+)px; top: (\d+)px
-        const pillMatch = html.match(/class="floating-edge-pill"[^>]*style="left:\s*(\d+(\.\d+)?)px;\s*top:\s*(\d+(\.\d+)?)px;"/)
+        const pillMatch = html.match(
+          /class="floating-edge-pill"[^>]*style="left:\s*(\d+(\.\d+)?)px;\s*top:\s*(\d+(\.\d+)?)px;"/,
+        )
         expect(pillMatch).not.toBeNull()
 
         const midX = parseFloat(pillMatch![1])
@@ -609,7 +615,9 @@ describe('Challenger 2: Adversarial Layout, SVG Geometry & Workload Stress', () 
 
       // Generated Narrative verification
       const narrative = generateRelationshipNarrative(incidentEdge, testNode)
-      expect(narrative).toContain('critical partner that tech partner of NVDA supplying PCIe Gen 5/6 Smart Cable Modules & Retimers')
+      expect(narrative).toContain(
+        'critical partner that tech partner of NVDA supplying PCIe Gen 5/6 Smart Cable Modules & Retimers',
+      )
       expect(narrative).toContain('92% dependency link')
       expect(narrative).toContain('Estimated annual procurement / contract value is ~$450M / yr')
       expect(narrative).toContain('Revenue concentration to key driver is ~38.0%')
@@ -633,8 +641,12 @@ describe('Challenger 2: Adversarial Layout, SVG Geometry & Workload Stress', () 
       })
 
       expect(html).toContain('CORE ECOSYSTEM ANCHOR')
-      expect(html).toContain('NVIDIA Corporation (NVDA) is the central anchor entity for this value chain')
-      expect(html).toContain('Capital expenditures, architectural roadmap decisions, and procurement volume')
+      expect(html).toContain(
+        'NVIDIA Corporation (NVDA) is the central anchor entity for this value chain',
+      )
+      expect(html).toContain(
+        'Capital expenditures, architectural roadmap decisions, and procurement volume',
+      )
     })
 
     it('falls back gracefully to standard sector narrative when unlinked non-focal node has no incident edges', async () => {
@@ -654,8 +666,12 @@ describe('Challenger 2: Adversarial Layout, SVG Geometry & Workload Stress', () 
 
       expect(html).toContain('Tier 2 Supplier')
       expect(html).toContain('fallback-role-tag')
-      expect(html).toContain('Isolated Tech Inc. (ISOLATED) operates within Specialty Testing (Technology)')
-      expect(html).toContain('Financial elasticity and revenue concentration propagate through correlated demand shifts')
+      expect(html).toContain(
+        'Isolated Tech Inc. (ISOLATED) operates within Specialty Testing (Technology)',
+      )
+      expect(html).toContain(
+        'Financial elasticity and revenue concentration propagate through correlated demand shifts',
+      )
     })
 
     it('renders explicit dashes for all missing or null metrics in EvidenceDrawer with zero fake values', async () => {

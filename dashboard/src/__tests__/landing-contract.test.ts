@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(root, 'views', 'LandingView.vue'), 'utf8')
+const appSource = readFileSync(join(root, 'App.vue'), 'utf8')
 const preview = readFileSync(join(root, 'components', 'FlowWorkspaceMockup.vue'), 'utf8')
 
 const FORBIDDEN_CLAIMS = [
@@ -34,10 +35,13 @@ describe('Landing page honours the product boundary', () => {
     for (const bad of FORBIDDEN_ILLUSTRATIVE_DATA) expect(src).not.toContain(bad)
   })
 
-  it('reads measured state from the local API', () => {
-    expect(src).toContain('api.marketClock')
+  it('reads measured state through shell resources without polling the API from a public route', () => {
+    expect(src).not.toContain('api.marketClock')
     expect(src).toMatch(/inject<Resource<StatusPayload>>\('status'\)/)
     expect(src).toMatch(/inject<Resource<Readiness>>\('readiness'\)/)
+    expect(src).toMatch(/inject<Resource<MarketClock>>\('marketClock'\)/)
+    expect(appSource).toContain('api.marketClock()')
+    expect(appSource).toContain("provide('marketClock', marketClock)")
   })
 
   it('routes entry calls to the operator access flow', () => {

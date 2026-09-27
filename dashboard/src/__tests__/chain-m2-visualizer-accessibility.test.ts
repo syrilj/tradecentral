@@ -54,7 +54,8 @@ const MOCK_NODES: SupplyChainNode[] = [
         filing_date: '2026-02-20',
         period: 'FY2026',
         speaker: 'Jensen Huang',
-        quote: 'Demand for Blackwell architecture systems significantly outstrips current packaging capacity.',
+        quote:
+          'Demand for Blackwell architecture systems significantly outstrips current packaging capacity.',
         context: 'Supply chain constraints and packaging partner relationships.',
         confidence: 0.95,
       },
@@ -294,7 +295,9 @@ describe('Milestone 2: Graph Visualizer Geometry & WCAG AA Accessibility', () =>
       // Dialog semantics
       expect(html).toContain('role="dialog"')
       expect(html).toContain('aria-modal="true"')
-      expect(html).toContain('aria-label="Entity Evidence and Supply Chain Details: NVDA - NVIDIA Corporation"')
+      expect(html).toContain(
+        'aria-label="Entity Evidence and Supply Chain Details: NVDA - NVIDIA Corporation"',
+      )
 
       // Backdrop scrim for dismissal
       expect(html).toContain('data-test="drawer-backdrop"')

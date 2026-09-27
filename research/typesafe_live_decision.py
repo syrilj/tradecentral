@@ -14,6 +14,7 @@ import os
 import ssl
 import threading
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -100,6 +101,49 @@ def _clean_symbol(value: Any) -> str:
     return symbol
 
 
+def _forecast_number(value: Any) -> float | None:
+    number = _number(value)
+    return round(number, 6) if number is not None else None
+
+
+def _compact_forecast(raw: Any) -> dict[str, Any]:
+    """Keep the advisory forecast contract small and probability-free."""
+
+    src = _mapping(raw)
+    interval = src.get("interval_80")
+    interval_80 = None
+    if isinstance(interval, (list, tuple)) and len(interval) == 2:
+        bounds = [_forecast_number(value) for value in interval]
+        if all(value is not None for value in bounds):
+            interval_80 = bounds
+
+    provenance = _mapping(src.get("provenance"))
+    raw_source = provenance.get("raw_source")
+    safe_provenance = (
+        {"raw_source": str(raw_source)[:120]}
+        if isinstance(raw_source, str) and raw_source.strip()
+        else {}
+    )
+
+    source = str(src.get("source") or "").strip().lower()
+    direction = str(src.get("direction") or "").strip().lower()
+    direction = {"up": "long", "down": "short"}.get(direction, direction)
+    confidence_kind = str(src.get("confidence_kind") or "").strip().lower()
+    return {
+        "source": source[:32] if source == "kronos" else None,
+        "asof_utc": str(src.get("asof_utc") or "")[:64] or None,
+        "direction": direction if direction in {"long", "short", "neutral"} else None,
+        "horizon": str(src.get("horizon") or "")[:40] or None,
+        "point_pct": _forecast_number(src.get("point_pct")),
+        "interval_80": interval_80,
+        "confidence_kind": confidence_kind[:32] or None,
+        "confidence_score": _forecast_number(src.get("confidence_score")),
+        "confidence_label": str(src.get("confidence_label") or "")[:48] or None,
+        "selective_actionable": src.get("selective_actionable") is True,
+        "provenance": safe_provenance,
+    }
+
+
 def _compact_state(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Accept only the small decision contract; discard arbitrary client data."""
 
@@ -109,10 +153,26 @@ def _compact_state(raw: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in _mapping(raw.get("source_status")).items()
         if key in {"options", "regime", "microstructure", "vpa", "execution_gate"}
     }
+    raw_forecast_status = str(
+        _mapping(raw.get("source_status")).get("forecast") or "missing"
+    ).lower()
+    source_status["forecast"] = (
+        raw_forecast_status
+        if raw_forecast_status in {"ready", "missing", "stale", "error"}
+        else "missing"
+    )
     state: dict[str, Any] = {
         "symbol": symbol,
         "observed_at": str(raw.get("observed_at") or datetime.now(timezone.utc).isoformat())[:64],
         "source_status": source_status,
+        "forecast": _compact_forecast(raw.get("forecast")),
+    }
+    previous = _mapping(raw.get("previous_decision"))
+    previous_action = str(previous.get("action") or "").lower()
+    state["previous_decision"] = {
+        "action": previous_action if previous_action in _ACTION_SET else None,
+        "consensus_score": _forecast_number(previous.get("consensus_score")),
+        "decided_at": str(previous.get("decided_at") or "")[:64] or None,
     }
     allowed: dict[str, tuple[str, ...]] = {
         "options": (
@@ -189,7 +249,10 @@ def build_typesafe_request(state: Mapping[str, Any]) -> dict[str, Any]:
                     "Which direction does the available measured market evidence lean? "
                     "Judge direction independently of entry permission or timing: a closed gate "
                     "can coexist with a bullish or bearish lean. Do not count dealer structure "
-                    "and options flow as independent confirmations. Ignore stale or failed sources."
+                    "and options flow as independent confirmations. Ignore stale or failed sources. "
+                    "Kronos forecast evidence is unvalidated ordinal research only: do not count it "
+                    "as independent confirmation or read its score as win probability. It may only "
+                    "surface disagreement or raise risk."
                 ),
                 "criteria": {
                     "bullish": "Usable evidence favors rising prices.",
@@ -207,7 +270,10 @@ def build_typesafe_request(state: Mapping[str, Any]) -> dict[str, Any]:
                     "lower confidence and raise risk; it must not produce a wait. Ignore the "
                     "execution gate for this choice — code applies stay-out policy separately. "
                     "If evidence is absent or balanced, still pick buy or sell with coin-flip "
-                    "confidence. This is decision support, not permission to place an order."
+                    "confidence. Kronos forecast evidence is unvalidated ordinal research only: "
+                    "it must not count as independent confirmation, determine this action, or be "
+                    "read as win probability. It may only surface disagreement or raise risk. "
+                    "This is decision support, not permission to place an order."
                 ),
                 "criteria": {
                     "buy": (
@@ -439,14 +505,39 @@ def _compute_model_votes(state: Mapping[str, Any]) -> tuple[dict[str, dict[str, 
         micro_sig = 0.0
         micro_label = "neutral"
         micro_summary = "Dealer microstructure unavailable"
-    elif any(w in hedging for w in ("bull", "buy", "bid", "stabilizing_long", "up")):
-        micro_sig = 0.8
-        micro_label = "bullish"
-        micro_summary = f"Dealer hedging supportive ({hedging})"
-    elif any(w in hedging for w in ("bear", "sell", "ask", "accelerating_down", "down")):
+    elif any(
+        w in hedging
+        for w in (
+            "accelerating_down",
+            "short-selling",
+            "sell aggressively",
+            "pressing",
+            "downward",
+            "bear",
+            "sell",
+            "ask",
+            "short",
+        )
+    ) and not any(w in hedging for w in ("short-covering", "buying support", "stabilizing_long")):
         micro_sig = -0.8
         micro_label = "bearish"
         micro_summary = f"Dealer hedging pressing ({hedging})"
+    elif any(
+        w in hedging
+        for w in (
+            "bull",
+            "buy",
+            "bid",
+            "stabilizing_long",
+            "accelerating_up",
+            "short-covering",
+            "buying support",
+            "up",
+        )
+    ):
+        micro_sig = 0.8
+        micro_label = "bullish"
+        micro_summary = f"Dealer hedging supportive ({hedging})"
     elif "pos" in dealer_regime:
         micro_sig = 0.25 if flow_sig > 0.1 else -0.25 if flow_sig < -0.1 else 0.0
         micro_label = "bullish" if micro_sig > 0 else "bearish" if micro_sig < 0 else "neutral"
@@ -529,8 +620,12 @@ def _build_brain(
     confidence: float,
     lean: str,
     consensus_score: float | None = None,
+    models: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    models, computed_score = _compute_model_votes(state)
+    if models is None:
+        models, computed_score = _compute_model_votes(state)
+    else:
+        computed_score = consensus_score if consensus_score is not None else 0.0
     c_score = consensus_score if consensus_score is not None else computed_score
     c_score = max(-1.0, min(1.0, c_score))
 
@@ -588,8 +683,8 @@ def _local_judgments(state: Mapping[str, Any]) -> dict[str, Any]:
 
     if total_active == 0:
         action = "buy"
-        confidence = 0.55
-        probabilities = {"buy": 0.55, "sell": 0.45}
+        confidence = 0.5
+        probabilities = {"buy": 0.5, "sell": 0.5}
         answers = {
             "lean": {"choice": "unknown", "confidence": 0.0, "probabilities": {}},
             "action": {"choice": action, "confidence": confidence, "probabilities": probabilities},
@@ -599,7 +694,8 @@ def _local_judgments(state: Mapping[str, Any]) -> dict[str, Any]:
             "risk": {"score": 3.5, "confidence": confidence},
         }
         answers.update(_vpa_local_answers(state))
-        answers["brain"] = _build_brain(state, action, confidence, "unknown", 0.0)
+        answers["brain"] = _build_brain(state, action, confidence, "unknown", 0.0, models=models)
+        answers["_models"] = models
         return answers
 
     # Deadband hysteresis around zero to prevent second-guessing and jitter
@@ -640,19 +736,19 @@ def _local_judgments(state: Mapping[str, Any]) -> dict[str, Any]:
 
     if agreeing >= 3 and opposing <= 1:
         confluence = "HIGH"
-        confidence = round(min(0.90, 0.76 + 0.14 * abs(c_score)), 4)
+        confidence = round(min(0.90, 0.56 + 0.34 * abs(c_score)), 4)
         alignment = 3.5
     elif agreeing >= 2 and opposing <= 1:
         confluence = "MODERATE"
-        confidence = round(min(0.82, 0.68 + 0.12 * abs(c_score)), 4)
+        confidence = round(min(0.82, 0.54 + 0.26 * abs(c_score)), 4)
         alignment = 2.6
     elif opposing >= 2:
         confluence = "CONTESTED"
-        confidence = round(max(0.60, min(0.70, 0.62 + 0.08 * abs(c_score))), 4)
+        confidence = round(min(0.62, 0.50 + 0.18 * abs(c_score)), 4)
         alignment = 1.2
     else:  # BALANCED
         confluence = "BALANCED"
-        confidence = round(max(0.60, min(0.68, 0.62 + 0.08 * abs(c_score))), 4)
+        confidence = round(min(0.56, 0.50 + 0.12 * abs(c_score)), 4)
         alignment = 1.5
 
     lean = "bullish" if c_score > 0.08 else "bearish" if c_score < -0.08 else "neutral"
@@ -696,7 +792,7 @@ def _local_judgments(state: Mapping[str, Any]) -> dict[str, Any]:
     else:
         setup = "no_setup"
 
-    brain_data = _build_brain(state, action, confidence, lean, c_score)
+    brain_data = _build_brain(state, action, confidence, lean, c_score, models=models)
 
     answers = {
         "lean": {
@@ -710,6 +806,7 @@ def _local_judgments(state: Mapping[str, Any]) -> dict[str, Any]:
         "timing": {"score": timing, "confidence": confidence},
         "risk": {"score": risk, "confidence": confidence},
         "brain": brain_data,
+        "_models": models,
     }
     answers.update(_vpa_local_answers(state))
     return answers
@@ -804,6 +901,46 @@ def _score(answers: Mapping[str, Any], key: str, default: float) -> tuple[float,
     )
 
 
+def _forecast_evidence(state: Mapping[str, Any], action: str) -> dict[str, Any]:
+    status = str(_mapping(state.get("source_status")).get("forecast") or "missing")
+    if status not in {"ready", "missing", "stale", "error"}:
+        status = "missing"
+    forecast = _mapping(state.get("forecast"))
+    direction = forecast.get("direction")
+    available = status == "ready" and forecast.get("source") == "kronos"
+    conflict = (
+        available
+        and direction in {"long", "short"}
+        and (
+            (direction == "long" and action == "sell") or (direction == "short" and action == "buy")
+        )
+    )
+    reason = {
+        "missing": "Kronos evidence is unavailable for this session.",
+        "stale": "Kronos evidence is stale or from the future.",
+        "error": "Kronos evidence is invalid.",
+    }.get(status)
+    if status == "ready" and not available:
+        reason = "Kronos evidence payload is incomplete."
+    return {
+        "status": status,
+        "available": available,
+        "reason": reason,
+        "source": forecast.get("source"),
+        "asof_utc": forecast.get("asof_utc"),
+        "direction": direction,
+        "horizon": forecast.get("horizon"),
+        "point_pct": forecast.get("point_pct"),
+        "interval_80": forecast.get("interval_80"),
+        "confidence_kind": forecast.get("confidence_kind"),
+        "confidence_score": forecast.get("confidence_score"),
+        "confidence_label": forecast.get("confidence_label"),
+        "selective_actionable": forecast.get("selective_actionable") is True,
+        "provenance": forecast.get("provenance") or {},
+        "conflict_with_action": bool(conflict),
+    }
+
+
 def _compose_reasons(state: Mapping[str, Any], action: str, keep_out: bool) -> list[str]:
     reasons: list[str] = []
     options = _mapping(state.get("options"))
@@ -846,15 +983,91 @@ def _policy(answers: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
     vpa_support, vpa_support_confidence = _score(answers, "vpa_claim_support", 0.0)
 
     gate = _mapping(state.get("execution_gate"))
+    models = answers.get("_models")
+    if models is None:
+        models, consensus_score = _compute_model_votes(state)
+    else:
+        total_w = sum(m["weight"] for m in models.values())
+        consensus_score = (
+            sum(m["score"] * m["weight"] for m in models.values()) / total_w if total_w > 0 else 0.0
+        )
+        consensus_score = max(-1.0, min(1.0, consensus_score))
+    previous = _mapping(state.get("previous_decision"))
+    previous_action = str(previous.get("action") or "").lower()
+    if previous_action not in _ACTION_SET:
+        previous_action = ""
+    gate_is_ready = (
+        str(_mapping(state.get("source_status")).get("execution_gate") or "").lower() == "ready"
+    )
+    session_locked = gate_is_ready and (
+        gate.get("must_be_flat") is True or gate.get("may_enter") is not True
+    )
+    target_label = "bullish" if action == "buy" else "bearish"
+    agreeing_reversal = sum(
+        1 for model in models.values() if model["weight"] > 0 and model["signal"] == target_label
+    )
+    opposing_reversal = sum(
+        1
+        for model in models.values()
+        if model["weight"] > 0 and model["signal"] not in {target_label, "neutral"}
+    )
+    directional_threshold_met = (
+        consensus_score >= 0.18 if action == "buy" else consensus_score <= -0.18
+    )
+    reversal_confirmed = (
+        agreeing_reversal >= 3 and opposing_reversal <= 1 and directional_threshold_met
+    )
+    flip_suppressed = False
+    stability_reason = "First decision for this operator session."
+    if previous_action:
+        if previous_action == action:
+            stability_reason = "Previous directional posture remains supported."
+        elif session_locked:
+            action = previous_action
+            flip_suppressed = True
+            stability_reason = "Completed-session lock prevents after-close decision changes."
+        elif not reversal_confirmed:
+            action = previous_action
+            flip_suppressed = True
+            stability_reason = (
+                "Proposed reversal lacks three-lens agreement and the ±0.18 consensus threshold."
+            )
+        else:
+            stability_reason = "Reversal confirmed by three lenses beyond the consensus threshold."
+    if flip_suppressed:
+        # A held posture is deliberately low-confidence and non-actionable.  Do
+        # not preserve the provider's high probability after policy rejected
+        # its direction change.
+        confidence = min(confidence, 0.52)
+        probabilities = _binary_probabilities(0.52 if action == "buy" else 0.48)
+        alignment = min(alignment, 1.5)
+        timing = min(timing, 1.5)
+
     source_status = _mapping(state.get("source_status"))
-    ready_sources = sum(1 for value in source_status.values() if str(value).lower() == "ready")
+    # Kronos is an advisory research lens, not an independent decision input.
+    # The execution gate is a policy input, not an independent market lens.
+    # Counting it here made a VPA-only snapshot look like "2 of 5" sources.
+    decision_lenses = ("options", "regime", "microstructure", "vpa")
+    ready_sources = sum(
+        1 for source in decision_lenses if str(source_status.get(source) or "").lower() == "ready"
+    )
     blockers: list[str] = []
     if gate.get("must_be_flat") is True:
         blockers.append("Session policy requires positions to be flat.")
     elif gate.get("may_enter") is not True:
         blockers.append(str(gate.get("reason") or "Execution gate is not open."))
     if ready_sources < 3:
-        blockers.append(f"Only {ready_sources} of 5 source lenses are ready.")
+        blockers.append(f"Only {ready_sources} of 4 decision lenses are ready.")
+        # Provider confidence is not allowed to outrun evidence coverage. A
+        # single VPA lens can supply a directional lean, never a 100% call.
+        coverage_cap = {0: 0.50, 1: 0.52, 2: 0.54}[ready_sources]
+        confidence = min(confidence, coverage_cap)
+        probabilities = _binary_probabilities(confidence if action == "buy" else 1.0 - confidence)
+        alignment = min(alignment, 1.5)
+        timing = min(timing, 1.5)
+        blockers.append(
+            "Directional certainty is capped until at least 3 independent lenses are ready."
+        )
     if confidence < 0.55:
         blockers.append("Directional confidence is below the 55% display threshold.")
     if alignment < 2.0:
@@ -873,6 +1086,12 @@ def _policy(answers: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
     if vpa_direction != action:
         risk_reasons.append(
             f"VPA next action is {vpa_direction} while the composite call is {action}."
+        )
+    forecast_evidence = _forecast_evidence(state, action)
+    if forecast_evidence["conflict_with_action"]:
+        risk_reasons.append(
+            "Kronos next-session research forecast conflicts with the composite action; "
+            "treat it as advisory risk evidence only."
         )
     lean, lean_confidence, lean_probabilities = _choice(
         answers, "lean", {"bullish", "bearish", "neutral", "unknown"}, "unknown"
@@ -906,7 +1125,18 @@ def _policy(answers: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
                 "confidence": round(vpa_support_confidence, 4),
             },
         },
-        "brain": answers.get("brain") or _build_brain(state, action, confidence, lean),
+        "forecast_evidence": forecast_evidence,
+        "stability": {
+            "previous_action": previous_action or None,
+            "proposed_action": raw_action,
+            "action_changed": bool(previous_action and action != previous_action),
+            "flip_suppressed": flip_suppressed,
+            "session_locked": session_locked,
+            "consensus_score": round(consensus_score, 3),
+            "reversal_threshold": 0.18,
+            "reason": stability_reason,
+        },
+        "brain": _build_brain(state, action, confidence, lean, consensus_score, models=models),
     }
 
 
@@ -940,7 +1170,7 @@ def _evaluate_snapshot(
     with _CACHE_LOCK:
         cached = _CACHE.get(fingerprint)
         if cached and time.monotonic() - cached[0] <= ttl:
-            result = json.loads(json.dumps(cached[1]))
+            result = deepcopy(cached[1])
             result["observed_at"] = state["observed_at"]
             result["cache"] = {"hit": True, "ttl_seconds": ttl}
             return result
@@ -987,7 +1217,7 @@ def _evaluate_snapshot(
         if len(_CACHE) > 128:
             oldest = min(_CACHE, key=lambda key: _CACHE[key][0])
             _CACHE.pop(oldest, None)
-    return json.loads(json.dumps(result))
+    return deepcopy(result)
 
 
 __all__ = ["build_typesafe_request", "evaluate_live_decision", "SCHEMA_VERSION"]

@@ -4,6 +4,12 @@ TradeCentral is a local-first quantitative market research and decision-support 
 
 The system is intentionally designed as a research instrument rather than an execution terminal. It can surface candidates, diagnostics, model evidence, options structures, and readiness state, but the checked-in decision-support pipeline does not place or route broker orders.
 
+**Live preview:** [tradecentral.syriltj1.workers.dev](https://tradecentral.syriltj1.workers.dev). This is a Cloudflare preview using Clerk development authentication. The public landing and waitlist are available; private workspaces remain access controlled, and the live research API is disabled. There is no custom domain or public API, and the source repository is still private pending an open-source release review and license.
+
+![Actual TradeCentral options positioning workspace showing SPY gamma, dealer walls, source age, and research status](dashboard/src/assets/showcase/options-positioning.png)
+
+*Actual local workstation capture. The source age and risk state are displayed in the interface. See [more product views and project highlights](docs/SHOWCASE.md).*
+
 > **Current operating posture:** research and shadow evidence first. Treat every model, scanner, and options surface as decision support unless the relevant preregistered gate and promotion criteria explicitly say otherwise.
 
 ## What TradeCentral contains
@@ -13,7 +19,7 @@ TradeCentral is split into four cooperating layers:
 1. **Research and evaluation** — point-in-time datasets, leak-resistant evaluation, model challengers, factor diagnostics, regime analysis, preregistered gates, and experiment artifacts.
 2. **Decision-support pipelines** — typed candidate contracts, adapter boundaries, evidence fusion, options validation, risk checks, shadow lifecycle tracking, and fail-closed promotion logic.
 3. **Local API and artifact services** — a loopback-only Python API that serves market data, research artifacts, options intelligence, health/readiness state, and the compiled dashboard.
-4. **Operator dashboard** — a Vue 3 and TypeScript interface built for dense market inspection, explicit provenance, visible stale/error states, and keyboard-first navigation.
+4. **Operator dashboard** — a Vue 3 and TypeScript interface with Clerk owner authentication, explicit provenance, visible stale/error states, and keyboard-first navigation.
 
 ```mermaid
 flowchart LR
@@ -28,6 +34,15 @@ flowchart LR
     G --> API
     API --> UI[Vue / TypeScript dashboard]
 ```
+
+### Architecture and security highlights
+
+- **Local research runtime:** Python serves data and artifacts from a loopback-only API; point-in-time inputs and research runs remain filesystem based.
+- **Typed decision pipeline:** provider adapters normalize inputs into typed contracts, then validation and promotion gates fail closed when evidence is missing or unsafe.
+- **Owner-scoped web access:** Clerk authenticates the dashboard, while the API and Convex independently enforce the configured owner identity. Convex stores only the small watchlist.
+- **Preview boundary:** Cloudflare serves the static app and waitlist. Its API proxy is disabled, so the preview cannot fetch live research data. The preview's Clerk development instance is not a production auth boundary.
+
+For the live preview's current boundaries and deployment details, see [`docs/CLOUDFLARE_DEPLOYMENT.md`](docs/CLOUDFLARE_DEPLOYMENT.md).
 
 For the complete system boundary, runtime topology, data paths, and safety model, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -95,6 +110,7 @@ Specialist routes currently include Sectors, Pulse, Momentum, Fintel, Gates, Evo
 | Frontend testing      | Vitest, `vue-tsc`, static design-conformance guard test                                                                                                                          |
 | Visualization         | Dependency-light SVG chart primitives plus Three.js where 3D rendering is required                                                                                               |
 | API                   | Python `http.server` with threaded request handling                                                                                                                              |
+| Web auth / hosting    | Clerk owner sign-in, owner-scoped Convex watchlist, Cloudflare Workers preview                                                                                                    |
 | Data / numerical work | pandas, NumPy and research-specific Python packages                                                                                                                              |
 | Market calendar       | `exchange_calendars`                                                                                                                                                             |
 | Research              | Local Python modules, Qlib workflows, model artifacts, point-in-time datasets                                                                                                    |
@@ -173,15 +189,13 @@ The API binds to `127.0.0.1`. That is deliberate: the current operator surface i
 
 ### Local operator access
 
-The first protected workspace route opens `/auth` and asks you to create one
-browser-local operator profile. TradeCentral derives a verifier with
-PBKDF2-SHA-256 and stores it in local browser storage; the unlocked state lives
-only in session storage. Protected deep links return to their original route
-after access is verified, and the shell's **Lock** action ends the session.
-
-This is a workstation lock for the routed interface, not server-side or
-multi-user authentication. It does not change the network trust boundary: keep
-the API on `127.0.0.1` and do not expose it directly to a LAN or the internet.
+For a workstation session, configure the explicit local auth mode in both the
+dashboard and API environment. The public preview uses Clerk and an owner
+allowlist. In either setup,
+the local Python API binds to `127.0.0.1` by default; Clerk in the browser does
+not make an unauthenticated API safe to expose. Public API deployment requires
+server-side Clerk token verification and an exact owner identity, as described
+in [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md).
 
 ## Configuration and credentials
 

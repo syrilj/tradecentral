@@ -36,6 +36,10 @@ debug.log
 .env.local
 .env.*.local
 !.env.example
+/cloudflare/.env.cloudflare
+
+# Generated agent state may contain local paths, metrics, or process metadata.
+/.claude-flow/
 
 # Coverage / test caches
 .coverage

@@ -100,6 +100,19 @@ def _no_auth(monkeypatch):
     monkeypatch.delenv("CLERK_AUTHORIZED_PARTIES", raising=False)
 
 
+def test_public_preview_disables_background_provider_jobs_by_default(monkeypatch):
+    monkeypatch.setenv("EDGE_PUBLIC_DEPLOYMENT", "1")
+    monkeypatch.delenv("EDGE_BACKGROUND_JOBS", raising=False)
+    assert not api_server._background_jobs_enabled()
+
+    monkeypatch.setenv("EDGE_BACKGROUND_JOBS", "1")
+    assert api_server._background_jobs_enabled()
+
+    monkeypatch.setenv("EDGE_PUBLIC_DEPLOYMENT", "0")
+    monkeypatch.delenv("EDGE_BACKGROUND_JOBS", raising=False)
+    assert api_server._background_jobs_enabled()
+
+
 # ---------------------------------------------------------------------------
 # FIX 2: GET must be rejected on mutating or cost-incurring endpoints.
 # ---------------------------------------------------------------------------
@@ -187,6 +200,114 @@ def test_non_mutating_get_endpoints_are_unaffected(monkeypatch):
     _no_auth(monkeypatch)
     resp = _request("GET", "/api/health")
     assert resp.status == 200
+
+
+def test_kronos_evidence_get_is_read_only_and_returns_compact_contract(monkeypatch):
+    _no_auth(monkeypatch)
+    calls = []
+
+    def load(symbol, asof_utc):
+        calls.append((symbol, asof_utc))
+        return {
+            "asof_utc": "2026-09-20T18:00:00Z",
+            "direction": "long",
+            "forecast": {
+                "horizon": "next_session",
+                "point": 101.25,
+                "point_pct": 0.62,
+                "interval_80": [-0.2, 1.1],
+                "point_tag": "within historical range",
+            },
+            "regime": "positive_gamma",
+            "gex": {"regime": "positive_gamma", "call_wall": 105, "put_wall": 95},
+            "research_confidence": {
+                "kind": "ordinal_score",
+                "score": 0.77,
+                "label": "high",
+                "selective_actionable": True,
+                "calibrated_probability": 0.99,
+            },
+            "provenance": {"raw_source": "Kronos/forecast_calibrated.py"},
+        }
+
+    monkeypatch.setattr(api_server, "_load_kronos_evidence", load)
+    resp = _request("GET", "/api/kronos/evidence?symbol=spy")
+
+    assert resp.status == 200
+    body = resp.json()
+    assert body["schema_version"] == "kronos-evidence-v1"
+    assert body["symbol"] == "SPY"
+    assert body["status"] == "ready"
+    assert body["reason"] is None
+    assert body["decision_authorized"] is False
+    assert calls and calls[0][0] == "SPY"
+    assert calls[0][1].tzinfo is not None
+    assert body["evidence"] == {
+        "source": "kronos",
+        "symbol": "SPY",
+        "asof_utc": "2026-09-20T18:00:00Z",
+        "direction": "long",
+        "forecast": {
+            "horizon": "next_session",
+            "point": 101.25,
+            "point_pct": 0.62,
+            "interval_80": [-0.2, 1.1],
+            "point_tag": "within historical range",
+        },
+        "regime": "positive_gamma",
+        "gex": {"regime": "positive_gamma", "call_wall": 105.0, "put_wall": 95.0},
+        "research_confidence": {
+            "kind": "ordinal_score",
+            "score": 0.77,
+            "label": "high",
+            "selective_actionable": True,
+        },
+        "provenance": {"raw_source": "Kronos/forecast_calibrated.py"},
+    }
+    assert "calibrated_probability" not in resp.text
+
+
+@pytest.mark.parametrize(
+    ("warning", "status"),
+    [
+        ("kronos_same_session_artifact_missing", "missing"),
+        ("kronos_symbol_not_in_same_session_artifact", "missing"),
+        ("kronos_artifact_stale_or_wrong_session", "stale"),
+        ("kronos_artifact_from_future", "stale"),
+        ("kronos_artifact_invalid", "error"),
+        ("kronos_artifact_asof_missing", "error"),
+    ],
+)
+def test_kronos_evidence_maps_adapter_warnings_to_status(monkeypatch, warning, status):
+    _no_auth(monkeypatch)
+    monkeypatch.setattr(
+        api_server,
+        "_load_kronos_evidence",
+        lambda symbol, asof_utc: {"_evidence_warning": warning},
+    )
+
+    resp = _request("GET", "/api/kronos/evidence?symbol=AAPL")
+
+    assert resp.status == 200
+    body = resp.json()
+    assert body["status"] == status
+    assert body["evidence"] is None
+    assert body["reason"] == warning
+    assert body["decision_authorized"] is False
+
+
+def test_kronos_evidence_rejects_invalid_symbol_without_loading(monkeypatch):
+    _no_auth(monkeypatch)
+    monkeypatch.setattr(
+        api_server,
+        "_load_kronos_evidence",
+        lambda *_args: pytest.fail("invalid symbol reached adapter"),
+    )
+
+    resp = _request("GET", "/api/kronos/evidence?symbol=../AAPL")
+
+    assert resp.status == 400
+    assert "invalid symbol" in resp.json()["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +620,48 @@ def test_no_allowlist_configured_accepts_any_valid_session(monkeypatch):
     monkeypatch.delenv("EDGE_ALLOWED_EMAILS", raising=False)
     ok, user_id, reason = api_server._verify_clerk_request(object())
     assert (ok, user_id, reason) == (True, "user_9", None)
+
+
+def test_public_deployment_requires_exact_owner_id_even_on_loopback(monkeypatch):
+    monkeypatch.setenv("EDGE_PUBLIC_DEPLOYMENT", "1")
+    monkeypatch.setenv("EDGE_AUTH_MODE", "clerk")
+    monkeypatch.setenv("EDGE_REQUIRE_AUTH", "1")
+    monkeypatch.setenv("CLERK_JWT_KEY", "test-key")
+    monkeypatch.setenv("CLERK_AUTHORIZED_PARTIES", "https://trade.example.com")
+    monkeypatch.delenv("EDGE_OWNER_USER_ID", raising=False)
+    assert api_server._auth_required() is True
+    assert any("EDGE_OWNER_USER_ID" in error for error in api_server._runtime_config_errors("127.0.0.1"))
+
+    monkeypatch.setenv("EDGE_OWNER_USER_ID", "user_owner")
+    assert api_server._runtime_config_errors("127.0.0.1") == []
+
+
+def test_public_deployment_rejects_local_auth_mode(monkeypatch):
+    monkeypatch.setenv("EDGE_PUBLIC_DEPLOYMENT", "1")
+    monkeypatch.setenv("EDGE_AUTH_MODE", "local")
+    monkeypatch.setenv("EDGE_OWNER_USER_ID", "user_owner")
+    monkeypatch.setenv("CLERK_JWT_KEY", "test-key")
+    monkeypatch.setenv("CLERK_AUTHORIZED_PARTIES", "https://trade.example.com")
+    assert any("EDGE_AUTH_MODE=clerk" in error for error in api_server._runtime_config_errors("127.0.0.1"))
+
+
+def test_public_deployment_rejects_another_valid_clerk_user(monkeypatch):
+    _fake_clerk(monkeypatch, {"sub": "user_other", "email": "syriltj1@gmail.com"})
+    monkeypatch.setenv("EDGE_PUBLIC_DEPLOYMENT", "1")
+    monkeypatch.setenv("EDGE_OWNER_USER_ID", "user_owner")
+    monkeypatch.delenv("EDGE_ALLOWED_EMAILS", raising=False)
+    ok, _, reason = api_server._verify_clerk_request(object())
+    assert ok is False
+    assert reason == "Operator is not authorized for this service"
+
+
+def test_public_deployment_accepts_only_owner_clerk_user(monkeypatch):
+    _fake_clerk(monkeypatch, {"sub": "user_owner"})
+    monkeypatch.setenv("EDGE_PUBLIC_DEPLOYMENT", "1")
+    monkeypatch.setenv("EDGE_OWNER_USER_ID", "user_owner")
+    monkeypatch.delenv("EDGE_ALLOWED_EMAILS", raising=False)
+    ok, user_id, reason = api_server._verify_clerk_request(object())
+    assert (ok, user_id, reason) == (True, "user_owner", None)
 
 
 # ---------------------------------------------------------------------------

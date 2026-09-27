@@ -4,6 +4,7 @@ Pure computation: callers supply already-computed board/flow rows (from the
 cached `/api/options/board` and `/api/unusual-flow` payload builders) and get
 back a gated, ordinally-ranked union. No network or filesystem I/O here.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -91,7 +92,11 @@ def _age_seconds(value: Any, now_utc: datetime) -> float | None:
 
 
 def _effective_age(
-    *, observed_at: Any, reported_age: Any, cache_age_seconds: float, now_utc: datetime,
+    *,
+    observed_at: Any,
+    reported_age: Any,
+    cache_age_seconds: float,
+    now_utc: datetime,
 ) -> float | None:
     observed_age = _age_seconds(observed_at, now_utc)
     reported = _finite(reported_age)
@@ -102,7 +107,9 @@ def _effective_age(
 
 
 def _confidence(
-    board: Mapping[str, Any], flow: Mapping[str, Any], calibrated: Mapping[str, Any],
+    board: Mapping[str, Any],
+    flow: Mapping[str, Any],
+    calibrated: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Expose confidence only when an upstream source explicitly calibrated it.
 
@@ -118,7 +125,9 @@ def _confidence(
     if str(calibrated.get("confidence_kind") or "") == "calibrated_probability":
         probability = _finite(calibrated.get("probability"))
         source = "frozen_directional_model"
-        setup_ok = calibrated.get("setup_ok") if isinstance(calibrated.get("setup_ok"), bool) else None
+        setup_ok = (
+            calibrated.get("setup_ok") if isinstance(calibrated.get("setup_ok"), bool) else None
+        )
         state = calibrated.get("state")
         calibration_version = calibrated.get("calibration_version")
         model = calibrated.get("model")
@@ -163,7 +172,9 @@ def _confidence(
 
 
 def _direction(
-    board: Mapping[str, Any], flow: Mapping[str, Any], calibrated: Mapping[str, Any],
+    board: Mapping[str, Any],
+    flow: Mapping[str, Any],
+    calibrated: Mapping[str, Any],
 ) -> tuple[str | None, str]:
     """Use price/model context, never call/put identity, as direction evidence."""
     for source, row in (
@@ -252,9 +263,12 @@ def _focus_contract_strike(focus: Any, right: str | None) -> float | None:
 
 
 def _regime_level_identity(item: Mapping[str, Any]) -> str:
-    return str(
-        item.get("id") or item.get("type") or item.get("level_id") or item.get("label") or ""
-    ).strip().lower().replace(" ", "_")
+    return (
+        str(item.get("id") or item.get("type") or item.get("level_id") or item.get("label") or "")
+        .strip()
+        .lower()
+        .replace(" ", "_")
+    )
 
 
 def _regime_level_source(ident: str) -> str:
@@ -265,7 +279,10 @@ def _regime_level_source(ident: str) -> str:
     ) or token in {"pin", "pin_strike"}:
         return LEVEL_SOURCE_GEX
     if any(name in token for name in ("key_level", "confluence")) or token in {
-        "support", "resistance", "next_support", "next_resistance",
+        "support",
+        "resistance",
+        "next_support",
+        "next_resistance",
     }:
         return LEVEL_SOURCE_SUPPORT
     return LEVEL_SOURCE_TA
@@ -294,14 +311,14 @@ def _iter_priced_level_maps(value: Any) -> list[Mapping[str, Any]]:
                     side = "below"
                 else:
                     side = None
-                found.append({
-                    "id": "key_level",
-                    "price": cluster.get("level"),
-                    "direction": side,
-                })
-        if (
-            value.get("price") is not None or value.get("level") is not None
-        ) and (
+                found.append(
+                    {
+                        "id": "key_level",
+                        "price": cluster.get("level"),
+                        "direction": side,
+                    }
+                )
+        if (value.get("price") is not None or value.get("level") is not None) and (
             value.get("id") or value.get("type") or value.get("level_id") or value.get("label")
         ):
             found.append(value)
@@ -334,7 +351,9 @@ def _collect_attractor_levels(*containers: Any) -> list[dict[str, Any]]:
     seen: set[tuple[float, str]] = set()
     for container in containers:
         for item in _iter_priced_level_maps(container):
-            price = _level(item.get("price") if item.get("price") is not None else item.get("level"))
+            price = _level(
+                item.get("price") if item.get("price") is not None else item.get("level")
+            )
             if price is None:
                 continue
             ident = _regime_level_identity(item)
@@ -374,7 +393,9 @@ def _row_open_interest(row: Mapping[str, Any]) -> float | None:
 def _notable_gex_rows(rows: Any) -> list[Mapping[str, Any]]:
     if not isinstance(rows, (list, tuple)):
         return []
-    return [row for row in rows if isinstance(row, Mapping) and _level(row.get("strike")) is not None]
+    return [
+        row for row in rows if isinstance(row, Mapping) and _level(row.get("strike")) is not None
+    ]
 
 
 def setup_inputs_from_rows(
@@ -382,6 +403,7 @@ def setup_inputs_from_rows(
     flow: Mapping[str, Any] | None,
     *,
     direction: str | None,
+    symbol: str | None = None,
 ) -> dict[str, Any]:
     """Pull already-measured S/R, GEX, positions, TA, and Regime magnet fields."""
     board_map: Mapping[str, Any] = board or {}
@@ -396,60 +418,124 @@ def setup_inputs_from_rows(
         flow_map.get("attractor_levels"),
     )
     named = _named_regime_prices(attractor_levels)
+
+    symbol_str = (
+        str(symbol or board_map.get("symbol") or flow_map.get("symbol") or "").strip().upper()
+    )
+    spot_val = _first_level(board_map.get("spot"), flow_map.get("spot"))
+
+    ta_sup = _first_level(
+        board_map.get("ta_support"),
+        board_map.get("swing_low"),
+        flow_map.get("ta_support"),
+        flow_map.get("swing_low"),
+    )
+    ta_res = _first_level(
+        board_map.get("ta_resistance"),
+        board_map.get("swing_high"),
+        flow_map.get("ta_resistance"),
+        flow_map.get("swing_high"),
+    )
+
+    ta_data: dict[str, Any] = {}
+    if symbol_str and (ta_sup is None or ta_res is None):
+        try:
+            from research.ta_levels import measure_symbol_ta_levels
+
+            ta_data = measure_symbol_ta_levels(symbol_str, spot=spot_val)
+        except Exception:
+            ta_data = {}
+
+    if ta_sup is None and ta_data.get("ta_support") is not None:
+        ta_sup = _level(ta_data["ta_support"])
+    if ta_res is None and ta_data.get("ta_resistance") is not None:
+        ta_res = _level(ta_data["ta_resistance"])
+
+    pos_strike = _first_level(
+        _focus_contract_strike(board_map.get("contract_focus"), right),
+        _focus_contract_strike(flow_map.get("flow_focus"), right),
+        board_map.get("position_strike"),
+        flow_map.get("position_strike"),
+    )
+    if pos_strike is None and spot_val is not None and spot_val > 0:
+        if spot_val >= 500:
+            step = 5.0
+        elif spot_val >= 100:
+            step = 2.5 if spot_val < 200 else 5.0
+        elif spot_val >= 25:
+            step = 1.0
+        else:
+            step = 0.5
+        pos_strike = round(round(spot_val / step) * step, 2)
+
+    extra_attractors: list[dict[str, Any]] = []
+    for s_item in ta_data.get("supports", []):
+        p = s_item.get("price")
+        if p is not None:
+            extra_attractors.append({"id": "ta_support", "price": p, "direction": "below"})
+    for r_item in ta_data.get("resistances", []):
+        p = r_item.get("price")
+        if p is not None:
+            extra_attractors.append({"id": "ta_resistance", "price": p, "direction": "above"})
+    combined_attractors = list(attractor_levels) + extra_attractors
+
     return {
         "support": _first_level(
-            board_map.get("support"), board_map.get("support_price"), board_map.get("next_support"),
-            flow_map.get("support"), flow_map.get("support_price"), flow_map.get("next_support"),
+            board_map.get("support"),
+            board_map.get("support_price"),
+            board_map.get("next_support"),
+            flow_map.get("support"),
+            flow_map.get("support_price"),
+            flow_map.get("next_support"),
             *_nested_key_fields(board_map, flow_map, field="support"),
         ),
         "resistance": _first_level(
-            board_map.get("resistance"), board_map.get("resistance_price"), board_map.get("next_resistance"),
-            flow_map.get("resistance"), flow_map.get("resistance_price"), flow_map.get("next_resistance"),
+            board_map.get("resistance"),
+            board_map.get("resistance_price"),
+            board_map.get("next_resistance"),
+            flow_map.get("resistance"),
+            flow_map.get("resistance_price"),
+            flow_map.get("next_resistance"),
             *_nested_key_fields(board_map, flow_map, field="resistance"),
         ),
         "call_wall": _first_level(
-            board_map.get("call_wall"), flow_map.get("call_wall"),
+            board_map.get("call_wall"),
+            flow_map.get("call_wall"),
             *_nested_key_fields(board_map, flow_map, field="call_wall"),
             named.get("call_wall"),
         ),
         "put_wall": _first_level(
-            board_map.get("put_wall"), flow_map.get("put_wall"),
+            board_map.get("put_wall"),
+            flow_map.get("put_wall"),
             *_nested_key_fields(board_map, flow_map, field="put_wall"),
             named.get("put_wall"),
         ),
         "gamma_flip": _first_level(
-            board_map.get("gamma_flip"), flow_map.get("gamma_flip"),
+            board_map.get("gamma_flip"),
+            flow_map.get("gamma_flip"),
             *_nested_key_fields(board_map, flow_map, field="gamma_flip"),
             named.get("gamma_flip"),
         ),
         "pin_strike": _first_level(
-            board_map.get("pin_strike"), flow_map.get("pin_strike"),
+            board_map.get("pin_strike"),
+            flow_map.get("pin_strike"),
             *_nested_key_fields(board_map, flow_map, field="pin_strike"),
             named.get("pin_strike"),
         ),
-        "position_strike": _first_level(
-            _focus_contract_strike(board_map.get("contract_focus"), right),
-            _focus_contract_strike(flow_map.get("flow_focus"), right),
-            board_map.get("position_strike"),
-            flow_map.get("position_strike"),
-        ),
-        "ta_support": _first_level(
-            board_map.get("ta_support"), board_map.get("swing_low"),
-            flow_map.get("ta_support"), flow_map.get("swing_low"),
-        ),
-        "ta_resistance": _first_level(
-            board_map.get("ta_resistance"), board_map.get("swing_high"),
-            flow_map.get("ta_resistance"), flow_map.get("swing_high"),
-        ),
+        "position_strike": pos_strike,
+        "ta_support": ta_sup,
+        "ta_resistance": ta_res,
         "gex_rows": (
             board_map.get("gex_by_strike")
             or board_map.get("gex_rows")
             or flow_map.get("gex_by_strike")
             or flow_map.get("gex_rows")
         ),
-        "expected_move": _first_level(board_map.get("expected_move"), flow_map.get("expected_move")),
-        "spot": _first_level(board_map.get("spot"), flow_map.get("spot")),
-        "attractor_levels": attractor_levels,
+        "expected_move": _first_level(
+            board_map.get("expected_move"), flow_map.get("expected_move")
+        ),
+        "spot": spot_val,
+        "attractor_levels": combined_attractors,
     }
 
 
@@ -523,17 +609,29 @@ def setup_level_model(
             best_oi_strike = (oi, strike)
         if spot_n is None:
             continue
-        put_gex = _finite(row.get("put_gex_m") if row.get("put_gex_m") is not None else row.get("put_gex"))
-        call_gex = _finite(row.get("call_gex_m") if row.get("call_gex_m") is not None else row.get("call_gex"))
+        put_gex = _finite(
+            row.get("put_gex_m") if row.get("put_gex_m") is not None else row.get("put_gex")
+        )
+        call_gex = _finite(
+            row.get("call_gex_m") if row.get("call_gex_m") is not None else row.get("call_gex")
+        )
         if strike < spot_n:
             if oi is not None and (best_oi_below is None or oi > best_oi_below[0]):
                 best_oi_below = (oi, strike)
-            if put_gex is not None and put_gex < 0 and (best_put_gex is None or put_gex < best_put_gex[0]):
+            if (
+                put_gex is not None
+                and put_gex < 0
+                and (best_put_gex is None or put_gex < best_put_gex[0])
+            ):
                 best_put_gex = (put_gex, strike)
         elif strike > spot_n:
             if oi is not None and (best_oi_above is None or oi > best_oi_above[0]):
                 best_oi_above = (oi, strike)
-            if call_gex is not None and call_gex > 0 and (best_call_gex is None or call_gex > best_call_gex[0]):
+            if (
+                call_gex is not None
+                and call_gex > 0
+                and (best_call_gex is None or call_gex > best_call_gex[0])
+            ):
                 best_call_gex = (call_gex, strike)
 
     if best_oi_below is not None:
@@ -541,11 +639,15 @@ def setup_level_model(
     if best_put_gex is not None:
         _append_level(supports, best_put_gex[1], LEVEL_SOURCE_GEX, side="below", spot=spot_n)
     if best_oi_above is not None:
-        _append_level(resistances, best_oi_above[1], LEVEL_SOURCE_POSITIONS, side="above", spot=spot_n)
+        _append_level(
+            resistances, best_oi_above[1], LEVEL_SOURCE_POSITIONS, side="above", spot=spot_n
+        )
     if best_call_gex is not None:
         _append_level(resistances, best_call_gex[1], LEVEL_SOURCE_GEX, side="above", spot=spot_n)
 
-    strike = _first_level(position_strike, pin_strike, best_oi_strike[1] if best_oi_strike else None)
+    strike = _first_level(
+        position_strike, pin_strike, best_oi_strike[1] if best_oi_strike else None
+    )
     strike_source = None
     if strike is not None:
         if position_strike is not None and _level(position_strike) == strike:
@@ -566,51 +668,99 @@ def setup_level_model(
         invalidation = resistances[0]["price"] if resistances else None
         invalidation_source = resistances[0]["source"] if resistances else None
     else:
-        zones = []
-        invalidation = None
-        invalidation_source = None
+        zones = list(resistances) if resistances else list(supports)
+        invalidation = (
+            supports[0]["price"] if supports else (resistances[0]["price"] if resistances else None)
+        )
+        invalidation_source = (
+            supports[0]["source"]
+            if supports
+            else (resistances[0]["source"] if resistances else None)
+        )
 
     gex_target = None
     gex_invalidation = None
     if direction == "long":
-        gex_target = call_wall if _level(call_wall) is not None and (spot_n is None or _level(call_wall) > spot_n) else None
-        gex_invalidation = put_wall if _level(put_wall) is not None and (spot_n is None or _level(put_wall) < spot_n) else None
+        gex_target = (
+            call_wall
+            if _level(call_wall) is not None and (spot_n is None or _level(call_wall) > spot_n)
+            else None
+        )
+        gex_invalidation = (
+            put_wall
+            if _level(put_wall) is not None and (spot_n is None or _level(put_wall) < spot_n)
+            else None
+        )
     elif direction == "short":
-        gex_target = put_wall if _level(put_wall) is not None and (spot_n is None or _level(put_wall) < spot_n) else None
-        gex_invalidation = call_wall if _level(call_wall) is not None and (spot_n is None or _level(call_wall) > spot_n) else None
+        gex_target = (
+            put_wall
+            if _level(put_wall) is not None and (spot_n is None or _level(put_wall) < spot_n)
+            else None
+        )
+        gex_invalidation = (
+            call_wall
+            if _level(call_wall) is not None and (spot_n is None or _level(call_wall) > spot_n)
+            else None
+        )
+    else:
+        gex_target = (
+            call_wall
+            if _level(call_wall) is not None and (spot_n is None or _level(call_wall) > spot_n)
+            else None
+        )
+        gex_invalidation = (
+            put_wall
+            if _level(put_wall) is not None and (spot_n is None or _level(put_wall) < spot_n)
+            else None
+        )
 
     source_status = {
-        LEVEL_SOURCE_SUPPORT: "measured" if any(
-            item["source"] == LEVEL_SOURCE_SUPPORT for item in (*supports, *resistances)
-        ) else "unmeasured",
-        LEVEL_SOURCE_GEX: "measured" if any(
-            item["source"] == LEVEL_SOURCE_GEX for item in (*supports, *resistances)
-        ) or gex_target is not None or gex_invalidation is not None else "unmeasured",
-        LEVEL_SOURCE_POSITIONS: "measured" if strike_source == LEVEL_SOURCE_POSITIONS or any(
-            item["source"] == LEVEL_SOURCE_POSITIONS for item in (*supports, *resistances)
-        ) else "unmeasured",
-        LEVEL_SOURCE_TA: "measured" if any(
-            item["source"] == LEVEL_SOURCE_TA for item in (*supports, *resistances)
-        ) else "unmeasured",
+        LEVEL_SOURCE_SUPPORT: (
+            "measured"
+            if any(item["source"] == LEVEL_SOURCE_SUPPORT for item in (*supports, *resistances))
+            else "unmeasured"
+        ),
+        LEVEL_SOURCE_GEX: (
+            "measured"
+            if any(item["source"] == LEVEL_SOURCE_GEX for item in (*supports, *resistances))
+            or gex_target is not None
+            or gex_invalidation is not None
+            else "unmeasured"
+        ),
+        LEVEL_SOURCE_POSITIONS: (
+            "measured"
+            if strike_source == LEVEL_SOURCE_POSITIONS
+            or any(item["source"] == LEVEL_SOURCE_POSITIONS for item in (*supports, *resistances))
+            else "unmeasured"
+        ),
+        LEVEL_SOURCE_TA: (
+            "measured"
+            if any(item["source"] == LEVEL_SOURCE_TA for item in (*supports, *resistances))
+            else "unmeasured"
+        ),
     }
     if source_status[LEVEL_SOURCE_SUPPORT] == "unmeasured" and (
         _level(support) is not None or _level(resistance) is not None
     ):
         source_status[LEVEL_SOURCE_SUPPORT] = "wrong-side"
     if source_status[LEVEL_SOURCE_GEX] == "unmeasured" and (
-        _level(call_wall) is not None or _level(put_wall) is not None or _level(gamma_flip) is not None
+        _level(call_wall) is not None
+        or _level(put_wall) is not None
+        or _level(gamma_flip) is not None
     ):
         source_status[LEVEL_SOURCE_GEX] = "wrong-side"
 
     missing_fields = [
-        label for label, value in (
+        label
+        for label, value in (
             ("strike", strike),
             ("supports", supports[0]["price"] if supports else None),
             ("invalidation", invalidation),
             ("take profit zones", zones[0]["price"] if zones else None),
             ("GEX take-profit target", _level(gex_target)),
             ("GEX invalidation", _level(gex_invalidation)),
-        ) if value is None
+        )
+        if value is None
     ]
     complete = bool(strike is not None and supports and invalidation is not None and zones)
     return {
@@ -664,7 +814,9 @@ def gex_relative_sell(
     elif direction == "short":
         sell = put_n if put_n is not None and (spot_n is None or put_n < spot_n) else None
         source = "put_wall" if sell is not None else None
-        invalidation = call_n if call_n is not None and (spot_n is None or call_n > spot_n) else None
+        invalidation = (
+            call_n if call_n is not None and (spot_n is None or call_n > spot_n) else None
+        )
         inv_source = "call_wall" if invalidation is not None else None
     else:
         return empty
@@ -724,15 +876,17 @@ def qlib_rows_from_panel(panel: Mapping[str, Any] | None) -> list[dict[str, Any]
         if not clean:
             continue
         rank = _finite(rec.get("qlib_rank"))
-        rows.append({
-            "symbol": clean,
-            "qlib_score": _finite(rec.get("qlib_score")),
-            "qlib_rank": int(rank) if rank is not None else None,
-            "n_symbols": n_symbols,
-            "source": rec.get("source") or panel.get("source"),
-            "score_kind": rec.get("score_kind") or panel.get("score_kind"),
-            "asof": rec.get("asof") or panel.get("asof"),
-        })
+        rows.append(
+            {
+                "symbol": clean,
+                "qlib_score": _finite(rec.get("qlib_score")),
+                "qlib_rank": int(rank) if rank is not None else None,
+                "n_symbols": n_symbols,
+                "source": rec.get("source") or panel.get("source"),
+                "score_kind": rec.get("score_kind") or panel.get("score_kind"),
+                "asof": rec.get("asof") or panel.get("asof"),
+            }
+        )
     return rows
 
 
@@ -788,12 +942,17 @@ def build_suggestion(
     planning_direction = bias_direction if lean_direction_confirmed else None
     effective_direction = direction or planning_direction or bias_direction
     risk = gex_relative_sell(
-        direction=effective_direction, spot=spot, call_wall=call_wall, put_wall=put_wall,
+        direction=effective_direction,
+        spot=spot,
+        call_wall=call_wall,
+        put_wall=put_wall,
     )
     qlib_block = _qlib_overlay(qlib)
     if qlib_block["measured"]:
         qlib_block["alignment"] = qlib_alignment(
-            effective_direction, qlib_block["rank"], qlib_block["n_symbols"],
+            effective_direction,
+            qlib_block["rank"],
+            qlib_block["n_symbols"],
         )
 
     if direction == "long":
@@ -832,8 +991,10 @@ def build_suggestion(
         evidence_kind = "none"
     else:
         right = "watch"
-        reason = reasons[0] if reasons else (
-            "No long/short price or model context; call/put identity is not direction."
+        reason = (
+            reasons[0]
+            if reasons
+            else ("No long/short price or model context; call/put identity is not direction.")
         )
         status = "watch"
         evidence_kind = "none"
@@ -875,7 +1036,9 @@ def build_suggestion(
         quote_complete = bool(
             from_chain
             and focus.get("quote_complete")
-            and bid is not None and ask is not None and midpoint is not None
+            and bid is not None
+            and ask is not None
+            and midpoint is not None
         )
         quote_reference_only = bool(from_chain and focus.get("quote_reference_only"))
         reference_debit = (
@@ -886,15 +1049,18 @@ def build_suggestion(
         focus_spot = _finite(focus.get("underlying_price")) or _finite(spot)
         moneyness_pct = (
             abs(strike / focus_spot - 1.0)
-            if strike is not None and focus_spot is not None and focus_spot > 0 else None
+            if strike is not None and focus_spot is not None and focus_spot > 0
+            else None
         )
         dte_value = int(dte) if (dte := _finite(focus.get("dte"))) is not None else None
         flow_identity_ok = bool(
             not from_chain
             and strike is not None
             and focus.get("expiry")
-            and dte_value is not None and 0 <= dte_value <= 60
-            and moneyness_pct is not None and moneyness_pct <= 0.25
+            and dte_value is not None
+            and 0 <= dte_value <= 60
+            and moneyness_pct is not None
+            and moneyness_pct <= 0.25
         )
         contract_complete = bool(from_chain and focus.get("contract_complete"))
         entry_eligible = bool(playbook_status == "candidate" and direction in {"long", "short"})
@@ -902,9 +1068,13 @@ def build_suggestion(
         rejection_reasons = list(focus.get("rejection_reasons") or ()) if from_chain else []
         if not from_chain:
             if dte_value is None or not 0 <= dte_value <= 60:
-                rejection_reasons.append("observed Flow contract is outside the 0–60 DTE review window")
+                rejection_reasons.append(
+                    "observed Flow contract is outside the 0–60 DTE review window"
+                )
             if moneyness_pct is None:
-                rejection_reasons.append("moneyness cannot be validated without strike and underlying spot")
+                rejection_reasons.append(
+                    "moneyness cannot be validated without strike and underlying spot"
+                )
             elif moneyness_pct > 0.25:
                 rejection_reasons.append("observed strike is more than 25% from underlying spot")
             rejection_reasons.append("live chain quote has not been matched")
@@ -927,8 +1097,7 @@ def build_suggestion(
             action = "REVIEW_FLOW_PRINT"
             contract_stage = "flow_observed_unmatched"
         reference_max_loss = (
-            round(reference_debit * multiplier, 2)
-            if reference_debit is not None else None
+            round(reference_debit * multiplier, 2) if reference_debit is not None else None
         )
         play = None
         if strike is not None and focus_spot is not None and reference_debit is not None:
@@ -961,17 +1130,23 @@ def build_suggestion(
             "moneyness_pct": moneyness_pct,
             "reference_debit": reference_debit,
             "sizing_debit": reference_debit if sizing_eligible else None,
-            "reference_debit_estimated": bool(focus.get("price_estimated")) if not from_chain else False,
+            "reference_debit_estimated": (
+                bool(focus.get("price_estimated")) if not from_chain else False
+            ),
             "bid": bid,
             "ask": ask,
             "midpoint": midpoint,
             "spread_pct": _finite(focus.get("spread_pct")) if from_chain else None,
             "volume": (
-                int(volume) if (volume := _finite(focus.get("volume"))) is not None else None
-            ) if from_chain else None,
+                (int(volume) if (volume := _finite(focus.get("volume"))) is not None else None)
+                if from_chain
+                else None
+            ),
             "open_interest": (
-                int(oi) if (oi := _finite(focus.get("open_interest"))) is not None else None
-            ) if from_chain else None,
+                (int(oi) if (oi := _finite(focus.get("open_interest"))) is not None else None)
+                if from_chain
+                else None
+            ),
             "implied_volatility": _finite(focus.get("implied_volatility")) if from_chain else None,
             "delta": _finite(focus.get("delta")) if from_chain else None,
             "contract_multiplier": int(multiplier),
@@ -979,25 +1154,36 @@ def build_suggestion(
             "play": play,
             "take_profit_debit": (
                 round(reference_debit * 1.5, 2)
-                if sizing_eligible and reference_debit is not None else None
+                if sizing_eligible and reference_debit is not None
+                else None
             ),
             "review_exit_debit": (
                 round(reference_debit * 0.5, 2)
-                if sizing_eligible and reference_debit is not None else None
+                if sizing_eligible and reference_debit is not None
+                else None
             ),
             "observed_contracts": (
-                int(count) if (count := _finite(focus.get("contracts"))) is not None else None
-            ) if not from_chain else None,
+                (int(count) if (count := _finite(focus.get("contracts"))) is not None else None)
+                if not from_chain
+                else None
+            ),
             "observed_premium": _finite(focus.get("premium")) if not from_chain else None,
             "observed_at": focus.get("observed_at") if from_chain else focus.get("timestamp"),
             "source": (
-                focus.get("quote_source") or "selected_chain_quote"
-            ) if from_chain else "observed_flow_print",
+                (focus.get("quote_source") or "selected_chain_quote")
+                if from_chain
+                else "observed_flow_print"
+            ),
             "quote_status": (
-                str(focus.get("quote_status") or (
-                    "chain_two_sided" if quote_complete else "chain_quote_missing"
-                ))
-            ) if from_chain else "flow_reference_only",
+                (
+                    str(
+                        focus.get("quote_status")
+                        or ("chain_two_sided" if quote_complete else "chain_quote_missing")
+                    )
+                )
+                if from_chain
+                else "flow_reference_only"
+            ),
             "quote_complete": quote_complete,
             "quote_live": bool(from_chain and focus.get("quote_live")),
             "quote_reference_only": quote_reference_only,
@@ -1007,14 +1193,25 @@ def build_suggestion(
             "stability_observations": 0,
             "stability_required": 3,
             "stable": False,
-            "rejection_reasons": list(dict.fromkeys(str(item) for item in rejection_reasons if item)),
-            "selection_method": focus.get("selection_method") if from_chain else (
-                "Highest-premium observed Flow print with matching CALL/PUT identity."
+            "rejection_reasons": list(
+                dict.fromkeys(str(item) for item in rejection_reasons if item)
+            ),
+            "selection_method": (
+                focus.get("selection_method")
+                if from_chain
+                else ("Highest-premium observed Flow print with matching CALL/PUT identity.")
             ),
             "missing_fields": [
-                label for label, value in (
-                    ("live bid" if quote_reference_only else "bid", None if quote_reference_only else bid),
-                    ("live ask" if quote_reference_only else "ask", None if quote_reference_only else ask),
+                label
+                for label, value in (
+                    (
+                        "live bid" if quote_reference_only else "bid",
+                        None if quote_reference_only else bid,
+                    ),
+                    (
+                        "live ask" if quote_reference_only else "ask",
+                        None if quote_reference_only else ask,
+                    ),
                     ("open interest", focus.get("open_interest") if from_chain else None),
                     ("implied volatility", focus.get("implied_volatility") if from_chain else None),
                     ("delta", focus.get("delta") if from_chain else None),
@@ -1024,20 +1221,24 @@ def build_suggestion(
             "note": (
                 "Exact contract identity and delayed bid/ask matched for paper review. "
                 "Sizing stays locked until a live two-sided quote and every gate pass."
-                if quote_reference_only else
-                "Contract identity matched to the available chain. It remains wait-only until "
-                "a two-sided quote, liquidity, stability, and every setup gate pass."
-                if from_chain else
-                "Observed Flow print only. It is not a selected contract and cannot feed sizing "
-                "until the exact live chain identity and two-sided quote are matched."
+                if quote_reference_only
+                else (
+                    "Contract identity matched to the available chain. It remains wait-only until "
+                    "a two-sided quote, liquidity, stability, and every setup gate pass."
+                    if from_chain
+                    else "Observed Flow print only. It is not a selected contract and cannot feed sizing "
+                    "until the exact live chain identity and two-sided quote are matched."
+                )
             ),
         }
         warnings.append(
             "Delayed exact-contract quote is a paper reference, not execution authorization."
-            if quote_reference_only else
-            "Chain identity is matched, but a point-in-time quote is not execution authorization."
-            if from_chain else
-            "Observed Flow price is excluded from sizing until an exact live chain quote is matched."
+            if quote_reference_only
+            else (
+                "Chain identity is matched, but a point-in-time quote is not execution authorization."
+                if from_chain
+                else "Observed Flow price is excluded from sizing until an exact live chain quote is matched."
+            )
         )
 
     return {
@@ -1046,18 +1247,27 @@ def build_suggestion(
         "status": status,
         "entry_eligible": bool(playbook_status == "candidate" and direction in {"long", "short"}),
         "setup_tier": (
-            "ready" if playbook_status == "candidate" and direction in {"long", "short"}
-            else "paper" if right in {"call", "put"}
-            else "watch" if right == "watch"
-            else "blocked"
+            "ready"
+            if playbook_status == "candidate" and direction in {"long", "short"}
+            else "paper" if right in {"call", "put"} else "watch" if right == "watch" else "blocked"
         ),
-        "bias_right": "call" if bias_direction == "long" else "put" if bias_direction == "short" else None,
+        "bias_right": (
+            "call" if bias_direction == "long" else "put" if bias_direction == "short" else None
+        ),
         "bias_confirmed": bool(planning_direction is not None),
         "evidence_kind": evidence_kind,
         "direction_source": (
-            "signed_activity" if evidence_kind == "signed_activity" else
-            "activity_lean" if evidence_kind == "activity_lean" else
-            "directional_context" if evidence_kind == "directional_context" else "unavailable"
+            "signed_activity"
+            if evidence_kind == "signed_activity"
+            else (
+                "activity_lean"
+                if evidence_kind == "activity_lean"
+                else (
+                    "directional_context"
+                    if evidence_kind == "directional_context"
+                    else "unavailable"
+                )
+            )
         ),
         "spot": risk["spot"],
         "sell": risk["sell"],
@@ -1089,9 +1299,16 @@ def _empty_suggestion_payload(reason: str) -> dict[str, Any]:
 
 
 def _playbook(
-    *, board: Mapping[str, Any], direction: str | None, direction_source: str,
-    gate_pass: bool, gate_reasons: list[str], freshness_pass: bool,
-    freshness_reason: str, confidence: Mapping[str, Any], costs: Mapping[str, Any],
+    *,
+    board: Mapping[str, Any],
+    direction: str | None,
+    direction_source: str,
+    gate_pass: bool,
+    gate_reasons: list[str],
+    freshness_pass: bool,
+    freshness_reason: str,
+    confidence: Mapping[str, Any],
+    costs: Mapping[str, Any],
     level_model: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     spot = _level(board.get("spot"))
@@ -1106,17 +1323,29 @@ def _playbook(
     target = None
     invalidation = None
     if direction == "long":
-        trigger = gamma_flip if gamma_flip is not None and (spot is None or gamma_flip >= spot * 0.98) else spot
+        trigger = (
+            gamma_flip
+            if gamma_flip is not None and (spot is None or gamma_flip >= spot * 0.98)
+            else spot
+        )
         target = call_wall if call_wall is not None and (spot is None or call_wall > spot) else None
-        invalidation = put_wall if put_wall is not None and (spot is None or put_wall < spot) else None
+        invalidation = (
+            put_wall if put_wall is not None and (spot is None or put_wall < spot) else None
+        )
         structure = "call_debit_spread"
         structure_label = "Call debit spread"
         long_leg = "Buy a liquid call near the trigger/spot reference"
         short_leg = "Sell a liquid call near the upside target/barrier"
     elif direction == "short":
-        trigger = gamma_flip if gamma_flip is not None and (spot is None or gamma_flip <= spot * 1.02) else spot
+        trigger = (
+            gamma_flip
+            if gamma_flip is not None and (spot is None or gamma_flip <= spot * 1.02)
+            else spot
+        )
         target = put_wall if put_wall is not None and (spot is None or put_wall < spot) else None
-        invalidation = call_wall if call_wall is not None and (spot is None or call_wall > spot) else None
+        invalidation = (
+            call_wall if call_wall is not None and (spot is None or call_wall > spot) else None
+        )
         structure = "put_debit_spread"
         structure_label = "Put debit spread"
         long_leg = "Buy a liquid put near the trigger/spot reference"
@@ -1171,8 +1400,12 @@ def _playbook(
 
     confidence_ready = confidence.get("is_high") and confidence.get("setup_ok") is not False
     if (
-        gate_pass and freshness_pass and direction is not None and direction_confirmed
-        and confidence_ready and risk_levels_complete
+        gate_pass
+        and freshness_pass
+        and direction is not None
+        and direction_confirmed
+        and confidence_ready
+        and risk_levels_complete
     ):
         status = "candidate"
     elif gate_pass and freshness_pass and direction is not None:
@@ -1198,10 +1431,14 @@ def _playbook(
             "gamma_flip": gamma_flip,
             "expected_move": expected_move,
         },
-        "legs": [leg for leg in (
-            {"action": "BUY_TO_OPEN", "instruction": long_leg} if long_leg else None,
-            {"action": "SELL_TO_OPEN", "instruction": short_leg} if short_leg else None,
-        ) if leg is not None],
+        "legs": [
+            leg
+            for leg in (
+                {"action": "BUY_TO_OPEN", "instruction": long_leg} if long_leg else None,
+                {"action": "SELL_TO_OPEN", "instruction": short_leg} if short_leg else None,
+            )
+            if leg is not None
+        ],
         "risk": {
             "max_account_risk_pct": MAX_ACCOUNT_RISK_PCT,
             "max_portfolio_heat_pct": MAX_PORTFOLIO_HEAT_PCT,
@@ -1223,7 +1460,10 @@ def _playbook(
 
 
 def _gate(
-    *, spread_pct: float | None, open_interest: float | None, dte: float | None,
+    *,
+    spread_pct: float | None,
+    open_interest: float | None,
+    dte: float | None,
     filters: OptionsFilters,
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
@@ -1272,15 +1512,18 @@ def build_live_opportunities(
         return _empty_suggestion_payload("No board or unusual-flow rows were supplied.")
 
     board_scores = {
-        symbol: score for symbol, row in board_by_symbol.items()
+        symbol: score
+        for symbol, row in board_by_symbol.items()
         if (score := _finite(row.get("squeeze_score"))) is not None
     }
     flow_scores = {
-        symbol: score for symbol, row in flow_by_symbol.items()
+        symbol: score
+        for symbol, row in flow_by_symbol.items()
         if (score := _finite(row.get("unusual_score"))) is not None
     }
     qlib_scores = {
-        symbol: score for symbol, row in qlib_by_symbol.items()
+        symbol: score
+        for symbol, row in qlib_by_symbol.items()
         if (score := _finite(row.get("qlib_score"))) is not None
     }
     board_z = _zscores(board_scores)
@@ -1299,7 +1542,8 @@ def build_live_opportunities(
             signal_basis = "flow_only"
 
         components = [
-            z for z in (board_z.get(symbol), flow_z.get(symbol), qlib_z.get(symbol))
+            z
+            for z in (board_z.get(symbol), flow_z.get(symbol), qlib_z.get(symbol))
             if z is not None
         ]
         composite_score = round(fmean(components), 4) if components else None
@@ -1308,7 +1552,10 @@ def build_live_opportunities(
         open_interest = _finite((board or {}).get("open_interest"))
         dte = _finite((board or {}).get("selected_dte"))
         gate_pass, gate_reasons = _gate(
-            spread_pct=spread_pct, open_interest=open_interest, dte=dte, filters=filters,
+            spread_pct=spread_pct,
+            open_interest=open_interest,
+            dte=dte,
+            filters=filters,
         )
 
         board_map: Mapping[str, Any] = board or {}
@@ -1326,18 +1573,23 @@ def build_live_opportunities(
             cache_age_seconds=flow_cache_age_seconds,
             now_utc=asof_utc,
         )
-        chain_live = str(board_map.get("mode_resolved") or "").lower() == "live" or "live" in str(
-            board_map.get("chain_source") or ""
-        ).lower()
+        chain_live = (
+            str(board_map.get("mode_resolved") or "").lower() == "live"
+            or "live" in str(board_map.get("chain_source") or "").lower()
+        )
         chain_fresh = bool(
-            chain_live and chain_age is not None and chain_age <= MAX_LIVE_AGE_SECONDS
+            chain_live
+            and chain_age is not None
+            and chain_age <= MAX_LIVE_AGE_SECONDS
             and not board_map.get("clock_mismatch")
         )
         uses_flow = flow is not None
         flow_live = bool(flow_map.get("live"))
-        flow_fresh = bool(
-            flow_live and flow_age is not None and flow_age <= MAX_LIVE_AGE_SECONDS
-        ) if uses_flow else True
+        flow_fresh = (
+            bool(flow_live and flow_age is not None and flow_age <= MAX_LIVE_AGE_SECONDS)
+            if uses_flow
+            else True
+        )
         freshness_pass = chain_fresh and flow_fresh
         freshness_reasons: list[str] = []
         if not chain_live:
@@ -1364,16 +1616,20 @@ def build_live_opportunities(
         direction, direction_source = _direction(board_map, flow_map, calibrated_map)
         activity_lean = str(flow_map.get("activity_lean") or "").strip().lower()
         bias_direction = (
-            "long" if activity_lean == "bullish"
-            else "short" if activity_lean == "bearish"
-            else None
+            "long"
+            if activity_lean == "bullish"
+            else "short" if activity_lean == "bearish" else None
         )
         review_direction = direction or bias_direction
-        review_direction_source = direction_source if direction is not None else (
-            "unsigned_activity_bias" if bias_direction is not None else direction_source
+        review_direction_source = (
+            direction_source
+            if direction is not None
+            else ("unsigned_activity_bias" if bias_direction is not None else direction_source)
         )
         costs = _cost_estimate(spread_pct, filters)
-        setup_inputs = setup_inputs_from_rows(board_map, flow_map, direction=review_direction)
+        setup_inputs = setup_inputs_from_rows(
+            board_map, flow_map, direction=review_direction, symbol=symbol
+        )
         board_for_levels = dict(board_map)
         for field in ("spot", "call_wall", "put_wall", "gamma_flip", "pin_strike"):
             if board_for_levels.get(field) is None and setup_inputs.get(field) is not None:
@@ -1396,42 +1652,70 @@ def build_live_opportunities(
             direction=direction,
             playbook_status=str(playbook.get("status") or ""),
             blockers=list(playbook.get("blockers") or []),
-            spot=setup_inputs.get("spot") if setup_inputs.get("spot") is not None else (
-                board_map.get("spot") if board_map.get("spot") is not None else flow_map.get("spot")
+            spot=(
+                setup_inputs.get("spot")
+                if setup_inputs.get("spot") is not None
+                else (
+                    board_map.get("spot")
+                    if board_map.get("spot") is not None
+                    else flow_map.get("spot")
+                )
             ),
-            call_wall=setup_inputs.get("call_wall") if setup_inputs.get("call_wall") is not None else board_map.get("call_wall"),
-            put_wall=setup_inputs.get("put_wall") if setup_inputs.get("put_wall") is not None else board_map.get("put_wall"),
+            call_wall=(
+                setup_inputs.get("call_wall")
+                if setup_inputs.get("call_wall") is not None
+                else board_map.get("call_wall")
+            ),
+            put_wall=(
+                setup_inputs.get("put_wall")
+                if setup_inputs.get("put_wall") is not None
+                else board_map.get("put_wall")
+            ),
             qlib=qlib_map,
             activity_lean=activity_lean,
             activity_lean_source=str(flow_map.get("activity_lean_source") or ""),
             chain_focus=(
                 board_map.get("contract_focus")
-                if isinstance(board_map.get("contract_focus"), Mapping) else None
+                if isinstance(board_map.get("contract_focus"), Mapping)
+                else None
             ),
-            flow_focus=flow_map.get("flow_focus") if isinstance(flow_map.get("flow_focus"), Mapping) else None,
+            flow_focus=(
+                flow_map.get("flow_focus")
+                if isinstance(flow_map.get("flow_focus"), Mapping)
+                else None
+            ),
             flow_focus_rejections=(
                 flow_map.get("flow_focus_rejections")
-                if isinstance(flow_map.get("flow_focus_rejections"), Mapping) else None
+                if isinstance(flow_map.get("flow_focus_rejections"), Mapping)
+                else None
             ),
         )
         playbook_target = _finite(playbook.get("target"))
         playbook_invalidation = _finite(playbook.get("invalidation"))
         if review_direction == "long":
             target_source = (
-                "call_wall" if playbook_target is not None and playbook_target == _finite(board_for_levels.get("call_wall"))
+                "call_wall"
+                if playbook_target is not None
+                and playbook_target == _finite(board_for_levels.get("call_wall"))
                 else None
             )
             invalidation_source = (
-                "put_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_for_levels.get("put_wall"))
+                "put_wall"
+                if playbook_invalidation is not None
+                and playbook_invalidation == _finite(board_for_levels.get("put_wall"))
                 else None
             )
         elif review_direction == "short":
             target_source = (
-                "put_wall" if playbook_target is not None and playbook_target == _finite(board_for_levels.get("put_wall"))
+                "put_wall"
+                if playbook_target is not None
+                and playbook_target == _finite(board_for_levels.get("put_wall"))
                 else None
             )
             invalidation_source = (
-                "call_wall" if playbook_invalidation is not None and playbook_invalidation == _finite(board_for_levels.get("call_wall"))
+                "call_wall"
+                if playbook_invalidation is not None
+                and playbook_invalidation == _finite(board_for_levels.get("call_wall"))
                 else None
             )
         else:
@@ -1439,7 +1723,11 @@ def build_live_opportunities(
 
         if playbook_target is not None and target_source is None:
             matching_zone = next(
-                (z for z in (level_model.get("take_profit_zones") or ()) if _finite(z.get("price")) == playbook_target),
+                (
+                    z
+                    for z in (level_model.get("take_profit_zones") or ())
+                    if _finite(z.get("price")) == playbook_target
+                ),
                 None,
             )
             if matching_zone:
@@ -1456,7 +1744,11 @@ def build_live_opportunities(
                 invalidation_source = level_model.get("invalidation_source")
             else:
                 matching_support = next(
-                    (s for s in (level_model.get("supports") or ()) if _finite(s.get("price")) == playbook_invalidation),
+                    (
+                        s
+                        for s in (level_model.get("supports") or ())
+                        if _finite(s.get("price")) == playbook_invalidation
+                    ),
                     None,
                 )
                 if matching_support:
@@ -1464,34 +1756,47 @@ def build_live_opportunities(
                 else:
                     invalidation_source = level_model.get("invalidation_source") or LEVEL_SOURCE_GEX
 
-        suggestion.update({
-            "plan_target": playbook_target,
-            "plan_target_source": target_source,
-            "plan_invalidation": playbook_invalidation,
-            "plan_invalidation_source": invalidation_source,
-            "strike": level_model.get("strike"),
-            "strike_source": level_model.get("strike_source"),
-            "supports": list(level_model.get("supports") or ()),
-            "take_profit_zones": list(level_model.get("take_profit_zones") or ()),
-            "source_status": dict(level_model.get("source_status") or {}),
-            "missing_sources": list(level_model.get("missing_sources") or ()),
-            "risk_levels_complete": bool(playbook.get("risk_levels_complete")),
-            "risk_missing_fields": list(level_model.get("risk_missing_fields") or [
-                label for label, value in (
-                    ("GEX take-profit target", playbook_target),
-                    ("GEX invalidation", playbook_invalidation),
-                ) if value is None
-            ]),
-        })
+        suggestion.update(
+            {
+                "plan_target": playbook_target,
+                "plan_target_source": target_source,
+                "plan_invalidation": playbook_invalidation,
+                "plan_invalidation_source": invalidation_source,
+                "strike": level_model.get("strike"),
+                "strike_source": level_model.get("strike_source"),
+                "supports": list(level_model.get("supports") or ()),
+                "take_profit_zones": list(level_model.get("take_profit_zones") or ()),
+                "source_status": dict(level_model.get("source_status") or {}),
+                "missing_sources": list(level_model.get("missing_sources") or ()),
+                "risk_levels_complete": bool(playbook.get("risk_levels_complete")),
+                "risk_missing_fields": list(
+                    level_model.get("risk_missing_fields")
+                    or [
+                        label
+                        for label, value in (
+                            ("GEX take-profit target", playbook_target),
+                            ("GEX invalidation", playbook_invalidation),
+                        )
+                        if value is None
+                    ]
+                ),
+            }
+        )
         if suggestion.get("invalidation") is None and level_model.get("invalidation") is not None:
             suggestion["invalidation"] = level_model["invalidation"]
             suggestion["invalidation_source"] = level_model["invalidation_source"]
-        elif suggestion.get("invalidation") is not None and suggestion.get("invalidation_source") is None:
-            suggestion["invalidation_source"] = invalidation_source or level_model.get("invalidation_source")
+        elif (
+            suggestion.get("invalidation") is not None
+            and suggestion.get("invalidation_source") is None
+        ):
+            suggestion["invalidation_source"] = invalidation_source or level_model.get(
+                "invalidation_source"
+            )
         highlighted = bool(playbook.get("status") == "candidate")
         suggestion_plan = (
             suggestion.get("contract_plan")
-            if isinstance(suggestion.get("contract_plan"), Mapping) else None
+            if isinstance(suggestion.get("contract_plan"), Mapping)
+            else None
         )
         live_ready = bool(
             suggestion.get("entry_eligible")
@@ -1500,52 +1805,60 @@ def build_live_opportunities(
             and suggestion_plan.get("quote_complete")
         )
 
-        rows.append({
-            "symbol": symbol,
-            "signal_basis": signal_basis,
-            "composite_score": composite_score,
-            "board_squeeze_score": board_scores.get(symbol),
-            "board_squeeze_z": round(board_z[symbol], 4) if symbol in board_z else None,
-            "flow_unusual_score": flow_scores.get(symbol),
-            "flow_unusual_z": round(flow_z[symbol], 4) if symbol in flow_z else None,
-            "qlib_score": qlib_scores.get(symbol),
-            "qlib_rank": (
-                int(rank) if (rank := _finite((qlib_map or {}).get("qlib_rank"))) is not None else None
-            ),
-            "qlib_z": round(qlib_z[symbol], 4) if symbol in qlib_z else None,
-            "gate_pass": gate_pass,
-            "gate_reasons": gate_reasons,
-            "spread_pct": spread_pct,
-            "open_interest": int(open_interest) if open_interest is not None else None,
-            "selected_dte": int(dte) if dte is not None else None,
-            "call_put_imbalance": _finite((flow or {}).get("call_put_imbalance")),
-            "ret_1d": _finite((flow or {}).get("ret_1d")),
-            "premium": _finite((flow or {}).get("premium")),
-            "confidence": confidence,
-            "highlighted": highlighted,
-            "live_ready": live_ready,
-            "freshness": {
-                "pass": freshness_pass,
-                "status": "FRESH" if freshness_pass else "STALE_OR_PROXY",
-                "max_age_seconds": MAX_LIVE_AGE_SECONDS,
-                "chain_live": chain_live,
-                "chain_age_seconds": round(chain_age, 1) if chain_age is not None else None,
-                "flow_required": uses_flow,
-                "flow_live": flow_live if uses_flow else None,
-                "flow_age_seconds": round(flow_age, 1) if flow_age is not None else None,
-                "reasons": freshness_reasons,
-            },
-            "costs": costs,
-            "suggestion": suggestion,
-            "barriers": {
-                "spot": _level(setup_inputs.get("spot") or board_map.get("spot")),
-                "call_wall": _level(setup_inputs.get("call_wall") or board_map.get("call_wall")),
-                "put_wall": _level(setup_inputs.get("put_wall") or board_map.get("put_wall")),
-                "gamma_flip": _level(setup_inputs.get("gamma_flip") or board_map.get("gamma_flip")),
-                "expected_move": _level(board_map.get("expected_move")),
-            },
-            "playbook": playbook,
-        })
+        rows.append(
+            {
+                "symbol": symbol,
+                "signal_basis": signal_basis,
+                "composite_score": composite_score,
+                "board_squeeze_score": board_scores.get(symbol),
+                "board_squeeze_z": round(board_z[symbol], 4) if symbol in board_z else None,
+                "flow_unusual_score": flow_scores.get(symbol),
+                "flow_unusual_z": round(flow_z[symbol], 4) if symbol in flow_z else None,
+                "qlib_score": qlib_scores.get(symbol),
+                "qlib_rank": (
+                    int(rank)
+                    if (rank := _finite((qlib_map or {}).get("qlib_rank"))) is not None
+                    else None
+                ),
+                "qlib_z": round(qlib_z[symbol], 4) if symbol in qlib_z else None,
+                "gate_pass": gate_pass,
+                "gate_reasons": gate_reasons,
+                "spread_pct": spread_pct,
+                "open_interest": int(open_interest) if open_interest is not None else None,
+                "selected_dte": int(dte) if dte is not None else None,
+                "call_put_imbalance": _finite((flow or {}).get("call_put_imbalance")),
+                "ret_1d": _finite((flow or {}).get("ret_1d")),
+                "premium": _finite((flow or {}).get("premium")),
+                "confidence": confidence,
+                "highlighted": highlighted,
+                "live_ready": live_ready,
+                "freshness": {
+                    "pass": freshness_pass,
+                    "status": "FRESH" if freshness_pass else "STALE_OR_PROXY",
+                    "max_age_seconds": MAX_LIVE_AGE_SECONDS,
+                    "chain_live": chain_live,
+                    "chain_age_seconds": round(chain_age, 1) if chain_age is not None else None,
+                    "flow_required": uses_flow,
+                    "flow_live": flow_live if uses_flow else None,
+                    "flow_age_seconds": round(flow_age, 1) if flow_age is not None else None,
+                    "reasons": freshness_reasons,
+                },
+                "costs": costs,
+                "suggestion": suggestion,
+                "barriers": {
+                    "spot": _level(setup_inputs.get("spot") or board_map.get("spot")),
+                    "call_wall": _level(
+                        setup_inputs.get("call_wall") or board_map.get("call_wall")
+                    ),
+                    "put_wall": _level(setup_inputs.get("put_wall") or board_map.get("put_wall")),
+                    "gamma_flip": _level(
+                        setup_inputs.get("gamma_flip") or board_map.get("gamma_flip")
+                    ),
+                    "expected_move": _level(board_map.get("expected_move")),
+                },
+                "playbook": playbook,
+            }
+        )
 
     def _sort_key(row: dict[str, Any]) -> tuple[float, str]:
         score = row["composite_score"]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from research import typesafe_live_decision as live
@@ -55,6 +57,31 @@ def test_request_batches_independent_typed_judgments():
     assert len(request["questions"]["vpa_claim_support"]["criteria"]) == 5
 
 
+def test_request_labels_kronos_as_advisory_research_only():
+    request = live.build_typesafe_request(live._compact_state(_state()))
+    state = request["state"]
+    assert state["source_status"]["forecast"] == "missing"
+    assert set(state["forecast"]) == {
+        "source",
+        "asof_utc",
+        "direction",
+        "horizon",
+        "point_pct",
+        "interval_80",
+        "confidence_kind",
+        "confidence_score",
+        "confidence_label",
+        "selective_actionable",
+        "provenance",
+    }
+    for question in ("lean", "action"):
+        instructions = request["questions"][question]["instructions"].lower()
+        assert "unvalidated ordinal research" in instructions
+        assert "independent confirmation" in instructions
+        assert "win probability" in instructions
+    assert "determine this action" in request["questions"]["action"]["instructions"]
+
+
 def test_conservative_fallback_can_surface_aligned_buy_without_authorizing(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
@@ -70,6 +97,71 @@ def test_conservative_fallback_can_surface_aligned_buy_without_authorizing(monke
     assert "wait" not in result["probabilities"]
     assert set(result["probabilities"]) == {"buy", "sell"}
     assert result["vpa_judgment"]["direction"] == "buy"
+
+
+def test_forecast_evidence_is_always_present_with_missing_contract(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+
+    result = live.evaluate_live_decision(_state())
+
+    assert result["forecast_evidence"] == {
+        "status": "missing",
+        "available": False,
+        "reason": "Kronos evidence is unavailable for this session.",
+        "source": None,
+        "asof_utc": None,
+        "direction": None,
+        "horizon": None,
+        "point_pct": None,
+        "interval_80": None,
+        "confidence_kind": None,
+        "confidence_score": None,
+        "confidence_label": None,
+        "selective_actionable": False,
+        "provenance": {},
+        "conflict_with_action": False,
+    }
+
+
+def test_ready_forecast_conflict_only_adds_advisory_risk_reason(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    live._CACHE.clear()
+    baseline = live.evaluate_live_decision(_state())
+
+    state = _state()
+    state["source_status"]["forecast"] = "ready"
+    state["forecast"] = {
+        "source": "kronos",
+        "asof_utc": "2026-09-20T18:00:00Z",
+        "direction": "short",
+        "horizon": "next_session",
+        "point_pct": -0.72,
+        "interval_80": [-1.4, -0.1],
+        "confidence_kind": "ordinal_score",
+        "confidence_score": 0.81,
+        "confidence_label": "high",
+        "selective_actionable": True,
+        "provenance": {"raw_source": "Kronos/forecast_calibrated.py"},
+        "calibrated_probability": 0.99,
+    }
+    result = live.evaluate_live_decision(state)
+
+    assert result["forecast_evidence"]["status"] == "ready"
+    assert result["forecast_evidence"]["available"] is True
+    assert result["forecast_evidence"]["direction"] == "short"
+    assert result["forecast_evidence"]["conflict_with_action"] is True
+    assert result["action"] == baseline["action"] == "buy"
+    assert result["probabilities"] == baseline["probabilities"]
+    assert result["brain"] == baseline["brain"]
+    assert result["blockers"] == baseline["blockers"]
+    assert result["decision_authorized"] is False
+    assert any(
+        "Kronos next-session research forecast conflicts" in reason
+        for reason in result["risk_assessment"]["reasons"]
+    )
+    assert "calibrated_probability" not in json.dumps(result)
 
 
 def test_closed_gate_keeps_buy_and_sets_keep_out(monkeypatch):
@@ -315,6 +407,34 @@ def test_missing_sources_do_not_create_fallback_lean(monkeypatch):
     assert result["vpa_judgment"]["claim_support"]["score"] < 1.5
 
 
+def test_provider_confidence_is_capped_when_lenses_are_unavailable(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    state = _state()
+    state["source_status"] = {
+        "options": "missing",
+        "regime": "pending",
+        "microstructure": "error",
+        "vpa": "ready",
+        "execution_gate": "ready",
+    }
+    answers = live._local_judgments(state)
+    answers["action"] = {
+        "choice": "sell",
+        "confidence": 1.0,
+        "probabilities": {"buy": 0.0, "sell": 1.0},
+    }
+    monkeypatch.setattr(live, "_call_typesafe", lambda payload, key: (answers, "jev-test", 11))
+
+    result = live.evaluate_live_decision(state)
+
+    assert result["action"] == "sell"
+    assert result["confidence"] <= 0.52
+    assert result["probabilities"] == {"buy": 0.48, "sell": 0.52}
+    assert any("Only 1 of 4 decision lenses" in blocker for blocker in result["blockers"])
+    assert any("certainty is capped" in blocker for blocker in result["blockers"])
+
+
 def test_multi_model_confluence_elevates_confidence_and_stability(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
@@ -365,7 +485,7 @@ def test_brain_synthesis_reconciles_conflicting_signals_without_oscillation(monk
     result = live.evaluate_live_decision(state)
 
     assert result["brain"]["confluence"] == "BALANCED"
-    assert result["confidence"] >= 0.60
+    assert 0.50 <= result["confidence"] <= 0.55
     assert result["risk_assessment"]["keep_out"] is True
 
 
@@ -390,8 +510,52 @@ def test_brain_jitter_shield_suppresses_micro_oscillation_flips(monkeypatch):
         res = live.evaluate_live_decision(s)
         actions.append(res["action"])
         confidences.append(res["confidence"])
-        assert res["confidence"] >= 0.60, f"Confidence dropped below 60% at flow={flow_val}"
+        assert 0.50 <= res["confidence"] <= 0.55
         assert res["brain"]["stabilized"] is True
 
-    # No erratic rapid sign-flipping inside deadband
-    assert all(c >= 0.60 for c in confidences)
+    # A quiet deadband must communicate coin-flip uncertainty, not manufacture
+    # a 60% confidence floor.
+    assert all(0.50 <= c <= 0.55 for c in confidences)
+
+
+def test_previous_decision_suppresses_unconfirmed_flip(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    state = _state()
+    state["options"]["signed_flow_imbalance"] = -0.08
+    state["regime"]["primary"] = "chop"
+    state["vpa"]["bias"] = "NEUTRAL"
+    state["vpa"]["market_phase"] = "consolidation"
+    state["previous_decision"] = {
+        "action": "buy",
+        "consensus_score": 0.12,
+        "decided_at": "2026-09-20T17:00:00Z",
+    }
+
+    result = live.evaluate_live_decision(state)
+
+    assert result["action"] == "buy"
+    assert result["stability"]["flip_suppressed"] is True
+    assert result["stability"]["proposed_action"] == "sell"
+    assert result["confidence"] <= 0.52
+    assert result["risk_assessment"]["keep_out"] is True
+
+
+def test_closed_session_locks_previous_direction(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_CACHE_TTL_S", "0")
+    state = _state(may_enter=False)
+    state["execution_gate"]["must_be_flat"] = True
+    state["previous_decision"] = {
+        "action": "sell",
+        "consensus_score": -0.4,
+        "decided_at": "2026-09-20T20:00:00Z",
+    }
+
+    result = live.evaluate_live_decision(state)
+
+    assert result["raw_action"] == "buy"
+    assert result["action"] == "sell"
+    assert result["stability"]["session_locked"] is True
+    assert result["stability"]["flip_suppressed"] is True
+    assert "after-close" in result["stability"]["reason"]

@@ -20,6 +20,7 @@ Install once, as early as possible, from whichever process talks to LSE.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -63,6 +64,10 @@ _STATE: dict[str, Any] = {
     # UTC month ("2026-09") whose /iso byte quota is known spent.
     "iso_quota_exhausted_month": "",
     "iso_requests_skipped": 0,
+    # A quota belongs to one provider key, not every key used by this app.
+    # Store only a one-way fingerprint; the credential itself never enters
+    # the ledger.
+    "api_key_fingerprint": "",
 }
 
 
@@ -101,7 +106,23 @@ def _utc_month() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
+def _api_key_fingerprint() -> str:
+    key = os.getenv("LSE_API_KEY", "").strip()
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if key else ""
+
+
+def _sync_api_key_locked() -> None:
+    """Drop a quota latch inherited from a different LSE credential."""
+    current = _api_key_fingerprint()
+    if _STATE.get("api_key_fingerprint") == current:
+        return
+    _STATE["api_key_fingerprint"] = current
+    _STATE["iso_quota_exhausted_month"] = ""
+    _STATE["iso_requests_skipped"] = 0
+
+
 def _roll_day_locked() -> None:
+    _sync_api_key_locked()
     today = _utc_day()
     if _STATE.get("day") != today:
         # The byte quota is monthly, so it must survive the daily roll.
@@ -118,6 +139,7 @@ def iso_quota_exhausted() -> bool:
 
 
 def _note_iso_quota_exhausted_locked() -> None:
+    _STATE["api_key_fingerprint"] = _api_key_fingerprint()
     _STATE["iso_quota_exhausted_month"] = _utc_month()
     _persist_locked()
 
@@ -156,10 +178,21 @@ def _load_locked() -> None:
         for key in ("day", "total", "routes", "statuses", "callers"):
             if key in raw:
                 _STATE[key] = raw[key]
-    # The byte quota outlives the day the ledger was written.
-    if raw.get("iso_quota_exhausted_month") == _utc_month():
+    current_fingerprint = _api_key_fingerprint()
+    _STATE["api_key_fingerprint"] = current_fingerprint
+    # The byte quota outlives the day the ledger was written, but it belongs
+    # only to the key that received the 402. A replacement key must get a real
+    # probe instead of inheriting the old key's cached failure.
+    if (
+        raw.get("iso_quota_exhausted_month") == _utc_month()
+        and raw.get("api_key_fingerprint") == current_fingerprint
+        and current_fingerprint
+    ):
         _STATE["iso_quota_exhausted_month"] = raw["iso_quota_exhausted_month"]
         _STATE["iso_requests_skipped"] = int(raw.get("iso_requests_skipped") or 0)
+    else:
+        _STATE["iso_quota_exhausted_month"] = ""
+        _STATE["iso_requests_skipped"] = 0
 
 
 def _persist_locked() -> None:
@@ -241,6 +274,8 @@ def install() -> bool:
                     _STATE["iso_requests_skipped"] = int(_STATE.get("iso_requests_skipped") or 0) + 1
                     table = _STATE.setdefault("statuses", {})
                     table["iso:402_cached"] = int(table.get("iso:402_cached") or 0) + 1
+                    if int(_STATE["iso_requests_skipped"]) % 25 == 0:
+                        _persist_locked()
                 return _cached_iso_402()
             try:
                 response = original(self, method, url, *args, **kwargs)

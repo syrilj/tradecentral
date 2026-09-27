@@ -51,16 +51,25 @@ def _payload(flow_rows):
 
 
 def test_signed_flow_requires_explicit_provider_aggressor():
-    result = _payload([
-        {
-            "contract_type": "call", "premium": 100_000, "volume": 10,
-            "timestamp": "2026-07-31T14:45:00Z", "aggressor": "BUY", "multiplier": 100,
-        },
-        {
-            "contract_type": "put", "premium": 150_000, "volume": 12,
-            "timestamp": "2026-07-31T14:46:00Z", "aggressor": "BUY",
-        },
-    ])
+    result = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 100_000,
+                "volume": 10,
+                "timestamp": "2026-07-31T14:45:00Z",
+                "aggressor": "BUY",
+                "multiplier": 100,
+            },
+            {
+                "contract_type": "put",
+                "premium": 150_000,
+                "volume": 12,
+                "timestamp": "2026-07-31T14:46:00Z",
+                "aggressor": "BUY",
+            },
+        ]
+    )
 
     assert result["provider"]["signed_flow_available"] is True
     assert result["summary"]["signed_net_premium"] == -50_000
@@ -77,13 +86,18 @@ def test_signed_flow_requires_explicit_provider_aggressor():
 
 
 def test_tape_back_solves_price_with_multiplier_and_preserves_vendor_block():
-    result = _payload([
-        {
-            "contract_type": "call", "premium": 750_000, "volume": 50,
-            "timestamp": "2026-07-31T14:45:00Z", "multiplier": 100,
-            "trade_class": "block",
-        },
-    ])
+    result = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 750_000,
+                "volume": 50,
+                "timestamp": "2026-07-31T14:45:00Z",
+                "multiplier": 100,
+                "trade_class": "block",
+            },
+        ]
+    )
     row = result["flow_tape"][0]
     assert row["price"] == 150.0
     assert row["contracts"] == 50
@@ -97,8 +111,10 @@ def test_tape_back_solves_price_with_multiplier_and_preserves_vendor_block():
 def test_contract_focus_names_a_specific_liquid_contract_for_each_right():
     chain = [
         _chain("call", 100) | {"delta": 0.72, "bid": 7.0, "ask": 7.8},
-        _chain("call", 105) | {"delta": 0.46, "bid": 3.9, "ask": 4.1, "occ_symbol": "TEST260828C00105000"},
-        _chain("put", 95) | {"delta": -0.44, "bid": 3.7, "ask": 3.9, "occ_symbol": "TEST260828P00095000"},
+        _chain("call", 105)
+        | {"delta": 0.46, "bid": 3.9, "ask": 4.1, "occ_symbol": "TEST260828C00105000"},
+        _chain("put", 95)
+        | {"delta": -0.44, "bid": 3.7, "ask": 3.9, "occ_symbol": "TEST260828P00095000"},
     ]
     result = build_options_intelligence(
         symbol="TEST",
@@ -129,23 +145,37 @@ def test_contract_focus_names_a_specific_liquid_contract_for_each_right():
 
 def test_contract_focus_prefers_liquidity_and_keeps_delayed_quotes_paper_only():
     chain = [
-        _chain("call", 105) | {
-            "delta": 0.45, "open_interest": 3, "volume": 20,
-            "quote_live": False, "quote_source": "yfinance_delayed_exact_occ",
+        _chain("call", 105)
+        | {
+            "delta": 0.45,
+            "open_interest": 3,
+            "volume": 20,
+            "quote_live": False,
+            "quote_source": "yfinance_delayed_exact_occ",
             "occ_symbol": "TEST260828C00105000",
         },
-        _chain("call", 107) | {
-            "delta": 0.52, "open_interest": 1200, "volume": 300,
-            "quote_live": False, "quote_source": "yfinance_delayed_exact_occ",
+        _chain("call", 107)
+        | {
+            "delta": 0.52,
+            "open_interest": 1200,
+            "volume": 300,
+            "quote_live": False,
+            "quote_source": "yfinance_delayed_exact_occ",
             "occ_symbol": "TEST260828C00107000",
         },
     ]
     result = build_options_intelligence(
-        symbol="TEST", chain_rows=chain, flow_rows=[],
+        symbol="TEST",
+        chain_rows=chain,
+        flow_rows=[],
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
-        spot=100, filters=OptionsFilters(range="1d", min_premium=0, min_volume=0),
-        mode_requested="live", mode_resolved="live", chain_source="fixture",
-        flow_source="fixture", asof_utc=ASOF,
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=0, min_volume=0),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
     )
 
     call = result["contract_focus"]["call"]
@@ -180,10 +210,16 @@ def test_contract_focus_rejects_extreme_strikes_from_provider_normalization():
 
 
 def test_large_untagged_print_is_not_certified_as_vendor_block():
-    result = _payload([{
-        "contract_type": "call", "premium": 750_000, "volume": 50,
-        "timestamp": "2026-07-31T14:45:00Z",
-    }])
+    result = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 750_000,
+                "volume": 50,
+                "timestamp": "2026-07-31T14:45:00Z",
+            }
+        ]
+    )
     row = result["flow_tape"][0]
     assert row["price"] is None
     assert row["trade_class"] == "large"
@@ -191,10 +227,17 @@ def test_large_untagged_print_is_not_certified_as_vendor_block():
 
 
 def test_expired_print_is_rejected_instead_of_clamped_to_zero_dte():
-    result = _payload([{
-        "contract_type": "call", "premium": 100_000, "volume": 10,
-        "expiry": "2026-07-30", "timestamp": "2026-07-31T14:45:00Z",
-    }])
+    result = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 100_000,
+                "volume": 10,
+                "expiry": "2026-07-30",
+                "timestamp": "2026-07-31T14:45:00Z",
+            }
+        ]
+    )
     assert result["flow_tape"] == []
     assert result["quality"]["flow_rejected"]["invalid"] == 1
 
@@ -202,9 +245,13 @@ def test_expired_print_is_rejected_instead_of_clamped_to_zero_dte():
 def test_sweep_burst_promotes_trade_class():
     rows = [
         {
-            "contract_type": "call", "premium": 80_000, "volume": 20, "strike": 105,
+            "contract_type": "call",
+            "premium": 80_000,
+            "volume": 20,
+            "strike": 105,
             "expiry": "2026-08-28",
-            "timestamp": f"2026-07-31T14:45:0{i}Z", "aggressor": "BUY",
+            "timestamp": f"2026-07-31T14:45:0{i}Z",
+            "aggressor": "BUY",
         }
         for i in range(3)
     ]
@@ -215,12 +262,17 @@ def test_sweep_burst_promotes_trade_class():
 
 
 def test_call_put_identity_and_stale_quote_proxy_stay_unsigned():
-    result = _payload([
-        {
-            "contract_type": "call", "premium": 125_000, "volume": 10,
-            "timestamp": "2026-07-31T14:45:00Z", "_stale_quote_side": "BUY",
-        },
-    ])
+    result = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 125_000,
+                "volume": 10,
+                "timestamp": "2026-07-31T14:45:00Z",
+                "_stale_quote_side": "BUY",
+            },
+        ]
+    )
 
     assert result["provider"]["signed_flow_available"] is False
     assert result["summary"]["signed_net_premium"] is None
@@ -235,12 +287,16 @@ def test_call_put_identity_and_stale_quote_proxy_stay_unsigned():
 
 
 def test_unsigned_call_put_mix_never_drives_squeeze_direction():
-    unsigned = _payload([
-        {
-            "contract_type": "call", "premium": 125_000, "volume": 10,
-            "timestamp": "2026-07-31T14:45:00Z",
-        },
-    ])
+    unsigned = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 125_000,
+                "volume": 10,
+                "timestamp": "2026-07-31T14:45:00Z",
+            },
+        ]
+    )
     assert unsigned["summary"]["activity_imbalance"] == 1.0
     assert unsigned["summary"]["signed_flow_imbalance"] is None
     theory = unsigned["summary"]["squeeze"]["theory"]
@@ -258,12 +314,17 @@ def test_unsigned_call_put_mix_never_drives_squeeze_direction():
 
 
 def test_signed_flow_imbalance_is_sample_size_shrunk_for_squeeze():
-    signed = _payload([
-        {
-            "contract_type": "call", "premium": 125_000, "volume": 10,
-            "timestamp": "2026-07-31T14:45:00Z", "aggressor": "BUY",
-        },
-    ])
+    signed = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 125_000,
+                "volume": 10,
+                "timestamp": "2026-07-31T14:45:00Z",
+                "aggressor": "BUY",
+            },
+        ]
+    )
     # One fully bullish signed print gets 1/8 confidence, not a saturated +1.
     assert signed["summary"]["signed_flow_confidence"] == 0.125
     assert signed["summary"]["signed_flow_imbalance"] == 0.125
@@ -278,13 +339,15 @@ def _signed_prints(n, *, side, start_hour=12):
     for i in range(n):
         minute = (i * 4) % 60
         hour = start_hour + (i * 4) // 60
-        rows.append({
-            "contract_type": right,
-            "premium": 125_000,
-            "volume": 10,
-            "timestamp": f"2026-07-31T{hour:02d}:{minute:02d}:00Z",
-            "aggressor": aggressor,
-        })
+        rows.append(
+            {
+                "contract_type": right,
+                "premium": 125_000,
+                "volume": 10,
+                "timestamp": f"2026-07-31T{hour:02d}:{minute:02d}:00Z",
+                "aggressor": aggressor,
+            }
+        )
     return rows
 
 
@@ -311,7 +374,8 @@ def test_mid_tape_reversal_updates_live_squeeze_instead_of_locking_pre_shift():
     )
     stable = build_options_intelligence(flow_rows=_signed_prints(12, side="buy_call"), **common)
     flipped = build_options_intelligence(
-        flow_rows=_signed_prints(8, side="buy_call") + _signed_prints(8, side="buy_put", start_hour=13),
+        flow_rows=_signed_prints(8, side="buy_call")
+        + _signed_prints(8, side="buy_put", start_hour=13),
         **common,
     )
     assert stable["summary"]["signed_flow_imbalance"] > 0
@@ -403,7 +467,11 @@ def test_gex_and_probability_are_explicitly_model_derived():
     assert result["gex_price_profile"]
     assert result["probability"]["available"] is True
     assert "risk-neutral" in result["probability"]["method"]
-    assert any("True dealer inventory is not public" in note or "true dealer inventory is not public" in note for note in result["caveats"])
+    assert any(
+        "True dealer inventory is not public" in note
+        or "true dealer inventory is not public" in note
+        for note in result["caveats"]
+    )
 
 
 def test_gex_walls_are_directional_not_global_argmax():
@@ -415,24 +483,60 @@ def test_gex_walls_are_directional_not_global_argmax():
     asof = ASOF
     chain = [
         {
-            "right": "call", "expiry": "2026-08-28", "strike": 100, "bid": 4.9, "ask": 5.1,
-            "volume": 500, "open_interest": 50_000, "iv": 0.35, "gamma": 0.05,
-            "multiplier": 100, "captured_utc": asof.isoformat(), "spot": 100,
+            "right": "call",
+            "expiry": "2026-08-28",
+            "strike": 100,
+            "bid": 4.9,
+            "ask": 5.1,
+            "volume": 500,
+            "open_interest": 50_000,
+            "iv": 0.35,
+            "gamma": 0.05,
+            "multiplier": 100,
+            "captured_utc": asof.isoformat(),
+            "spot": 100,
         },
         {
-            "right": "put", "expiry": "2026-08-28", "strike": 100, "bid": 4.9, "ask": 5.1,
-            "volume": 500, "open_interest": 50_000, "iv": 0.35, "gamma": 0.05,
-            "multiplier": 100, "captured_utc": asof.isoformat(), "spot": 100,
+            "right": "put",
+            "expiry": "2026-08-28",
+            "strike": 100,
+            "bid": 4.9,
+            "ask": 5.1,
+            "volume": 500,
+            "open_interest": 50_000,
+            "iv": 0.35,
+            "gamma": 0.05,
+            "multiplier": 100,
+            "captured_utc": asof.isoformat(),
+            "spot": 100,
         },
         {
-            "right": "call", "expiry": "2026-08-28", "strike": 110, "bid": 1.9, "ask": 2.1,
-            "volume": 100, "open_interest": 8_000, "iv": 0.35, "gamma": 0.02,
-            "multiplier": 100, "captured_utc": asof.isoformat(), "spot": 100,
+            "right": "call",
+            "expiry": "2026-08-28",
+            "strike": 110,
+            "bid": 1.9,
+            "ask": 2.1,
+            "volume": 100,
+            "open_interest": 8_000,
+            "iv": 0.35,
+            "gamma": 0.02,
+            "multiplier": 100,
+            "captured_utc": asof.isoformat(),
+            "spot": 100,
         },
         {
-            "right": "put", "expiry": "2026-08-28", "strike": 90, "bid": 1.9, "ask": 2.1,
-            "volume": 100, "open_interest": 8_000, "iv": 0.35, "gamma": 0.02,
-            "multiplier": 100, "captured_utc": asof.isoformat(), "spot": 100,
+            "right": "put",
+            "expiry": "2026-08-28",
+            "strike": 90,
+            "bid": 1.9,
+            "ask": 2.1,
+            "volume": 100,
+            "open_interest": 8_000,
+            "iv": 0.35,
+            "gamma": 0.02,
+            "multiplier": 100,
+            "captured_utc": asof.isoformat(),
+            "spot": 100,
         },
     ]
     result = build_options_intelligence(
@@ -454,18 +558,28 @@ def test_gex_walls_are_directional_not_global_argmax():
 
 
 def test_squeeze_readout_is_attached_to_summary():
-    result = _payload([
-        {
-            "contract_type": "call", "premium": 250_000, "volume": 40,
-            "timestamp": "2026-07-31T14:45:00Z", "aggressor": "BUY",
-        },
-    ])
+    result = _payload(
+        [
+            {
+                "contract_type": "call",
+                "premium": 250_000,
+                "volume": 40,
+                "timestamp": "2026-07-31T14:45:00Z",
+                "aggressor": "BUY",
+            },
+        ]
+    )
     squeeze = result["summary"]["squeeze"]
     assert "bullish" in squeeze and "bearish" in squeeze
     assert "score" in squeeze  # signed gex_core score [-100, 100]
     assert -100 <= squeeze["score"] <= 100
     assert squeeze["label"] in {
-        "quiet", "two_way", "bullish_lean", "bullish_squeeze", "bearish_lean", "bearish_squeeze",
+        "quiet",
+        "two_way",
+        "bullish_lean",
+        "bullish_squeeze",
+        "bearish_lean",
+        "bearish_squeeze",
     }
     assert squeeze["primary"] in {"quiet", "two_way", "bullish", "bearish"}
     method = squeeze.get("method") or ""
@@ -627,20 +741,28 @@ def test_exact_expiry_keeps_gex_focus_but_relaxes_an_empty_trade_tape():
         chain_rows=[_chain("call", 105), _chain("put", 95)],
         flow_rows=[
             {
-                "contract_type": "call", "premium": 1_000, "volume": 10,
-                "strike": 105, "expiry": "2026-08-28",
+                "contract_type": "call",
+                "premium": 1_000,
+                "volume": 10,
+                "strike": 105,
+                "expiry": "2026-08-28",
                 "timestamp": "2026-07-31T14:45:00Z",
             },
             {
-                "contract_type": "put", "premium": 125_000, "volume": 20,
-                "strike": 90, "expiry": "2026-09-18",
+                "contract_type": "put",
+                "premium": 125_000,
+                "volume": 20,
+                "strike": 90,
+                "expiry": "2026-09-18",
                 "timestamp": "2026-07-31T14:46:00Z",
             },
         ],
         price_series=[],
         spot=100,
         filters=OptionsFilters(
-            range="1d", min_premium=50_000, min_volume=1,
+            range="1d",
+            min_premium=50_000,
+            min_volume=1,
             expiry="2026-08-28",
         ),
         mode_requested="live",
@@ -671,13 +793,15 @@ def test_tape_anomalies_use_robust_observable_rules_and_respect_depth_limit():
         }
         for i in range(9)
     ]
-    rows.append({
-        "contract_type": "put",
-        "premium": 2_000_000,
-        "volume": 500,
-        "strike": 70,
-        "timestamp": "2026-07-31T14:10:00Z",
-    })
+    rows.append(
+        {
+            "contract_type": "put",
+            "premium": 2_000_000,
+            "volume": 500,
+            "strike": 70,
+            "timestamp": "2026-07-31T14:10:00Z",
+        }
+    )
     result = build_options_intelligence(
         symbol="TEST",
         chain_rows=[_chain("call", 105), _chain("put", 95)],
@@ -769,6 +893,7 @@ def test_imbalance_confidence_shrinks_thin_tape():
 # Measurability: a missing input must never render as a measured zero.
 # ---------------------------------------------------------------------------
 
+
 def _measurability_payload(*, open_interest: int, oi_source: str) -> dict:
     call = {**_chain("call", 105), "open_interest": open_interest}
     put = {**_chain("put", 95), "open_interest": open_interest}
@@ -779,7 +904,10 @@ def _measurability_payload(*, open_interest: int, oi_source: str) -> dict:
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(
-            range="1d", min_premium=0, min_volume=0, min_open_interest=0,
+            range="1d",
+            min_premium=0,
+            min_volume=0,
+            min_open_interest=0,
         ),
         mode_requested="live",
         mode_resolved="live",
@@ -826,11 +954,20 @@ def test_median_spread_pct_is_reported_on_summary():
 def test_median_spread_pct_is_none_without_usable_bid_ask():
     payload = build_options_intelligence(
         symbol="TEST",
-        chain_rows=[{
-            "right": "call", "expiry": "2026-08-28", "strike": 105,
-            "volume": 500, "open_interest": 2_000, "iv": 0.35, "gamma": 0.02,
-            "multiplier": 100, "captured_utc": ASOF.isoformat(), "spot": 100,
-        }],
+        chain_rows=[
+            {
+                "right": "call",
+                "expiry": "2026-08-28",
+                "strike": 105,
+                "volume": 500,
+                "open_interest": 2_000,
+                "iv": 0.35,
+                "gamma": 0.02,
+                "multiplier": 100,
+                "captured_utc": ASOF.isoformat(),
+                "spot": 100,
+            }
+        ],
         flow_rows=[],
         price_series=[{"t": ASOF.isoformat(), "close": 100}],
         spot=100,
@@ -849,7 +986,9 @@ def test_charm_is_delta_decay_per_day_and_identical_for_calls_and_puts_at_q0():
 
     # ATM, 30 DTE, IV 0.35, r 0.045, q 0.
     call = _bs_charm_per_day(spot=100, strike=100, years=30 / 365, iv=0.35, rate=0.045)
-    put = _bs_charm_per_day(spot=100, strike=100, years=30 / 365, iv=0.35, rate=0.045, is_call=False)
+    put = _bs_charm_per_day(
+        spot=100, strike=100, years=30 / 365, iv=0.35, rate=0.045, is_call=False
+    )
     assert call is not None and put is not None
     assert call == pytest.approx(put, abs=1e-12)
     # Charm is negative for ATM options: delta decays toward 0/1 as time passes.
@@ -902,15 +1041,36 @@ def test_charm_summary_pressure_tag_follows_dealer_hedge_convention():
     from edge.daily_plays.options_intelligence import _charm_map
 
     rows = [
-        {"right": "call", "strike": 100, "dte": 30, "iv": 0.35, "open_interest": 2_000, "multiplier": 100},
-        {"right": "put", "strike": 100, "dte": 30, "iv": 0.35, "open_interest": 2_000, "multiplier": 100},
+        {
+            "right": "call",
+            "strike": 100,
+            "dte": 30,
+            "iv": 0.35,
+            "open_interest": 2_000,
+            "multiplier": 100,
+        },
+        {
+            "right": "put",
+            "strike": 100,
+            "dte": 30,
+            "iv": 0.35,
+            "open_interest": 2_000,
+            "multiplier": 100,
+        },
     ]
     _, summary, _ = _charm_map(rows, spot=100, rate=0.045)
     # Equal OI on both sides → net ≈ 0 → balanced.
     assert summary["pressure"] == "balanced"
 
     rows = [
-        {"right": "call", "strike": 100, "dte": 30, "iv": 0.35, "open_interest": 2_000, "multiplier": 100},
+        {
+            "right": "call",
+            "strike": 100,
+            "dte": 30,
+            "iv": 0.35,
+            "open_interest": 2_000,
+            "multiplier": 100,
+        },
     ]
     _, summary, _ = _charm_map(rows, spot=100, rate=0.045)
     # Call-only book: net charm flow < 0 (ATM charm negative) → dealers buy.
@@ -924,26 +1084,31 @@ def test_pressure_gauge_readout_agrees_with_dealer_hedge_convention():
     # §5.5: positive net charm flow → dealers sell → selling pressure.
     # The gauge negates the charm term so it agrees with the charm KPI.
     gauge = _pressure_gauge(
-        net_charm_flow=500.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+        net_charm_flow=500.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
     )
     assert gauge["imbalance"] == pytest.approx(-1.0)
     assert gauge["label"] == "selling"
 
     gauge = _pressure_gauge(
-        net_charm_flow=-500.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+        net_charm_flow=-500.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
     )
     assert gauge["imbalance"] == pytest.approx(1.0)
     assert gauge["label"] == "buying"
 
     gauge = _pressure_gauge(
-        net_charm_flow=0.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+        net_charm_flow=0.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
     )
     assert gauge["imbalance"] == pytest.approx(0.0)
     assert gauge["label"] == "balanced"
-
 
 
 def test_payload_exposes_charm_pressure_and_delta_weighted_volume():
@@ -1001,11 +1166,17 @@ def test_negative_gex_takeaway_puts_the_sign_ahead_of_the_dollar_sign():
 # --- charm / pressure-gauge math audit regressions ---------------------------
 
 
-def _charm_row(right: str, strike: float, *, oi: int = 2_000, dte: int | None = 30,
-               iv: float = 0.35) -> dict:
+def _charm_row(
+    right: str, strike: float, *, oi: int = 2_000, dte: int | None = 30, iv: float = 0.35
+) -> dict:
     return {
-        "right": right, "strike": strike, "open_interest": oi, "volume": 0,
-        "iv": iv, "dte": dte, "multiplier": 100,
+        "right": right,
+        "strike": strike,
+        "open_interest": oi,
+        "volume": 0,
+        "iv": iv,
+        "dte": dte,
+        "multiplier": 100,
     }
 
 
@@ -1063,8 +1234,9 @@ def test_abs_charm_flow_is_gross_magnitude_not_net_of_opposing_strikes():
     """
     from edge.daily_plays.options_intelligence import _charm_map
 
-    rows = [_charm_row("call", k) for k in (90, 95, 100, 105, 110)] + \
-           [_charm_row("put", k) for k in (90, 95, 100, 105, 110)]
+    rows = [_charm_row("call", k) for k in (90, 95, 100, 105, 110)] + [
+        _charm_row("put", k) for k in (90, 95, 100, 105, 110)
+    ]
     mapped, summary, _ = _charm_map(rows, spot=100, rate=0.045)
 
     expected = sum(abs(r["call_charm_flow"]) + abs(r["put_charm_flow"]) for r in mapped)
@@ -1075,15 +1247,17 @@ def test_abs_charm_flow_is_gross_magnitude_not_net_of_opposing_strikes():
     assert summary["abs_charm_flow"] > abs(summary["net_charm_flow"])
 
 
-
 def test_pressure_gauge_channels_abstain_when_they_have_no_gross_magnitude():
     """A channel with no data must not vote 'balanced' and dilute the others."""
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     gauge = _pressure_gauge(
-        net_charm_flow=250_000.0, abs_charm_flow=900_000.0,
-        net_gex_m=0.0, abs_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+        net_charm_flow=250_000.0,
+        abs_charm_flow=900_000.0,
+        net_gex_m=0.0,
+        abs_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
     )
     assert gauge["channels"]["gex"] is None
     assert gauge["channels"]["volume"] is None
@@ -1096,16 +1270,23 @@ def test_pressure_gauge_stays_bounded_and_unsigned_context_never_votes():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     gauge = _pressure_gauge(
-        net_charm_flow=-900_000.0, abs_charm_flow=900_000.0,
-        net_gex_m=150.0, abs_gex_m=150.0,
-        delta_weighted_call_vol=90_000.0, delta_weighted_put_vol=0.0,
+        net_charm_flow=-900_000.0,
+        abs_charm_flow=900_000.0,
+        net_gex_m=150.0,
+        abs_gex_m=150.0,
+        delta_weighted_call_vol=90_000.0,
+        delta_weighted_put_vol=0.0,
     )
     # Charm maxed bullish -> saturates at exactly +1, never beyond. The unsigned
     # call/put mix and the GEX sign are context only and never vote.
     assert gauge["imbalance"] == pytest.approx(1.0)
     assert gauge["label"] == "buying"
     assert gauge["channels"] == {
-        "charm": 1.0, "tape": None, "underlying": None, "volume": None, "gex": None,
+        "charm": 1.0,
+        "tape": None,
+        "underlying": None,
+        "volume": None,
+        "gex": None,
     }
 
 
@@ -1179,10 +1360,15 @@ def test_expiration_day_chain_reports_zero_measured_rather_than_fabricating_flow
 
 def _tape_channel(**overrides):
     base = {
-        "signed_premium": 0.0, "gross_premium": 0.0, "resolved_premium": 0.0,
-        "total_premium": 0.0, "n_signed": 0, "n_total": 0,
+        "signed_premium": 0.0,
+        "gross_premium": 0.0,
+        "resolved_premium": 0.0,
+        "total_premium": 0.0,
+        "n_signed": 0,
+        "n_total": 0,
         "source_mix": {"vendor": 0, "quote_rule_live": 0, "quote_rule_delayed": 0, "unresolved": 0},
-        "buy_premium": 0.0, "sell_premium": 0.0,
+        "buy_premium": 0.0,
+        "sell_premium": 0.0,
     }
     base.update(overrides)
     return base
@@ -1193,8 +1379,11 @@ def test_pressure_gauge_unsigned_call_put_mix_is_context_not_direction():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     gauge = _pressure_gauge(
-        net_charm_flow=0.0, abs_charm_flow=0.0, net_gex_m=0.0,
-        delta_weighted_call_vol=10_000.0, delta_weighted_put_vol=1_000.0,
+        net_charm_flow=0.0,
+        abs_charm_flow=0.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=10_000.0,
+        delta_weighted_put_vol=1_000.0,
     )
     assert gauge["imbalance"] == pytest.approx(0.0)
     assert gauge["label"] == "balanced"
@@ -1210,9 +1399,12 @@ def test_pressure_gauge_gex_sets_follow_through_not_direction():
 
     def gauge(net_gex_m: float):
         return _pressure_gauge(
-            net_charm_flow=250_000.0, abs_charm_flow=900_000.0,
-            net_gex_m=net_gex_m, abs_gex_m=150.0,
-            delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
+            net_charm_flow=250_000.0,
+            abs_charm_flow=900_000.0,
+            net_gex_m=net_gex_m,
+            abs_gex_m=150.0,
+            delta_weighted_call_vol=0.0,
+            delta_weighted_put_vol=0.0,
         )
 
     positive, negative = gauge(150.0), gauge(-150.0)
@@ -1227,15 +1419,23 @@ def test_pressure_gauge_tape_channel_votes_with_resolved_sides():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     tape = _tape_channel(
-        signed_premium=-800_000.0, gross_premium=1_000_000.0,
-        resolved_premium=1_000_000.0, total_premium=1_250_000.0,
-        n_signed=30, n_total=40,
+        signed_premium=-800_000.0,
+        gross_premium=1_000_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_250_000.0,
+        n_signed=30,
+        n_total=40,
         source_mix={"vendor": 0, "quote_rule_live": 30, "quote_rule_delayed": 0, "unresolved": 10},
-        buy_premium=100_000.0, sell_premium=900_000.0,
+        buy_premium=100_000.0,
+        sell_premium=900_000.0,
     )
     gauge = _pressure_gauge(
-        net_charm_flow=0.0, abs_charm_flow=0.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0, tape=tape,
+        net_charm_flow=0.0,
+        abs_charm_flow=0.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
+        tape=tape,
     )
     assert gauge["channels"]["tape"] == pytest.approx(-0.8)
     assert gauge["imbalance"] == pytest.approx(-0.8)
@@ -1248,12 +1448,20 @@ def test_pressure_gauge_tape_channel_abstains_below_evidence_floor():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     thin = _tape_channel(
-        signed_premium=-90_000.0, gross_premium=100_000.0, resolved_premium=100_000.0,
-        total_premium=2_000_000.0, n_signed=3, n_total=60,
+        signed_premium=-90_000.0,
+        gross_premium=100_000.0,
+        resolved_premium=100_000.0,
+        total_premium=2_000_000.0,
+        n_signed=3,
+        n_total=60,
     )
     gauge = _pressure_gauge(
-        net_charm_flow=0.0, abs_charm_flow=0.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0, tape=thin,
+        net_charm_flow=0.0,
+        abs_charm_flow=0.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
+        tape=thin,
     )
     assert gauge["channels"]["tape"] is None
     assert gauge["imbalance"] == pytest.approx(0.0)
@@ -1265,13 +1473,21 @@ def test_pressure_gauge_conflicting_channels_are_not_actionable():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     tape = _tape_channel(
-        signed_premium=-800_000.0, gross_premium=1_000_000.0, resolved_premium=1_000_000.0,
-        total_premium=1_100_000.0, n_signed=40, n_total=44,
+        signed_premium=-800_000.0,
+        gross_premium=1_000_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_100_000.0,
+        n_signed=40,
+        n_total=44,
         source_mix={"vendor": 40, "quote_rule_live": 0, "quote_rule_delayed": 0, "unresolved": 4},
     )
     gauge = _pressure_gauge(
-        net_charm_flow=-800_000.0, abs_charm_flow=1_000_000.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0, tape=tape,
+        net_charm_flow=-800_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
+        tape=tape,
     )
     assert abs(gauge["imbalance"]) < 0.25
     assert gauge["actionable"] is False
@@ -1284,15 +1500,26 @@ def test_pressure_gauge_agreeing_live_channels_are_high_confidence():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     tape = _tape_channel(
-        signed_premium=-700_000.0, gross_premium=1_000_000.0, resolved_premium=1_000_000.0,
-        total_premium=1_200_000.0, n_signed=40, n_total=48,
+        signed_premium=-700_000.0,
+        gross_premium=1_000_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_200_000.0,
+        n_signed=40,
+        n_total=48,
         source_mix={"vendor": 0, "quote_rule_live": 40, "quote_rule_delayed": 0, "unresolved": 8},
     )
     underlying = {"ratio": -0.5, "rvol": 1.4, "bars_used": 7, "timeframe": "1h", "stale": False}
     gauge = _pressure_gauge(
-        net_charm_flow=700_000.0, abs_charm_flow=1_000_000.0, net_gex_m=-80.0, abs_gex_m=120.0,
-        delta_weighted_call_vol=1_000.0, delta_weighted_put_vol=4_000.0,
-        tape=tape, underlying=underlying, charm_coverage=0.95, mode_resolved="live",
+        net_charm_flow=700_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=-80.0,
+        abs_gex_m=120.0,
+        delta_weighted_call_vol=1_000.0,
+        delta_weighted_put_vol=4_000.0,
+        tape=tape,
+        underlying=underlying,
+        charm_coverage=0.95,
+        mode_resolved="live",
     )
     assert gauge["label"] == "selling"
     assert gauge["direction"] == "selling"
@@ -1309,8 +1536,12 @@ def test_pressure_gauge_charm_alone_is_never_actionable():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     gauge = _pressure_gauge(
-        net_charm_flow=900_000.0, abs_charm_flow=1_000_000.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0, charm_coverage=1.0,
+        net_charm_flow=900_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
+        charm_coverage=1.0,
     )
     assert gauge["label"] == "selling"
     assert gauge["actionable"] is False
@@ -1322,14 +1553,23 @@ def test_pressure_gauge_delayed_mode_is_never_actionable():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     tape = _tape_channel(
-        signed_premium=-700_000.0, gross_premium=1_000_000.0, resolved_premium=1_000_000.0,
-        total_premium=1_200_000.0, n_signed=40, n_total=48,
+        signed_premium=-700_000.0,
+        gross_premium=1_000_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_200_000.0,
+        n_signed=40,
+        n_total=48,
         source_mix={"vendor": 40, "quote_rule_live": 0, "quote_rule_delayed": 0, "unresolved": 8},
     )
     gauge = _pressure_gauge(
-        net_charm_flow=700_000.0, abs_charm_flow=1_000_000.0, net_gex_m=0.0,
-        delta_weighted_call_vol=0.0, delta_weighted_put_vol=0.0,
-        tape=tape, charm_coverage=1.0, mode_resolved="history",
+        net_charm_flow=700_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=0.0,
+        delta_weighted_call_vol=0.0,
+        delta_weighted_put_vol=0.0,
+        tape=tape,
+        charm_coverage=1.0,
+        mode_resolved="history",
     )
     assert gauge["label"] == "selling"
     assert gauge["actionable"] is False
@@ -1342,8 +1582,12 @@ def test_underlying_pressure_uses_close_location_value_as_a_labelled_proxy():
 
     def bar(i: int, *, close_at_high: bool) -> dict:
         return {
-            "t": f"2026-07-31T{9 + i:02d}:30:00+00:00", "open": 100.0, "high": 101.0, "low": 99.0,
-            "close": 101.0 if close_at_high else 99.0, "volume": 1_000.0,
+            "t": f"2026-07-31T{9 + i:02d}:30:00+00:00",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 101.0 if close_at_high else 99.0,
+            "volume": 1_000.0,
         }
 
     bullish = _underlying_pressure([bar(i, close_at_high=True) for i in range(7)])
@@ -1374,10 +1618,15 @@ def _print(right: str, strike: float, price: float, premium: float = 100_000, **
     # into one sweep-burst row, either of which would hide a fixture print.
     minutes = next(_PRINT_SEQ)
     return {
-        "contract_type": right, "strike": strike, "expiry": "2026-08-28",
-        "price": price, "premium": premium, "volume": 20,
+        "contract_type": right,
+        "strike": strike,
+        "expiry": "2026-08-28",
+        "price": price,
+        "premium": premium,
+        "volume": 20,
         "timestamp": f"2026-07-31T{13 + minutes // 60:02d}:{minutes % 60:02d}:00Z",
-        "multiplier": 100, **extra,
+        "multiplier": 100,
+        **extra,
     }
 
 
@@ -1392,16 +1641,19 @@ def test_quote_rule_infers_print_side_from_live_chain_quote():
         symbol="TEST",
         chain_rows=[_quote_chain("call", 105), _quote_chain("put", 95)],
         flow_rows=[
-            _print("call", 105, 5.10),   # lifted the ask → buy call → buying
-            _print("put", 95, 5.10),     # lifted the ask → buy put → selling
-            _print("call", 105, 4.90),   # hit the bid → sell call → selling
-            _print("put", 95, 5.00),     # mid → unresolved
+            _print("call", 105, 5.10),  # lifted the ask → buy call → buying
+            _print("put", 95, 5.10),  # lifted the ask → buy put → selling
+            _print("call", 105, 4.90),  # hit the bid → sell call → selling
+            _print("put", 95, 5.00),  # mid → unresolved
         ],
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
-        mode_requested="live", mode_resolved="live",
-        chain_source="fixture", flow_source="fixture", asof_utc=ASOF,
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
     )
     tape = result["pressure"]["tape"]
     assert tape["n_total"] == 4
@@ -1431,17 +1683,23 @@ def test_quote_rule_infers_print_side_from_live_chain_quote():
 def test_quote_rule_on_delayed_quote_only_counts_prints_outside_the_touch():
     result = build_options_intelligence(
         symbol="TEST",
-        chain_rows=[_quote_chain("call", 105, quote_live=False), _quote_chain("put", 95, quote_live=False)],
+        chain_rows=[
+            _quote_chain("call", 105, quote_live=False),
+            _quote_chain("put", 95, quote_live=False),
+        ],
         flow_rows=[
-            _print("call", 105, 5.20),   # through the ask → buy, discounted
-            _print("call", 105, 5.06),   # inside the spread → unresolved on a stale quote
-            _print("put", 95, 4.80),     # through the bid → sell put → buying, discounted
+            _print("call", 105, 5.20),  # through the ask → buy, discounted
+            _print("call", 105, 5.06),  # inside the spread → unresolved on a stale quote
+            _print("put", 95, 4.80),  # through the bid → sell put → buying, discounted
         ],
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
-        mode_requested="live", mode_resolved="live",
-        chain_source="fixture", flow_source="fixture", asof_utc=ASOF,
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
     )
     tape = result["pressure"]["tape"]
     assert tape["source_mix"]["quote_rule_delayed"] == 2
@@ -1465,8 +1723,11 @@ def test_vendor_aggressor_outranks_quote_rule():
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
-        mode_requested="live", mode_resolved="live",
-        chain_source="fixture", flow_source="fixture", asof_utc=ASOF,
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
     )
     row = result["flow_tape"][0]
     assert row["inferred_side"] == "buy"
@@ -1477,8 +1738,14 @@ def test_vendor_aggressor_outranks_quote_rule():
 
 def test_payload_exposes_underlying_channel_when_bars_are_supplied():
     bars = [
-        {"t": f"2026-07-31T{9 + i:02d}:30:00+00:00", "open": 100.0, "high": 101.0, "low": 99.0,
-         "close": 99.0, "volume": 1_000.0}
+        {
+            "t": f"2026-07-31T{9 + i:02d}:30:00+00:00",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 99.0,
+            "volume": 1_000.0,
+        }
         for i in range(7)
     ]
     result = build_options_intelligence(
@@ -1488,8 +1755,11 @@ def test_payload_exposes_underlying_channel_when_bars_are_supplied():
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
-        mode_requested="live", mode_resolved="live",
-        chain_source="fixture", flow_source="fixture", asof_utc=ASOF,
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
         underlying_bars=bars,
     )
     pressure = result["pressure"]
@@ -1516,17 +1786,20 @@ def test_tick_rule_signs_prints_when_the_chain_has_no_quote():
         symbol="TEST",
         chain_rows=[_quoteless_chain("call", 105), _quoteless_chain("put", 95)],
         flow_rows=[
-            _print("call", 105, 5.00),   # first print: nothing to compare → unresolved
-            _print("call", 105, 5.20),   # uptick → buy call → buying
-            _print("call", 105, 5.20),   # zero tick inherits the buy
-            _print("call", 105, 5.10),   # downtick → sell call → selling
-            _print("put", 95, 4.00),     # lone print on its contract → unresolved
+            _print("call", 105, 5.00),  # first print: nothing to compare → unresolved
+            _print("call", 105, 5.20),  # uptick → buy call → buying
+            _print("call", 105, 5.20),  # zero tick inherits the buy
+            _print("call", 105, 5.10),  # downtick → sell call → selling
+            _print("put", 95, 4.00),  # lone print on its contract → unresolved
         ],
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
-        mode_requested="live", mode_resolved="live",
-        chain_source="fixture", flow_source="fixture", asof_utc=ASOF,
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
     )
     tape = result["pressure"]["tape"]
     assert tape["n_total"] == 5
@@ -1552,15 +1825,20 @@ def test_tick_rule_never_overrides_a_quote_rule_side():
         symbol="TEST",
         chain_rows=[_quote_chain("call", 105), _quote_chain("put", 95)],
         flow_rows=[
-            _print("call", 105, 5.10),   # at the ask → buy (quote rule)
-            _print("call", 105, 4.90),   # at the bid → sell (quote rule), even though it is a downtick anyway
-            _print("call", 105, 5.00),   # mid: quote rule abstains → tick test says uptick → buy
+            _print("call", 105, 5.10),  # at the ask → buy (quote rule)
+            _print(
+                "call", 105, 4.90
+            ),  # at the bid → sell (quote rule), even though it is a downtick anyway
+            _print("call", 105, 5.00),  # mid: quote rule abstains → tick test says uptick → buy
         ],
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
-        mode_requested="live", mode_resolved="live",
-        chain_source="fixture", flow_source="fixture", asof_utc=ASOF,
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
     )
     rows = {row["price"]: row for row in result["flow_tape"]}
     assert rows[5.1]["side_source"] == "quote_rule_live"
@@ -1570,7 +1848,7 @@ def test_tick_rule_never_overrides_a_quote_rule_side():
 
 def test_delayed_quote_from_another_day_is_not_a_reference():
     stale = _quote_chain("call", 105, quote_live=False)
-    stale["captured_utc"] = "2026-07-20T15:00:00+00:00"   # eleven days before the prints
+    stale["captured_utc"] = "2026-07-20T15:00:00+00:00"  # eleven days before the prints
     result = build_options_intelligence(
         symbol="TEST",
         chain_rows=[stale, _quote_chain("put", 95, quote_live=False)],
@@ -1578,8 +1856,11 @@ def test_delayed_quote_from_another_day_is_not_a_reference():
         price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
         spot=100,
         filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
-        mode_requested="live", mode_resolved="live",
-        chain_source="fixture", flow_source="fixture", asof_utc=ASOF,
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
     )
     row = result["flow_tape"][0]
     assert row["inferred_side"] is None
@@ -1591,17 +1872,164 @@ def test_tick_test_only_tape_caps_confidence_at_medium():
     from edge.daily_plays.options_intelligence import _pressure_gauge
 
     tape = _tape_channel(
-        signed_premium=-280_000.0, gross_premium=400_000.0, resolved_premium=1_000_000.0,
-        total_premium=1_200_000.0, n_signed=300, n_total=360,
-        source_mix={"vendor": 0, "quote_rule_live": 0, "quote_rule_delayed": 0, "tick_rule": 300, "unresolved": 60},
+        signed_premium=-280_000.0,
+        gross_premium=400_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_200_000.0,
+        n_signed=300,
+        n_total=360,
+        source_mix={
+            "vendor": 0,
+            "quote_rule_live": 0,
+            "quote_rule_delayed": 0,
+            "tick_rule": 300,
+            "unresolved": 60,
+        },
     )
     underlying = {"ratio": -0.6, "rvol": 1.2, "bars_used": 7, "timeframe": "1h", "stale": False}
     gauge = _pressure_gauge(
-        net_charm_flow=700_000.0, abs_charm_flow=1_000_000.0, net_gex_m=0.0,
-        tape=tape, underlying=underlying, charm_coverage=1.0, mode_resolved="live",
+        net_charm_flow=700_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=0.0,
+        tape=tape,
+        underlying=underlying,
+        charm_coverage=1.0,
+        mode_resolved="live",
     )
     assert gauge["label"] == "selling"
     assert gauge["tape"]["quality"] == pytest.approx(0.4)
     assert gauge["confidence"]["band"] == "medium"
     assert gauge["actionable"] is True
     assert any("tick-test only" in reason for reason in gauge["reasons"])
+
+
+def test_pressure_gauge_stale_source_age_is_never_actionable():
+    """A live mode label cannot promote an 86,000s stale feed into an actionable entry."""
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    tape = _tape_channel(
+        signed_premium=-700_000.0,
+        gross_premium=1_000_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_200_000.0,
+        n_signed=40,
+        n_total=48,
+        source_mix={"vendor": 0, "quote_rule_live": 40, "quote_rule_delayed": 0, "unresolved": 8},
+    )
+    underlying = {"ratio": -0.5, "rvol": 1.4, "bars_used": 7, "timeframe": "1h", "stale": False}
+    gauge = _pressure_gauge(
+        net_charm_flow=700_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=-80.0,
+        abs_gex_m=120.0,
+        delta_weighted_call_vol=1_000.0,
+        delta_weighted_put_vol=4_000.0,
+        tape=tape,
+        underlying=underlying,
+        charm_coverage=0.95,
+        mode_resolved="live",
+        source_age_seconds=86_000.0,
+    )
+    assert gauge["label"] == "selling"
+    assert gauge["actionable"] is False
+    assert gauge["confidence"]["freshness"] == 0.0
+    assert any("stale" in r for r in gauge["reasons"])
+    assert "UNCONFIRMED" in gauge["verdict"]
+
+
+def test_pressure_gauge_unknown_source_age_is_never_actionable():
+    """Missing or unverified feed freshness cannot authorize a live entry."""
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    tape = _tape_channel(
+        signed_premium=-700_000.0,
+        gross_premium=1_000_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_200_000.0,
+        n_signed=40,
+        n_total=48,
+        source_mix={"vendor": 0, "quote_rule_live": 40, "quote_rule_delayed": 0, "unresolved": 8},
+    )
+    underlying = {"ratio": -0.5, "rvol": 1.4, "bars_used": 7, "timeframe": "1h", "stale": False}
+    gauge = _pressure_gauge(
+        net_charm_flow=700_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=-80.0,
+        abs_gex_m=120.0,
+        delta_weighted_call_vol=1_000.0,
+        delta_weighted_put_vol=4_000.0,
+        tape=tape,
+        underlying=underlying,
+        charm_coverage=0.95,
+        mode_resolved="live",
+        source_age_seconds=None,
+    )
+    assert gauge["label"] == "selling"
+    assert gauge["actionable"] is False
+    assert gauge["confidence"]["freshness"] <= 0.4
+    assert any("unknown" in r for r in gauge["reasons"])
+
+
+def test_pressure_gauge_fresh_source_age_permits_actionable():
+    """A fresh feed under 5 minutes allows high confidence actionable trades."""
+    from edge.daily_plays.options_intelligence import _pressure_gauge
+
+    tape = _tape_channel(
+        signed_premium=-700_000.0,
+        gross_premium=1_000_000.0,
+        resolved_premium=1_000_000.0,
+        total_premium=1_200_000.0,
+        n_signed=40,
+        n_total=48,
+        source_mix={"vendor": 0, "quote_rule_live": 40, "quote_rule_delayed": 0, "unresolved": 8},
+    )
+    underlying = {"ratio": -0.5, "rvol": 1.4, "bars_used": 7, "timeframe": "1h", "stale": False}
+    gauge = _pressure_gauge(
+        net_charm_flow=700_000.0,
+        abs_charm_flow=1_000_000.0,
+        net_gex_m=-80.0,
+        abs_gex_m=120.0,
+        delta_weighted_call_vol=1_000.0,
+        delta_weighted_put_vol=4_000.0,
+        tape=tape,
+        underlying=underlying,
+        charm_coverage=0.95,
+        mode_resolved="live",
+        source_age_seconds=15.0,
+    )
+    assert gauge["label"] == "selling"
+    assert gauge["actionable"] is True
+    assert gauge["confidence"]["freshness"] == 1.0
+
+
+def test_build_options_intelligence_passes_feed_age_and_prevents_stale_actionable():
+    """End-to-end: build_options_intelligence incorporates feed age into pressure gauge."""
+    from datetime import timedelta
+
+    # Tape timestamp is 86,000 seconds in the past
+    stale_ts = (ASOF - timedelta(seconds=86_000)).isoformat()
+    result = build_options_intelligence(
+        symbol="TEST",
+        chain_rows=[_chain("call", 105), _chain("put", 95)],
+        flow_rows=[
+            {
+                "contract_type": "call",
+                "premium": 100_000,
+                "volume": 10,
+                "timestamp": stale_ts,
+                "aggressor": "BUY",
+                "multiplier": 100,
+            },
+        ],
+        price_series=[{"t": ASOF.isoformat(), "close": 100, "volume": 1_000_000}],
+        spot=100,
+        filters=OptionsFilters(range="1d", min_premium=50_000, min_volume=1),
+        mode_requested="live",
+        mode_resolved="live",
+        chain_source="fixture",
+        flow_source="fixture",
+        asof_utc=ASOF,
+    )
+    assert result["freshness"]["age_seconds"] >= 86_000
+    assert result["pressure"]["actionable"] is False
+    assert result["pressure"]["confidence"]["freshness"] == 0.0

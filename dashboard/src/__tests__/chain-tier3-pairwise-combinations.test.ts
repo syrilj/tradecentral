@@ -25,12 +25,7 @@ vi.mock('vue-router', () => ({
   }),
 }))
 
-import {
-  flowTypeClass,
-  flowMarkerId,
-  relationshipLabel,
-  rankBeneficiaries,
-} from '@/chainDisplay'
+import { flowTypeClass, flowMarkerId, relationshipLabel, rankBeneficiaries } from '@/chainDisplay'
 
 import ValueChainGraph from '@/components/ValueChainGraph.vue'
 
@@ -103,7 +98,10 @@ function makeEdge(
 // ---------------------------------------------------------------------------
 // Simulated Ecosystem Payloads
 // ---------------------------------------------------------------------------
-const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: SupplyChainEdge[]; theme: string }> = {
+const ECOSYSTEM_FIXTURES: Record<
+  string,
+  { nodes: SupplyChainNode[]; edges: SupplyChainEdge[]; theme: string }
+> = {
   // 1. AI Data Center (NVDA)
   ai_datacenter: {
     theme: 'ai_datacenter',
@@ -111,9 +109,25 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
       makeNode('NVDA', 'NVIDIA', 'Technology', 'Semiconductors', 'mega_driver', 3120, 99, true),
       makeNode('TSM', 'TSMC', 'Technology', 'Foundry', 'tier1_supplier', 890, 94),
       makeNode('ASML', 'ASML', 'Technology', 'Lithography', 'tier2_supplier', 340, 89),
-      makeNode('AAOI', 'Applied Opto', 'Technology', 'Optics & Transceivers', 'tier1_supplier', 1.8, 96),
+      makeNode(
+        'AAOI',
+        'Applied Opto',
+        'Technology',
+        'Optics & Transceivers',
+        'tier1_supplier',
+        1.8,
+        96,
+      ),
       makeNode('VRT', 'Vertiv', 'Industrials', 'Liquid Cooling', 'horizontal_enabler', 48, 92),
-      makeNode('MSFT', 'Microsoft', 'Technology', 'Cloud Infrastructure', 'downstream_customer', 3200, 72),
+      makeNode(
+        'MSFT',
+        'Microsoft',
+        'Technology',
+        'Cloud Infrastructure',
+        'downstream_customer',
+        3200,
+        72,
+      ),
     ],
     edges: [
       makeEdge('ASML', 'TSM', 'supplies_to', 'EUV Lithography Scanners'),
@@ -127,10 +141,43 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
   space_defense: {
     theme: 'space_defense',
     nodes: [
-      makeNode('ASTS', 'AST SpaceMobile', 'Telecom', 'Space & Direct-to-Cell', 'mega_driver', 7.5, 95, true),
-      makeNode('RKLB', 'Rocket Lab', 'Aerospace', 'Space Launch & Satellites', 'tier1_supplier', 4.2, 91),
-      makeNode('HEI', 'HEICO Corp', 'Aerospace', 'Aviation & Space Components', 'tier2_supplier', 32.0, 84),
-      makeNode('T', 'AT&T Inc.', 'Telecom', 'Commercial Mobile Carrier', 'downstream_customer', 155.0, 68),
+      makeNode(
+        'ASTS',
+        'AST SpaceMobile',
+        'Telecom',
+        'Space & Direct-to-Cell',
+        'mega_driver',
+        7.5,
+        95,
+        true,
+      ),
+      makeNode(
+        'RKLB',
+        'Rocket Lab',
+        'Aerospace',
+        'Space Launch & Satellites',
+        'tier1_supplier',
+        4.2,
+        91,
+      ),
+      makeNode(
+        'HEI',
+        'HEICO Corp',
+        'Aerospace',
+        'Aviation & Space Components',
+        'tier2_supplier',
+        32.0,
+        84,
+      ),
+      makeNode(
+        'T',
+        'AT&T Inc.',
+        'Telecom',
+        'Commercial Mobile Carrier',
+        'downstream_customer',
+        155.0,
+        68,
+      ),
     ],
     edges: [
       makeEdge('HEI', 'RKLB', 'supplies_to', 'Space-grade Avionics'),
@@ -142,10 +189,43 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
   semi_equipment: {
     theme: 'semi_equipment',
     nodes: [
-      makeNode('ASML', 'ASML Holding', 'Technology', 'Foundry & Litho Equipment', 'mega_driver', 340, 96, true),
-      makeNode('ZEISS', 'Carl Zeiss Optics', 'Technology', 'Optics & Lasers', 'tier1_supplier', 45, 93),
-      makeNode('TRUMPF', 'TRUMPF Lasers', 'Industrials', 'CO2 Laser Metrology', 'tier2_supplier', 12, 88),
-      makeNode('TSM', 'TSMC', 'Technology', 'Foundry & Wafer Metrology', 'downstream_customer', 890, 78),
+      makeNode(
+        'ASML',
+        'ASML Holding',
+        'Technology',
+        'Foundry & Litho Equipment',
+        'mega_driver',
+        340,
+        96,
+        true,
+      ),
+      makeNode(
+        'ZEISS',
+        'Carl Zeiss Optics',
+        'Technology',
+        'Optics & Lasers',
+        'tier1_supplier',
+        45,
+        93,
+      ),
+      makeNode(
+        'TRUMPF',
+        'TRUMPF Lasers',
+        'Industrials',
+        'CO2 Laser Metrology',
+        'tier2_supplier',
+        12,
+        88,
+      ),
+      makeNode(
+        'TSM',
+        'TSMC',
+        'Technology',
+        'Foundry & Wafer Metrology',
+        'downstream_customer',
+        890,
+        78,
+      ),
     ],
     edges: [
       makeEdge('TRUMPF', 'ZEISS', 'supplies_to', 'EUV Pulse Lasers'),
@@ -157,10 +237,43 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
   energy_grid: {
     theme: 'energy_grid',
     nodes: [
-      makeNode('CEG', 'Constellation Energy', 'Utilities', 'Power & Nuclear SMRs', 'mega_driver', 85.0, 94, true),
-      makeNode('CCJ', 'Cameco Corp', 'Energy', 'Uranium Fuel Processing', 'tier1_supplier', 24.0, 89),
-      makeNode('BWXT', 'BWX Technologies', 'Industrials', 'Nuclear Reactor Components', 'tier2_supplier', 11.0, 86),
-      makeNode('MSFT', 'Microsoft Cloud', 'Technology', 'Data Center Energy Offtake', 'downstream_customer', 3200, 75),
+      makeNode(
+        'CEG',
+        'Constellation Energy',
+        'Utilities',
+        'Power & Nuclear SMRs',
+        'mega_driver',
+        85.0,
+        94,
+        true,
+      ),
+      makeNode(
+        'CCJ',
+        'Cameco Corp',
+        'Energy',
+        'Uranium Fuel Processing',
+        'tier1_supplier',
+        24.0,
+        89,
+      ),
+      makeNode(
+        'BWXT',
+        'BWX Technologies',
+        'Industrials',
+        'Nuclear Reactor Components',
+        'tier2_supplier',
+        11.0,
+        86,
+      ),
+      makeNode(
+        'MSFT',
+        'Microsoft Cloud',
+        'Technology',
+        'Data Center Energy Offtake',
+        'downstream_customer',
+        3200,
+        75,
+      ),
     ],
     edges: [
       makeEdge('BWXT', 'CEG', 'supplies_to', 'SMR Pressure Vessels'),
@@ -172,10 +285,43 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
   agentic_software: {
     theme: 'agentic_software',
     nodes: [
-      makeNode('PLTR', 'Palantir Technologies', 'Technology', 'Enterprise AI & Ontology', 'mega_driver', 95.0, 95, true),
-      makeNode('SNOW', 'Snowflake Inc', 'Technology', 'Enterprise AI Data Cloud', 'tier1_supplier', 45.0, 88),
-      makeNode('ESTC', 'Elastic N.V.', 'Technology', 'Vector Search & Indexing', 'tier2_supplier', 9.5, 83),
-      makeNode('BP', 'BP plc', 'Energy', 'Downstream Industrial Customer', 'downstream_customer', 98.0, 65),
+      makeNode(
+        'PLTR',
+        'Palantir Technologies',
+        'Technology',
+        'Enterprise AI & Ontology',
+        'mega_driver',
+        95.0,
+        95,
+        true,
+      ),
+      makeNode(
+        'SNOW',
+        'Snowflake Inc',
+        'Technology',
+        'Enterprise AI Data Cloud',
+        'tier1_supplier',
+        45.0,
+        88,
+      ),
+      makeNode(
+        'ESTC',
+        'Elastic N.V.',
+        'Technology',
+        'Vector Search & Indexing',
+        'tier2_supplier',
+        9.5,
+        83,
+      ),
+      makeNode(
+        'BP',
+        'BP plc',
+        'Energy',
+        'Downstream Industrial Customer',
+        'downstream_customer',
+        98.0,
+        65,
+      ),
     ],
     edges: [
       makeEdge('ESTC', 'SNOW', 'technology_partner', 'Vector Hybrid Search Engine'),
@@ -187,10 +333,43 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
   glp1_cdmo: {
     theme: 'glp1_cdmo',
     nodes: [
-      makeNode('LLY', 'Eli Lilly and Company', 'Healthcare', 'GLP-1 Incretin Therapeutics', 'mega_driver', 890.0, 98, true),
-      makeNode('WST', 'West Pharmaceutical', 'Healthcare', 'GLP-1 Auto-Injectors & Syringes', 'tier1_supplier', 26.0, 93),
-      makeNode('SHL', 'SHL Medical', 'Healthcare', 'Sterile Syringe Molding', 'tier2_supplier', 6.5, 87),
-      makeNode('CVS', 'CVS Health Corp', 'Healthcare', 'Pharmacy Benefit Manager', 'downstream_customer', 72.0, 69),
+      makeNode(
+        'LLY',
+        'Eli Lilly and Company',
+        'Healthcare',
+        'GLP-1 Incretin Therapeutics',
+        'mega_driver',
+        890.0,
+        98,
+        true,
+      ),
+      makeNode(
+        'WST',
+        'West Pharmaceutical',
+        'Healthcare',
+        'GLP-1 Auto-Injectors & Syringes',
+        'tier1_supplier',
+        26.0,
+        93,
+      ),
+      makeNode(
+        'SHL',
+        'SHL Medical',
+        'Healthcare',
+        'Sterile Syringe Molding',
+        'tier2_supplier',
+        6.5,
+        87,
+      ),
+      makeNode(
+        'CVS',
+        'CVS Health Corp',
+        'Healthcare',
+        'Pharmacy Benefit Manager',
+        'downstream_customer',
+        72.0,
+        69,
+      ),
     ],
     edges: [
       makeEdge('SHL', 'WST', 'supplies_to', 'Medical-Grade Polymer Molds'),
@@ -202,10 +381,43 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
   robotics_ai: {
     theme: 'robotics_ai',
     nodes: [
-      makeNode('TSLA', 'Tesla Optimus', 'Consumer Cyclical', 'Robotics & Vision AI', 'mega_driver', 820.0, 94, true),
-      makeNode('NVDA', 'NVIDIA Isaac', 'Technology', 'Robotics Simulation & Chips', 'tier1_supplier', 3120.0, 97),
-      makeNode('HMRN', 'Harmonic Drive Systems', 'Industrials', 'Robotics Precision Gears', 'tier2_supplier', 4.5, 90),
-      makeNode('AMZN', 'Amazon Fulfillment', 'Consumer Cyclical', 'Warehouse Robotics Fleet', 'downstream_customer', 2100.0, 74),
+      makeNode(
+        'TSLA',
+        'Tesla Optimus',
+        'Consumer Cyclical',
+        'Robotics & Vision AI',
+        'mega_driver',
+        820.0,
+        94,
+        true,
+      ),
+      makeNode(
+        'NVDA',
+        'NVIDIA Isaac',
+        'Technology',
+        'Robotics Simulation & Chips',
+        'tier1_supplier',
+        3120.0,
+        97,
+      ),
+      makeNode(
+        'HMRN',
+        'Harmonic Drive Systems',
+        'Industrials',
+        'Robotics Precision Gears',
+        'tier2_supplier',
+        4.5,
+        90,
+      ),
+      makeNode(
+        'AMZN',
+        'Amazon Fulfillment',
+        'Consumer Cyclical',
+        'Warehouse Robotics Fleet',
+        'downstream_customer',
+        2100.0,
+        74,
+      ),
     ],
     edges: [
       makeEdge('HMRN', 'TSLA', 'supplies_to', 'Harmonic Actuator Gears'),
@@ -217,10 +429,43 @@ const ECOSYSTEM_FIXTURES: Record<string, { nodes: SupplyChainNode[]; edges: Supp
   quantum_computing: {
     theme: 'quantum_computing',
     nodes: [
-      makeNode('IONQ', 'IonQ Inc', 'Technology', 'Quantum Systems & Qubits', 'mega_driver', 3.8, 92, true),
-      makeNode('KEYS', 'Keysight Technologies', 'Technology', 'Quantum Control Instruments', 'tier1_supplier', 28.0, 86),
-      makeNode('COHR', 'Coherent Corp', 'Technology', 'Laser & Photonic Sources', 'tier2_supplier', 14.5, 89),
-      makeNode('BA', 'The Boeing Company', 'Aerospace', 'Quantum Materials Research', 'downstream_customer', 125.0, 67),
+      makeNode(
+        'IONQ',
+        'IonQ Inc',
+        'Technology',
+        'Quantum Systems & Qubits',
+        'mega_driver',
+        3.8,
+        92,
+        true,
+      ),
+      makeNode(
+        'KEYS',
+        'Keysight Technologies',
+        'Technology',
+        'Quantum Control Instruments',
+        'tier1_supplier',
+        28.0,
+        86,
+      ),
+      makeNode(
+        'COHR',
+        'Coherent Corp',
+        'Technology',
+        'Laser & Photonic Sources',
+        'tier2_supplier',
+        14.5,
+        89,
+      ),
+      makeNode(
+        'BA',
+        'The Boeing Company',
+        'Aerospace',
+        'Quantum Materials Research',
+        'downstream_customer',
+        125.0,
+        67,
+      ),
     ],
     edges: [
       makeEdge('COHR', 'KEYS', 'supplies_to', 'Trapped-Ion UV Lasers'),
@@ -271,7 +516,8 @@ describe('Tier 3: Pairwise Combinatorial Test Suite', () => {
     const eco = ECOSYSTEM_FIXTURES.ai_datacenter
     const summary: ThematicSummary = {
       theme_name: 'AI Data Center Infrastructure',
-      capex_catalyst_narrative: 'Hyperscale CapEx accelerating into liquid cooling and 800G optics.',
+      capex_catalyst_narrative:
+        'Hyperscale CapEx accelerating into liquid cooling and 800G optics.',
       total_ecosystem_market_cap_b: 7450.0,
       top_beneficiaries: ['AAOI', 'LITE', 'VRT', 'MU'],
       catalyst_timeline: [
@@ -298,7 +544,15 @@ describe('Tier 3: Pairwise Combinatorial Test Suite', () => {
       null,
       true,
     )
-    const peer1 = makeNode('SYM', 'Symbotic Inc', 'Industrials', 'Robotics & Automation', 'tier1_supplier', 12.0, 85)
+    const peer1 = makeNode(
+      'SYM',
+      'Symbotic Inc',
+      'Industrials',
+      'Robotics & Automation',
+      'tier1_supplier',
+      12.0,
+      85,
+    )
     const peerEdge = makeEdge('XYZUNKNOWN', 'SYM', 'peer', 'Same-Sector Peer Benchmark')
 
     const nodes = [uncatalogedFocal, peer1]
@@ -471,7 +725,8 @@ describe('Tier 3: Pairwise Combinatorial Test Suite', () => {
   it('Pair 16: Options Skew (heavy_call_sweep) aligns with high elasticity scores', () => {
     const eco = ECOSYSTEM_FIXTURES.ai_datacenter
     const bullishBeneficiaries = eco.nodes.filter(
-      (n) => n.metrics.options_skew === 'heavy_call_sweep' && (n.metrics.elasticity_score ?? 0) >= 90,
+      (n) =>
+        n.metrics.options_skew === 'heavy_call_sweep' && (n.metrics.elasticity_score ?? 0) >= 90,
     )
     expect(bullishBeneficiaries.length).toBeGreaterThan(0)
     expect(bullishBeneficiaries.map((n) => n.symbol)).toContain('NVDA')

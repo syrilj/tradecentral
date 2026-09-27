@@ -25,29 +25,38 @@ export function operatorAuthMode(): OperatorAuthMode {
 }
 
 export function isLocalAuthMode(): boolean {
-  if (operatorAuthMode() === 'local') return true
-  const key = String(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? '').trim()
-  return !key
+  // Local bypass is an explicit development choice. A missing Clerk key must
+  // never silently turn a production deployment into an unauthenticated app.
+  return operatorAuthMode() === 'local' && !import.meta.env.PROD
 }
 
 export function allowedOperatorEmails(): string[] {
   return String(import.meta.env.VITE_EDGE_ALLOWED_EMAILS ?? '')
     .split(',')
-    .map((value) => value.trim().toLowerCase())
+    .map((email) => email.trim().toLowerCase())
     .filter(Boolean)
 }
 
 export function isAllowedOperatorEmail(email: string | null | undefined): boolean {
-  const allowed = allowedOperatorEmails()
-  if (!allowed.length) return true
   const value = (email ?? '').trim().toLowerCase()
-  return value.length > 0 && allowed.includes(value)
+  return value !== '' && allowedOperatorEmails().includes(value)
 }
 
 export function safeRedirect(value: unknown, fallback = '/flow'): string {
   if (typeof value !== 'string') return fallback
-  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/auth')) return fallback
-  return value
+  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return fallback
+  try {
+    const target = new URL(value, 'https://tradecentral.invalid')
+    if (target.origin !== 'https://tradecentral.invalid') return fallback
+    if (
+      target.pathname === '/auth' ||
+      target.pathname.startsWith('/auth/') ||
+      target.pathname === '/waitlist'
+    ) return fallback
+    return `${target.pathname}${target.search}${target.hash}`
+  } catch {
+    return fallback
+  }
 }
 
 export function operatorLabel(identity: OperatorIdentity | null | undefined): string {

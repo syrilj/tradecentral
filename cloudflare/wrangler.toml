@@ -1,24 +1,28 @@
 # TradeCentral Cloudflare Worker.
 #
-# Serves the built SPA as static assets and proxies /api/* to the local
-# Python API server behind a Cloudflare Tunnel.
+# This is intentionally a static Clerk waitlist deployment by default. It has
+# no public path to the costly local Python research API. Staging API proxying
+# is a deliberate opt-in: set all three variables below through the Cloudflare
+# dashboard or a non-committed environment-specific config.
 #
-# Deploy from the repo root:
-#   cd dashboard && npm run build
-#   cd .. && npx wrangler deploy -c cloudflare/wrangler.toml
+#   API_PROXY_ENABLED=true
+#   PUBLIC_ORIGIN=https://staging.example.com
+#   API_UPSTREAM=https://api-staging.example.com
 #
-# API_UPSTREAM is the public hostname of the cloudflared tunnel that exposes
-# the local Python API server. Set it after running setup_tunnel.sh.
+# API_UPSTREAM must still enforce Clerk JWT verification and the operator
+# allowlist itself; origin checks at the Worker are not authentication.
 
 name = "tradecentral"
-main = "cloudflare/worker.js"
-compatibility_date = "2024-12-01"
+main = "worker.js"
+compatibility_date = "2026-09-24"
 
 [assets]
-directory = "runs/dashboard_dist"
+directory = "../runs/dashboard_dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api", "/api/*"]
 
 [vars]
-VITE_EDGE_AUTH_MODE = "local"
+API_PROXY_ENABLED = "false"
+PUBLIC_ORIGIN = ""
 API_UPSTREAM = ""

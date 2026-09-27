@@ -90,7 +90,11 @@ onUnmounted(() => {
     data-test="evidence-drawer"
     role="dialog"
     aria-modal="true"
-    :aria-label="node ? `Entity Evidence and Supply Chain Details: ${node.symbol} - ${node.name}` : 'Entity Evidence and Supply Chain Details'"
+    :aria-label="
+      node
+        ? `Entity Evidence and Supply Chain Details: ${node.symbol} - ${node.name}`
+        : 'Entity Evidence and Supply Chain Details'
+    "
     tabindex="-1"
     @keydown.esc="emit('close')"
   >
@@ -128,11 +132,7 @@ onUnmounted(() => {
         </div>
 
         <div v-if="activeIncidentEdges.length" class="connections-list">
-          <div
-            v-for="edge in activeIncidentEdges"
-            :key="edge.id"
-            class="connection-card"
-          >
+          <div v-for="edge in activeIncidentEdges" :key="edge.id" class="connection-card">
             <div class="connection-header">
               <span class="connection-pair font-mono">{{ edge.source }} ➔ {{ edge.target }}</span>
               <span class="connection-rel-pill">
@@ -146,7 +146,9 @@ onUnmounted(() => {
             <div class="connection-metrics-grid">
               <div class="conn-metric">
                 <span class="conn-k">Est. Annual Contract:</span>
-                <span class="conn-v font-mono">{{ formatContractValue(edge.annual_contract_value_est_m) }}</span>
+                <span class="conn-v font-mono">{{
+                  formatContractValue(edge.annual_contract_value_est_m)
+                }}</span>
               </div>
               <div class="conn-metric">
                 <span class="conn-k">Link Strength:</span>
@@ -172,15 +174,25 @@ onUnmounted(() => {
         <div v-else class="connection-fallback-panel">
           <div class="fallback-header">
             <span class="fallback-role-tag">
-              {{ node.is_focus || node.tier === 'mega_driver' ? 'CORE ECOSYSTEM ANCHOR' : tierBadgeLabel(node.tier) }}
+              {{
+                node.is_focus || node.tier === 'mega_driver'
+                  ? 'CORE ECOSYSTEM ANCHOR'
+                  : tierBadgeLabel(node.tier)
+              }}
             </span>
           </div>
           <p class="fallback-narrative">
             <template v-if="node.is_focus || node.tier === 'mega_driver'">
-              {{ node.name }} ({{ node.symbol }}) is the central anchor entity for this value chain. Capital expenditures, architectural roadmap decisions, and procurement volume flow through this driver to upstream Tier 1/2 suppliers and downstream enterprise customers.
+              {{ node.name }} ({{ node.symbol }}) is the central anchor entity for this value chain.
+              Capital expenditures, architectural roadmap decisions, and procurement volume flow
+              through this driver to upstream Tier 1/2 suppliers and downstream enterprise
+              customers.
             </template>
             <template v-else>
-              {{ node.name }} ({{ node.symbol }}) operates within {{ node.sub_industry }} ({{ node.sector }}). Financial elasticity and revenue concentration propagate through correlated demand shifts across connected supply chain nodes.
+              {{ node.name }} ({{ node.symbol }}) operates within {{ node.sub_industry }} ({{
+                node.sector
+              }}). Financial elasticity and revenue concentration propagate through correlated
+              demand shifts across connected supply chain nodes.
             </template>
           </p>
         </div>

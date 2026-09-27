@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import { isLocalAuthMode } from './auth'
+import { isLocalAuthMode, safeRedirect } from './auth'
+export { safeRedirect } from './auth'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -25,6 +26,12 @@ const routes: RouteRecordRaw[] = [
     name: 'auth',
     component: () => import('@/views/AuthView.vue'),
     meta: { title: 'Operator access', public: true },
+  },
+  {
+    path: '/waitlist',
+    name: 'waitlist',
+    component: () => import('@/views/AuthView.vue'),
+    meta: { title: 'Request access', public: true },
   },
   {
     path: '/brief',
@@ -285,12 +292,6 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 })
 
-export function safeRedirect(value: unknown, fallback = '/flow'): string {
-  if (typeof value !== 'string') return fallback
-  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/auth')) return fallback
-  return value
-}
-
 /*
  * EDGE_AUTH_MODE=local never installs the Clerk plugin (see main.ts), so
  * AuthView's useClerk()/<SignIn> would throw and render a blank screen. There
@@ -298,7 +299,7 @@ export function safeRedirect(value: unknown, fallback = '/flow'): string {
  * send /auth straight to the requested desk surface instead.
  */
 router.beforeEach((to) => {
-  if (to.name === 'auth' && isLocalAuthMode()) {
+  if (to.name === 'auth' && to.query.mode !== 'waitlist' && isLocalAuthMode()) {
     return safeRedirect(to.query.redirect, '/flow')
   }
   return true

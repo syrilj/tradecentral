@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
+import { useAuth } from '@clerk/vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   api,
@@ -42,7 +43,9 @@ import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import TrajectoryChart from '@/components/TrajectoryChart.vue'
 import LoadingState from '@/components/LoadingState.vue'
-import { loadWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
+import { loadWatchlist, saveWatchlist, toggleWatchlistSymbol, watchlistHas } from '@/watchlist'
+import { isLocalAuthMode } from '@/auth'
+import { cloudWatchlistConfigured, loadCloudWatchlist, saveCloudWatchlist } from '@/cloudWatchlist'
 import { tickerCompanyName, tickerIdentity } from '@/tickerIdentity'
 import {
   filterSortInstitutions,
@@ -62,6 +65,9 @@ import {
 const status = inject<Resource<StatusPayload>>('status')
 const route = useRoute()
 const router = useRouter()
+const clerkAuth = isLocalAuthMode() ? null : useAuth()
+const convexToken = () => clerkAuth?.getToken.value({ template: 'convex' }) ?? Promise.resolve(null)
+const cloudSyncError = ref<string | null>(null)
 
 // -- Symbols & Search State ----------------------------------------------------
 const q = ref('')
@@ -74,6 +80,11 @@ const onBook = computed(() => watchlistHas(book.value, symbol.value))
 
 function toggleBook(): void {
   book.value = toggleWatchlistSymbol(book.value, symbol.value).symbols
+  if (cloudWatchlistConfigured() && clerkAuth) {
+    void saveCloudWatchlist(book.value, convexToken).catch((error: unknown) => {
+      cloudSyncError.value = `Cloud watchlist not saved: ${error instanceof Error ? error.message : 'unknown error'}`
+    })
+  }
 }
 
 // Active Tab navigation
@@ -89,15 +100,28 @@ export type MarketTab =
   | 'news'
   | 'compare'
 
-const activeTab = ref<MarketTab>((route.query.tab as MarketTab) || 'overview')
+const marketTabs: readonly MarketTab[] = [
+  'overview',
+  'financials',
+  'forecast',
+  'insiders',
+  'institutions',
+  'government',
+  'compensation',
+  'ownership',
+  'news',
+  'compare',
+]
+function isMarketTab(value: unknown): value is MarketTab {
+  return typeof value === 'string' && marketTabs.includes(value as MarketTab)
+}
+const activeTab = ref<MarketTab>(isMarketTab(route.query.tab) ? route.query.tab : 'overview')
 
 // Watch route queries
 watch(
   () => route.query.tab,
   (t) => {
-    if (t && typeof t === 'string') {
-      activeTab.value = t as MarketTab
-    }
+    activeTab.value = isMarketTab(t) ? t : 'overview'
   },
   { immediate: true },
 )
@@ -237,7 +261,9 @@ function cleanTicker(term: string): string {
     .slice(0, 10)
 }
 
+let searchRequest = 0
 const runSearch = debounce(async (term: string) => {
+  const requestId = ++searchRequest
   searching.value = true
   try {
     const cleaned = cleanTicker(term)
@@ -256,15 +282,19 @@ const runSearch = debounce(async (term: string) => {
         ...list,
       ]
     }
-    hits.value = list
+    if (requestId === searchRequest) hits.value = list
   } catch {
-    hits.value = []
+    if (requestId === searchRequest) hits.value = []
   } finally {
-    searching.value = false
+    if (requestId === searchRequest) searching.value = false
   }
 }, 140)
 
-watch(q, (v) => runSearch(v))
+watch(q, (v) => {
+  // Invalidate in-flight results immediately, including during the debounce window.
+  searchRequest += 1
+  runSearch(v)
+})
 
 async function loadTrajectory(): Promise<void> {
   const reqSym = symbol.value
@@ -287,18 +317,27 @@ async function loadTrajectory(): Promise<void> {
   }
 }
 
+let compareRequest = 0
 async function loadCompare(): Promise<void> {
+  const requestId = ++compareRequest
   if (basket.value.length < 2) {
     cmp.value = null
     cmpErr.value = null
     return
   }
+  const symbols = [...basket.value]
+  const window = win.value
   try {
-    cmp.value = await api.compare(basket.value, win.value)
-    cmpErr.value = null
+    const result = await api.compare(symbols, window)
+    if (requestId === compareRequest) {
+      cmp.value = result
+      cmpErr.value = null
+    }
   } catch (e) {
-    cmpErr.value = e instanceof Error ? e.message : String(e)
-    cmp.value = null
+    if (requestId === compareRequest) {
+      cmpErr.value = e instanceof Error ? e.message : String(e)
+      cmp.value = null
+    }
   }
 }
 
@@ -325,20 +364,14 @@ function onSearchKey(e: KeyboardEvent): void {
   }
   if (e.key === 'ArrowDown' && hits.value.length) {
     e.preventDefault()
-    const idx = Math.max(
-      0,
-      hits.value.findIndex((h) => h.symbol === symbol.value),
-    )
-    const next = hits.value[Math.min(hits.value.length - 1, idx + 1)]
+    const idx = hits.value.findIndex((h) => h.symbol === symbol.value)
+    const next = hits.value[Math.min(hits.value.length - 1, idx < 0 ? 0 : idx + 1)]
     if (next) select(next.symbol)
   }
   if (e.key === 'ArrowUp' && hits.value.length) {
     e.preventDefault()
-    const idx = Math.max(
-      0,
-      hits.value.findIndex((h) => h.symbol === symbol.value),
-    )
-    const prev = hits.value[Math.max(0, idx - 1)]
+    const idx = hits.value.findIndex((h) => h.symbol === symbol.value)
+    const prev = hits.value[Math.max(0, idx < 0 ? hits.value.length - 1 : idx - 1)]
     if (prev) select(prev.symbol)
   }
 }
@@ -358,6 +391,16 @@ watch(win, () => void loadCompare())
 let trajTimer: number | undefined
 
 onMounted(() => {
+  if (cloudWatchlistConfigured() && clerkAuth) {
+    void loadCloudWatchlist(convexToken)
+      .then((remote) => {
+        if (remote) book.value = saveWatchlist(remote)
+        else return saveCloudWatchlist(book.value, convexToken)
+      })
+      .catch((error: unknown) => {
+        cloudSyncError.value = `Cloud watchlist unavailable: ${error instanceof Error ? error.message : 'unknown error'}`
+      })
+  }
   reloadAllSymbolData()
   if (symbol.value && symbol.value !== 'SPY') {
     basket.value = [symbol.value, 'SPY']
@@ -910,6 +953,7 @@ const finChartData = computed(() => {
             >
               {{ onBook ? 'PINNED' : 'PIN TO BOOK' }}
             </button>
+            <span v-if="cloudSyncError" class="err" role="status">{{ cloudSyncError }}</span>
             <RouterLink :to="{ name: 'options', query: { symbol } }" class="btn-action label">
               OPTIONS DRIFT
             </RouterLink>
@@ -4081,6 +4125,7 @@ const finChartData = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--s3);
+  min-width: 0;
 }
 
 .ticker-badge {
@@ -4107,6 +4152,7 @@ const finChartData = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
 }
 
 .ticker-title-row {
@@ -4142,6 +4188,7 @@ const finChartData = computed(() => {
   align-items: center;
   gap: var(--s3);
   font-size: var(--t-tiny, 11px);
+  flex-wrap: wrap;
 }
 
 .ticker-price-block {
@@ -4574,6 +4621,49 @@ const finChartData = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--s4);
+}
+
+.score-desc {
+  min-width: 0;
+}
+
+.score-note {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .ticker-masthead {
+    padding: var(--s4);
+  }
+
+  .ticker-brand {
+    align-items: flex-start;
+  }
+
+  .ticker-badge {
+    padding-inline: var(--s2);
+  }
+
+  .ticker-info {
+    overflow-wrap: anywhere;
+  }
+
+  .market-cockpit :deep(.overview-chart-panel > .head) {
+    flex-wrap: wrap;
+  }
+
+  .overview-chart-panel .switches {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .overview-chart-panel .switches .seg:last-child {
+    max-width: 100%;
+    overflow-x: auto;
+  }
 }
 
 .score-circle {

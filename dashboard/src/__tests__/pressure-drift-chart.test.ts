@@ -103,12 +103,12 @@ describe('DriftView structure gate (shipped SFC)', () => {
     expect(s).toContain('chain_by_strike')
   })
 
-  it('wires the pressure gauge to the backend pressure payload', () => {
+  it('keeps tape pressure as separate evidence with source context', () => {
     const s = src()
-    expect(s).toContain('pressure')
-    expect(s).toContain('gauge-needle')
-    expect(s).toContain('aria-valuenow')
-    expect(s).toContain('convention_note')
+    expect(s).toContain('dealerRead.evidence.pressureVerdict')
+    expect(s).toContain('dealerRead.evidence.pressureActionable')
+    expect(s).toContain('Tape pressure is reported separately')
+    expect(s).toContain('dealer-evidence-details')
   })
 
   it('shows KPI cards for GEX, charm flow, P/C ratio, and last update', () => {
@@ -580,43 +580,34 @@ describe('DriftView Strike Table, Directional Strategies & Flow Diagram Enhancem
     expect(s).toContain('WALLS &amp; FLIP')
   })
 
-  it('actionable strategies include unambiguous LONG/SHORT and BUYING/SELLING directional tags', () => {
+  it('labels Charm as modeled positioning instead of an execution signal', () => {
     const s = src()
-    expect(s).toContain('LONG BIAS')
-    expect(s).toContain('SHORT BIAS')
-    expect(s).toContain('RANGE MEAN-REVERSION')
-    expect(s).toContain('dir-badge')
-    expect(s).toContain('Directional Execution:')
+    expect(s).toContain('Structural estimate, not observed tape buying or selling')
+    expect(s).toContain('does not establish a directional trade')
+    expect(s).not.toContain('Directional Execution:')
   })
 
-  it('actionable strategies include 3-stage lifecycle execution steps', () => {
+  it('shows data freshness and model limitations beside the structural read', () => {
     const s = src()
-    expect(s).toContain('Lifecycle Stages &amp; Flow Direction:')
-    expect(s).toContain('Stage 1 ·')
-    expect(s).toContain('Stage 2 ·')
-    expect(s).toContain('Stage 3 ·')
+    expect(s).toContain('dealerRead.evidence.freshness')
+    expect(s).toContain('Feed age')
+    expect(s).toContain('Evidence and model limits')
   })
 
-  it('renders a 5-step dealer rebalancing flow cascade diagram', () => {
+  it('shows the chain evidence and names missing model inputs', () => {
     const s = src()
-    expect(s).toContain('DEALER REBALANCING FLOW CASCADE')
-    expect(s).toContain('STEP 1')
-    expect(s).toContain('STEP 2')
-    expect(s).toContain('STEP 3')
-    expect(s).toContain('STEP 4 · FORCED FLOW')
-    expect(s).toContain('STEP 5')
-    expect(s).toContain('flow-cascade-container')
+    expect(s).toContain('PressureDriftChart')
+    expect(s).toContain('charmAllSkipped')
+    expect(s).toContain('contracts excluded')
+    expect(s).toContain('Those strikes are absent from the chart, not')
   })
 
-  it('renders the real-time IF / THEN level watch and execution trigger matrix', () => {
+  it('provides location and watch context without execution triggers', () => {
     const s = src()
-    expect(s).toContain('IF / THEN LEVEL WATCH &amp; EXECUTION TRIGGERS')
-    expect(s).toContain('ABOVE CALL WALL')
-    expect(s).toContain('IN CHANNEL')
-    expect(s).toContain('BELOW PUT WALL')
-    expect(s).toContain('trigger-matrix-board')
-    expect(s).toContain('matrix-grid')
-    expect(s).toContain('matrix-card')
+    expect(s).toContain('dealerRead.position')
+    expect(s).toContain('dealerRead.watch')
+    expect(s).toContain('Walls describe option positioning levels')
+    expect(s).not.toContain('IF / THEN LEVEL WATCH &amp; EXECUTION TRIGGERS')
   })
 
   it('includes major liquid ETF quick chips in the command bar', () => {

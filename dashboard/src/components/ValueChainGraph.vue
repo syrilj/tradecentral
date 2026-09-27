@@ -476,7 +476,10 @@ function isNodeConnected(symbol: string): boolean {
       </div>
 
       <!-- HTML Node Overlays for High-Density Interactive Cards -->
-      <div class="nodes-overlay" :style="{ width: `${CANVAS_WIDTH}px`, height: `${totalHeight}px` }">
+      <div
+        class="nodes-overlay"
+        :style="{ width: `${CANVAS_WIDTH}px`, height: `${totalHeight}px` }"
+      >
         <div
           v-for="n in layoutNodes"
           :key="n.symbol"

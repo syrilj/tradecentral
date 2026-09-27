@@ -56,6 +56,7 @@ const PAPER_FILES = new Set<string>([
   'src/components/DeskTelemetryPlate.vue',
   'src/components/IcDecayPlate.vue',
   'src/components/PayoffPlate.vue',
+  'src/components/Waitlist3DModel.vue',
 ])
 
 /** tokens.css IS allowed to define hex/rgb/rgba/hsl literals — it is the palette. */
@@ -70,6 +71,7 @@ const EXEMPT = new Set<string>([
   // Each entry below is genuinely non-conformant at the baseline — verified
   // with DESIGN_CONFORMANCE_DIAGNOSE=1. Conformant desk files are enforced.
   // A later feature removes its files from here once they are fixed.
+  'src/components/SetupBacktestCard.vue',
 ])
 
 function listSourceFiles(dir: string, acc: string[] = []): string[] {

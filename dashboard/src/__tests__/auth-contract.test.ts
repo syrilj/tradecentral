@@ -56,10 +56,16 @@ describe('Clerk operator access contract', () => {
     expect(viewSource).not.toContain('guaranteed')
   })
 
-  it('provides a polished explicit switch between sign in and operator setup', () => {
+  it('uses Clerk waitlist for requests and disables open sign-up', () => {
     expect(viewSource).toContain('auth-mode-switch')
-    expect(viewSource).toContain('Create access')
+    expect(viewSource).toContain('Request access')
+    expect(viewSource).toContain('<Waitlist')
+    expect(viewSource).toContain(':with-sign-up="false"')
+    expect(viewSource).not.toContain('<SignUp')
     expect(viewSource).toContain("mode: 'signin'")
-    expect(viewSource).toContain("mode: 'setup'")
+    expect(mainSource).toContain("waitlistUrl: '/waitlist'")
+    expect(authSource).toContain('VITE_EDGE_ALLOWED_EMAILS')
+    expect(authSource).not.toContain('syriltj1@gmail.com')
+    expect(authSource).toContain("operatorAuthMode() === 'local' && !import.meta.env.PROD")
   })
 })

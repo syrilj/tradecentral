@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref, onMounted, onUnmounted, watch } from 'vue'
+import { useAuth } from '@clerk/vue'
 import { useRouter } from 'vue-router'
 import {
   api,
@@ -14,7 +15,9 @@ import {
 import type { Resource } from '@/composables/useResource'
 import { num, pctFrac, signedPct, tone, usd, DASH } from '@/format'
 import { sparkline } from '@/charts'
-import { loadWatchlist, toggleWatchlistSymbol } from '@/watchlist'
+import { loadWatchlist, saveWatchlist, toggleWatchlistSymbol } from '@/watchlist'
+import { isLocalAuthMode } from '@/auth'
+import { cloudWatchlistConfigured, loadCloudWatchlist, saveCloudWatchlist } from '@/cloudWatchlist'
 import Panel from '@/components/Panel.vue'
 import VerdictChip from '@/components/VerdictChip.vue'
 import RegimeStateBadge from '@/components/RegimeStateBadge.vue'
@@ -34,6 +37,8 @@ import {
 const status = inject<Resource<StatusPayload>>('status')!
 const readiness = inject<Resource<Readiness>>('readiness')!
 const router = useRouter()
+const clerkAuth = isLocalAuthMode() ? null : useAuth()
+const convexToken = () => clerkAuth?.getToken.value({ template: 'convex' }) ?? Promise.resolve(null)
 
 const scanning = ref(false)
 const scanDepth = ref<ScanDepth>('quick')
@@ -76,6 +81,7 @@ function onVisibilityChange(): void {
 
 onMounted(() => {
   customWatchlist.value = loadWatchlist()
+  if (cloudWatchlistConfigured() && clerkAuth) void hydrateCloudWatchlist()
   document.addEventListener('visibilitychange', onVisibilityChange)
   void probeWatchlist(true)
   void resumeScanJob()
@@ -86,6 +92,28 @@ onMounted(() => {
     if (document.visibilityState === 'visible') void refreshBoardMarks()
   }, 20_000)
 })
+
+async function hydrateCloudWatchlist(): Promise<void> {
+  try {
+    const remote = await loadCloudWatchlist(convexToken)
+    if (remote) {
+      customWatchlist.value = remote
+      saveWatchlist(remote)
+      void probeWatchlist(true)
+    } else {
+      await saveCloudWatchlist(customWatchlist.value, convexToken)
+    }
+  } catch (error) {
+    probeErr.value = `Cloud watchlist unavailable: ${error instanceof Error ? error.message : 'unknown error'}`
+  }
+}
+
+function persistCloudWatchlist(): void {
+  if (!cloudWatchlistConfigured() || !clerkAuth) return
+  void saveCloudWatchlist(customWatchlist.value, convexToken).catch((error: unknown) => {
+    probeErr.value = `Cloud watchlist not saved: ${error instanceof Error ? error.message : 'unknown error'}`
+  })
+}
 
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
@@ -106,6 +134,7 @@ async function probeSymbol(sym: string): Promise<void> {
     probeResults.value[clean] = t
     if (!customWatchlist.value.includes(clean)) {
       customWatchlist.value = toggleWatchlistSymbol(customWatchlist.value, clean).symbols
+      persistCloudWatchlist()
     }
     customTickerInput.value = ''
   } catch (e) {
@@ -143,6 +172,7 @@ watch(
 
 function removeWatchlistSymbol(sym: string): void {
   customWatchlist.value = toggleWatchlistSymbol(customWatchlist.value, sym).symbols
+  persistCloudWatchlist()
   delete probeResults.value[sym]
 }
 
@@ -842,15 +872,19 @@ function navTo(name: string): void {
           <span
             class="kpi-badge"
             :class="
-              marketRegimeBreadth.dampening >= marketRegimeBreadth.amplification
-                ? 'pos'
-                : 'warn-text'
+              marketRegimeBreadth.measured === 0
+                ? 'muted'
+                : marketRegimeBreadth.dampening >= marketRegimeBreadth.amplification
+                  ? 'pos'
+                  : 'warn-text'
             "
           >
             {{
-              marketRegimeBreadth.dampening >= marketRegimeBreadth.amplification
-                ? 'LONG Γ'
-                : 'SHORT Γ'
+              marketRegimeBreadth.measured === 0
+                ? 'UNMEASURED'
+                : marketRegimeBreadth.dampening >= marketRegimeBreadth.amplification
+                  ? 'LONG Γ'
+                  : 'SHORT Γ'
             }}
           </span>
         </div>
@@ -861,10 +895,15 @@ function navTo(name: string): void {
           <span class="kpi-sub-count label">DAMP/AMP</span>
         </div>
         <span class="kpi-sub">
-          {{ marketRegimeBreadth.dampening }} Dampening ·
-          {{ marketRegimeBreadth.amplification }} Amplification ({{
-            marketRegimeBreadth.dominantBias
-          }})
+          <template v-if="marketRegimeBreadth.measured === 0">
+            Awaiting regime telemetry across watch symbols
+          </template>
+          <template v-else>
+            {{ marketRegimeBreadth.dampening }} Dampening ·
+            {{ marketRegimeBreadth.amplification }} Amplification ({{
+              marketRegimeBreadth.dominantBias
+            }})
+          </template>
         </span>
       </button>
 

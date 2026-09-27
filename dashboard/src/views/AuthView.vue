@@ -1,34 +1,48 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/vue'
+import { SignIn, Waitlist, useAuth, useClerk, useUser } from '@clerk/vue'
 import { useRoute, useRouter } from 'vue-router'
-import { isAllowedOperatorEmail, safeRedirect } from '@/auth'
+import { isAllowedOperatorEmail, isLocalAuthMode, safeRedirect } from '@/auth'
 import AppIcon from '@/components/AppIcon.vue'
 import OperatorAccessVisual from '@/components/OperatorAccessVisual.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
+import decisionCapture from '@/assets/showcase/decision-live.png'
 
 const route = useRoute()
 const router = useRouter()
-const clerk = useClerk()
-const { isLoaded, isSignedIn } = useAuth()
-const { user } = useUser()
+const localMode = isLocalAuthMode()
+const clerk = localMode ? ref(null) : useClerk()
+const { isLoaded, isSignedIn } = localMode
+  ? { isLoaded: ref(true), isSignedIn: ref(false) }
+  : useAuth()
+const { isLoaded: isUserLoaded, user } = localMode
+  ? { isLoaded: ref(true), user: ref<null>(null) }
+  : useUser()
+const isPreview = import.meta.env.MODE === 'preview'
 
 onMounted(() => document.body.classList.add('edge-public-mode'))
 onUnmounted(() => document.body.classList.remove('edge-public-mode'))
 
-const mode = computed(() => (route.query.mode === 'setup' ? 'setup' : 'signin'))
+const mode = computed(() =>
+  route.name === 'waitlist' || route.query.mode === 'waitlist' ? 'waitlist' : 'signin',
+)
 const redirectTarget = computed(() => safeRedirect(route.query.redirect, '/flow'))
 const email = computed(() => user.value?.primaryEmailAddress?.emailAddress ?? '')
-const denied = computed(() => Boolean(isSignedIn.value && !isAllowedOperatorEmail(email.value)))
+const denied = computed(() =>
+  Boolean(isUserLoaded.value && isSignedIn.value && !isAllowedOperatorEmail(email.value)),
+)
 const unauthorizedAttempt = ref(false)
 
+const hasClerk = computed(() => !localMode && isLoaded.value && clerk.value != null)
+
 watch(
-  [isLoaded, isSignedIn, denied, redirectTarget],
+  [isLoaded, isUserLoaded, isSignedIn, denied, redirectTarget],
   async () => {
-    if (!isLoaded.value || !isSignedIn.value) return
+    if (!isLoaded.value || !isUserLoaded.value || !isSignedIn.value) return
     if (denied.value) {
       unauthorizedAttempt.value = true
       await clerk.value?.signOut()
+      await router.replace({ name: 'waitlist' })
       return
     }
     unauthorizedAttempt.value = false
@@ -56,24 +70,93 @@ watch(
 
     <main class="auth-shell">
       <section class="auth-context" aria-labelledby="auth-context-title">
-        <p class="eyebrow"><span aria-hidden="true" /> Operator access · measured Flow</p>
-        <h1 id="auth-context-title">One identity.<br />The full instrument.</h1>
-        <p class="context-copy">
-          Clerk verifies the operator; TradeCentral preserves the local boundary. After that, Flow
-          opens the measured market-wide window—not a demo board, promised return, or trade ticket.
-        </p>
-        <div class="close-row">
-          <span>Next: authenticate</span>
-          <i />
-          <span>Open Flow</span>
-          <i />
-          <span>Inspect one chain</span>
-        </div>
-        <div class="access-route-visual"><OperatorAccessVisual /></div>
+        <template v-if="mode === 'waitlist'">
+          <p class="eyebrow"><span aria-hidden="true" /> Private preview · Access request</p>
+          <h1 id="auth-context-title">A clearer view of options positioning.</h1>
+          <p class="context-copy">
+            TradeCentral brings dealer gamma, options flow, and research provenance into one
+            workstation. Request access to the private preview; each request is reviewed before an
+            invitation is issued.
+          </p>
+          <div class="close-row">
+            <span>01 Request access</span>
+            <i aria-hidden="true" />
+            <span>02 Verification</span>
+            <i aria-hidden="true" />
+            <span>03 Invitation</span>
+          </div>
+          <div class="waitlist-benefits-grid" aria-label="Private preview inclusions">
+            <div class="benefit-item">
+              <span class="benefit-dot" aria-hidden="true" />
+              <div>
+                <strong>Dealer positioning</strong>
+                <p>Gamma exposure, flip levels, and key positioning zones.</p>
+              </div>
+            </div>
+            <div class="benefit-item">
+              <span class="benefit-dot" aria-hidden="true" />
+              <div>
+                <strong>Options flow</strong>
+                <p>Trade direction with source and confidence context.</p>
+              </div>
+            </div>
+            <div class="benefit-item">
+              <span class="benefit-dot" aria-hidden="true" />
+              <div>
+                <strong>Research evidence</strong>
+                <p>Methodology and out-of-sample results alongside each view.</p>
+              </div>
+            </div>
+          </div>
+          <figure class="preview-capture">
+            <img
+              :src="decisionCapture"
+              alt="Actual TradeCentral decision workspace showing a SPY standby reading when independent research lenses are unavailable"
+              width="1440"
+              height="900"
+              loading="lazy"
+              decoding="async"
+            />
+            <figcaption>
+              From the workstation · SPY decision view · captured local session
+            </figcaption>
+          </figure>
+          <div class="preview-note">
+            <span class="preview-note-index">PREVIEW / 01</span>
+            <p>
+              Built for market research and decision support. TradeCentral does not route orders.
+            </p>
+          </div>
+        </template>
+        <template v-else>
+          <p class="eyebrow"><span aria-hidden="true" /> Operator access · measured Flow</p>
+          <h1 id="auth-context-title">One identity.<br />The full instrument.</h1>
+          <p class="context-copy">
+            <template v-if="isPreview">
+              This public preview accepts access requests. Live research is offline while the
+              private API remains on the local workstation.
+            </template>
+            <template v-else>
+              Clerk verifies the operator; TradeCentral preserves the local boundary. After that,
+              Flow opens the measured market-wide window—not a demo board, promised return, or trade
+              ticket.
+            </template>
+          </p>
+          <div class="close-row">
+            <span>Next: authenticate</span>
+            <i aria-hidden="true" />
+            <span>Open Flow</span>
+            <i aria-hidden="true" />
+            <span>Inspect one chain</span>
+          </div>
+          <div class="access-route-visual"><OperatorAccessVisual mode="signin" /></div>
+        </template>
       </section>
 
       <section class="auth-panel" aria-labelledby="auth-title">
-        <div class="panel-index" aria-hidden="true">ACCESS / 01</div>
+        <div class="panel-index" aria-hidden="true">
+          {{ mode === 'waitlist' ? 'WAITLIST / 01' : 'ACCESS / 01' }}
+        </div>
         <nav class="auth-mode-switch" aria-label="Choose access mode">
           <RouterLink
             :class="{ active: mode === 'signin' }"
@@ -82,20 +165,20 @@ watch(
             Sign in
           </RouterLink>
           <RouterLink
-            :class="{ active: mode === 'setup' }"
-            :to="{ name: 'auth', query: { mode: 'setup', redirect: redirectTarget } }"
+            :class="{ active: mode === 'waitlist' }"
+            :to="{ name: 'waitlist', query: { redirect: redirectTarget } }"
           >
-            Create access
+            Request access
           </RouterLink>
         </nav>
         <div class="panel-head">
-          <p>{{ mode === 'setup' ? 'Create operator access' : 'Continue to Flow' }}</p>
+          <p>{{ mode === 'waitlist' ? 'Private preview' : 'Continue to Flow' }}</p>
           <h2 id="auth-title">
             {{
               denied
                 ? 'This account is not authorized'
-                : mode === 'setup'
-                  ? 'Create the operator session'
+                : mode === 'waitlist'
+                  ? 'Request preview access'
                   : 'Unlock the instrument'
             }}
           </h2>
@@ -103,37 +186,99 @@ watch(
             {{
               denied
                 ? 'The signed-in account is not on the operator allowlist. Sign in with the authorized address.'
-                : mode === 'setup'
-                  ? 'Create a Clerk operator session for this workstation.'
+                : mode === 'waitlist'
+                  ? 'Share your email. We review requests on a rolling basis and contact selected applicants.'
                   : 'Sign in to open the Flow tape and the rest of the desk.'
             }}
           </span>
         </div>
 
-        <div v-if="!isLoaded" class="clerk-wait" role="status">Loading Clerk…</div>
-        <p v-else-if="denied || unauthorizedAttempt" class="form-error" role="alert">
+        <!-- Feedback alerts -->
+        <div
+          v-if="unauthorizedAttempt && mode === 'waitlist'"
+          class="waitlist-notice"
+          role="status"
+        >
+          <AppIcon name="shield" :size="16" />
+          <div class="notice-text">
+            <strong>Operator allowlist check</strong>
+            <p>
+              Your address is not currently on the operator allowlist. Submit your email below to
+              request an operator invitation.
+            </p>
+          </div>
+        </div>
+
+        <p
+          v-else-if="(denied || unauthorizedAttempt) && mode !== 'waitlist'"
+          class="form-error"
+          role="alert"
+        >
           <AppIcon name="alert" :size="15" />
-          Access is limited to the configured operator allowlist. This is not a public signup.
+          Access requires an authorized operator account. This is not a public signup.
         </p>
-        <SignUp
-          v-else-if="mode === 'setup'"
-          path="/auth"
-          routing="path"
-          :sign-in-url="`/auth?redirect=${encodeURIComponent(redirectTarget)}`"
-          :force-redirect-url="redirectTarget"
-        />
-        <SignIn
-          v-else
-          path="/auth"
-          routing="path"
-          :with-sign-up="true"
-          :sign-up-url="`/auth?mode=setup&redirect=${encodeURIComponent(redirectTarget)}`"
-          :force-redirect-url="redirectTarget"
-        />
+
+        <!-- Waitlist Mode Content -->
+        <template v-if="mode === 'waitlist'">
+          <div v-if="!isLoaded" class="clerk-wait" role="status">Loading access portal…</div>
+          <Waitlist v-else-if="hasClerk" sign-in-url="/auth" />
+          <div v-else class="waitlist-unavailable" role="status">
+            <strong>Waitlist unavailable</strong>
+            <p v-if="localMode">
+              Waitlist requests require Clerk, which is not configured in local mode. No request has
+              been submitted.
+            </p>
+            <p v-else>Clerk is not available in this session. No request has been submitted.</p>
+          </div>
+        </template>
+
+        <!-- Sign-in Mode Content -->
+        <template v-else>
+          <div v-if="!isLoaded" class="clerk-wait" role="status">Loading Clerk…</div>
+          <div v-else-if="localMode" class="local-session-box">
+            <div class="local-status">
+              <span class="status-indicator-dot" aria-hidden="true" />
+              <strong>Local operator session active</strong>
+            </div>
+            <p>
+              The research API is bound to 127.0.0.1. No external authentication credentials
+              required.
+            </p>
+            <RouterLink class="btn-continue-flow" :to="redirectTarget">
+              Continue to Flow
+              <svg
+                class="px-arrow"
+                width="20"
+                height="20"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <rect x="1" y="8" width="10" height="4" />
+                <rect x="11" y="4" width="4" height="4" />
+                <rect x="11" y="12" width="4" height="4" />
+                <rect x="15" y="8" width="4" height="4" />
+              </svg>
+            </RouterLink>
+          </div>
+          <SignIn
+            v-else
+            path="/auth"
+            routing="path"
+            :with-sign-up="false"
+            :force-redirect-url="redirectTarget"
+          />
+        </template>
 
         <p class="security-note">
-          Clerk holds the operator session. The research API still binds to 127.0.0.1. That is a
-          workstation lock, not permission to expose the local API on a network.
+          <template v-if="isPreview">
+            Preview mode · The research API is disabled. Operator watchlists can sync through Convex
+            after sign-in. Joining the waitlist does not grant dashboard access.
+          </template>
+          <template v-else>
+            Clerk holds the operator session. The research API still binds to 127.0.0.1. That is a
+            workstation lock, not permission to expose the local API on a network.
+          </template>
         </p>
       </section>
     </main>
@@ -185,7 +330,7 @@ watch(
   /* Editorial typography aligned with the landing paper system. */
   --font-display: 'Inter Tight Variable', 'Inter Tight', 'Geist Variable', 'Geist', sans-serif;
   --font-ui: 'Inter Variable', 'Inter', 'Geist Variable', 'Geist', sans-serif;
-  --font-data: 'Space Mono', 'IBM Plex Mono', 'Geist Mono Variable', monospace;
+  --font-data: var(--font-ui);
   position: relative;
   z-index: 3;
   min-height: 100vh;
@@ -193,10 +338,7 @@ watch(
   grid-template-rows: auto 1fr auto;
   overflow-x: hidden;
   color: var(--auth-dark);
-  background:
-    linear-gradient(rgba(24, 24, 27, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(24, 24, 27, 0.045) 1px, transparent 1px), var(--auth-paper);
-  background-size: 40px 40px;
+  background: var(--auth-paper);
   font-family: var(--font-ui);
 }
 
@@ -226,6 +368,8 @@ watch(
 }
 .auth-brand:hover {
   text-decoration: none;
+  border-color: var(--auth-dark);
+  background: #fffefa;
 }
 .auth-wordmark {
   display: grid;
@@ -257,6 +401,14 @@ watch(
 .back-link:hover {
   color: var(--auth-dark);
   text-decoration: none;
+}
+.auth-page a:focus-visible,
+.auth-page button:focus-visible,
+.auth-page :deep(button:focus-visible),
+.auth-page :deep(a:focus-visible),
+.auth-page :deep(input:focus-visible) {
+  outline: 2px solid var(--auth-orange);
+  outline-offset: 3px;
 }
 
 .auth-shell {
@@ -295,6 +447,7 @@ watch(
   font-weight: 600;
   letter-spacing: -0.04em;
   line-height: 0.99;
+  text-wrap: balance;
 }
 .context-copy {
   margin-top: 22px;
@@ -333,7 +486,7 @@ watch(
   background: #ffffff;
   border: 1px solid #c9c9c4;
   border-top: 3px solid var(--auth-orange);
-  box-shadow: 18px 22px 0 rgba(0, 130, 230, 0.1);
+  box-shadow: 12px 14px 0 rgba(24, 24, 27, 0.07);
 }
 .auth-panel::before,
 .auth-panel::after {
@@ -382,6 +535,9 @@ watch(
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+  transition:
+    color 140ms ease,
+    background-color 140ms ease;
 }
 .auth-mode-switch a:hover {
   color: #18181b;
@@ -405,6 +561,8 @@ watch(
   font-size: 28px;
   font-weight: 600;
   letter-spacing: -0.03em;
+  line-height: 1.08;
+  text-wrap: balance;
 }
 .panel-head > span {
   display: block;
@@ -420,6 +578,26 @@ watch(
   color: #6f6f78;
   font-family: var(--font-ui);
   font-size: 13px;
+}
+.waitlist-unavailable {
+  display: grid;
+  gap: 7px;
+  margin-top: 22px;
+  padding: 16px;
+  border: 1px solid var(--auth-rule);
+  border-left: 3px solid var(--auth-orange);
+  background: #f5f4ef;
+}
+.waitlist-unavailable strong {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+}
+.waitlist-unavailable p {
+  margin: 0;
+  color: var(--auth-muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 .form-error {
   display: flex;
@@ -478,6 +656,11 @@ watch(
 .auth-panel :deep(.cl-formButtonPrimary:hover) {
   background: #26262c;
 }
+.auth-panel :deep(button:disabled),
+.auth-panel :deep([aria-disabled='true']) {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
 .auth-panel :deep(.cl-socialButtonsBlockButton) {
   min-height: 46px;
   color: #292923;
@@ -509,6 +692,188 @@ watch(
   color: #7d2931;
 }
 
+/* Clerk Waitlist specific overrides */
+.auth-panel :deep(.cl-waitlist-root),
+.auth-panel :deep(.cl-waitlistSuccess) {
+  width: 100%;
+}
+.auth-panel :deep(.cl-waitlistSuccessTitle) {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--auth-dark);
+}
+.auth-panel :deep(.cl-waitlistSuccessText) {
+  color: #565660;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Waitlist Benefits Grid on Context Side */
+.waitlist-benefits-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  margin: 26px 0 0;
+  border-top: 1px solid var(--auth-rule);
+}
+.benefit-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--auth-rule);
+}
+.benefit-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  background: var(--auth-orange);
+  flex-shrink: 0;
+}
+.benefit-item strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--auth-dark);
+  line-height: 1.25;
+}
+.benefit-item p {
+  margin: 3px 0 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--auth-muted);
+  line-height: 1.35;
+}
+
+.preview-capture {
+  margin: 28px 0 0;
+  border: 1px solid var(--auth-rule);
+  background: #101217;
+}
+.preview-capture img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.preview-capture figcaption {
+  padding: 10px 12px;
+  border-top: 1px solid #33363a;
+  color: #d5d6d9;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.preview-note {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--auth-rule);
+}
+.preview-note-index {
+  flex: 0 0 auto;
+  color: var(--auth-orange);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.preview-note p {
+  margin: 0;
+  color: var(--auth-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Waitlist Notice Banner */
+.waitlist-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 12px 14px;
+  background: #fdfaf3;
+  border: 1px solid #f3d79f;
+  border-left: 3px solid #d97706;
+  color: #92400e;
+}
+.waitlist-notice .notice-text strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.waitlist-notice .notice-text p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #78350f;
+}
+
+/* Local Session Box */
+.local-session-box {
+  margin-top: 22px;
+  padding: 16px;
+  background: #f8f8f4;
+  border: 1px solid var(--auth-rule);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.local-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.status-indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--auth-green);
+}
+.local-status strong {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--auth-dark);
+}
+.local-session-box p {
+  margin: 0;
+  font-size: 12px;
+  color: #565660;
+  line-height: 1.45;
+}
+.btn-continue-flow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  margin-top: 4px;
+  padding: 8px 14px;
+  color: #fbfbf8;
+  background: #09090b;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+.btn-continue-flow:hover {
+  background: #26262c;
+  text-decoration: none;
+}
+.btn-continue-flow:active {
+  transform: translateY(1px);
+}
+
 .security-note {
   margin-top: 26px;
   padding-top: 18px;
@@ -534,6 +899,9 @@ watch(
 }
 
 @media (max-width: 980px) {
+  .preview-capture {
+    display: none;
+  }
   .auth-shell {
     grid-template-columns: 1fr;
     gap: 36px;
@@ -541,6 +909,18 @@ watch(
   .auth-panel {
     position: relative;
     max-width: 560px;
+    width: 100%;
+    justify-self: center;
+  }
+}
+
+@media (min-width: 981px) and (max-width: 1100px) {
+  .auth-shell {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+    gap: 32px;
+  }
+  .auth-panel {
+    padding-inline: 24px;
   }
 }
 
@@ -562,13 +942,41 @@ watch(
   }
   .auth-panel {
     padding: 22px 18px 24px;
-    box-shadow: 9px 11px 0 rgba(0, 130, 230, 0.1);
+    box-shadow: 6px 7px 0 rgba(24, 24, 27, 0.07);
+  }
+  .close-row {
+    flex-wrap: wrap;
+    gap: 8px;
+    line-height: 1.5;
+  }
+  .close-row i {
+    flex-basis: 18px;
+  }
+  .preview-note {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .panel-index {
+    top: -22px;
+    font-size: 9px;
   }
   .auth-footer {
     flex-direction: column;
     align-items: flex-start;
     justify-content: center;
     padding-block: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-page *,
+  .auth-page *::before,
+  .auth-page *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 </style>

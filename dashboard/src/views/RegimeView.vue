@@ -68,6 +68,7 @@ import {
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import LoadingState from '@/components/LoadingState.vue'
+import RegimeSkeletonLoader from '@/components/RegimeSkeletonLoader.vue'
 import RegimeSurfaceChart from '@/components/RegimeSurfaceChart.vue'
 import RegimeBreadthStrip from '@/components/RegimeBreadthStrip.vue'
 import MicrostructureTopographyCard from '@/components/MicrostructureTopographyCard.vue'
@@ -725,11 +726,42 @@ const regimeRead = computed(() => {
   }
 })
 
+/**
+ * Core regime telemetry is processing when options/market-regime/microstructure
+ * are still loading on cold start or symbol switch and have not yet settled.
+ * When true, the workstation withholds provisional/wrong reads ("Range-Bound Consolidation",
+ * "Compression Range") and renders the instrument-grade RegimeSkeletonLoader.
+ */
+const isRegimeProcessing = computed<boolean>(() => {
+  if (!activated.value) return false
+  const hasOptions = optionsRes.data.value != null
+  const hasMarketRegime = marketRegimeRes.data.value != null
+  const hasMicroRegime = microRegimeRes.data.value != null
+  const hasState = stateRes.data.value != null
+  const isLoadingCore =
+    (optionsRes.loading.value && !hasOptions) ||
+    (marketRegimeRes.loading.value && !hasMarketRegime) ||
+    (microRegimeRes.loading.value && !hasMicroRegime) ||
+    (stateRes.loading.value && !hasState)
+  return isLoadingCore
+})
+
 const tacticalBiasRead = computed(() => {
   const r = regimeRead.value
   const pt = latestStatePoint.value
   const vel = pt?.kalman_velocity ?? 0
   const spot = r.spot ?? effectiveSpot.value
+
+  if (isRegimeProcessing.value) {
+    return {
+      title: 'CALIBRATING MULTI-MODEL REGIME',
+      bias: 'CALIBRATING…',
+      toneClass: 'neutral',
+      stance:
+        'Pricing live option chains and synthesizing multi-model regime telemetry. Real-time dealer gamma, volatility structure, and causal kinematics are processing.',
+      action: 'Awaiting initial multi-model consensus before issuing tactical playbook guidance.',
+    }
+  }
 
   if (r.side == null) {
     if (pt != null && spot != null) {
@@ -871,9 +903,11 @@ const tacticalBias = computed(() => {
   return {
     ...tacticalBiasRead.value,
     provisional,
-    provisionalNote: provisional
-      ? `Price-only read — dealer gamma pending (${regimeRead.value.withheldReason ?? 'chain loading'})`
-      : null,
+    provisionalNote: isRegimeProcessing.value
+      ? null
+      : provisional
+        ? `Price-only read — dealer gamma pending (${regimeRead.value.withheldReason ?? 'chain loading'})`
+        : null,
   }
 })
 
@@ -1116,6 +1150,12 @@ const reconciledMarketRegime = computed<MarketRegimePayload | null>(() => {
   const spot = r.spot ?? effectiveSpot.value ?? raw?.spot ?? null
 
   if (!spot && !raw) return null
+
+  // When the multi-model regime engine is still calculating, withhold synthesizing
+  // a provisional regime rather than spoofing "Compression Range" or a premature trend.
+  if (marketRegimeRes.loading.value && !raw) {
+    return null
+  }
 
   const measurable = r.side != null && r.side !== 'unmeasurable' && chainMeasurable.value
 
@@ -1560,7 +1600,9 @@ function goLive(): void {
   void signalsRes.refresh()
   void absorptionRes.refresh()
   void zeroDteRes.refresh()
-  void runBacktest()
+  if (activeSection.value === 'setups') {
+    void runBacktest()
+  }
 }
 
 function applySymbol(): void {
@@ -1582,7 +1624,10 @@ function applySymbol(): void {
     void signalsRes.refresh({ clear: true })
     void absorptionRes.refresh({ clear: true })
     void zeroDteRes.refresh({ clear: true })
-    void runBacktest()
+    backtestResult.value = null
+    if (activeSection.value === 'setups') {
+      void runBacktest()
+    }
   }
 }
 
@@ -1610,9 +1655,22 @@ watch(
       void signalsRes.refresh({ clear: true })
       void absorptionRes.refresh({ clear: true })
       void zeroDteRes.refresh({ clear: true })
+      backtestResult.value = null
+      if (activeSection.value === 'setups') {
+        void runBacktest()
+      }
+    }
+  },
+)
+
+watch(
+  [activeSection, activated],
+  ([sec, isLive]) => {
+    if (sec === 'setups' && isLive && !backtestResult.value && !backtestRunning.value) {
       void runBacktest()
     }
   },
+  { immediate: false },
 )
 
 /* ---- INSTITUTIONAL QUANT WORKSTATION COMPUTEDS ------------------------- */
@@ -1882,8 +1940,10 @@ function onBreadthActivate(): void {
           <button
             v-for="sec in SECTIONS"
             :key="sec.id"
+            type="button"
             class="tab-btn"
             :class="{ active: activeSection === sec.id }"
+            :aria-pressed="activeSection === sec.id"
             @click="setSection(sec.id)"
           >
             {{ sec.label }}
@@ -1998,8 +2058,12 @@ function onBreadthActivate(): void {
           :quote-quality="symbolQuoteRow?.quality ?? null"
           :next-expiry-dte="nextExpiryDte"
           :next-expiry-date="nextExpiryDate ? nextExpiryDate.slice(5) : null"
-          :regime="regimeRead.side"
-          :custom-regime-label="reconciledMarketRegime?.primaryLabel || tacticalBias.bias || null"
+          :regime="isRegimeProcessing ? null : regimeRead.side"
+          :custom-regime-label="
+            isRegimeProcessing
+              ? 'CALIBRATING REGIME…'
+              : reconciledMarketRegime?.primaryLabel || tacticalBias.bias || null
+          "
           :active-timeframe="
             lookbackWindow === '1d'
               ? '1D'
@@ -2022,256 +2086,296 @@ function onBreadthActivate(): void {
           @select-timeframe="(tf) => setWindow(tf.toLowerCase())"
         />
 
+        <!-- Synchronized Active Calibration Banner for non-tactical sections -->
+        <div
+          v-if="isRegimeProcessing && activeSection !== 'all' && activeSection !== 'tactical'"
+          class="section-calibrating-banner ticked font-mono"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="scb-left">
+            <span class="processing-pulse" aria-hidden="true" />
+            <span class="scb-eyebrow">CALIBRATING MULTI-MODEL REGIME TELEMETRY · {{ symbol }}</span>
+            <span class="scb-detail font-sans">
+              Pricing live option chains, dealer gamma topography, and causal kinematics…
+            </span>
+          </div>
+          <button type="button" class="scb-jump-btn font-mono" @click="setSection('tactical')">
+            VIEW TELEMETRY CONSOLE &rarr;
+          </button>
+        </div>
+
         <!-- 1. Executive Tactical Briefing & Multi-Model Regime Workstation -->
         <div
           v-show="activeSection === 'all' || activeSection === 'tactical'"
           id="sec-tactical"
           class="section-container"
         >
-          <section class="tactical-banner ticked" :class="tacticalBias.toneClass">
-            <div class="tactical-header">
-              <div class="tactical-title-wrap">
-                <span class="tactical-eyebrow font-mono"
-                  >EXECUTIVE REGIME TACTICAL BRIEFING · {{ symbol }}</span
-                >
-                <h2 class="tactical-title">{{ tacticalBias.title }}</h2>
-                <span v-if="tacticalBias.provisionalNote" class="tactical-provisional font-mono">
-                  {{ tacticalBias.provisionalNote }}
-                </span>
-              </div>
-              <div class="tactical-bias-badge font-mono" :class="tacticalBias.toneClass">
-                BIAS: {{ tacticalBias.bias }}
-              </div>
-            </div>
+          <!-- Processing Skeleton Screen while core regime streams are calibrating -->
+          <RegimeSkeletonLoader
+            v-if="isRegimeProcessing"
+            :symbol="symbol"
+            :spot="regimeRead.spot ?? effectiveSpot"
+            :options-loading="optionsRes.loading.value && !optionsRes.data.value"
+            :regime-loading="marketRegimeRes.loading.value && !marketRegimeRes.data.value"
+            :micro-loading="microRegimeRes.loading.value && !microRegimeRes.data.value"
+            :state-loading="stateRes.loading.value && !stateRes.data.value"
+            :flow-loading="absorptionRes.loading.value && !absorptionRes.data.value"
+            :gate-loading="executionGateRes.loading.value && !executionGateRes.data.value"
+            :signals-loading="signalsRes.loading.value && !signalsRes.data.value"
+            :vwap-loading="vwapRes.loading.value && !vwapRes.data.value"
+          />
 
-            <div class="tactical-body-grid">
-              <div class="tactical-col stance-col">
-                <div class="col-header">
-                  <span class="col-label font-mono">MARKET MICROSTRUCTURE STANCE</span>
-                  <span class="col-tag font-mono">DEALER DYNAMICS</span>
-                </div>
-                <p class="col-text">{{ tacticalBias.stance }}</p>
-              </div>
-              <div class="tactical-col action-col">
-                <div class="col-header">
-                  <span class="col-label font-mono">ACTIONABLE EXECUTION PLAN</span>
-                  <span class="col-tag font-mono action-tag">TACTICAL PLAYBOOK</span>
-                </div>
-                <p class="col-text text-phosphor font-semibold">{{ tacticalBias.action }}</p>
-              </div>
-            </div>
-
-            <!-- Active Execution Ticket Overlay if present -->
-            <div
-              v-if="ticketRead"
-              class="active-ticket-row"
-              :class="[ticketRead.sig.action, { conflicted: !ticketRead.actionable }]"
-            >
-              <div class="ticket-status-pill font-mono">
-                {{ ticketRead.actionable ? 'ACTIVE TICKET' : 'UNCONFIRMED TICKET' }}:
-                {{ ticketRead.sig.action }} &middot; {{ ticketRead.sig.setup_name }}
-              </div>
-
-              <!-- A price-structure ticket pointing the other way from the
-                   dealer-gamma read is stated as the disagreement it is. -->
-              <p v-if="ticketRead.conflict" class="ticket-conflict font-mono">
-                ⚠ CONFLICTS WITH THE REGIME READ — the briefing above is
-                {{ ticketRead.biasSide === 'long' ? 'bullish' : 'bearish' }}; this ticket is
-                {{ ticketRead.sig.direction }}. It is generated from price and volume structure only
-                (no dealer gamma in history), so treat it as a second opinion, not an order.
-              </p>
-              <p v-else-if="ticketRead.staleReason" class="ticket-conflict font-mono">
-                ⚠ NOT LIVE — {{ ticketRead.staleReason }}.
-                <template v-if="ticketRead.driftPct != null">
-                  Spot has moved {{ ticketRead.driftPct >= 0 ? '+' : ''
-                  }}{{ num(ticketRead.driftPct, 1) }}% since the quote.
-                </template>
-              </p>
-
-              <div class="ticket-metrics-list">
-                <div>
-                  Entry:
-                  <span class="font-mono font-bold">${{ num(ticketRead.sig.entry_price, 2) }}</span>
-                </div>
-                <div>
-                  Stop:
-                  <span class="font-mono font-bold text-rose"
-                    >${{ num(ticketRead.sig.stop_loss, 2) }}</span
+          <template v-else>
+            <section class="tactical-banner ticked" :class="tacticalBias.toneClass">
+              <div class="tactical-header">
+                <div class="tactical-title-wrap">
+                  <span class="tactical-eyebrow font-mono"
+                    >EXECUTIVE REGIME TACTICAL BRIEFING · {{ symbol }}</span
                   >
-                  <span class="ticket-sub font-mono"
-                    >1R ${{ num(ticketRead.riskPerShare, 2) }}</span
-                  >
-                </div>
-                <div>
-                  Target:
-                  <span class="font-mono font-bold text-emerald"
-                    >${{ num(ticketRead.sig.take_profit, 2) }}</span
-                  >
-                  <span class="ticket-sub font-mono"
-                    >{{ num(ticketRead.sig.risk_reward, 2) }}R</span
-                  >
-                </div>
-                <div>
-                  Scale:
-                  <span class="font-mono"
-                    >${{ num(ticketRead.sig.target_1r, 2) }} / ${{
-                      num(ticketRead.sig.target_2r, 2)
-                    }}
-                    / ${{ num(ticketRead.sig.target_3r, 2) }}</span
-                  >
-                  <span class="ticket-sub font-mono">1R / 2R / 3R</span>
-                </div>
-                <div>
-                  Conviction:
-                  <span class="font-mono font-bold"
-                    >{{ Math.round(ticketRead.sig.conviction * 100) }}%</span
-                  >
-                </div>
-                <div>
-                  Size:
-                  <span class="font-mono font-bold"
-                    >{{ ticketRead.sig.suggested_size_pct }}% capital</span
-                  >
-                  <span class="ticket-sub font-mono"
-                    >risks
-                    {{
-                      num(
-                        (ticketRead.sig.suggested_size_pct * ticketRead.riskPerShare) /
-                          Math.max(ticketRead.sig.entry_price, 1e-9),
-                        2,
-                      )
-                    }}% of capital</span
-                  >
-                </div>
-              </div>
-
-              <!-- Say what the stop is a multiple of. Without this the numbers
-                   look chosen; they are 1x a measured bar volatility. -->
-              <p class="ticket-basis font-mono">
-                Levels sized off {{ ticketRead.unitLabel }} = ${{
-                  num(ticketRead.sig.risk_unit, 2)
-                }}/share &middot; bar {{ ticketRead.sig.timestamp.slice(0, 10) }}
-              </p>
-            </div>
-
-            <!-- Microstructure Pivot Ladder -->
-            <div class="pivot-ladder-strip">
-              <span class="ladder-title font-mono">PIVOT LADDER:</span>
-              <div class="ladder-pills">
-                <span
-                  v-for="p in pivotLadder"
-                  :key="p.label"
-                  class="ladder-pill font-mono"
-                  :class="[p.tone, { 'is-spot': p.tone === 'spot' }]"
-                  :title="p.role"
-                >
-                  <span v-if="p.tone === 'spot'" class="spot-live-dot" aria-hidden="true" />
-                  <span class="p-name">{{ p.label }}</span>
-                  <span class="p-price">${{ num(p.price, 2) }}</span>
-                  <span
-                    v-if="p.tone !== 'spot' && pivotDeltaPct(p.price)"
-                    class="p-delta font-mono"
-                    :class="p.price >= (regimeRead.spot ?? effectiveSpot ?? 0) ? 'above' : 'below'"
-                  >
-                    {{ pivotDeltaPct(p.price) }}
+                  <h2 class="tactical-title">{{ tacticalBias.title }}</h2>
+                  <span v-if="tacticalBias.provisionalNote" class="tactical-provisional font-mono">
+                    {{ tacticalBias.provisionalNote }}
                   </span>
-                </span>
+                </div>
+                <div class="tactical-bias-badge font-mono" :class="tacticalBias.toneClass">
+                  BIAS: {{ tacticalBias.bias }}
+                </div>
               </div>
-              <!-- Levels outside the immediate window are noted without evasive wording -->
-              <span v-if="missingLevels.length" class="ladder-missing font-mono">
-                outside active window: {{ missingLevels.join(', ') }}
-              </span>
-            </div>
 
-            <!-- Rule of 16 Expected Move Volatility Strip -->
-            <div v-if="expectedMove" class="expected-move-strip">
-              <div class="em-item">
-                <span class="em-label font-mono"
-                  >1-DAY EXPECTED MOVE ({{
-                    expectedMove?.ivBasis === 'vix_proxy' ? 'VIX / 16' : 'ATM IV / 16'
-                  }})</span
-                >
-                <span class="em-val font-mono font-bold text-warn">
-                  &plusmn;${{ num(expectedMove.em1dDollars, 2) }} (&plusmn;{{
-                    num(expectedMove.em1dPct, 1)
-                  }}%)
-                </span>
-                <span class="em-sub font-mono text-ink-dim"
-                  >[${{ num(expectedMove.em1dLow, 2) }} to ${{
-                    num(expectedMove.em1dHigh, 2)
-                  }}]</span
-                >
+              <div class="tactical-body-grid">
+                <div class="tactical-col stance-col">
+                  <div class="col-header">
+                    <span class="col-label font-mono">MARKET MICROSTRUCTURE STANCE</span>
+                    <span class="col-tag font-mono">DEALER DYNAMICS</span>
+                  </div>
+                  <p class="col-text">{{ tacticalBias.stance }}</p>
+                </div>
+                <div class="tactical-col action-col">
+                  <div class="col-header">
+                    <span class="col-label font-mono">ACTIONABLE EXECUTION PLAN</span>
+                    <span class="col-tag font-mono action-tag">TACTICAL PLAYBOOK</span>
+                  </div>
+                  <p class="col-text text-phosphor font-semibold">{{ tacticalBias.action }}</p>
+                </div>
               </div>
-              <div class="em-item">
-                <span class="em-label font-mono">1-WEEK EXPECTED MOVE</span>
-                <span class="em-val font-mono font-semibold">
-                  &plusmn;${{ num(expectedMove.em1wDollars, 2) }} (&plusmn;{{
-                    num(expectedMove.em1wPct, 1)
-                  }}%)
-                </span>
-                <span class="em-sub font-mono text-ink-dim"
-                  >[${{ num(expectedMove.em1wLow, 2) }} to ${{
-                    num(expectedMove.em1wHigh, 2)
-                  }}]</span
-                >
+
+              <!-- Active Execution Ticket Overlay if present -->
+              <div
+                v-if="ticketRead"
+                class="active-ticket-row"
+                :class="[ticketRead.sig.action, { conflicted: !ticketRead.actionable }]"
+              >
+                <div class="ticket-status-pill font-mono">
+                  {{ ticketRead.actionable ? 'ACTIVE TICKET' : 'UNCONFIRMED TICKET' }}:
+                  {{ ticketRead.sig.action }} &middot; {{ ticketRead.sig.setup_name }}
+                </div>
+
+                <!-- A price-structure ticket pointing the other way from the
+                   dealer-gamma read is stated as the disagreement it is. -->
+                <p v-if="ticketRead.conflict" class="ticket-conflict font-mono">
+                  ⚠ CONFLICTS WITH THE REGIME READ — the briefing above is
+                  {{ ticketRead.biasSide === 'long' ? 'bullish' : 'bearish' }}; this ticket is
+                  {{ ticketRead.sig.direction }}. It is generated from price and volume structure
+                  only (no dealer gamma in history), so treat it as a second opinion, not an order.
+                </p>
+                <p v-else-if="ticketRead.staleReason" class="ticket-conflict font-mono">
+                  ⚠ NOT LIVE — {{ ticketRead.staleReason }}.
+                  <template v-if="ticketRead.driftPct != null">
+                    Spot has moved {{ ticketRead.driftPct >= 0 ? '+' : ''
+                    }}{{ num(ticketRead.driftPct, 1) }}% since the quote.
+                  </template>
+                </p>
+
+                <div class="ticket-metrics-list">
+                  <div>
+                    Entry:
+                    <span class="font-mono font-bold"
+                      >${{ num(ticketRead.sig.entry_price, 2) }}</span
+                    >
+                  </div>
+                  <div>
+                    Stop:
+                    <span class="font-mono font-bold text-rose"
+                      >${{ num(ticketRead.sig.stop_loss, 2) }}</span
+                    >
+                    <span class="ticket-sub font-mono"
+                      >1R ${{ num(ticketRead.riskPerShare, 2) }}</span
+                    >
+                  </div>
+                  <div>
+                    Target:
+                    <span class="font-mono font-bold text-emerald"
+                      >${{ num(ticketRead.sig.take_profit, 2) }}</span
+                    >
+                    <span class="ticket-sub font-mono"
+                      >{{ num(ticketRead.sig.risk_reward, 2) }}R</span
+                    >
+                  </div>
+                  <div>
+                    Scale:
+                    <span class="font-mono"
+                      >${{ num(ticketRead.sig.target_1r, 2) }} / ${{
+                        num(ticketRead.sig.target_2r, 2)
+                      }}
+                      / ${{ num(ticketRead.sig.target_3r, 2) }}</span
+                    >
+                    <span class="ticket-sub font-mono">1R / 2R / 3R</span>
+                  </div>
+                  <div>
+                    Conviction:
+                    <span class="font-mono font-bold"
+                      >{{ Math.round(ticketRead.sig.conviction * 100) }}%</span
+                    >
+                  </div>
+                  <div>
+                    Size:
+                    <span class="font-mono font-bold"
+                      >{{ ticketRead.sig.suggested_size_pct }}% capital</span
+                    >
+                    <span class="ticket-sub font-mono"
+                      >risks
+                      {{
+                        num(
+                          (ticketRead.sig.suggested_size_pct * ticketRead.riskPerShare) /
+                            Math.max(ticketRead.sig.entry_price, 1e-9),
+                          2,
+                        )
+                      }}% of capital</span
+                    >
+                  </div>
+                </div>
+
+                <!-- Say what the stop is a multiple of. Without this the numbers
+                   look chosen; they are 1x a measured bar volatility. -->
+                <p class="ticket-basis font-mono">
+                  Levels sized off {{ ticketRead.unitLabel }} = ${{
+                    num(ticketRead.sig.risk_unit, 2)
+                  }}/share &middot; bar {{ ticketRead.sig.timestamp.slice(0, 10) }}
+                </p>
               </div>
-              <div class="em-item">
-                <span class="em-label font-mono">INTRADAY MOVE EXCURSION</span>
-                <span class="em-val font-mono font-semibold text-call-hi">
-                  {{ moveExcursion?.label }}
-                </span>
-                <span class="em-sub text-ink-dim">
-                  {{
-                    wallSpatial?.callWallInside1d
-                      ? 'Call Wall inside 1D EM (High-Probability Pin)'
-                      : 'Call Wall beyond 1D EM'
-                  }}
+
+              <!-- Microstructure Pivot Ladder -->
+              <div class="pivot-ladder-strip">
+                <span class="ladder-title font-mono">PIVOT LADDER:</span>
+                <div class="ladder-pills">
+                  <span
+                    v-for="p in pivotLadder"
+                    :key="p.label"
+                    class="ladder-pill font-mono"
+                    :class="[p.tone, { 'is-spot': p.tone === 'spot' }]"
+                    :title="p.role"
+                  >
+                    <span v-if="p.tone === 'spot'" class="spot-live-dot" aria-hidden="true" />
+                    <span class="p-name">{{ p.label }}</span>
+                    <span class="p-price">${{ num(p.price, 2) }}</span>
+                    <span
+                      v-if="p.tone !== 'spot' && pivotDeltaPct(p.price)"
+                      class="p-delta font-mono"
+                      :class="
+                        p.price >= (regimeRead.spot ?? effectiveSpot ?? 0) ? 'above' : 'below'
+                      "
+                    >
+                      {{ pivotDeltaPct(p.price) }}
+                    </span>
+                  </span>
+                </div>
+                <!-- Levels outside the immediate window are noted without evasive wording -->
+                <span v-if="missingLevels.length" class="ladder-missing font-mono">
+                  outside active window: {{ missingLevels.join(', ') }}
                 </span>
               </div>
-              <div class="em-item">
-                <span class="em-label font-mono">VOL COMPLEX BENCHMARK</span>
-                <!-- `ivAnnualPct` is whatever fed the corridor, which after a
+
+              <!-- Rule of 16 Expected Move Volatility Strip -->
+              <div v-if="expectedMove" class="expected-move-strip">
+                <div class="em-item">
+                  <span class="em-label font-mono"
+                    >1-DAY EXPECTED MOVE ({{
+                      expectedMove?.ivBasis === 'vix_proxy' ? 'VIX / 16' : 'ATM IV / 16'
+                    }})</span
+                  >
+                  <span class="em-val font-mono font-bold text-warn">
+                    &plusmn;${{ num(expectedMove.em1dDollars, 2) }} (&plusmn;{{
+                      num(expectedMove.em1dPct, 1)
+                    }}%)
+                  </span>
+                  <span class="em-sub font-mono text-ink-dim"
+                    >[${{ num(expectedMove.em1dLow, 2) }} to ${{
+                      num(expectedMove.em1dHigh, 2)
+                    }}]</span
+                  >
+                </div>
+                <div class="em-item">
+                  <span class="em-label font-mono">1-WEEK EXPECTED MOVE</span>
+                  <span class="em-val font-mono font-semibold">
+                    &plusmn;${{ num(expectedMove.em1wDollars, 2) }} (&plusmn;{{
+                      num(expectedMove.em1wPct, 1)
+                    }}%)
+                  </span>
+                  <span class="em-sub font-mono text-ink-dim"
+                    >[${{ num(expectedMove.em1wLow, 2) }} to ${{
+                      num(expectedMove.em1wHigh, 2)
+                    }}]</span
+                  >
+                </div>
+                <div class="em-item">
+                  <span class="em-label font-mono">INTRADAY MOVE EXCURSION</span>
+                  <span class="em-val font-mono font-semibold text-call-hi">
+                    {{ moveExcursion?.label }}
+                  </span>
+                  <span class="em-sub text-ink-dim">
+                    {{
+                      wallSpatial?.callWallInside1d
+                        ? 'Call Wall inside 1D EM (High-Probability Pin)'
+                        : 'Call Wall beyond 1D EM'
+                    }}
+                  </span>
+                </div>
+                <div class="em-item">
+                  <span class="em-label font-mono">VOL COMPLEX BENCHMARK</span>
+                  <!-- `ivAnnualPct` is whatever fed the corridor, which after a
                      VIX fallback IS the VIX. Printing that under an "ATM IV"
                      label reported the index vol as the symbol's own. -->
-                <span class="em-val font-mono text-phosphor font-semibold">
-                  VIX {{ vixQuote != null ? num(vixQuote, 1) : DASH }} &middot; ATM IV
-                  {{ atmIv != null ? `${num(atmIv > 1.5 ? atmIv : atmIv * 100, 1)}%` : DASH }}
-                </span>
-                <span class="em-sub font-mono text-ink-faint"
-                  >EM = S &times; ({{ expectedMove?.ivBasisLabel ?? 'IV / 16' }})</span
-                >
+                  <span class="em-val font-mono text-phosphor font-semibold">
+                    VIX {{ vixQuote != null ? num(vixQuote, 1) : DASH }} &middot; ATM IV
+                    {{ atmIv != null ? `${num(atmIv > 1.5 ? atmIv : atmIv * 100, 1)}%` : DASH }}
+                  </span>
+                  <span class="em-sub font-mono text-ink-faint"
+                    >EM = S &times; ({{ expectedMove?.ivBasisLabel ?? 'IV / 16' }})</span
+                  >
+                </div>
               </div>
+            </section>
+
+            <!-- Multi-Dimensional Market Regime Workstation Tier (Reconciled Models) -->
+            <div class="quant-grid-row tier-1-row">
+              <PrimaryRegimeCard
+                :payload="reconciledMarketRegime"
+                :symbol="symbol"
+                :spot="regimeRead.spot ?? effectiveSpot"
+                :loading="marketRegimeRes.loading.value"
+              />
+              <TransitionRiskGauge
+                :transition="reconciledMarketRegime?.transition"
+                :measurable="reconciledMarketRegime?.quality?.measurable"
+              />
             </div>
-          </section>
 
-          <!-- Multi-Dimensional Market Regime Workstation Tier (Reconciled Models) -->
-          <div class="quant-grid-row tier-1-row">
-            <PrimaryRegimeCard
-              :payload="reconciledMarketRegime"
-              :symbol="symbol"
-              :spot="regimeRead.spot ?? effectiveSpot"
-              :loading="marketRegimeRes.loading.value"
-            />
-            <TransitionRiskGauge
-              :transition="reconciledMarketRegime?.transition"
-              :measurable="reconciledMarketRegime?.quality?.measurable"
-            />
-          </div>
+            <div class="quant-grid-row tier-2-row">
+              <FourPillarContextGrid
+                :payload="reconciledMarketRegime"
+                :loading="marketRegimeRes.loading.value"
+              />
+            </div>
 
-          <div class="quant-grid-row tier-2-row">
-            <FourPillarContextGrid
-              :payload="reconciledMarketRegime"
-              :loading="marketRegimeRes.loading.value"
-            />
-          </div>
-
-          <div class="quant-grid-row tier-3-row">
-            <ModelAgreementMatrix :agreement="reconciledMarketRegime?.agreement" />
-            <DynamicExplanationPanel
-              :explanation="reconciledMarketRegime?.explanation"
-              :measurable="reconciledMarketRegime?.quality?.measurable"
-            />
-          </div>
+            <div class="quant-grid-row tier-3-row">
+              <ModelAgreementMatrix :agreement="reconciledMarketRegime?.agreement" />
+              <DynamicExplanationPanel
+                :explanation="reconciledMarketRegime?.explanation"
+                :measurable="reconciledMarketRegime?.quality?.measurable"
+              />
+            </div>
+          </template>
         </div>
 
         <!-- 2. Levels, Probability & Order Flow Map -->
@@ -3095,6 +3199,104 @@ function onBreadthActivate(): void {
 </template>
 
 <style scoped>
+.mode-tabs .tab-btn:focus-visible,
+.ticker-chip:focus-visible,
+.win-chip:focus-visible,
+.apply-btn:focus-visible,
+.go-live-btn:focus-visible,
+.scb-jump-btn:focus-visible {
+  outline: var(--hair) solid var(--phosphor);
+  outline-offset: 2px;
+  position: relative;
+  z-index: 1;
+}
+
+.mode-tabs .tab-btn[aria-pressed='true'] {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--phosphor) 70%, white);
+}
+
+.mode-tabs .tab-btn {
+  line-height: 1.25;
+}
+
+.view-header h1 {
+  max-width: 25ch;
+  line-height: 1.08;
+  letter-spacing: var(--track-tight, -0.025em);
+  text-wrap: balance;
+}
+
+.dek {
+  line-height: 1.5;
+}
+
+.signals-table {
+  min-width: 38rem;
+}
+
+.signals-table tbody tr:hover {
+  background: var(--wash-2);
+}
+
+.signals-table tbody tr:last-child td {
+  border-bottom-color: transparent;
+}
+
+.action-pill {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.kpi-box {
+  min-width: 0;
+}
+
+.kpi-val {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+  .view-header {
+    padding: var(--s3);
+  }
+
+  .view-header h1 {
+    font-size: var(--t-lead);
+  }
+
+  .header-top {
+    gap: var(--s3);
+  }
+
+  .mode-tabs {
+    flex: 1 1 100%;
+    min-width: 0;
+    gap: 0.25rem;
+  }
+
+  .mode-tabs .tab-btn {
+    min-height: 2.75rem;
+    padding-inline: 0.5rem;
+  }
+
+  .controls-line {
+    gap: var(--s3);
+  }
+
+  .timeframe-controls {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-tabs .tab-btn,
+  .ticker-chip,
+  .win-chip,
+  .apply-btn {
+    transition: none;
+  }
+}
+
 .regime-view {
   display: flex;
   flex-direction: column;
@@ -4451,5 +4653,55 @@ function onBreadthActivate(): void {
     flex-direction: column;
     gap: 0.5rem;
   }
+}
+
+.section-calibrating-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  background: var(--panel);
+  border: var(--hair) solid var(--rule);
+  border-left: 3px solid var(--phosphor);
+  padding: var(--s2) var(--s4);
+  animation: sk-fade-in 200ms ease-out;
+  margin-bottom: var(--s3);
+}
+
+.scb-left {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.scb-eyebrow {
+  color: var(--phosphor);
+  font-size: var(--t-nano);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.scb-detail {
+  color: var(--ink-dim);
+  font-size: var(--t-nano);
+}
+
+.scb-jump-btn {
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--rule);
+  color: var(--phosphor);
+  font-size: var(--t-nano);
+  font-weight: 700;
+  padding: 3px 8px;
+  cursor: pointer;
+  letter-spacing: 0.06em;
+  transition: all 150ms ease;
+  white-space: nowrap;
+}
+
+.scb-jump-btn:hover {
+  background: var(--phosphor);
+  color: var(--void);
 }
 </style>

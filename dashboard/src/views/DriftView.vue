@@ -14,6 +14,7 @@ import Panel from '@/components/Panel.vue'
 import LoadingState from '@/components/LoadingState.vue'
 import GammaExposureMap from '@/components/GammaExposureMap.vue'
 import PressureDriftChart from '@/components/PressureDriftChart.vue'
+import { resolveDealerRead } from '@/dealerRead'
 
 /**
  * Charm / pressure drift tab.
@@ -86,8 +87,6 @@ const tableSearch = ref('')
 const sortCol = ref<string>('strike')
 const sortAsc = ref(true)
 
-/** Strategy display mode: 'primary' | 'all' */
-const strategyViewMode = ref<'primary' | 'all'>('primary')
 
 const optionsRes = useResource<OptionsIntelligence>(
   () =>
@@ -171,7 +170,6 @@ function setPreset(p: 'strict' | 'balanced' | 'raw'): void {
 const payload = computed(() => optionsRes.data.value)
 const summary = computed(() => payload.value?.summary)
 const charmSummary = computed(() => payload.value?.charm_summary)
-const pressure = computed(() => payload.value?.pressure)
 const charmRows = computed(() => payload.value?.charm_by_strike ?? [])
 const chainRows = computed(() => payload.value?.chain_by_strike ?? [])
 const gexRows = computed(() => payload.value?.gex_by_strike ?? [])
@@ -179,6 +177,7 @@ const freshness = computed(() => payload.value?.freshness)
 const chainContext = computed(() => payload.value?.chain_context)
 const availableExpiries = computed(() => chainContext.value?.available_expiries ?? [])
 const probability = computed(() => payload.value?.probability)
+const dealerRead = computed(() => resolveDealerRead(payload.value))
 
 const spot = computed(() => summary.value?.spot ?? null)
 const callWall = computed(() => summary.value?.call_wall ?? null)
@@ -189,32 +188,6 @@ const netGex = computed(() => summary.value?.total_gex_m ?? null)
 const gexRegime = computed(() => summary.value?.regime ?? 'neutral')
 const netCharmFlow = computed(() => charmSummary.value?.net_charm_flow ?? null)
 const charmPressure = computed(() => charmSummary.value?.pressure ?? 'balanced')
-
-/**
- * Net charm flow as a share of the chain's own gross charm magnitude, in [-1, 1].
- *
- * Net charm flow is shares/day and scales with open interest, so absolute
- * cutoffs (the old ±1500 / −2000) fired on essentially every liquid symbol and
- * never on an illiquid one — which made the "charm is one-sided" branches
- * unconditional for large caps and silently overrode the pressure gauge.
- * Dividing by gross makes the test scale-free and comparable across symbols.
- * Negative = dealers buy (bullish tailwind); positive = dealers sell.
- */
-const charmRatio = computed(() => {
-  const gross = charmSummary.value?.abs_charm_flow ?? 0
-  const net = charmSummary.value?.net_charm_flow ?? 0
-  return gross > 0 ? net / gross : 0
-})
-/** A fifth of all charm flow pointing one way counts as one-sided. */
-const CHARM_ONE_SIDED = 0.2
-
-/**
- * Render one pressure-gauge channel ratio. `null` means the channel had no gross
- * magnitude and abstained from the blend — show that, never a 0 it didn't vote.
- */
-function channelText(value: number | null): string {
-  return value == null || !Number.isFinite(value) ? 'n/a' : signed(value, 2)
-}
 
 /** Human-readable cause when part (or all) of the chain could not be charmed. */
 const CHARM_SKIP_LABELS: Record<string, string> = {
@@ -256,9 +229,6 @@ const charmSkipHint = computed(() => {
   return null
 })
 
-const expectedMove = computed(
-  () => probability.value?.expected_move ?? (spot.value ? spot.value * 0.035 : null),
-)
 const atmIv = computed(() => probability.value?.atm_iv ?? null)
 
 const asof = computed(() => payload.value?.asof_utc ?? null)
@@ -288,117 +258,6 @@ const gexRegimeLabel = computed(
     })[gexRegime.value],
 )
 
-const pressureLabel = computed(
-  () =>
-    ({
-      buying: 'BUYING PRESSURE',
-      selling: 'SELLING PRESSURE',
-      balanced: 'BALANCED',
-    })[pressure.value?.label ?? 'balanced'],
-)
-
-const gaugePct = computed(() => {
-  const v = pressure.value?.imbalance
-  if (v == null || !Number.isFinite(v)) return 50
-  return Math.round(((v + 1) / 2) * 100)
-})
-
-/** Server-side read: confidence band, actionability and the channels behind it. */
-const pressureBand = computed(() => pressure.value?.confidence?.band ?? 'unmeasurable')
-const pressureActionable = computed(() => pressure.value?.actionable === true)
-const pressureVerdict = computed(() => pressure.value?.verdict ?? pressureLabel.value)
-const tapeChannel = computed(() => pressure.value?.tape ?? null)
-const underlyingChannel = computed(() => pressure.value?.underlying ?? null)
-const pressureConflicts = computed(() => pressure.value?.conflicts ?? [])
-const pressureReasons = computed(() => pressure.value?.reasons ?? [])
-
-/** How the tape's sides were resolved — the trader should see what kind of evidence this is. */
-const tapeSideMixText = computed(() => {
-  const tape = tapeChannel.value
-  if (!tape || tape.n_total === 0) return 'no prints in window'
-  const mix = tape.source_mix
-  const parts: string[] = []
-  if (mix.vendor) parts.push(`${mix.vendor} vendor-signed`)
-  if (mix.quote_rule_live) parts.push(`${mix.quote_rule_live} vs live quote`)
-  if (mix.quote_rule_delayed) parts.push(`${mix.quote_rule_delayed} vs delayed quote (½ weight)`)
-  if (mix.tick_rule) parts.push(`${mix.tick_rule} by tick test (0.4 weight)`)
-  if (mix.unresolved) parts.push(`${mix.unresolved} unresolved`)
-  return parts.join(' · ')
-})
-
-interface PressureChannelRow {
-  key: 'charm' | 'tape' | 'underlying'
-  name: string
-  ratio: number | null
-  weight: number
-  detail: string
-  tone: 'buying' | 'selling' | 'balanced' | 'na'
-  /** True when this channel's data is stale and should be visually deprioritized. */
-  stale: boolean
-  /** Freshness rank: 1 = highest quality (live), 3 = lowest quality (OHLCV proxy). */
-  freshnessRank: 1 | 2 | 3
-}
-
-/** One row per voting channel: what it read, how much it weighs, and why it may have abstained. */
-const pressureChannelRows = computed<PressureChannelRow[]>(() => {
-  const p = pressure.value
-  if (!p) return []
-  const tone = (ratio: number | null): PressureChannelRow['tone'] => {
-    if (ratio == null || !Number.isFinite(ratio)) return 'na'
-    const threshold = p.thresholds?.direction ?? 0.25
-    return ratio > threshold ? 'buying' : ratio < -threshold ? 'selling' : 'balanced'
-  }
-  const charmMeasured = charmSummary.value?.contracts_measured ?? 0
-  const charmSkipped = charmSummary.value?.contracts_skipped ?? 0
-  const tape = tapeChannel.value
-  const und = underlyingChannel.value
-  const undStale = und?.stale === true
-  return [
-    {
-      key: 'charm',
-      name: 'Charm positioning',
-      ratio: p.channels.charm,
-      weight: p.weights.charm,
-      detail:
-        p.channels.charm == null
-          ? 'no measurable charm flow'
-          : `${signed(p.components.net_charm_flow, 0)} sh/d · ${charmMeasured}/${charmMeasured + charmSkipped} contracts · model proxy`,
-      tone: tone(p.channels.charm),
-      stale: false,
-      freshnessRank: 2,
-    },
-    {
-      key: 'tape',
-      name: 'Tape buyers vs sellers',
-      ratio: p.channels.tape,
-      weight: p.weights.tape,
-      detail: tape
-        ? `${tape.n_signed}/${tape.n_total} prints sided · ${Math.round(tape.coverage * 100)}% of premium · ${tapeSideMixText.value}`
-        : 'no flow prints available',
-      tone: tone(p.channels.tape),
-      stale: false,
-      freshnessRank: 1,
-    },
-    {
-      key: 'underlying',
-      name: 'Underlying volume read',
-      ratio: p.channels.underlying,
-      weight: p.weights.underlying,
-      detail: und
-        ? `${und.bars_used} × ${und.timeframe ?? '?'} bars · rvol ${und.rvol != null ? und.rvol.toFixed(2) + '×' : 'n/a'} · close-location proxy${undStale ? ' · STALE — excluded from blend' : ''}`
-        : 'no underlying bars supplied',
-      tone: undStale ? 'na' : tone(p.channels.underlying),
-      stale: undStale,
-      freshnessRank: 3,
-    },
-  ]
-})
-
-/** True when the underlying channel is flagged stale by the server. */
-const isUnderlyingStale = computed(
-  () => pressureChannelRows.value.find((r) => r.key === 'underlying')?.stale === true,
-)
-
 const dataModeBadge = computed(() => {
   if (loading.value) return 'SYNC'
   if (error.value) return 'FAULT'
@@ -417,303 +276,6 @@ const activeExpiryLabel = computed(() => {
   }
   const match = availableExpiries.value.find((e) => e.expiry === selectedExpiry.value)
   return match ? `${match.expiry} (${match.dte} DTE)` : selectedExpiry.value
-})
-
-/** Directional assessment with unambiguous Long vs Short / Buying vs Selling signals. */
-const microstructureAssessment = computed(() => {
-  if (!pressure.value || !summary.value) return null
-  const imb = pressure.value.imbalance
-  const regimeStr = summary.value.regime
-  const flowVal = charmSummary.value?.net_charm_flow ?? 0
-  const ratio = charmRatio.value
-  const spotVal = spot.value
-  const cw = callWall.value
-  const pw = putWall.value
-  const flip = gammaFlip.value
-  const em = expectedMove.value ?? (spotVal ? spotVal * 0.035 : null)
-
-  // Helper: build a per-channel conflict explanation when channels disagree.
-  const buildConflictExplanation = (): string => {
-    const conflicts = pressure.value?.conflicts ?? []
-    if (!conflicts.length) return ''
-    const channelLabels: Record<string, string> = {
-      tape: 'Tape (live prints)',
-      charm: 'Charm (structural/mechanical)',
-      underlying: 'Underlying vol (OHLCV proxy)',
-    }
-    return conflicts
-      .map((c) => {
-        const label = channelLabels[c.channel] ?? c.channel
-        return `${label}: ${c.note}`
-      })
-      .join('; ')
-  }
-
-  // Helper: specific price-level confirmation trigger to avoid vague "WAIT".
-  const buildConfirmationTrigger = (lean: 'buying' | 'selling'): string => {
-    if (lean === 'buying') {
-      if (pw != null && spotVal != null) {
-        const targetLevel = num(spotVal + (em ?? spotVal * 0.02), 2)
-        return `Wait for an hourly close above $${targetLevel} on above-average volume, or for the tape to show ≥60% buyer-sided prints, before entering long.`
-      }
-      return 'Wait for an hourly close above the nearest resistance on above-average volume, or for the live tape to show ≥60% buyer-sided prints.'
-    } else {
-      if (cw != null && spotVal != null) {
-        const targetLevel = num(spotVal - (em ?? spotVal * 0.02), 2)
-        return `Wait for an hourly close below $${targetLevel} on above-average volume, or for the tape to show ≥60% seller-sided prints, before entering short.`
-      }
-      return 'Wait for an hourly close below the nearest support on above-average volume, or for the live tape to show ≥60% seller-sided prints.'
-    }
-  }
-
-  // 1. Breakout Above Resistance / Flip
-  if (cw != null && spotVal != null && spotVal >= cw) {
-    const targetUp = em != null ? `$${num(spotVal + em, 2)} (+${num(em, 1)} EM)` : 'next resistance'
-    return {
-      title: 'Bullish Breakout Above Call Wall Resistance',
-      direction: 'LONG BIAS (BREAKOUT CONTINUATION)',
-      action: 'UPWARD VOLATILITY EXPANSION',
-      tone: 'buying',
-      body: `Spot ($${num(spotVal, 2)}) has breached above Call Wall ($${num(cw, 0)}). Dealer call gamma flips and dealer inventory short-covering accelerates upside continuation. Scenario: if spot holds above $${num(cw, 0)}, target ${targetUp}; if spot falls back below $${num(cw, 0)}, breakout has failed — exit.`,
-      implication: `Ride bullish expansion momentum. Entry: breakout retest of $${num(cw, 0)}. Target: ${targetUp}. Stop: hourly close below Call Wall $${num(cw, 0)}.`,
-    }
-  }
-
-  // 2. Breakdown Below Support / Flip
-  if (
-    (pw != null && spotVal != null && spotVal <= pw) ||
-    (flip != null && spotVal != null && spotVal < flip && regimeStr === 'negative')
-  ) {
-    const supportLevel = pw ?? flip
-    const targetDn =
-      em != null && spotVal != null
-        ? `$${num(spotVal - em, 2)} (-${num(em, 1)} EM)`
-        : 'next major support'
-    return {
-      title: 'Bearish Breakdown Below Key Structural Support',
-      direction: 'SHORT BIAS (SELLING HEADWIND)',
-      action: 'DOWNSIDE VOLATILITY CASCADE',
-      tone: 'selling',
-      body: `Spot ($${num(spotVal, 2)}) is trading below key structural support (Put Wall $${num(pw, 0)} / Flip $${num(flip, 0)}). Dealer pro-cyclical short hedging accelerates downward slip. Scenario: if spot stays below $${num(supportLevel, 0)}, target ${targetDn}; reclaim above $${num(supportLevel, 0)} invalidates the short.`,
-      implication: `Favors Bear Put Spreads and fading counter-trend bounces. Entry: bounce fade near $${num(supportLevel, 0)}. Target: ${targetDn}. Stop: hourly close above $${num(supportLevel, 0)}.`,
-    }
-  }
-
-  // 3. A directional lean the server could not confirm. Explain why channels
-  // conflict — Tape measures live order flow while Charm is a mechanical model
-  // output; they can disagree for legitimate structural reasons.
-  const actionable = pressure.value.actionable === true
-  const band = pressure.value.confidence?.band ?? 'unmeasurable'
-  if (!actionable && (Math.abs(imb) > 0.25 || Math.abs(ratio) >= CHARM_ONE_SIDED)) {
-    const lean = imb > 0.25 ? 'buying' : imb < -0.25 ? 'selling' : ratio < 0 ? 'buying' : 'selling'
-    const conflictExplanation = buildConflictExplanation()
-    const active = pressure.value.confidence?.channels_active ?? 0
-    const tapeTone = pressureChannelRows.value.find((r) => r.key === 'tape')?.tone
-    const charmTone = pressureChannelRows.value.find((r) => r.key === 'charm')?.tone
-
-    // Explain the conflict in human terms when tape vs charm disagree
-    let conflictBody: string
-    if (conflictExplanation) {
-      conflictBody = `The evidence disagrees: ${conflictExplanation}.`
-      if (
-        tapeTone &&
-        charmTone &&
-        tapeTone !== 'na' &&
-        charmTone !== 'na' &&
-        tapeTone !== charmTone
-      ) {
-        const tapeDir =
-          tapeTone === 'buying' ? 'buying' : tapeTone === 'selling' ? 'selling' : 'neutral'
-        const charmDir =
-          charmTone === 'buying'
-            ? 'buying tailwind'
-            : charmTone === 'selling'
-              ? 'selling headwind'
-              : 'neutral'
-        conflictBody += ` Note: Tape shows live ${tapeDir} flow (real-time order fill data); Charm shows mechanical ${charmDir} (time-decay model output) — these measure different dynamics and can legitimately diverge.`
-      }
-      if (isUnderlyingStale.value) {
-        conflictBody += ' Underlying volume bar is STALE and has been excluded from the blend.'
-      }
-    } else {
-      conflictBody = `The ${lean} read rests on ${active} directional channel${active === 1 ? '' : 's'} and is not corroborated by the tape or the underlying.`
-      if (isUnderlyingStale.value) {
-        conflictBody += ' Underlying volume bar is STALE — it was excluded from this blend.'
-      }
-    }
-
-    const trigger = buildConfirmationTrigger(lean)
-    const spotVsWalls =
-      spotVal != null && pw != null && cw != null
-        ? `Spot ($${num(spotVal, 2)}) is ${spotVal >= pw && spotVal <= cw ? `inside the channel [$${num(pw, 0)} – $${num(cw, 0)}]` : spotVal < pw ? `below Put Wall ($${num(pw, 0)})` : `above Call Wall ($${num(cw, 0)})`}.`
-        : ''
-
-    return {
-      title: `Unconfirmed ${lean === 'buying' ? 'Buying' : 'Selling'} Lean`,
-      direction: 'NO TRADE · WAIT FOR CONFIRMATION',
-      action: `${band.toUpperCase()} CONFIDENCE`,
-      tone: 'balanced',
-      body: conflictBody,
-      implication: `${spotVsWalls} ${trigger}`.trim(),
-    }
-  }
-
-  // 4. Charm Buying Tailwind — only when the blended read is confirmed.
-  if (actionable && imb > 0.25) {
-    const spotPos =
-      spotVal != null && pw != null && cw != null
-        ? `Spot ($${num(spotVal, 2)}) is ${spotVal >= pw ? `above Put Wall ($${num(pw, 0)})` : `at Put Wall ($${num(pw, 0)})`} — scenario if support holds: target Call Wall $${num(cw, 0)}. If Put Wall breaks: revert to watching for breakdown.`
-        : ''
-    return {
-      title: 'Strong Structural Buying Pressure',
-      direction: 'LONG BIAS (BUYING TAILWIND)',
-      action: 'BUYING EQUILIBRIUM',
-      tone: 'buying',
-      body: `Dealers are net short decaying OTM put contracts. As time passes without a downward move, put deltas decay toward zero, forcing dealers to systematically BUY back their short equity hedges (${compact(Math.abs(flowVal))} shares/day). ${isUnderlyingStale.value ? 'Note: underlying volume signal is STALE and was excluded from this read.' : ''}`,
-      implication:
-        `Mechanical tailwind supporting price; dips into Put Wall ($${num(summary.value.put_wall, 0)}) find rapid absorption. ${spotPos} Favors Long Call Spreads or buying pullback into Put Wall support. Stop: hourly close below Put Wall.`.trim(),
-    }
-  }
-
-  // 5. Charm Selling Headwind — same guard as branch 4, mirrored.
-  if (actionable && imb < -0.25) {
-    const spotPos =
-      spotVal != null && pw != null && cw != null
-        ? `Spot ($${num(spotVal, 2)}) is ${spotVal <= cw ? `below Call Wall ($${num(cw, 0)})` : `at Call Wall ($${num(cw, 0)})`} — scenario if resistance holds: target Put Wall $${num(pw, 0)}. If Call Wall breaks: revert to watching for breakout.`
-        : ''
-    return {
-      title: 'Strong Structural Selling Pressure',
-      direction: 'SHORT BIAS (SELLING HEADWIND)',
-      action: 'SELLING OVERHANG',
-      tone: 'selling',
-      body: `Long call gamma/delta decay dominates dealer inventory. As call deltas decay over time, dealers are forced to SELL underlying stock to remain delta-neutral (${compact(Math.abs(flowVal))} shares/day). ${isUnderlyingStale.value ? 'Note: underlying volume signal is STALE and was excluded from this read.' : ''}`,
-      implication:
-        `Mechanical headwind capping upside; rallies toward Call Wall ($${num(summary.value.call_wall, 0)}) face persistent dealer inventory supply. ${spotPos} Favors selling rips or Long Put Spreads. Stop: hourly close above Call Wall.`.trim(),
-    }
-  }
-
-  // 6. Range Mean-Reversion in Positive Gamma Channel
-  if (
-    regimeStr === 'positive' ||
-    (spotVal != null && pw != null && cw != null && spotVal >= pw && spotVal <= cw)
-  ) {
-    const spotPos =
-      spotVal != null && pw != null && cw != null
-        ? `Spot ($${num(spotVal, 2)}) is inside [$${num(pw, 0)} – $${num(cw, 0)}].`
-        : ''
-    return {
-      title: 'Balanced Flow in Positive Gamma Channel',
-      direction: 'RANGE MEAN-REVERSION (BUY LOW / SELL HIGH)',
-      action: 'VOLATILITY DAMPENING',
-      tone: 'range',
-      body: `Dealer positioning is Net Long Gamma ($${compact(summary.value.total_gex_m ?? 0)}M GEX). Dealers hedge counter-cyclically (buying dips, selling rips), compressing realized volatility between Put Wall ($${num(summary.value.put_wall, 0)}) and Call Wall ($${num(summary.value.call_wall, 0)}). ${spotPos}`,
-      implication: `High probability of range-bound mean-reversion. Scenario if support holds: buy near Put Wall $${num(pw, 0)}, take profit near Call Wall $${num(cw, 0)}. Scenario if Put Wall breaks: wait for hourly close below $${num(pw, 0)} to switch to short bias. Breakout follow-through above $${num(cw, 0)} would invalidate range.`,
-    }
-  }
-
-  // 7. Neutral Consolidation
-  return {
-    title: 'Neutral / Transitory Market Equilibrium',
-    direction: 'NEUTRAL PIVOT WATCH',
-    action: 'BREAKOUT EXPANSION MONITOR',
-    tone: 'balanced',
-    body: `Charm drift and directional options flow are evenly matched. The key structural pivot to monitor is the Gamma Flip point at $${num(summary.value.gamma_flip, 0)}.`,
-    implication:
-      flip != null && spotVal != null
-        ? `Scenario if Spot stays above Gamma Flip ($${num(flip, 0)}): mean-reversion bias — buy dips. Scenario if Spot breaks below $${num(flip, 0)}: trending / cascade bias — wait for hourly close confirmation before fading. Monitor live tape for directional sweeps near ATM strikes.`
-        : 'Monitor live flow tape for directional sweeps or sudden volume imbalances across near-the-money strikes.',
-  }
-})
-
-/** True when pressure imbalance is non-trivial but server confirmation is absent. */
-const isUnconfirmedLean = computed(() => {
-  const actionable = pressure.value?.actionable === true
-  const imb = pressure.value?.imbalance ?? 0
-  return !actionable && Math.abs(imb) > 0.25
-})
-
-/** Single unified authoritative consensus directive across all model & tape components.
- * Eliminates contradictory reads by reconciling Microstructure Assessment, Playbook Strategies,
- * and Order Flow Pressure into ONE unambiguous operational directive.
- */
-const consensusDirective = computed(() => {
-  if (!pressure.value || !summary.value) return null
-  const assess = microstructureAssessment.value
-  const spotVal = spot.value
-  const cw = callWall.value
-  const pw = putWall.value
-  const flip = gammaFlip.value
-  const actionable = pressure.value.actionable === true
-  const imb = pressure.value.imbalance ?? 0
-  const gex = netGex.value ?? 0
-
-  // 1. Confirmed Structural Breakdown (Short Bias)
-  const structuralBreakdown =
-    (pw != null && spotVal != null && spotVal <= pw) ||
-    (flip != null && spotVal != null && spotVal < flip && gex < 0)
-
-  if (structuralBreakdown || (actionable && imb < -0.25)) {
-    const level = pw ?? flip ?? (spotVal ? spotVal * 0.98 : 0)
-    return {
-      headline: 'Bearish Breakdown & Structural Selling Headwind',
-      statusBadge: 'ACTIONABLE SHORT',
-      actionBadge: 'DOWNSIDE VOLATILITY CASCADE',
-      tone: 'selling' as const,
-      narrative: `Spot ($${num(spotVal, 2)}) is trading below key structural support (Put Wall $${num(pw, 0)} / Flip $${num(flip, 0)}). Dealer negative gamma accelerates downside slip. Tape and positioning corroboration confirms immediate selling headwind.`,
-      clearDirective: `EXECUTE SHORT BIAS: Fade counter-trend bounces towards $${num(level, 0)} or enter Bear Put Spreads. Invalidation stop: hourly close back above $${num(level, 0)}.`,
-    }
-  }
-
-  // 2. Confirmed Bullish Breakout (Long Bias)
-  if ((cw != null && spotVal != null && spotVal >= cw) || (actionable && imb > 0.25)) {
-    return {
-      headline: 'Bullish Breakout & Mechanical Buying Tailwind',
-      statusBadge: 'ACTIONABLE LONG',
-      actionBadge: 'UPWARD VOLATILITY EXPANSION',
-      tone: 'buying' as const,
-      narrative: `Spot ($${num(spotVal, 2)}) has confirmed bullish orderflow acceleration above resistance. Dealer call gamma unwinding and charm rebalancing create sustained upward drift.`,
-      clearDirective: `EXECUTE LONG BIAS: Enter on breakout retests or buy Bull Call Spreads. Invalidation stop: hourly close below Call Wall $${num(cw, 0)}.`,
-    }
-  }
-
-  // 3. Unconfirmed Lean / Conflicting Channels (No Trade / Stand Aside)
-  if (
-    !actionable &&
-    (Math.abs(imb) > 0.25 || (assess?.direction.startsWith('NO TRADE') ?? false))
-  ) {
-    const lean = imb > 0.25 ? 'Buying' : 'Selling'
-    return {
-      headline: `Orderflow Divergence: Unconfirmed ${lean} Lean`,
-      statusBadge: 'STAND ASIDE · AWAITING CONFIRMATION',
-      actionBadge: 'ZERO CONVICTION · PRESERVE CAPITAL',
-      tone: 'balanced' as const,
-      narrative: `Live tape orderflow and structural charm models are divergent. Dealer positioning indicates an unconfirmed ${lean.toLowerCase()} lean, but lack of multi-channel agreement makes directional entry low-probability.`,
-      clearDirective: `STAND ASIDE: Do NOT enter new directional risk. Hold capital until spot decisively closes outside range [$${num(pw, 0)} – $${num(cw, 0)}] on heavy volume.`,
-    }
-  }
-
-  // 4. Stable Range Mean-Reversion
-  if (gex >= 0 || (spotVal != null && pw != null && cw != null && spotVal >= pw && spotVal <= cw)) {
-    return {
-      headline: 'Positive Gamma Channeling & Mean-Reversion',
-      statusBadge: 'RANGE BOUND',
-      actionBadge: 'VOLATILITY DAMPENING PIN',
-      tone: 'range' as const,
-      narrative: `Positive dealer gamma ($${compact(gex)}M) compresses realized volatility between Put Wall $${num(pw, 0)} and Call Wall $${num(cw, 0)}. Dealer rebalancing enforces range pinning.`,
-      clearDirective: `EXECUTE RANGE FADE: Buy dips near Put Wall ($${num(pw, 0)}), take profit near Call Wall ($${num(cw, 0)}). Invalidation stop: close below $${num(pw, 0)}.`,
-    }
-  }
-
-  // 5. Neutral Consolidation
-  return {
-    headline: 'Neutral Market Equilibrium',
-    statusBadge: 'NEUTRAL PIVOT WATCH',
-    actionBadge: 'BREAKOUT MONITOR',
-    tone: 'balanced' as const,
-    narrative: 'Order flow and charm drift are balanced. No dominant dealer supply or demand bias.',
-    clearDirective:
-      'MONITOR PIVOTS: Wait for spot expansion outside immediate consolidation before deploying risk.',
-  }
 })
 
 /** Strike table: pair call/put rows per strike, sorted by strike. */
@@ -936,202 +498,6 @@ function exportCsv(): void {
   URL.revokeObjectURL(url)
 }
 
-/** Actionable quantitative trading strategies playbook with unambiguous Long/Short signals. */
-const strategies = computed(() => {
-  const spotVal = spot.value
-  const cw = callWall.value
-  const pw = putWall.value
-  const flip = gammaFlip.value
-  const gex = netGex.value ?? 0
-  const charm = netCharmFlow.value ?? 0
-  const em = expectedMove.value ?? (spotVal ? spotVal * 0.03 : 5.0)
-  const imb = pressure.value?.imbalance ?? 0
-
-  // Structural breakdown: spot is below a key support level in negative-gamma regime.
-  // This takes priority over pressure-gauge-only signals (mirrors microstructureAssessment ordering).
-  const structuralBreakdown =
-    (pw != null && spotVal != null && spotVal <= pw) ||
-    (flip != null && spotVal != null && spotVal < flip && gex < 0)
-
-  // Only a server-confirmed directional read can arm a pressure-driven
-  // strategy. An unconfirmed lean leaves the range regime standing.
-  const actionable = pressure.value?.actionable === true
-  const unconfirmedLean = !actionable && Math.abs(imb) > 0.25
-  const s1Active =
-    gex >= 0 &&
-    spotVal != null &&
-    pw != null &&
-    cw != null &&
-    spotVal >= pw &&
-    spotVal <= cw &&
-    (Math.abs(imb) <= 0.25 || !actionable)
-  // s2Active (LONG/buying) is suppressed when the structural breakdown condition holds —
-  // a bullish gauge reading alone does not override a structural support break.
-  // Charm one-sidedness on its own no longer arms it: a positioning proxy
-  // cannot corroborate itself.
-  const s2Active =
-    !structuralBreakdown &&
-    ((cw != null && spotVal != null && spotVal >= cw) ||
-      (actionable && imb > 0.25 && (cw == null || (spotVal != null && spotVal < cw))))
-  const s3Active = structuralBreakdown || (actionable && imb < -0.25)
-
-  return [
-    {
-      id: 'strat-1',
-      title: 'Strategy 1: Mean-Reversion Channeling',
-      regime: 'Positive Gamma (+GEX)',
-      direction: 'LONG at Put Wall / SHORT at Call Wall',
-      directionType: 'range' as const,
-      biasTag: 'RANGE MEAN-REVERSION',
-      status: unconfirmedLean ? 'MONITORING' : s1Active ? 'ACTIVE' : 'MONITORING',
-      isActive: s1Active,
-      entryZone: pw != null ? `$${num(pw, 0)} (Put Wall Support)` : `Near Spot $${num(spotVal, 0)}`,
-      target1: spotVal != null ? `$${num(spotVal + em * 0.5, 2)} (Equilibrium)` : 'Equilibrium',
-      target2: cw != null ? `$${num(cw, 0)} (Call Wall Ceiling)` : 'Call Wall',
-      stopLoss: pw != null ? `$${num(pw * 0.985, 2)} (Below Put Wall)` : 'Below Support',
-      riskReward:
-        pw && cw && spotVal && spotVal > pw
-          ? ((cw - spotVal) / (spotVal - pw * 0.985)).toFixed(1) + 'x'
-          : '2.2x',
-      condition: `Spot ($${num(spotVal, 0)}) bounded between Put Wall ($${num(pw, 0)}) and Call Wall ($${num(cw, 0)}), Net GEX > 0`,
-      trade: unconfirmedLean
-        ? `WAIT FOR CONFIRMATION: Spot is inside channel [$${num(pw, 0)} – $${num(cw, 0)}], but directional orderflow is unconfirmed. Hold off on new entries until spot tests Put Wall support ($${num(pw, 0)}) or Call Wall resistance ($${num(cw, 0)}).`
-        : 'Fade range boundaries. BUY: Enter long call spreads / long shares near Put Wall support. SELL: Take profit and sell call spreads near Call Wall resistance.',
-      mechanic:
-        'Dealer counter-cyclical hedging dampens realized volatility: dealers buy falling prices and sell rising prices, enforcing range compression.',
-      stages: [
-        {
-          name: 'Stage 1 · Absorption [BUY ZONE]',
-          note: 'Spot tests Put Wall ($' + num(pw, 0) + '). Dealers buy dips to hedge put gamma.',
-        },
-        {
-          name: 'Stage 2 · Mean Reversion [DRIFT UP]',
-          note: 'Price drifts toward spot equilibrium / VWAP baseline.',
-        },
-        {
-          name: 'Stage 3 · Resistance Pin [SELL / TAKE PROFIT]',
-          note: 'Price reaches Call Wall ($' + num(cw, 0) + '). Dealer supply caps upside.',
-        },
-      ],
-    },
-    {
-      id: 'strat-2',
-      title: 'Strategy 2: Breakout Expansion & Charm Inflow',
-      regime: 'Breakout Expansion & Time-Decay (dΔ/dt)',
-      direction: 'LONG BIAS (BUYING MOMENTUM)',
-      directionType: 'buying' as const,
-      biasTag: 'LONG BIAS',
-      status: s2Active ? 'ACTIVE' : 'MONITORING',
-      isActive: s2Active,
-      entryZone:
-        cw != null && spotVal != null && spotVal >= cw
-          ? `$${num(cw, 0)} (Breakout Above Wall)`
-          : `$${num(spotVal, 2)} (Dip Inflow)`,
-      target1:
-        spotVal != null ? `$${num(spotVal + em, 2)} (+${num(em, 1)} Move)` : 'Upside Target 1',
-      target2:
-        spotVal != null
-          ? `$${num(spotVal + em * 2, 2)} (+${num(em * 2, 1)} Expansion)`
-          : 'Call Wall Expansion',
-      stopLoss:
-        cw != null && spotVal != null && spotVal >= cw
-          ? `$${num(cw * 0.99, 2)} (Below Breakout)`
-          : pw != null
-            ? `$${num(pw, 2)} (Put Wall Floor)`
-            : 'Support Floor',
-      riskReward: '2.6x',
-      condition: `Spot ($${num(spotVal, 0)}) breaking above Call Wall ($${num(cw, 0)}) OR Net Charm Flow negative (${signed(charm, 0)} sh/d buying tailwind)`,
-      trade:
-        'DIRECTIONAL LONG: Buy Spot, Call Options, or Bull Call Spreads. Ride dealer short-covering tailwind and upside breakout momentum.',
-      mechanic:
-        'Dealer short OTM put hedges decay toward 0 delta as time passes, forcing continuous buyback of short stock hedges. Above Call Wall, gamma flips to fuel acceleration.',
-      stages: [
-        {
-          name: 'Stage 1 · Time Decay Accumulation [BUY ACCUMULATION]',
-          note: 'OTM puts decay rapidly into expiration; dealer delta approaches 0.',
-        },
-        {
-          name: 'Stage 2 · Mechanical Buying [UPWARD DRIFT]',
-          note: 'Dealers buy +' + compact(Math.abs(charm)) + ' shares/day to unwind short hedges.',
-        },
-        {
-          name: 'Stage 3 · Resistance Break [BREAKOUT EXPANSION]',
-          note: 'Price clears Call Wall ($' + num(cw, 0) + '), triggering momentum follow-through.',
-        },
-      ],
-    },
-    {
-      id: 'strat-3',
-      title: 'Strategy 3: Breakdown Expansion Below Key Support',
-      regime: 'Negative Gamma (-GEX / Below Support)',
-      direction: 'SHORT BIAS (SELLING HEADWIND)',
-      directionType: 'selling' as const,
-      biasTag: 'SHORT BIAS',
-      status: s3Active ? 'TRIGGERED' : 'MONITORING',
-      isActive: s3Active,
-      entryZone:
-        pw != null
-          ? `$${num(pw, 0)} (Below Put Wall)`
-          : flip != null
-            ? `$${num(flip, 0)} (Below Flip)`
-            : `Below $${num(spotVal, 0)}`,
-      target1:
-        spotVal != null ? `$${num(spotVal - em, 2)} (-${num(em, 1)} Move)` : 'Downside Pivot',
-      target2:
-        spotVal != null
-          ? `$${num(spotVal - em * 2, 2)} (-${num(em * 2, 1)} Cascade)`
-          : 'Major Downside Band',
-      stopLoss:
-        pw != null
-          ? `$${num(pw * 1.01, 2)} (Above Put Wall)`
-          : flip != null
-            ? `$${num(flip * 1.01, 2)}`
-            : 'Above Pivot',
-      riskReward: '2.8x',
-      condition: `Spot ($${num(spotVal, 0)}) breaches below Put Wall ($${num(pw, 0)}) / Gamma Flip ($${num(flip, 0)}) into negative gamma territory`,
-      trade:
-        'DIRECTIONAL SHORT: Buy Put options, Bear Put debit spreads, or fade counter-trend bounces to capture downside volatility cascades.',
-      mechanic:
-        'Dealers are net short gamma. As price falls, dealers are mathematically forced to sell more underlying stock to stay delta-neutral, accelerating selloffs.',
-      stages: [
-        {
-          name: 'Stage 1 · Regime Breach [SHORT TRIGGER]',
-          note:
-            'Spot falls below Put Wall ($' + num(pw, 0) + ') / Gamma Flip ($' + num(flip, 0) + ').',
-        },
-        {
-          name: 'Stage 2 · Dealer Cascade [FORCED SELLING]',
-          note: 'Pro-cyclical dealer selling accelerates downward slippage.',
-        },
-        {
-          name: 'Stage 3 · Target Support [EXIT SHORT]',
-          note: 'Downside expansion target: major historical support / lower volatility boundary.',
-        },
-      ],
-    },
-  ]
-})
-
-/** The single dominant primary active strategy.
- *
- * Priority mirrors microstructureAssessment:
- *   1. Breakdown (s3 / SHORT) — structural break overrides gauge signals
- *   2. Range channel (s1 / MEAN-REVERSION) — positive gamma pinning
- *   3. Buying expansion (s2 / LONG) — charm tailwind / breakout
- */
-const primaryStrategy = computed(() => {
-  const strats = strategies.value
-  // Honour the same priority as microstructureAssessment so the two never contradict.
-  if (strats[2].isActive) return strats[2] // s3: structural breakdown wins first
-  if (strats[0].isActive) return strats[0] // s1: range channel
-  if (strats[1].isActive) return strats[1] // s2: buying / breakout expansion
-  // Fallback: no strategy is active — use microstructure tone to pick the most relevant.
-  const tone = microstructureAssessment.value?.tone
-  if (tone === 'selling') return strats[2]
-  if (tone === 'buying') return strats[1]
-  return strats[0]
-})
-
 const focusStrike = ref<number | null>(null)
 
 /** True when the server is serving a cached snapshot (no live feed available).
@@ -1157,9 +523,7 @@ const charmChartKey = computed(
         >
         <h1>Charm &amp; Pressure Drift</h1>
         <p>
-          Charm (∂Δ/∂t) measures the mechanical daily change in option delta solely due to the
-          passage of time. Because dealers run delta-neutral books, decaying OTM options force
-          predictable, time-dependent rebalancing flows into the underlying market.
+          Charm estimates how option delta changes as time passes. The output is a model proxy for potential dealer rehedging, not observed buying or selling in the underlying.
         </p>
 
         <!-- Quick Ticker Chips -->
@@ -1280,7 +644,7 @@ const charmChartKey = computed(
       <div
         class="kpi tooltip-card"
         :class="{ stale: netGex == null }"
-        title="Net Gamma Exposure ($M per 1% move). Positive = Dealers long gamma (Mean-Reversion / Buy Dips, Sell Rallies). Negative = Dealers short gamma (Trending / Cascading Breakouts)."
+        title="Net gamma exposure in millions. Structural context; it does not establish a directional trade."
       >
         <div class="k-head">
           <span class="label k-key">NET GEX</span>
@@ -1295,7 +659,7 @@ const charmChartKey = computed(
       <div
         class="kpi tooltip-card"
         :class="{ stale: netCharmFlow == null }"
-        title="Net Charm Flow (shares/day dealers must trade from time decay). Negative = Dealers short decaying puts → BUYING pressure. Positive = Dealers long decaying calls → SELLING pressure."
+        title="Modeled net charm flow in shares per day. Structural estimate, not observed tape buying or selling."
       >
         <div class="k-head">
           <span class="label k-key">NET CHARM FLOW</span>
@@ -1349,405 +713,37 @@ const charmChartKey = computed(
       </div>
     </section>
 
-    <!-- Unified Authoritative Consensus Directive Banner -->
-    <section v-if="consensusDirective" class="consensus-section">
-      <div class="consensus-banner" :class="consensusDirective.tone">
-        <div class="consensus-header">
-          <div class="consensus-title-group">
-            <span class="label consensus-pill" :class="consensusDirective.tone"
-              >AUTHORITATIVE CONSENSUS</span
-            >
-            <span class="consensus-title">{{ consensusDirective.headline }}</span>
-          </div>
-          <div class="consensus-badge-group">
-            <span class="badge consensus-badge label" :class="consensusDirective.tone">
-              {{ consensusDirective.statusBadge }}
-            </span>
-            <span class="badge consensus-sub-badge label">
-              {{ consensusDirective.actionBadge }}
-            </span>
-          </div>
+    <section class="dealer-read-card" :class="dealerRead.tone" data-testid="dealer-primary-read" aria-live="polite">
+      <div class="dealer-read-heading">
+        <div>
+          <span class="label eyebrow">PRIMARY STRUCTURAL READ</span>
+          <h2>{{ dealerRead.headline }}</h2>
         </div>
-        <p class="consensus-narrative">{{ consensusDirective.narrative }}</p>
-        <div class="consensus-footer label">
-          <span class="consensus-prompt"><b>ONE CLEAR DIRECTIVE:</b></span>
-          <span class="consensus-action-text" :class="consensusDirective.tone">{{
-            consensusDirective.clearDirective
-          }}</span>
-        </div>
+        <span class="label freshness-chip" :class="dealerRead.evidence.freshness">
+          {{ dealerRead.evidence.freshness === 'fresh' ? 'FRESH SNAPSHOT' : dealerRead.evidence.freshness === 'stale' ? 'STALE SNAPSHOT' : 'FRESHNESS UNKNOWN' }}
+        </span>
       </div>
+      <p v-if="loading" class="dealer-read-narrative">Loading options snapshot…</p>
+      <p v-else-if="error && !payload" class="dealer-read-narrative">Options data unavailable: {{ error }}</p>
+      <p v-else class="dealer-read-narrative">{{ dealerRead.narrative }}</p>
+      <div class="dealer-read-levels">
+        <div><span class="label">LOCATION</span><b class="fig">{{ dealerRead.position }}</b></div>
+        <div><span class="label">WATCH</span><b>{{ dealerRead.watch }}</b></div>
+      </div>
+      <div class="dealer-evidence label" aria-label="Supporting evidence">
+        <span>Spot <b class="fig">{{ dealerRead.evidence.spot != null ? `$${num(dealerRead.evidence.spot, 2)}` : '—' }}</b></span>
+        <span>Put wall <b class="fig">{{ dealerRead.evidence.putWall != null ? `$${num(dealerRead.evidence.putWall, 2)}` : '—' }}</b></span>
+        <span>Call wall <b class="fig">{{ dealerRead.evidence.callWall != null ? `$${num(dealerRead.evidence.callWall, 2)}` : '—' }}</b></span>
+        <span>Net GEX <b class="fig">{{ dealerRead.evidence.totalGexM != null ? `${signed(dealerRead.evidence.totalGexM, 1)}M` : '—' }}</b></span>
+        <span>Charm model <b class="fig">{{ dealerRead.evidence.netCharmFlow != null ? `${signed(dealerRead.evidence.netCharmFlow, 0)} sh/d · ${dealerRead.evidence.charmPressure ?? 'unclassified'}` : 'unavailable' }}</b></span>
+        <span>Tape pressure <b>{{ dealerRead.evidence.pressureVerdict ?? 'unavailable' }} · {{ dealerRead.evidence.pressureActionable === true ? 'source marks actionable' : dealerRead.evidence.pressureActionable === false ? 'source does not mark actionable' : 'actionability unavailable' }}</b></span>
+        <span>Feed age <b class="fig">{{ dealerRead.evidence.ageSeconds != null ? `${Math.round(dealerRead.evidence.ageSeconds)}s` : 'unknown' }}</b></span>
+      </div>
+      <details class="dealer-evidence-details">
+        <summary class="label">Evidence and model limits</summary>
+        <p>Walls describe option positioning levels; their presence does not confirm support, resistance, or a breakout. Charm is a modeled structural estimate, not observed stock buying or selling. Tape pressure is reported separately and does not override the wall-location read.</p>
+      </details>
     </section>
-
-    <!-- Pressure Gauge & Multi-Factor Decomposition -->
-    <Panel label="PRESSURE GAUGE &amp; FLOW POSTURE" :meta="pressureVerdict" live>
-      <div class="gauge-card-container">
-        <!-- Main Gauge Bar -->
-        <div class="gauge-body">
-          <div class="gauge-header">
-            <div class="gauge-title-row">
-              <span class="label">MICROSTRUCTURE PRESSURE IMBALANCE</span>
-              <span v-if="pressure" class="fig gauge-score" :class="pressure.label">
-                {{ signed(pressure.imbalance, 2) }}
-              </span>
-            </div>
-          </div>
-
-          <div
-            class="gauge-track"
-            role="meter"
-            :aria-valuemin="-1"
-            :aria-valuemax="1"
-            :aria-valuenow="pressure ? pressure.imbalance : undefined"
-            :aria-valuetext="pressure ? pressureLabel : 'Unavailable'"
-            :aria-label="`Pressure imbalance ${pressure?.imbalance ?? 'unavailable'}`"
-          >
-            <span class="gauge-zones" aria-hidden="true">
-              <i class="zone-sell-heavy" title="Heavy Selling Pressure (-1.0 to -0.5)" />
-              <i class="zone-sell-mod" title="Moderate Selling Pressure (-0.5 to -0.2)" />
-              <i class="zone-neutral" title="Balanced / Neutral (-0.2 to +0.2)" />
-              <i class="zone-buy-mod" title="Moderate Buying Pressure (+0.2 to +0.5)" />
-              <i class="zone-buy-heavy" title="Heavy Buying Pressure (+0.5 to +1.0)" />
-            </span>
-            <span class="gauge-ticks" aria-hidden="true" />
-            <span
-              v-if="pressure"
-              class="gauge-needle"
-              :class="pressure.label"
-              :style="{ left: `${gaugePct}%` }"
-            />
-          </div>
-
-          <div class="gauge-labels label">
-            <span class="sell">◀ SELLING PRESSURE (−1.0)</span>
-            <span class="neutral">BALANCED (0.0)</span>
-            <span class="buy">BUYING PRESSURE (+1.0) ▶</span>
-          </div>
-
-          <!--
-            The read: verdict + confidence, then each voting channel's own
-            net/gross ratio. "n/a" means that channel abstained (no data or
-            below its evidence floor) — it did NOT vote balanced, so it must
-            not render as 0. Call/put mix and GEX sign are context, not votes.
-          -->
-          <div v-if="pressure" class="read-block" data-testid="pressure-read">
-            <div class="read-verdict">
-              <span class="fig read-verdict-text" :class="pressure.direction">{{
-                pressure.verdict
-              }}</span>
-              <span class="conf-chip label" :class="pressureBand">
-                {{ pressureBand.toUpperCase() }} · {{ Math.round(pressure.confidence.score * 100) }}
-              </span>
-              <span class="conf-chip label" :class="pressureActionable ? 'actionable' : 'hold'">
-                {{ pressureActionable ? 'ACTIONABLE' : 'NO TRADE' }}
-              </span>
-            </div>
-            <div class="channel-list">
-              <!-- Signal freshness ranking header -->
-              <span class="label channel-freshness-hdr" colspan="3">
-                SIGNAL QUALITY RANK: Tape (live) &gt; Charm (structural) &gt; Underlying vol (OHLCV
-                proxy)
-              </span>
-              <template v-for="row in pressureChannelRows" :key="row.key">
-                <span
-                  class="label channel-name"
-                  :class="{ 'channel-stale': row.stale }"
-                  :title="row.stale ? 'Stale data — excluded from blend' : undefined"
-                >
-                  {{ row.name }}
-                  <span v-if="row.stale" class="stale-badge label">STALE · EXCLUDED</span>
-                </span>
-                <span
-                  class="fig channel-ratio"
-                  :class="[row.tone, { 'channel-stale': row.stale }]"
-                  >{{ channelText(row.ratio) }}</span
-                >
-                <span class="label channel-detail" :class="{ 'channel-stale': row.stale }"
-                  >w {{ row.weight }} · {{ row.detail }}</span
-                >
-              </template>
-            </div>
-
-            <p class="gauge-note label">
-              Context (not votes) · call/put mix {{ channelText(pressure.context.call_put_mix) }} ·
-              GEX {{ signed(pressure.components.net_gex_m, 1) }}M
-              {{ pressure.context.gex_regime }} — {{ pressure.context.follow_through }} · agreement
-              {{ Math.round(pressure.confidence.agreement * 100) }}% · evidence
-              {{ Math.round(pressure.confidence.evidence * 100) }}% · freshness
-              {{ Math.round(pressure.confidence.freshness * 100) }}%
-            </p>
-            <div v-if="pressureConflicts.length" class="conflict-reconciliation-box label">
-              <div class="reconcile-title">
-                <span class="reconcile-icon">⚖</span>
-                <b>ORDERFLOW RECONCILIATION · CHANNELS DIVERGENT:</b>
-              </div>
-              <p class="reconcile-text">
-                Live prints and mechanical charm disagree. Overall consensus is
-                <b>STAND ASIDE</b> until live order flow confirms direction.
-              </p>
-              <ul class="reason-list conflict label">
-                <li v-for="c in pressureConflicts" :key="c.channel">
-                  ⚠ {{ c.note }} ({{ signed(c.ratio, 2) }})
-                </li>
-              </ul>
-            </div>
-            <ul v-if="pressureReasons.length" class="reason-list label">
-              <li v-for="(r, i) in pressureReasons" :key="i">{{ r }}</li>
-            </ul>
-          </div>
-          <p v-else class="gauge-note label">Pressure unavailable until the chain loads.</p>
-        </div>
-
-        <!-- 3-Factor Breakdown Cards -->
-        <div v-if="pressure" class="factor-grid">
-          <div class="factor-card" :class="charmPressure">
-            <div class="factor-head">
-              <span class="label">1. CHARM TIME DECAY</span>
-              <span class="factor-badge label" :class="charmPressure">{{
-                charmPressure.toUpperCase()
-              }}</span>
-            </div>
-            <div class="factor-metric fig" :class="charmPressure">
-              {{ signed(pressure.components.net_charm_flow, 0) }} <small>sh/d</small>
-            </div>
-            <p class="factor-desc">
-              {{
-                netCharmFlow && netCharmFlow < 0
-                  ? 'Dealers short decaying OTM puts → Must BUY stock to unwind hedges (LONG tailwind).'
-                  : netCharmFlow && netCharmFlow > 0
-                    ? 'Dealers long decaying calls → Must SELL stock to re-neutralize (SHORT headwind).'
-                    : 'Time decay flow is balanced between calls and puts.'
-              }}
-            </p>
-          </div>
-
-          <div class="factor-card" :class="gexRegime">
-            <div class="factor-head">
-              <span class="label">2. GEX REGIME</span>
-              <span class="factor-badge label" :class="gexRegime">{{ gexRegimeLabel }}</span>
-            </div>
-            <div class="factor-metric fig" :class="gexRegime">
-              {{ signed(pressure.components.net_gex_m, 1) }} <small>$M</small>
-            </div>
-            <p class="factor-desc">
-              {{
-                gexRegime === 'positive'
-                  ? 'Long Gamma: Counter-cyclical rehedging compresses volatility (Buy Dips, Sell Rallies).'
-                  : gexRegime === 'negative'
-                    ? 'Short Gamma: Pro-cyclical rehedging amplifies breakouts & slips (Accelerating Trends).'
-                    : 'Gamma exposure neutral near current spot.'
-              }}
-            </p>
-          </div>
-
-          <!--
-            Buyer/seller imbalance from side-resolved prints. Call-vs-put volume
-            used to sit here captioned "Bullish/Bearish bias" — a bought put and
-            a sold put are the same row in that number, so it never measured
-            who was pressing. The mix is still shown, as context.
-          -->
-          <div class="factor-card" :class="pressureChannelRows[1]?.tone">
-            <div class="factor-head">
-              <span class="label">3. TAPE BUYERS VS SELLERS</span>
-              <span class="factor-badge label" :class="pressureChannelRows[1]?.tone">
-                {{
-                  pressureChannelRows[1]?.tone === 'na'
-                    ? 'ABSTAINS'
-                    : (pressureChannelRows[1]?.tone ?? 'n/a').toUpperCase()
-                }}
-              </span>
-            </div>
-            <div class="factor-metric fig" :class="pressureChannelRows[1]?.tone">
-              {{ channelText(pressure.channels.tape) }}
-              <small v-if="tapeChannel"
-                >{{ tapeChannel.n_signed }}/{{ tapeChannel.n_total }} sided</small
-              >
-            </div>
-            <p class="factor-desc">
-              {{
-                tapeChannel && tapeChannel.n_total > 0
-                  ? `Buy ${compact(tapeChannel.buy_premium)} vs sell ${compact(tapeChannel.sell_premium)} premium on the underlying (buy call / sell put = buying). ${tapeSideMixText}. Call/put mix ${channelText(pressure.context.call_put_mix)} is contract identity, not side.`
-                  : 'No prints in the window, so the tape cannot say who is pressing.'
-              }}
-            </p>
-          </div>
-
-          <div
-            class="factor-card"
-            :class="[
-              pressureChannelRows[2]?.stale ? 'stale-channel' : pressureChannelRows[2]?.tone,
-            ]"
-          >
-            <div class="factor-head">
-              <span class="label"
-                >4. UNDERLYING VOLUME READ
-                <small class="freshness-rank-label">(quality 3/3 — lowest)</small></span
-              >
-              <span v-if="isUnderlyingStale" class="factor-badge label stale-excluded">
-                STALE · EXCLUDED FROM BLEND
-              </span>
-              <span v-else class="factor-badge label" :class="pressureChannelRows[2]?.tone">
-                {{
-                  pressureChannelRows[2]?.tone === 'na'
-                    ? 'ABSTAINS'
-                    : (pressureChannelRows[2]?.tone ?? 'n/a').toUpperCase()
-                }}
-              </span>
-            </div>
-            <div
-              class="factor-metric fig"
-              :class="isUnderlyingStale ? 'stale-metric' : pressureChannelRows[2]?.tone"
-            >
-              <s v-if="isUnderlyingStale">{{ channelText(pressure.channels.underlying) }}</s>
-              <template v-else>{{ channelText(pressure.channels.underlying) }}</template>
-              <small v-if="underlyingChannel">
-                rvol
-                {{
-                  underlyingChannel.rvol != null ? underlyingChannel.rvol.toFixed(2) + '×' : 'n/a'
-                }}</small
-              >
-            </div>
-            <p v-if="isUnderlyingStale" class="factor-desc stale-desc">
-              ⏸ Underlying OHLCV bars are STALE (not from the current session). This channel was
-              <b>excluded from the blend</b> and did not vote on the pressure verdict. Verdict above
-              is based on Tape + Charm only.
-            </p>
-            <p v-else class="factor-desc">
-              {{
-                underlyingChannel
-                  ? `Closes ${underlyingChannel.ratio > 0.25 ? 'near the highs' : underlyingChannel.ratio < -0.25 ? 'near the lows' : 'mid-range'} on volume over the last ${underlyingChannel.bars_used} × ${underlyingChannel.timeframe ?? '?'} bars (${signed(underlyingChannel.close_change_pct ?? 0, 2)}%). ${underlyingChannel.note}`
-                  : 'No underlying bars were supplied, so the stock itself cannot corroborate the options read.'
-              }}
-            </p>
-          </div>
-        </div>
-
-        <!-- Microstructure Interpretation Banner with Directional Action -->
-        <div
-          v-if="microstructureAssessment"
-          class="assessment-box"
-          :class="microstructureAssessment.tone"
-        >
-          <div class="assessment-header">
-            <span class="label assess-tag">MICROSTRUCTURE IMPLICATION</span>
-            <span class="assess-title">{{ microstructureAssessment.title }}</span>
-            <span class="badge assess-dir-badge label" :class="microstructureAssessment.tone">
-              {{ microstructureAssessment.direction }}
-            </span>
-            <span v-if="isUnderlyingStale" class="badge assess-stale-note label">
-              ⏸ UNDERLYING STALE · EXCLUDED
-            </span>
-          </div>
-          <p class="assess-body">{{ microstructureAssessment.body }}</p>
-          <div
-            class="assess-footer label"
-            :class="
-              microstructureAssessment.direction.startsWith('NO TRADE') ? 'no-trade-footer' : ''
-            "
-          >
-            <b v-if="microstructureAssessment.direction.startsWith('NO TRADE')">
-              ⚠ Confirmation Required:
-            </b>
-            <b v-else>Actionable Decision Tree:</b>
-            {{ microstructureAssessment.implication }}
-          </div>
-        </div>
-      </div>
-    </Panel>
-
-    <!-- Step-by-Step Dealer Flow Cascade Diagram -->
-    <Panel
-      label="DEALER REBALANCING FLOW CASCADE &amp; MICROSTRUCTURE MECHANISM"
-      meta="STEP-BY-STEP FLOWCHART"
-      live
-    >
-      <!-- Snapshot data notice -->
-      <div v-if="isHistoryFallback" class="snapshot-notice label">
-        <span class="snap-icon">⏸</span>
-        SNAPSHOT DATA: live feed unavailable for {{ symbol }}. Values reflect the last cached chain
-        ({{ asof ? shortDate(asof) : '—' }}). Cascade mechanics are correct for the snapshot; they
-        update when a live feed reconnects.
-      </div>
-      <div class="flow-cascade-container">
-        <div class="cascade-step">
-          <div class="step-num label">STEP 1</div>
-          <div class="step-title">Time &amp; Price State</div>
-          <div class="step-metric fig">Spot: ${{ num(spot) }}</div>
-          <p class="step-desc">
-            Time advances (Δt = 1d), decaying extrinsic value across all open contracts.
-          </p>
-        </div>
-
-        <div class="cascade-arrow">➔</div>
-
-        <div class="cascade-step">
-          <div class="step-num label">STEP 2</div>
-          <div class="step-title">Greeks Repricing</div>
-          <div class="step-metric fig">Charm ∂Δ/∂t</div>
-          <p class="step-desc">
-            OTM put delta shrinks toward 0; OTM call delta shrinks toward 0. Gamma profile adjusts.
-          </p>
-        </div>
-
-        <div class="cascade-arrow">➔</div>
-
-        <div class="cascade-step" :class="charmPressure">
-          <div class="step-num label">STEP 3</div>
-          <div class="step-title">Dealer Inventory</div>
-          <div class="step-metric fig" :class="charmPressure">
-            {{
-              netCharmFlow && netCharmFlow < 0
-                ? 'DEALERS SHORT PUTS'
-                : netCharmFlow && netCharmFlow > 0
-                  ? 'DEALERS LONG CALLS'
-                  : 'BALANCED BOOK'
-            }}
-          </div>
-          <p class="step-desc">
-            Dealer book delta drifts off zero; hedge ratio requires mechanical adjustment.
-          </p>
-        </div>
-
-        <div class="cascade-arrow">➔</div>
-
-        <div class="cascade-step highlight" :class="charmPressure">
-          <div class="step-num label">STEP 4 · FORCED FLOW</div>
-          <div class="step-title" :class="charmPressure">
-            {{
-              netCharmFlow && netCharmFlow < 0
-                ? '▲ DEALERS BUY SHARES'
-                : netCharmFlow && netCharmFlow > 0
-                  ? '▼ DEALERS SELL SHARES'
-                  : 'NEUTRAL REBALANCE'
-            }}
-          </div>
-          <div class="step-metric fig" :class="charmPressure">
-            {{ netCharmFlow != null ? `${signed(netCharmFlow, 0)} sh/d` : '—' }}
-          </div>
-          <p class="step-desc">
-            {{
-              netCharmFlow && netCharmFlow < 0
-                ? 'LONG TAILWIND: Mandatory buying pressure lifting price off supports.'
-                : netCharmFlow && netCharmFlow > 0
-                  ? 'SHORT HEADWIND: Mandatory selling supply capping price rallies.'
-                  : 'Neutral order flow equilibrium across strikes.'
-            }}
-          </p>
-        </div>
-
-        <div class="cascade-arrow">➔</div>
-
-        <div class="cascade-step">
-          <div class="step-num label">STEP 5</div>
-          <div class="step-title">Structural Walls</div>
-          <div class="step-metric fig">
-            PW: ${{ num(putWall, 0) }} · CW: ${{ num(callWall, 0) }}
-          </div>
-          <p class="step-desc">
-            Put Wall acts as bounce floor; Call Wall acts as overhead supply ceiling.
-          </p>
-        </div>
-      </div>
-    </Panel>
 
     <!-- Charm flow by strike chart -->
     <Panel
@@ -1836,310 +832,6 @@ const charmChartKey = computed(
           :max-height="420"
           @update:focus-strike="focusStrike = $event"
         />
-      </div>
-    </Panel>
-
-    <!-- Actionable Quantitative Strategies & Directional Trade Ticket -->
-    <Panel
-      label="ACTIONABLE QUANTITATIVE STRATEGIES &amp; TRADE EXECUTION"
-      meta="LIVE TRADE PLAYBOOK"
-      live
-    >
-      <template #action>
-        <div class="mini-segment" role="group" aria-label="Strategy view mode">
-          <button
-            type="button"
-            class="label"
-            :class="{ on: strategyViewMode === 'primary' }"
-            @click="strategyViewMode = 'primary'"
-          >
-            PRIMARY LIVE SETUP
-          </button>
-          <button
-            type="button"
-            class="label"
-            :class="{ on: strategyViewMode === 'all' }"
-            @click="strategyViewMode = 'all'"
-          >
-            ALL PLAYBOOK REGIMES
-          </button>
-        </div>
-      </template>
-
-      <!-- Primary Actionable Trade Ticket (When 'primary' view is active) -->
-      <div v-if="strategyViewMode === 'primary' && primaryStrategy" class="primary-ticket-wrap">
-        <div class="primary-ticket" :class="primaryStrategy.directionType">
-          <div class="ticket-head">
-            <div class="ticket-title-group">
-              <span
-                class="badge primary-tag label"
-                :class="{ 'monitoring-tag': isUnconfirmedLean }"
-              >
-                {{
-                  isUnconfirmedLean ? 'MONITORING SETUP (RANGE WATCH)' : 'PRIMARY ACTIONABLE SETUP'
-                }}
-              </span>
-              <span class="ticket-title">{{ primaryStrategy.title }}</span>
-            </div>
-            <div class="ticket-badges">
-              <span class="badge dir-badge label" :class="primaryStrategy.directionType">
-                {{ primaryStrategy.biasTag }}
-              </span>
-              <span
-                class="strat-status label"
-                :class="[
-                  primaryStrategy.status.toLowerCase(),
-                  { 'stand-aside': isUnconfirmedLean },
-                ]"
-              >
-                {{ isUnconfirmedLean ? 'AWAITING CONFIRMATION' : primaryStrategy.status }}
-              </span>
-            </div>
-          </div>
-
-          <!-- Trade Execution Level Grid -->
-          <div class="ticket-levels-grid">
-            <div class="level-box">
-              <span class="label lvl-label">ENTRY REFERENCE</span>
-              <span class="fig lvl-val highlight">{{ primaryStrategy.entryZone }}</span>
-            </div>
-            <div class="level-box">
-              <span class="label lvl-label">TARGET 1</span>
-              <span class="fig lvl-val call-hi">{{ primaryStrategy.target1 }}</span>
-            </div>
-            <div class="level-box">
-              <span class="label lvl-label">TARGET 2 (WALL)</span>
-              <span class="fig lvl-val call-hi">{{ primaryStrategy.target2 }}</span>
-            </div>
-            <div class="level-box">
-              <span class="label lvl-label">STOP / INVALIDATION</span>
-              <span class="fig lvl-val put-hi">{{ primaryStrategy.stopLoss }}</span>
-            </div>
-            <div class="level-box">
-              <span class="label lvl-label">RISK / REWARD</span>
-              <span class="fig lvl-val phosphor">{{ primaryStrategy.riskReward }}</span>
-            </div>
-          </div>
-
-          <!-- Trade Playbook Instruction -->
-          <div class="ticket-instruction">
-            <span class="label inst-label">Directional Execution:</span>
-            <span class="inst-text" :class="primaryStrategy.directionType">{{
-              primaryStrategy.trade
-            }}</span>
-          </div>
-
-          <!-- Lifecycle Stages Breakdown with Active Indicator -->
-          <div class="strat-stages-wrap">
-            <span class="strat-label label">Lifecycle Stages &amp; Flow Direction:</span>
-            <div class="strat-stages-list">
-              <div
-                v-for="(stg, idx) in primaryStrategy.stages"
-                :key="stg.name"
-                class="stage-item"
-                :class="{ 'is-first': idx === 0 }"
-              >
-                <span class="stage-name label">{{ stg.name }}</span>
-                <span class="stage-note">{{ stg.note }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="ticket-mechanic">
-            <span class="label mech-label">DEALER INVENTORY MECHANIC:</span>
-            <span class="mech-text">{{ primaryStrategy.mechanic }}</span>
-          </div>
-        </div>
-
-        <!-- Real-time Level Watch & If-Then Trigger Board -->
-        <div class="trigger-matrix-board">
-          <div class="matrix-header">
-            <span class="label matrix-title">IF / THEN LEVEL WATCH &amp; EXECUTION TRIGGERS</span>
-            <span class="label current-spot-badge">
-              SPOT: <b>${{ num(spot, 2) }}</b> · REGIME: <b>{{ gexRegimeLabel }}</b> · CHARM:
-              <b>{{ charmPressure.toUpperCase() }}</b>
-            </span>
-          </div>
-          <div class="matrix-grid">
-            <!-- Bullish Breakout Trigger -->
-            <div
-              class="matrix-card bullish"
-              :class="{ active: spot != null && callWall != null && spot >= callWall }"
-            >
-              <div class="m-head">
-                <span class="m-dir label call">▲ ABOVE CALL WALL (${{ num(callWall, 0) }})</span>
-                <span
-                  class="m-badge label"
-                  :class="
-                    spot != null && callWall != null && spot >= callWall ? 'active' : 'pending'
-                  "
-                >
-                  {{
-                    spot != null && callWall != null && spot >= callWall
-                      ? 'TRIGGERED / EXPANDING'
-                      : 'WATCH LEVEL'
-                  }}
-                </span>
-              </div>
-              <div class="m-rule">
-                <b>IF Spot &gt; ${{ num(callWall, 0) }}:</b> Dealer call gamma flips / resistance
-                breaks. Buy Long Calls / Momentum Continuation.
-              </div>
-              <div class="m-levels label">
-                Target: ${{ num(spot != null ? spot + (expectedMove ?? 5) : 0, 1) }} · Invalidation:
-                Below ${{ num(callWall, 0) }}
-              </div>
-            </div>
-
-            <!-- In-Channel Mean-Reversion Trigger -->
-            <div
-              class="matrix-card channel"
-              :class="{
-                active:
-                  spot != null &&
-                  putWall != null &&
-                  callWall != null &&
-                  spot >= putWall &&
-                  spot <= callWall,
-              }"
-            >
-              <div class="m-head">
-                <span class="m-dir label phosphor"
-                  >↔ IN CHANNEL [${{ num(putWall, 0) }} — ${{ num(callWall, 0) }}]</span
-                >
-                <span
-                  class="m-badge label"
-                  :class="
-                    spot != null &&
-                    putWall != null &&
-                    callWall != null &&
-                    spot >= putWall &&
-                    spot <= callWall
-                      ? 'active'
-                      : 'pending'
-                  "
-                >
-                  {{
-                    spot != null &&
-                    putWall != null &&
-                    callWall != null &&
-                    spot >= putWall &&
-                    spot <= callWall
-                      ? 'ACTIVE IN CHANNEL'
-                      : 'WATCH CHANNEL'
-                  }}
-                </span>
-              </div>
-              <div class="m-rule">
-                <b>IF ${{ num(putWall, 0) }} &le; Spot &le; ${{ num(callWall, 0) }}:</b>
-                {{
-                  gexRegime === 'positive'
-                    ? `Long Gamma dampening. BUY near $${num(putWall, 0)} Put Wall, SELL near $${num(callWall, 0)} Call Wall.`
-                    : `Short Gamma channel: use caution. Range boundaries are less reliable; pro-cyclical hedging can accelerate breakouts in either direction.`
-                }}
-              </div>
-              <div class="m-levels label">
-                Equilibrium: ${{
-                  num(
-                    spot != null && putWall != null && callWall != null
-                      ? (putWall + callWall) / 2
-                      : 0,
-                    1,
-                  )
-                }}
-                · Stop: Below ${{ num(putWall, 0) }}
-              </div>
-            </div>
-
-            <!-- Bearish Breakdown Trigger -->
-            <div
-              class="matrix-card bearish"
-              :class="{ active: spot != null && putWall != null && spot < putWall }"
-            >
-              <div class="m-head">
-                <span class="m-dir label put">▼ BELOW PUT WALL (${{ num(putWall, 0) }})</span>
-                <span
-                  class="m-badge label"
-                  :class="spot != null && putWall != null && spot < putWall ? 'active' : 'pending'"
-                >
-                  {{
-                    spot != null && putWall != null && spot < putWall
-                      ? 'TRIGGERED / CASCADING'
-                      : 'WATCH LEVEL'
-                  }}
-                </span>
-              </div>
-              <div class="m-rule">
-                <b>IF Spot &lt; ${{ num(putWall, 0) }}:</b> Dealer put gamma support breaks. Buy
-                Long Puts / Bear Put Spreads for cascading downside.
-              </div>
-              <div class="m-levels label">
-                Target: ${{ num(spot != null ? spot - (expectedMove ?? 5) : 0, 1) }} · Invalidation:
-                Reclaim above ${{ num(putWall, 0) }}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- All Playbook Regimes Grid (When 'all' view is active) -->
-      <div v-else class="strategies-grid">
-        <div
-          v-for="strat in strategies"
-          :key="strat.id"
-          class="strategy-card"
-          :class="[
-            strat.directionType,
-            { active: strat.status === 'ACTIVE' || strat.status === 'TRIGGERED' },
-          ]"
-        >
-          <div class="strat-top">
-            <span class="strat-title">{{ strat.title }}</span>
-            <span
-              class="strat-status label"
-              :class="{
-                active: strat.status === 'ACTIVE',
-                triggered: strat.status === 'TRIGGERED',
-                monitoring: strat.status === 'MONITORING',
-              }"
-            >
-              {{ strat.status }}
-            </span>
-          </div>
-
-          <div class="strat-bias-bar">
-            <span class="badge dir-badge label" :class="strat.directionType">
-              {{ strat.biasTag }}
-            </span>
-            <span class="strat-regime label">{{ strat.regime }}</span>
-          </div>
-
-          <div class="strat-section">
-            <span class="strat-label label">Condition:</span>
-            <span class="strat-text">{{ strat.condition }}</span>
-          </div>
-
-          <div class="strat-section">
-            <span class="strat-label label">Directional Execution:</span>
-            <span class="strat-text highlight" :class="strat.directionType">{{ strat.trade }}</span>
-          </div>
-
-          <!-- Execution Stages (Stage 1 -> Stage 2 -> Stage 3) -->
-          <div class="strat-stages-wrap">
-            <span class="strat-label label">Lifecycle Stages &amp; Flow Direction:</span>
-            <div class="strat-stages-list">
-              <div v-for="stg in strat.stages" :key="stg.name" class="stage-item">
-                <span class="stage-name label">{{ stg.name }}</span>
-                <span class="stage-note">{{ stg.note }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="strat-section">
-            <span class="strat-label label">Dealer Hedging Mechanic:</span>
-            <span class="strat-text note">{{ strat.mechanic }}</span>
-          </div>
-        </div>
       </div>
     </Panel>
 
@@ -2437,7 +1129,6 @@ const charmChartKey = computed(
       {{ payload.provider?.activity_basis ?? 'unavailable' }} · charm source
       {{ charmSummary?.source ?? 'unavailable' }}
     </p>
-    <p v-if="pressure" class="freshness-note label">{{ pressure.convention_note }}</p>
   </div>
 </template>
 
@@ -2474,15 +1165,15 @@ const charmChartKey = computed(
 h1 {
   margin: var(--s2) 0 0;
   color: var(--ink);
-  font: 700 var(--t-display) / 1.15 var(--font-display);
-  letter-spacing: var(--track-tight);
+  font: 700 var(--t-view-title) / 1.12 var(--font-display);
+  letter-spacing: var(--track-display);
 }
 
 .drift-title p {
   max-width: 82ch;
   margin-top: var(--s3);
   color: var(--text-secondary);
-  font-size: var(--t-body);
+  font-size: var(--t-reading);
   line-height: 1.55;
 }
 

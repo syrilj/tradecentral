@@ -121,14 +121,14 @@ def max_drawdown(equity: pd.Series) -> float:
 def sharpe(daily_returns: pd.Series) -> float | None:
     """Annualised Sharpe of daily returns: mean/std * sqrt(252), ddof=1.
 
-    None when fewer than two observations or when the std is exactly zero
+    None when fewer than two observations or when the std is effectively zero
     (Sharpe is undefined for a constant return stream).
     """
     r = daily_returns.dropna()
     if len(r) < 2:
         return None
     sd = float(r.std(ddof=1))
-    if not np.isfinite(sd) or sd == 0.0:
+    if not np.isfinite(sd) or sd <= 1e-12:
         return None
     return float(r.mean() / sd) * math.sqrt(ANNUAL)
 
@@ -154,10 +154,11 @@ def cagr(equity: pd.Series) -> float | None:
 
 
 def equity_curve(daily_strategy_returns: pd.Series) -> pd.Series:
-    """(1 + r).cumprod() normalised to start at exactly 1.0."""
-    gross = (1.0 + daily_strategy_returns).cumprod()
-    first = gross.iloc[0]
-    return gross / first
+    """(1 + r).cumprod() starting at 1.0."""
+    if daily_strategy_returns.empty:
+        return pd.Series(dtype=float)
+    return (1.0 + daily_strategy_returns).cumprod()
+
 
 
 def transaction_costs(weights: pd.DataFrame, cost_bps: float) -> pd.Series:
@@ -434,12 +435,13 @@ def ou_half_life(spread: pd.Series) -> dict:
 
 
 def hurst_exponent(s: pd.Series, max_lag: int = 100) -> float | None:
-    """Rescaled-range (R/S) Hurst exponent.
+    """Hurst exponent computed via root-mean-square lag dispersion.
 
-    For each lag L in [2, min(max_lag, n//2)] the series is split into
-    consecutive non-overlapping chunks of length L; each chunk contributes
-    R/S = range of the demeaned cumulative sum / sample std. The exponent is
-    the slope of log(E[R/S]) against log(L). None when n < 60.
+    Computes RMS dispersion of lag differences:
+    tau(L) = sqrt(E[(s[t+L] - s[t])^2]).
+    The Hurst exponent H is the slope of log(tau(L)) against log(L).
+    For a random walk, H ~ 0.5; trending/persistent series have H > 0.5;
+    mean-reverting series have H < 0.5. None when n < 60.
     """
     v = s.dropna().to_numpy(dtype=float)
     n = v.size
@@ -448,24 +450,18 @@ def hurst_exponent(s: pd.Series, max_lag: int = 100) -> float | None:
     max_l = min(int(max_lag), n // 2)
     if max_l < 2:
         return None
-    log_rs: list[float] = []
-    log_l: list[float] = []
-    for lag in range(2, max_l + 1):
-        m = n // lag
-        chunks = v[: m * lag].reshape(m, lag)
-        z = np.cumsum(chunks - chunks.mean(axis=1, keepdims=True), axis=1)
-        r = np.ptp(z, axis=1)
-        sd = chunks.std(axis=1, ddof=1)
-        ok = sd > 0
-        if not ok.any():
-            continue
-        rs = float(np.mean(r[ok] / sd[ok]))
-        if rs > 0:
-            log_rs.append(math.log(rs))
-            log_l.append(math.log(lag))
-    if len(log_rs) < 2:
+    lags = np.arange(2, max_l + 1)
+    tau: list[float] = []
+    valid_lags: list[float] = []
+    for lag in lags:
+        diff = v[lag:] - v[:-lag]
+        rms = float(np.sqrt(np.mean(diff**2)))
+        if np.isfinite(rms) and rms > 0.0:
+            tau.append(math.log(rms))
+            valid_lags.append(math.log(lag))
+    if len(tau) < 2:
         return None
-    a = np.polyfit(np.asarray(log_l), np.asarray(log_rs), 1)
+    a = np.polyfit(np.asarray(valid_lags), np.asarray(tau), 1)
     h = float(a[0])
     if not np.isfinite(h):
         return None

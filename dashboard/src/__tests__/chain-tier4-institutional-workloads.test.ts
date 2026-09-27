@@ -24,18 +24,11 @@ vi.mock('vue-router', () => ({
   }),
 }))
 
-import {
-  formatCapExSensitivity,
-  rankBeneficiaries,
-} from '@/chainDisplay'
+import { formatCapExSensitivity, rankBeneficiaries } from '@/chainDisplay'
 
 import ValueChainGraph from '@/components/ValueChainGraph.vue'
 
-import type {
-  SupplyChainNode,
-  SupplyChainEdge,
-  ThematicBridge,
-} from '@/api'
+import type { SupplyChainNode, SupplyChainEdge, ThematicBridge } from '@/api'
 
 describe('Tier 4: Realistic Institutional Workloads & Application Scenarios', () => {
   // =========================================================================
@@ -95,7 +88,8 @@ describe('Tier 4: Realistic Institutional Workloads & Application Scenarios', ()
           filing_date: '2026-08-27',
           period: 'Q2 FY2027',
           speaker: 'Jensen Huang',
-          quote: 'Every dollar of cloud CapEx directly compounds into our accelerated computing systems.',
+          quote:
+            'Every dollar of cloud CapEx directly compounds into our accelerated computing systems.',
           context: 'Hyperscale CapEx acceleration',
           confidence: 0.98,
         },
@@ -222,7 +216,8 @@ describe('Tier 4: Realistic Institutional Workloads & Application Scenarios', ()
           filing_date: '2026-08-14',
           period: 'Q2 2026',
           speaker: 'Item 1 Financial Statements',
-          quote: 'We have definitive commercial launch agreements with Rocket Lab and spectrum partnerships with AT&T.',
+          quote:
+            'We have definitive commercial launch agreements with Rocket Lab and spectrum partnerships with AT&T.',
           context: 'Commercial spectrum and launch commitments',
           confidence: 0.99,
         },

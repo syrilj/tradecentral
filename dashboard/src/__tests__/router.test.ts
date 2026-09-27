@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const routerSource = readFileSync(join(srcRoot, 'router.ts'), 'utf8')
+const authSource = readFileSync(join(srcRoot, 'auth.ts'), 'utf8')
 const appSource = readFileSync(join(srcRoot, 'App.vue'), 'utf8')
 
 describe('public entry and operator routing', () => {
@@ -21,10 +22,12 @@ describe('public entry and operator routing', () => {
   })
 
   it('sanitizes redirect targets and returns signed-in operators to Flow', () => {
-    expect(routerSource).toContain("value.startsWith('//')")
-    expect(routerSource).toContain("value.startsWith('/auth')")
-    expect(routerSource).toContain('return fallback')
-    expect(routerSource).toContain("fallback = '/flow'")
+    expect(authSource).toContain("value.startsWith('//')")
+    expect(authSource).toContain("value.startsWith('/\\\\')")
+    expect(authSource).toContain("target.pathname === '/auth'")
+    expect(authSource).toContain("target.pathname === '/waitlist'")
+    expect(authSource).toContain('return fallback')
+    expect(authSource).toContain("fallback = '/flow'")
   })
 
   it('aliases /quantitative-research onto the Market Financials model highlight', () => {

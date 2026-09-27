@@ -81,8 +81,16 @@ const MOCK_THEMES: SupplyChainThemeSummary[] = [
     node_count: 16,
     top_beneficiaries: ['AAOI', 'LITE', 'VRT', 'MU'],
     catalyst_timeline: [
-      { date: '2026-10-15', event: 'OFC Optical Standards Conf', impacted_tickers: ['AAOI', 'LITE', 'COHR'] },
-      { date: '2026-11-20', event: 'SC26 Supercomputing Reveal', impacted_tickers: ['NVDA', 'VRT', 'SMCI'] },
+      {
+        date: '2026-10-15',
+        event: 'OFC Optical Standards Conf',
+        impacted_tickers: ['AAOI', 'LITE', 'COHR'],
+      },
+      {
+        date: '2026-11-20',
+        event: 'SC26 Supercomputing Reveal',
+        impacted_tickers: ['NVDA', 'VRT', 'SMCI'],
+      },
     ],
   },
   {
@@ -94,7 +102,11 @@ const MOCK_THEMES: SupplyChainThemeSummary[] = [
     node_count: 14,
     top_beneficiaries: ['RKLB', 'LUNR', 'RDW', 'IRDM'],
     catalyst_timeline: [
-      { date: '2026-10-01', event: 'FCC Cellular Spectrum Auction', impacted_tickers: ['ASTS', 'GSAT', 'T'] },
+      {
+        date: '2026-10-01',
+        event: 'FCC Cellular Spectrum Auction',
+        impacted_tickers: ['ASTS', 'GSAT', 'T'],
+      },
     ],
   },
   {
@@ -187,7 +199,8 @@ const MOCK_NODES: SupplyChainNode[] = [
         filing_date: '2026-02-21',
         period: 'FY2026',
         speaker: 'Form 10-K Item 1',
-        quote: 'We rely on third-party foundries, primarily TSMC, to manufacture our semiconductor wafers.',
+        quote:
+          'We rely on third-party foundries, primarily TSMC, to manufacture our semiconductor wafers.',
         context: 'Foundry concentration and supply risk disclosure',
         confidence: 0.96,
       },
@@ -196,7 +209,8 @@ const MOCK_NODES: SupplyChainNode[] = [
         filing_date: '2026-08-27',
         period: 'Q2 FY2027',
         speaker: 'Jensen Huang (CEO)',
-        quote: 'Demand for Blackwell architecture and liquid-cooled racks continues to exceed supply.',
+        quote:
+          'Demand for Blackwell architecture and liquid-cooled racks continues to exceed supply.',
         context: 'Liquid cooling and advanced packaging supply constraints',
         confidence: 0.94,
       },
@@ -636,8 +650,12 @@ describe('Tier 1: Feature Coverage — Value Chain & Supply Network', () => {
   // =========================================================================
   describe('F07: Quant-Fundamental Beneficiary Elasticity Scoring', () => {
     function computeBeneficiaryElasticity(metrics: SupplyChainNode['metrics']): number | null {
-      const { capex_sensitivity, revenue_concentration_pct, operating_leverage, flow_sentiment_score } =
-        metrics
+      const {
+        capex_sensitivity,
+        revenue_concentration_pct,
+        operating_leverage,
+        flow_sentiment_score,
+      } = metrics
       if (
         capex_sensitivity == null &&
         revenue_concentration_pct == null &&
@@ -941,7 +959,9 @@ describe('Tier 1: Feature Coverage — Value Chain & Supply Network', () => {
       const html = await renderToString(app)
 
       expect(html).toContain('ASML')
-      expect(html).toContain('No direct SEC or transcript quotation records attached for this node.')
+      expect(html).toContain(
+        'No direct SEC or transcript quotation records attached for this node.',
+      )
     })
   })
 
