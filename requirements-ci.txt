@@ -33,7 +33,7 @@ yfinance==0.2.66
 # (RuntimeError) when it's absent -- by design, so a missing xgboost never
 # masquerades as a passing test. Several tests exercise the real
 # CPU-XGBoost path and need the package actually importable.
-xgboost==3.2.0
+xgboost==3.4.1
 # daily_plays/config.py's load_project_environment() silently no-ops
 # (bare `except ImportError: return`) when python-dotenv isn't installed,
 # which made tests/daily_plays/test_environment.py fail for the wrong
