@@ -269,12 +269,19 @@ function printDocument() {
               to evaluate, not a conveyance or transfer of title.
             </p>
             <p>
-              4.2 <strong>Trade Secret Protection.</strong> The Quantitative Models, microstructure
-              heuristics, volume-price analysis algorithms, and signal fusion pipelines represent
-              valuable trade secrets of Licensor under the Uniform Trade Secrets Act (UTSA) and 18
-              U.S.C. § 1836 (Defend Trade Secrets Act). Licensee shall maintain strict
-              confidentiality and protect the Software against unauthorized disclosure using
-              reasonable care.
+              4.2 <strong>Confidential information.</strong> Original quantitative models and
+              evidence-fusion algorithms in the Software are Licensor's confidential information
+              until Licensor publishes them. Publication of source code discloses the published
+              expression. Licensor does not claim trade-secret protection in source code that
+              Licensor has made public.
+            </p>
+            <p>
+              4.3 <strong>Third-party works excluded.</strong> The Software does not include,
+              reproduce, or license any third-party book, figure, chart commentary, caption, or
+              other literary work. Licensor claims copyright only in original expression written
+              for the Software. Volume-price measurements in the Software are original code and
+              original numeric thresholds. Nothing in this Agreement grants any right in a
+              third-party work.
             </p>
           </section>
 

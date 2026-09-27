@@ -26,7 +26,7 @@ IF YOU DO NOT AGREE TO ALL OF THE TERMS AND CONDITIONS OF THIS AGREEMENT, YOU AR
 
 1.4 **"Evaluation Purpose"** means the private, personal, non-commercial, non-production examination and architectural inspection of the source code strictly for evaluation, research peer review, and academic study.
 
-1.5 **"Quantitative Models and Alpha Pipelines"** means all mathematical formulas, regime transition matrices, causal envelopes, squeeze calculators, voltrend models, options pricing estimators, order flow feature extractors, and trade secret algorithms embodied in the Software.
+1.5 **"Quantitative Models and Alpha Pipelines"** means original mathematical formulas, regime transition matrices, causal envelopes, squeeze calculators, voltrend models, options pricing estimators, and order-flow feature extractors embodied in the Software. It does not include any third-party book or chart commentary.
 
 1.6 **"Commercial Purpose"** means any use intended to generate revenue, profit, commercial advantage, financial gain, or direct/indirect monetary return, including but not limited to fee-based services, subscription products, consulting, proprietary trading for profit, fund management, or SaaS hosting.
 
@@ -72,7 +72,9 @@ Remove, alter, obscure, or deface any copyright notices, trademark legends, conf
 
 4.1 **Ownership.** Licensee acknowledges and agrees that Licensor is and shall remain the sole and exclusive owner of all right, title, and interest in and to the Software, including all worldwide intellectual property rights, copyrights, patents, trade dress, trademarks, and trade secrets therein. This Agreement constitutes a license to evaluate, not a sale or transfer of title.
 
-4.2 **Trade Secrets.** The Quantitative Models, alpha signals, microstructure classification heuristics, evidence-fusion algorithms, and volume-price analysis codex embodied within the Software represent confidential, proprietary information and trade secrets of Licensor under the Uniform Trade Secrets Act (UTSA) and the Defend Trade Secrets Act of 2016 (18 U.S.C. § 1836). Licensee agrees to safeguard the Software using at least the same degree of care Licensee uses for Licensee's own highly confidential materials, and in no event less than a reasonable standard of care.
+4.2 **Trade Secrets.** Original quantitative models, alpha signals, microstructure classification heuristics, and evidence-fusion algorithms embodied within the Software are confidential information of Licensor. Licensee agrees to safeguard unpublished configuration, credentials, and non-public research notes using at least reasonable care. Publication of source code discloses the published expression. Licensor does not claim trade-secret protection in source code that Licensor has made public.
+
+4.3 **Third-party works excluded.** The Software does not include, reproduce, or license any third-party book, figure, chart commentary, caption, or other literary work. Licensor claims copyright only in original expression written for the Software. Names of generally known market methods are descriptive. Nothing in this Agreement grants any right in a third-party work, and Licensee must not treat the Software as a copy of, or a substitute for, any third-party publication. Volume-price measurements in the Software are original code and original numeric thresholds.
 
 ---
 
