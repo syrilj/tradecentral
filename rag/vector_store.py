@@ -12,7 +12,6 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Any
-import faiss
 import numpy as np
 
 from edge.rag.chunker import DocumentChunk

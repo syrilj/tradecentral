@@ -123,7 +123,14 @@ def test_hybrid_vector_store(sample_parsed_book):
         assert "book_title" in hybrid_hits[0]
 
 
+@pytest.mark.needs_live_network(
+    reason="SentenceTransformer downloads all-MiniLM-L6-v2 from remote hub over network"
+)
 def test_model_doctor_diagnosis(sample_parsed_book):
+    pytest.importorskip(
+        "sentence_transformers",
+        reason="sentence_transformers required for live embedding engine",
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test_quant.db"
         pipeline = QuantRAGPipeline(

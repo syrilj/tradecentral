@@ -9,7 +9,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 import numpy as np
-import torch
+
+try:
+    import torch
+except ImportError:
+    torch = None
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +31,9 @@ class LocalSentenceEmbeddingEngine:
         self.batch_size = batch_size
 
         if device is None:
-            if torch.backends.mps.is_available():
+            if torch is not None and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 self.device = "mps"
-            elif torch.cuda.is_available():
+            elif torch is not None and torch.cuda.is_available():
                 self.device = "cuda"
             else:
                 self.device = "cpu"

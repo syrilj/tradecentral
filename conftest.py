@@ -67,6 +67,11 @@ _MARKED_TESTS: dict[str, tuple[str, str]] = {
         "fetch is live, not fixture-backed, so this fails deterministically "
         "on any day after the value was frozen.",
     ),
+    "tests/test_rag_pipeline.py::test_model_doctor_diagnosis": (
+        "needs_live_network",
+        "QuantRAGPipeline initializes LocalSentenceEmbeddingEngine which downloads "
+        "the all-MiniLM-L6-v2 model weights from HuggingFace over live network.",
+    ),
 }
 
 
