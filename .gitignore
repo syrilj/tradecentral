@@ -141,3 +141,20 @@ node-compile-cache/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Local AI/agent workspaces and generated state. Keep these on the machine.
+.agents/
+.claude/
+.claude-flow/
+.factory/
+.grok/
+.jules/
+.ruflo/
+.ruvector/
+.swarm/
+
+# Generated SSR caches from local tooling.
+/gTYTtnOJgI9gvxN4gn2g-/
+/OIuC-CwDsvF5N55Xy5IGK/
+/hyAek7rRTCNlYSQErsQ5h/
+/t6vB9JoUlyXFgEqbyCuqp/
