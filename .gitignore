@@ -158,3 +158,17 @@ node-compile-cache/
 /OIuC-CwDsvF5N55Xy5IGK/
 /hyAek7rRTCNlYSQErsQ5h/
 /t6vB9JoUlyXFgEqbyCuqp/
+
+# Root-level caches and generated media from local tooling.
+/esbuild-*.code
+/esbuild-*.map
+/agentdb.rvf*
+/skills-lock.json
+/.impeccable.md
+/brag-output/
+/edge
+
+# Trained model weights are local artifacts; keep model code and metadata.
+/models/qlib_scan_lgb/model.txt
+/models/v90/meta_xgb_*.json
+/models/v90_wide/meta_xgb_*.json
