@@ -237,7 +237,9 @@ class TestAdversarialExtremeIVs:
         )
         assert regime.measurable is True
         assert not math.isnan(regime.total_net_gex_m)
-        assert regime.expected_move_1d is not None
+        # 0.1% IV is below the engine's plausible-input floor. Retain the
+        # measurable positioning read, but do not fabricate an expected move.
+        assert regime.expected_move_1d is None
 
     def test_hyper_volatility_meme_stock_iv(self):
         """IV = 10.0 (1000% IV, hypervolatility)."""

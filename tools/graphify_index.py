@@ -40,7 +40,7 @@ EDGE_ROOT = Path(__file__).resolve().parents[1]
 GRAPH_DIR = EDGE_ROOT / "runs" / "graph"
 
 GRAPHIFY_BIN = os.environ.get(
-    "GRAPHIFY_BIN", "/Users/syriljacob/Library/Python/3.10/bin/graphify"
+    "GRAPHIFY_BIN", str(Path.home() / "Library/Python/3.10/bin/graphify")
 )
 
 INCLUDE_EXTENSIONS = {".py", ".md", ".vue", ".ts", ".json"}

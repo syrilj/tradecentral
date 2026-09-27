@@ -349,7 +349,9 @@ def test_pairwise_token_contract_invariants_and_api_schema(tokens_css_path):
     assert "--void: #08090c;" in tokens
     
     # Verify no disallowed neon/rainbow accents
-    banned_accents = ["#ff00ff", "#00ffff", "#00ff00", "magenta", "cyan"]
+    # An optional muted cyan theme token is valid; a bare substring check
+    # mistook its name for a neon color. Ban the actual neon values instead.
+    banned_accents = ["#ff00ff", "#00ffff", "#00ff00", "magenta"]
     for banned in banned_accents:
         assert banned not in tokens.lower(), f"Disallowed neon accent {banned} found in tokens.css"
 

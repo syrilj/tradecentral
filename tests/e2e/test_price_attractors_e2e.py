@@ -131,14 +131,19 @@ class TestTier1Feature01MarketRegimeClassifier:
         spot = 105.0
         strikes = [95.0, 100.0, 105.0, 110.0]
         call_oi = [2000, 5000, 12000, 15000]
-        put_oi = [1000, 2000, 3000, 1000]
+        # Put-heavy lower strikes and call-heavy upper strikes create a real
+        # gamma sign crossing below spot; an all-positive book has no flip.
+        put_oi = [15000, 12000, 3000, 1000]
 
         regime = calculate_market_regime(
             spot=spot,
             strikes=strikes,
             call_oi=call_oi,
             put_oi=put_oi,
+            ivs=[0.25] * len(strikes),
         )
+        assert regime.gamma_flip is not None
+        assert spot >= regime.gamma_flip
         assert regime.topography_quadrant == "forward_positive_ramp"
 
 
@@ -846,14 +851,15 @@ class TestTier2BoundaryAndCornerCases:
         assert regime.volatility_regime == "negative_gamma"
 
     def test_b5_3_monotonic_fallback_for_gamma_flip(self):
-        """When no zero crossing exists, gamma flip defaults to spot."""
+        """A monotonic gamma book has no measured flip level."""
         regime = calculate_market_regime(
             spot=100.0,
             strikes=[90.0, 100.0, 110.0],
             call_oi=[10000, 20000, 30000],
             put_oi=[0, 0, 0],
         )
-        assert regime.gamma_flip == 100.0
+        assert regime.measurable is True
+        assert regime.gamma_flip is None
 
     # Dimension 6: Negative & Zero Interest Rates
     def test_b6_1_zero_interest_rate_stability(self):

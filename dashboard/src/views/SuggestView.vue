@@ -972,17 +972,17 @@ const meta = computed(() => {
 .title-block h1 {
   margin: 4px 0 8px;
   font-family: var(--font-display);
-  font-size: var(--t-lead);
-  font-weight: 600;
-  letter-spacing: var(--track-tight);
+  font-size: var(--t-view-title);
+  font-weight: 700;
+  letter-spacing: var(--track-display);
 }
 
 .title-block p {
   max-width: 68ch;
   margin: 0;
   color: var(--ink-dim);
-  font-size: var(--t-small);
-  line-height: 1.45;
+  font-size: var(--t-reading);
+  line-height: 1.5;
 }
 
 .eyebrow {

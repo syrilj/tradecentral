@@ -15,7 +15,7 @@ import time
 import types
 from pathlib import Path
 
-ROOT = Path("/Users/syriljacob/Desktop/alltrading/edge")
+ROOT = Path(__file__).resolve().parents[1]
 if 'edge' not in sys.modules:
     _edge_mod = types.ModuleType('edge')
     _edge_mod.__path__ = [str(ROOT)]

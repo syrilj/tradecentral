@@ -7,10 +7,10 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/syriljacob/Desktop/alltrading/edge/tools/update_all_data.sh</string>
+        <string>/path/to/tradecentral/tools/update_all_data.sh</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/syriljacob/Desktop/alltrading/edge</string>
+    <string>/path/to/tradecentral</string>
     <key>StartCalendarInterval</key>
     <array>
         <dict>
@@ -55,8 +55,8 @@
         </dict>
     </array>
     <key>StandardOutPath</key>
-    <string>/Users/syriljacob/Desktop/alltrading/edge/runs/auto_sync.log</string>
+    <string>/path/to/tradecentral/runs/auto_sync.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/syriljacob/Desktop/alltrading/edge/runs/auto_sync.err</string>
+    <string>/path/to/tradecentral/runs/auto_sync.err</string>
 </dict>
 </plist>

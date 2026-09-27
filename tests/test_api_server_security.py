@@ -318,7 +318,7 @@ def test_kronos_evidence_rejects_invalid_symbol_without_loading(monkeypatch):
 
 def test_dispatch_500_never_echoes_exception_string_or_path(monkeypatch):
     _no_auth(monkeypatch)
-    secret_path = "/Users/syriljacob/Desktop/alltrading/edge/data/AAPL/secret.parquet"
+    secret_path = "/home/operator/internal_trading_cluster/data/AAPL/secret.parquet"
 
     def boom(**kwargs):
         raise FileNotFoundError(f"[Errno 2] No such file or directory: '{secret_path}'")
@@ -646,7 +646,7 @@ def test_public_deployment_rejects_local_auth_mode(monkeypatch):
 
 
 def test_public_deployment_rejects_another_valid_clerk_user(monkeypatch):
-    _fake_clerk(monkeypatch, {"sub": "user_other", "email": "syriltj1@gmail.com"})
+    _fake_clerk(monkeypatch, {"sub": "user_other", "email": "other_operator@example.com"})
     monkeypatch.setenv("EDGE_PUBLIC_DEPLOYMENT", "1")
     monkeypatch.setenv("EDGE_OWNER_USER_ID", "user_owner")
     monkeypatch.delenv("EDGE_ALLOWED_EMAILS", raising=False)

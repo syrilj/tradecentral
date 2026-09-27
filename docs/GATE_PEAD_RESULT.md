@@ -1,7 +1,7 @@
 # Post-Earnings Announcement Drift (PEAD) Honest Re-Validation Result
 
 **Rendered**: 2026-08-02T01:33:03.367117+00:00
-**Artifact**: `/Users/syriljacob/Desktop/alltrading/edge/runs/pead_catalyst/results.json` (sha256 `f074d75c0d559ae9423c046bed2db6b8183722b118da5d867f6305c620ec2699`)
+**Artifact**: `runs/pead_catalyst/results.json` (sha256 `f074d75c0d559ae9423c046bed2db6b8183722b118da5d867f6305c620ec2699`)
 **Verdict**: 🔴 **NO-GO**
 
 ---

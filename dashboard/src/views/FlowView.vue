@@ -143,7 +143,7 @@ const flowTapeStats = computed(() => {
     <header class="fv-strip" aria-label="Options flow control strip">
       <div class="fv-live">
         <i aria-hidden="true" class="fv-live-dot" />
-        <span class="label fv-live-label">OPTIONS FLOW</span>
+        <h1 class="fv-live-label">Options flow</h1>
         <!-- 15s HTTP poll (not a firehose). Flags are descriptive — not ENTER signals. -->
         <span class="label fv-live-sub">· 15s HTTP poll · flags not ENTER</span>
       </div>
@@ -269,9 +269,9 @@ const flowTapeStats = computed(() => {
 
 .fv-live-label {
   color: var(--phosphor);
-  font-size: var(--t-micro);
-  font-weight: 800;
-  letter-spacing: 0.07em;
+  font: 700 var(--t-view-title) / 1.12 var(--font-display);
+  letter-spacing: var(--track-display);
+  white-space: nowrap;
 }
 
 .fv-live-sub {

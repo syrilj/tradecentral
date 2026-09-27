@@ -2,7 +2,7 @@
 """Launcher for the Edge Quantitative Trading Literature RAG & Model Doctor.
 
 Usage examples:
-  python3 tools/quant_rag.py ingest /Users/syriljacob/Downloads/Research-Papers
+  python3 tools/quant_rag.py ingest ~/Downloads/Research-Papers
   python3 tools/quant_rag.py stats
   python3 tools/quant_rag.py search "purged k-fold cross validation"
   python3 tools/quant_rag.py diagnose "My backtest Sharpe is 3.1 but live execution loses money due to slippage"

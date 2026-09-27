@@ -65,7 +65,7 @@ describe('Clerk operator access contract', () => {
     expect(viewSource).toContain("mode: 'signin'")
     expect(mainSource).toContain("waitlistUrl: '/waitlist'")
     expect(authSource).toContain('VITE_EDGE_ALLOWED_EMAILS')
-    expect(authSource).not.toContain('syriltj1@gmail.com')
+    expect(authSource).not.toContain('@gmail.com')
     expect(authSource).toContain("operatorAuthMode() === 'local' && !import.meta.env.PROD")
   })
 })

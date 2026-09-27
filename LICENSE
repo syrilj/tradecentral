@@ -1,0 +1,31 @@
+# Copyright and License Notice
+
+Copyright (c) 2026 Syril Jacob. All Rights Reserved.
+
+## PROPRIETARY AND SOURCE-AVAILABLE (VIEW-ONLY) LICENSE
+
+This software, including all source code, documentation, algorithms, mathematical models, architectural designs, user interface assets, and associated files (collectively, the "Software"), is the proprietary intellectual property of Syril Jacob ("Owner").
+
+### 1. Permitted Uses
+You are granted a limited, personal, revocable, non-exclusive, non-transferable, and royalty-free permission solely to:
+- View, browse, and inspect the source code for personal educational purposes, peer review, and architectural evaluation.
+- Fork or download a local copy solely as strictly necessary to view the source code for the aforementioned evaluation purposes.
+
+### 2. Prohibited Uses
+Except as expressly authorized under Section 1, ALL RIGHTS ARE STRICTLY RESERVED. Without the express prior written consent of the Owner, you may NOT:
+- **Use or Execute**: Execute, deploy, host, run, or integrate this Software or any part thereof into any live, production, staging, development, automated trading, paper trading, commercial, or institutional environment.
+- **Copy or Distribute**: Copy, duplicate, mirror, reproduce, distribute, publish, sublicense, rent, lease, sell, or publicly display the Software or any portion thereof.
+- **Modify or Derive**: Modify, adapt, translate, decompile, disassemble, reverse engineer, or create derivative works based upon the Software, its quantitative models, heuristics, indicators, or algorithms.
+- **Commercial Exploitation**: Use the Software or any portion thereof directly or indirectly for any commercial purpose, for-profit service, subscription product, API service, or financial business.
+- **AI / Model Training**: Ingest, scrape, or process this Software, its models, strategies, or documentation to train, fine-tune, benchmark, or evaluate any artificial intelligence, machine learning model, or automated decision engine.
+
+### 3. Proprietary Quantitative Research and Alpha
+The quantitative methods, evidence-fusion heuristics, volume price analysis codex, microstructure regime classification logic, dealer gamma exposure models, and signal pipelines contained within this Software represent proprietary research and trade secrets of the Owner.
+
+### 4. No Warranty & Financial Disclaimer
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE, INCLUDING BUT NOT LIMITED TO ANY FINANCIAL LOSS, TRADING LOSSES, LOST PROFITS, CAPITAL LOSS, OR SYSTEM INTERRUPTIONS. THIS SOFTWARE DOES NOT CONSTITUTE FINANCIAL, INVESTMENT, OR TRADING ADVICE.
+
+### 5. Licensing Inquiries
+For commercial licensing inquiries, permissions, or partnership requests, please contact the repository owner.

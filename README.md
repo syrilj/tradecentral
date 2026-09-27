@@ -1,12 +1,33 @@
 # TradeCentral
 
-TradeCentral is a local-first quantitative market research and decision-support workstation for US equities and options. It combines market scanning, options intelligence, flow analysis, research diagnostics, model governance, and shadow-trading evidence behind a single desktop-oriented interface.
+<p align="center">
+  <img src="dashboard/src/assets/showcase/options-positioning.png" alt="TradeCentral Workstation - Options Positioning & Dealer Gamma" width="100%" />
+</p>
 
-The system is intentionally designed as a research instrument rather than an execution terminal. It can surface candidates, diagnostics, model evidence, options structures, and readiness state, but the checked-in decision-support pipeline does not place or route broker orders.
+<p align="center">
+  <strong>Local-First Quantitative Market Research & Options Intelligence Workstation</strong>
+  <br />
+  <em>Options Flow Tape · Dealer Gamma Exposure (GEX) · Microstructure Regimes · Volume Price Analysis (VPA) · Directional Setups · Value Chains · Multi-Lens Decision Fusion</em>
+</p>
 
-![Actual TradeCentral options positioning workspace showing SPY gamma, dealer walls, source age, and research status](dashboard/src/assets/showcase/options-positioning.png)
+<p align="center">
+  <a href="#workstation-tour"><img src="https://img.shields.io/badge/Workstation-Visual%20Tour-00f0ff?style=flat-square" alt="Visual Tour" /></a>
+  <a href="#workspaces"><img src="https://img.shields.io/badge/Workspaces-15%20Surfaces-3b82f6?style=flat-square" alt="Workspaces" /></a>
+  <a href="docs/SHOWCASE.md"><img src="https://img.shields.io/badge/Showcase-Product%20Highlights-8b5cf6?style=flat-square" alt="Showcase" /></a>
+  <img src="https://img.shields.io/badge/Architecture-Local--First-22c55e?style=flat-square" alt="Local-First" />
+  <img src="https://img.shields.io/badge/Frontend-Vue%203%20%7C%20TypeScript-42b883?style=flat-square" alt="Vue 3 TypeScript" />
+  <img src="https://img.shields.io/badge/Backend-Python%203.10%20%7C%20FastAPI%20%2F%20HTTP-3776ab?style=flat-square" alt="Python 3.10" />
+  <img src="https://img.shields.io/badge/Execution-Decision%20Support%20Only-f59e0b?style=flat-square" alt="Decision Support Only" />
+  <img src="https://img.shields.io/badge/Tests-2%2C700%2B%20Passing-10b981?style=flat-square" alt="Tests" />
+</p>
 
-*Actual local workstation capture. The source age and risk state are displayed in the interface. See [more product views and project highlights](docs/SHOWCASE.md).*
+---
+
+TradeCentral is a local-first quantitative market research and decision-support workstation for US equities and options. It combines high-conviction options flow scanning, real-time dealer gamma exposure (GEX), volume price analysis (VPA / Wyckoff), kinematic microstructure regimes, thematic value-chain elasticity, and shadow-trading model governance behind a single desktop-oriented interface.
+
+The system is intentionally engineered as an institutional research instrument rather than an execution terminal. It surfaces candidates, diagnostics, model evidence, contract structures, and readiness gates, but the checked-in pipeline strictly adheres to a **fail-closed, decision-support-only architecture** that does not place or route broker orders.
+
+*Actual local workstation captures shown below. Data age, provider sources, and risk states are displayed throughout the interface. See [more product views and technical highlights](docs/SHOWCASE.md).*
 
 > **Current operating posture:** research and shadow evidence first. Treat every model, scanner, and options surface as decision support unless the relevant preregistered gate and promotion criteria explicitly say otherwise.
 
@@ -46,19 +67,87 @@ For the complete system boundary, runtime topology, data paths, and safety model
 
 For the visual system, navigation model, component rules, chart semantics, and interaction standards, see [`docs/DESIGN.md`](docs/DESIGN.md).
 
+## Workstation Tour
+
+TradeCentral replaces fragmented browser tabs and black-box trading alerts with an integrated, provenance-backed quantitative workstation. Every readout displays its data age, provider source, and confidence bounds.
+
+### 1. Market-Wide Options Flow Tape & Real-Time Analytics
+![Market-wide Options Flow Tape](dashboard/src/assets/showcase/flow-tape.png)
+*Real-time provider options tape with 15s polling, sweep/block detection, whale orders ($500k+), vendor golden sweeps, cumulative net flow trend, and multi-tier expiry concentration.*
+
+- **Institutional Tape Reading:** Tracks live options transactions with granular filters for aggressive Sweeps, Whale prints ($500k+), Volume > OI, and Unusual Moneyness.
+- **Provider Analytics:** Real-time cumulative net flow curve, call vs. put volume & premium distribution (e.g. Call Dominant flow), and premium concentration by DTE brackets (0 DTE, 1–7D, 8–30D, 30D+).
+- **Execution Classification:** Heuristic trade categorization distinguishes between institutional size, burst sweeps, and multi-exchange fills with transparent missing-OI flags.
+
+### 2. Dealer-Gamma Regime & Microstructure Dynamics
+![Dealer-Gamma Regime & Microstructure Dynamics](dashboard/src/assets/showcase/regime-dynamics.png)
+*Executive regime briefing showing SPY Long Gamma stance, 2-state kinematic state-space filtering, pivot ladder, and 1-day/1-week expected move excursions.*
+
+- **Dealer Microstructure Modeling:** Models whether market makers are in **Long Gamma** (damping volatility by selling strength and buying dips) or **Short Gamma** (accelerating price trends via directional delta-hedging).
+- **Kinematic Filtering & Envelopes:** 2-state kinematic state-space filtering and causal Nadaraya-Watson kernel envelopes provide noise-reduced price trajectories without lookahead bias.
+- **Microstructure Pivot Ladder:** Real-time calculated Call Wall, Put Wall, Gamma Flip Point, Kernel Mean ($m(t)$), and $\pm 1\sigma$ Expected Move bounds ($ATM \cdot IV / \sqrt{252}$).
+
+### 3. Directional Setups & Strike Execution Planning
+![Directional Setups and Strike Plans](dashboard/src/assets/showcase/setups-directional.png)
+*Bullish & Bearish directional plans with planning mode safety gating, QLIR scores, exact contract strike candidates, dealer-hedge support levels, and take-profit targets.*
+
+- **Gated Execution Workflow:** Operates in Planning Mode outside regular trading hours and strictly enforces multi-condition freshness gates before authorizing live directional entries.
+- **Exact Contract Candidates:** Pinpoints recommended strike candidates based on open interest clusters, gamma pin levels, and delta-liquidity profiles.
+- **Asymmetric Risk Profiles:** Automatically computes invalidation levels anchored to dealer-hedge support prints and tiered take-profit targets aligned with dealer call walls.
+
+### 4. Volume Price Analysis (VPA) & Wyckoff Campaign Phase
+![Volume Price Analysis](dashboard/src/assets/showcase/vpa-analysis.png)
+*Volume-price analysis on exact OHLCV bars: effort versus result, campaign phase, volume-profile POC, and value areas.*
+
+- **Effort vs. Result Verification:** Evaluates candle spread versus traded volume to detect institutional absorption, stopping volume, tests of supply, and distribution spikes.
+- **Volume Profile & Value Area:** High-resolution volume distribution highlighting Point of Control (POC), Value Area High (VAH), and Value Area Low (VAL).
+- **Role-Reversed Price Levels:** Algorithmic identification of dynamic support and resistance zones with bar-level evidence tracing.
+
+### 5. Thematic Value Chain Elasticity & Revenue Propagation
+![Value Chain Elasticity Graph](dashboard/src/assets/showcase/value-chain.png)
+*Thematic supply-chain node topology (GLP-1 & CDMO, Advanced Semiconductor, AI Infrastructure), CapEx sensitivity, revenue concentration, and options skew.*
+
+- **Supply Chain Node Topology:** Maps interdependencies across Core Drivers, Tier 1 Suppliers, and Infrastructure Enablers across emerging industry megatrends.
+- **CapEx Flow-Through Sensitivity:** Quantifies operating leverage and downstream revenue propagation resulting from upstream capital expenditure announcements.
+- **Derivative Alignment:** Correlates fundamental supply chain positioning with options order-flow momentum and implied volatility skew.
+
+### 6. Options Positioning & Dealer Exposure (GEX)
+![Options Positioning Workspace](dashboard/src/assets/showcase/options-positioning.png)
+*Underlier options positioning showing net gamma exposure, call/put open interest distribution, dealer resistance walls, and source freshness.*
+
+- **Net Gamma by Strike:** Visualizes dealer gamma positioning across all active strikes to locate high-probability price magnets and volatility suppression pins.
+- **Risk-Neutral Implied Density:** Extracts market-implied probability distributions and skew from option quotes without parametric assumptions.
+
+### 7. Decision Brain Consensus Engine & Live Read
+![Decision Live Surface](dashboard/src/assets/showcase/decision-live.png)
+*Decision Brain consensus engine combining regime, structure, flow, and valuation lenses with explicit standby and out-of-sample capital validation.*
+
+- **Multi-Lens Evidence Fusion:** Requires independent quantitative models (VPA, Dealer Gamma, Flow Tape, Trend Kinematics) to reach strict consensus before signaling conviction.
+- **Fail-Closed Governance:** Reverts to explicit **Standby** whenever source quotes are stale, spread thresholds are violated, or model agreement is insufficient.
+
 ## Workspaces
 
-The current dashboard is organized around five primary workspaces and a set of specialist research surfaces.
+The operator workstation is organized around 15 specialized surfaces designed for institutional market research and tactical decision support:
 
-| Workspace    | Purpose                                                                                           |
-| ------------ | ------------------------------------------------------------------------------------------------- |
-| **Desk**     | Operator posture, queue, market state, readiness, and high-level activity                         |
-| **Market**   | Symbol research, price trajectory, factor context, comparison, and cross-asset inspection         |
-| **Options**  | Single-underlier options intelligence, positioning, gamma structure, ranges, and contract context |
-| **Flow**     | Market-wide flow, sector activity, unusual options attention, and latent flow-state research      |
-| **Research** | Methods, models, diagnostics, experiments, and governance surfaces                                |
+| Workspace | Route | Core Quantitative Focus | Key Capabilities |
+| :--- | :--- | :--- | :--- |
+| **Brief** | `/brief` | Symbol Overview & Multi-Lens Summary | Unified snapshot of technical structure, dealer gamma, options flow, and valuation for any ticker. |
+| **Decision** | `/decision` | Consensus Engine & OOS Capital Audit | Multi-model decision brain aggregating independent research lenses with fail-closed safety gating. |
+| **Flow** | `/flow` | Market-Wide Options Tape & Order Flow | 15s polled provider tape, sweep/whale detection, golden flags, cumulative net flow, and expiry concentration. |
+| **VPA** | `/vpa` | Volume Price Analysis & Wyckoff Codex | Effort vs. result volume validation, Wyckoff campaign phase detection, Volume Profile POC, and value areas. |
+| **Reversal** | `/reversal` | Exhaustion & Turning Point Detection | Identifies oversold/overbought exhaustion extremes, institutional absorption, and trend inflection points. |
+| **Options** | `/options` | Single-Underlier Options Intelligence | Strike-by-strike GEX topology, open interest distribution, call/put resistance walls, and implied ranges. |
+| **Regime** | `/regime` | Dealer Gamma & Microstructure Dynamics | Long/short gamma stances, kinematic state-space filters, Nadaraya-Watson envelopes, and expected move bounds. |
+| **Setups** | `/suggest` | Directional Strike & Execution Planning | Systematic directional candidate ranking, QLIR scores, target strikes, invalidation levels, and take-profit zones. |
+| **Drift** | `/drift` | Charm & Dynamic Hedge Pressure | Models second-order dealer hedging drift (delta decay with time/charm) and expected intraday price pressure. |
+| **Desk** | `/desk` | Operator Posture & Execution Queue | High-level market status, readiness checklist, active candidates, and portfolio risk telemetry. |
+| **Chain** | `/chain` | Value Chain & Revenue Propagation | Interactive node graphs across megatrends (GLP-1, AI, Semis), CapEx elasticity scores, and revenue concentration. |
+| **Market** | `/market` | Multi-Asset Research & Factor Context | Broad universe search, multi-symbol trajectory rebasing, correlation matrices, and sector relative strength. |
+| **Crypto** | `/crypto` | 24/7 Digital Asset Tape & Kalman Velocity | Continuous crypto asset tracking with kinematic state filtering and trend-velocity scoring. |
+| **Vol Trend** | `/voltrend` | Volatility-Targeted Momentum | Trend-following strategies with dynamic volatility scaling and risk-budget allocation. |
+| **Vanna** | `/vanna` | Delta-Vol Coupling & Event Pricing | Cross-greeks surface modeling second-order delta sensitivity to implied volatility shifts ahead of major catalysts. |
 
-Specialist routes currently include Sectors, Pulse, Momentum, Fintel, Gates, Evolution, Live Blend, Graph, Breaks, Cloud, and Kalman (constant-velocity trend). The route definitions in [`dashboard/src/router.ts`](dashboard/src/router.ts) are the source of truth for the current workspace inventory.
+Specialist sub-routes and research lab surfaces include Sectors (`/sectors`), Pulse (`/pulse`), Momentum (`/momentum`), Fintel Short/Borrow (`/fintel`), Preregistered Gates (`/gates`), Model Evolution (`/evolution`), Live Blend (`/live`), Graph (`/graph`), Breaks (`/breaks`), Cloud Watchlist (`/cloud`), and Kalman Velocity (`/kalman`). The route definitions in [`dashboard/src/router.ts`](dashboard/src/router.ts) serve as the source of truth for the complete workspace inventory.
 
 ## Core capabilities
 
@@ -264,6 +353,15 @@ Do not summarize the current system state from an old result file alone. For ope
 7. Make a failed or stale dependency obvious to the operator.
 8. Treat every promotion decision as evidence-bound and reproducible.
 
+## License and terms
+
+Copyright (c) 2026 Syril Jacob. All Rights Reserved.
+
+This software is released under a **Commercial Proprietary Software License and Evaluation Agreement**. It is source-available solely for personal, non-commercial evaluation, peer review, and architectural examination in non-production environments.
+
+Unauthorized copying, distribution, modification, live trading deployment, broker integration, commercial exploitation, or ingestion into AI/LLM model training sets is strictly prohibited. See [`LICENSE`](LICENSE) for the full legally binding agreement and the dashboard at `/license` and `/terms` for terms of service and regulatory safe harbor disclaimers.
+
 ---
 
 TradeCentral is quantitative research software. Backtests, model scores, flow metrics, option analytics, and simulated/shadow outcomes are not guarantees of future performance or financial advice.
+

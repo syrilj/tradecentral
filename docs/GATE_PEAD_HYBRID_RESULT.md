@@ -1,7 +1,7 @@
 # Hybrid PEAD-Factor Strategy Gate Result
 
 **Rendered**: 2026-08-02T01:33:19.251963+00:00
-**Artifact**: `/Users/syriljacob/Desktop/alltrading/edge/runs/pead_factor_hybrid/results.json` (sha256 `78ae7086358fa03162be38e9584cff0e6d4991e3549af7d1c95dd67256ac8a07`)
+**Artifact**: `runs/pead_factor_hybrid/results.json` (sha256 `78ae7086358fa03162be38e9584cff0e6d4991e3549af7d1c95dd67256ac8a07`)
 **Verdict**: 🔴 **NO-GO**
 
 ---

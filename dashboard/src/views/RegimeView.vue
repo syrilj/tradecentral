@@ -3221,12 +3221,14 @@ function onBreadthActivate(): void {
 
 .view-header h1 {
   max-width: 25ch;
+  font-size: var(--t-view-title);
   line-height: 1.08;
-  letter-spacing: var(--track-tight, -0.025em);
+  letter-spacing: var(--track-display);
   text-wrap: balance;
 }
 
 .dek {
+  font-size: var(--t-reading);
   line-height: 1.5;
 }
 

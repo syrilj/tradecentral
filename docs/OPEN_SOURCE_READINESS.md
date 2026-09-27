@@ -5,6 +5,33 @@ until the current working tree is reviewed and an open source license is chosen.
 
 ## Current audit
 
+### Verified in the current working tree (2026-09-26)
+
+- Dashboard production build and the complete frontend suite pass (135 files,
+  2,702 tests). The Market view's focused suite passes all 44 tests.
+- Local API security tests pass (54 tests), and the Cloudflare Worker security
+  tests pass (6 tests).
+- Core leak-resistance checks pass (3 tests). The full Python suite is not yet
+  verified in this checkout: the default Python lacks `cvxpy`, and the frozen
+  research environment's SciPy binary fails to import on this host. A run from
+  the workspace parent with the two optimizer modules excluded passed 2,016
+  tests before a test requiring the repo-relative `data/1d` directory failed;
+  that focused test passes when run from the repository root. A repository-root
+  run of the available suite is in progress. A stale adversarial assertion for
+  0.1% IV was corrected to require an unmeasured expected move; its focused
+  file passes.
+- The seven primary research workspaces (Flow, Options, Setups, Regime, Charm,
+  Vanna, Market) were checked in the local browser at 375, 768, 1024, and
+  1440 px for workspace-width overflow. Market and Options overflow found at
+  the two smallest widths was fixed.
+- Gitleaks found no secrets in the current Git diff. A full history scan still
+  reports the documented `generic-api-key` field-name match in
+  `docs/SQUEEZE_FUEL_CALIBRATION.md`; it is not a credential.
+
+These checks cover the local source and preview configuration. The exact public
+deployment still needs an anonymous, owner, and non-owner access smoke test
+before its access claims can be treated as verified.
+
 - The local `.env`, `.env.preview.local`, and `cloudflare/.env.cloudflare` must
   stay out of Git. The Cloudflare profile was tracked previously; it is now
   ignored and removed from the index while its local copy remains on disk.
@@ -35,6 +62,7 @@ until the current working tree is reviewed and an open source license is chosen.
    account identifiers or licensed raw data.
 5. Re-run the dashboard build, security tests, and an anonymous/owner/non-owner
    authentication smoke test against the exact deployment to be published.
+   Restore a working research environment and run the complete Python suite.
 6. Update the README's launch state and screenshot links so they describe what
    a visitor can actually open. Keep the private API hostname and local profile
    outside committed configuration.
