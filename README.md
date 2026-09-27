@@ -4,8 +4,6 @@ TradeCentral is a local-first quantitative market research and decision-support 
 
 The system is intentionally designed as a research instrument rather than an execution terminal. It can surface candidates, diagnostics, model evidence, options structures, and readiness state, but the checked-in decision-support pipeline does not place or route broker orders.
 
-**Live preview:** [tradecentral.syriltj1.workers.dev](https://tradecentral.syriltj1.workers.dev). This is a Cloudflare preview using Clerk development authentication. The public landing and waitlist are available; private workspaces remain access controlled, and the live research API is disabled. There is no custom domain or public API, and the source repository is still private pending an open-source release review and license.
-
 ![Actual TradeCentral options positioning workspace showing SPY gamma, dealer walls, source age, and research status](dashboard/src/assets/showcase/options-positioning.png)
 
 *Actual local workstation capture. The source age and risk state are displayed in the interface. See [more product views and project highlights](docs/SHOWCASE.md).*
