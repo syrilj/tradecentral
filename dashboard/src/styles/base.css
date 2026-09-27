@@ -1,0 +1,746 @@
+@import './tokens.css';
+
+/* fonts are bundled, not fetched — a trading desk must render with the
+   network down. */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+/* The dashboard copy is Latin; importing the scoped faces avoids shipping
+   Cyrillic and Vietnamese IBM Plex assets with every initial visit. */
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+@import '@fontsource/ibm-plex-mono/latin-600.css';
+/* Public paper surface (landing/auth) follows the editorial system: Inter
+   Tight for display, Inter for body, Space Mono for eyebrows and data
+   labels. No component consumes Lora anymore, so its faces are not bundled. */
+@import '@fontsource-variable/inter-tight';
+@import '@fontsource-variable/inter';
+@import '@fontsource/space-mono/latin-400.css';
+@import '@fontsource/space-mono/latin-700.css';
+
+/* ── Metric-matched fallbacks for the paper surface ────────────────────────
+   Inter renders ~7.8% wider than the platform grotesque it falls back to, so
+   until the woff2 arrived the landing lede laid out one line short and then
+   reflowed everything under it — four layout shifts inside the first 1.3s and
+   the whole of the page's remaining CLS once the rotating word was fixed.
+   These faces re-serve the local grotesque at Inter's measured proportions,
+   so the swap changes glyph shapes without changing where anything sits.
+   size-adjust values are measured against this project's own copy; the
+   vertical overrides come from Inter's own head/hhea metrics. */
+@font-face {
+  font-family: 'Inter Metric Fallback';
+  src: local('Helvetica Neue'), local('Helvetica'), local('Arial');
+  size-adjust: 107.8%;
+  ascent-override: 90.2%;
+  descent-override: 22.48%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: 'Inter Tight Metric Fallback';
+  src: local('Helvetica Neue'), local('Helvetica'), local('Arial');
+  size-adjust: 98.5%;
+  ascent-override: 98.4%;
+  descent-override: 24.5%;
+  line-gap-override: 0%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+/* Defense in depth: #app must never let a descendant's intrinsic size grow
+   it past the viewport (see App.vue .rail for the actual fix — this just
+   guarantees the page can't silently start scrolling again if something
+   else overflows later). Matches the promise body makes below. */
+#app {
+  overflow: hidden;
+}
+
+body {
+  background: var(--void);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; /* the shell scrolls its panes, never the page */
+  caret-color: var(--phosphor);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--phosphor) 30%, transparent);
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------------------
+   The substrate: ultra-subtle measurement grid under everything.
+   Panels sit cleanly on top of it.
+   ------------------------------------------------------------------------ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(to right, var(--grid) var(--hair), transparent var(--hair)),
+    linear-gradient(to bottom, var(--grid) var(--hair), transparent var(--hair));
+  background-size: 32px 32px;
+}
+
+/* ---- type primitives: Mistral AI modern hierarchy ----------------------- */
+
+.label {
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/*
+ * .label truncates by design: it is the utility for short chrome captions in
+ * tight grid cells. Sentences that carry meaning must never be silently cut,
+ * so opt them into wrapping with .label.wraps.
+ */
+.label.wraps {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Dense desk chrome intentionally paints compact controls. .hit-28 restores a
+ * 28px pointer target underneath one without changing a pixel of its painted
+ * size or the surrounding layout.
+ */
+.hit-28 {
+  position: relative;
+}
+.hit-28::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 28px);
+  height: max(100%, 28px);
+  transform: translate(-50%, -50%);
+}
+
+/* Global overflow safety for dense instrument panels */
+.panel,
+.kpi-card,
+.sector-card,
+.gauge {
+  min-width: 0;
+}
+
+table .feat,
+.card-name,
+.kpi-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fig {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum', 'zero';
+  letter-spacing: var(--track-tight);
+}
+
+.mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.font-mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+.font-bold {
+  font-weight: 700;
+}
+.font-semibold {
+  font-weight: 600;
+}
+
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
+.flat {
+  color: var(--ink-dim);
+}
+
+.text-call,
+.text-call-hi,
+.text-emerald {
+  color: var(--call-hi);
+}
+.text-put,
+.text-put-hi,
+.text-rose {
+  color: var(--put-hi);
+}
+.text-long {
+  color: var(--long);
+}
+.text-short {
+  color: var(--short);
+}
+.text-warn {
+  color: var(--warn);
+}
+.text-phosphor {
+  color: var(--phosphor);
+}
+.text-muted,
+.text-ink-dim {
+  color: var(--ink-dim);
+}
+.text-ink-soft {
+  color: var(--ink-soft);
+}
+.text-ink-faint {
+  color: var(--ink-faint);
+}
+
+/* ---- focus: visible, phosphor, never removed ----------------------------
+   2px rather than a hairline: WCAG 2.2 SC 2.4.11 asks for an indicator with
+   at least the area of a 2px perimeter, and a 1px ring did not clear it. */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: var(--phosphor);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---- scrollbars: thin, part of the instrument --------------------------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-hi) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: var(--r-sm);
+  border: 2px solid var(--void);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--rule-hi);
+}
+
+/* ---- shared panel chrome -------------------------------------------------
+   Standard content-layer material (NOT Liquid Glass): opaque fill, hairline
+   rule, one specular line along the top edge for curvature, soft ambient
+   shadow. Glass is reserved for floating chrome per the two-layer model. */
+.ticked {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 34px), var(--panel);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.ticked:hover {
+  border-color: var(--rule-hi);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.hairline {
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+}
+
+/* ---- staggered entrance -------------------------------------------------
+   One orchestrated page load. Panels resolve in sequence cleanly. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise var(--dur-slow) var(--ease-out) both;
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-lamp {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes trace-in {
+  from {
+    stroke-dashoffset: var(--trace-len, 2000);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Canonical data table.
+   ------------------------------------------------------------------------ */
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
+
+.grid th {
+  text-align: left;
+  padding: var(--s2) var(--s4);
+  color: var(--ink-dim);
+  border-bottom: var(--hair) solid var(--rule);
+  position: sticky;
+  top: 0;
+  background: var(--panel-hi);
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  z-index: 1;
+  background: var(--panel-hi);
+}
+
+.grid td {
+  padding: var(--s2) var(--s4);
+  border-bottom: var(--hair) solid var(--rule-faint);
+  color: var(--ink);
+  vertical-align: middle;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.grid tbody tr:hover td {
+  background: var(--wash-1);
+}
+
+/* Figures align on the decimal */
+.grid .num,
+th.num,
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- desk controls: sleek Mistral-styled buttons ------------------------ */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--density-control-h);
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid var(--action-primary);
+  border-radius: var(--r-sm);
+  background: var(--action-primary);
+  color: var(--void);
+  font-family: var(--font-ui);
+  font-size: var(--t-tiny);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--action-primary-hover);
+}
+.btn-primary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-quiet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--density-control-h);
+  padding: var(--s2) var(--s3);
+  border: var(--hair) solid var(--action-quiet);
+  border-radius: var(--r-sm);
+  background: var(--wash-1);
+  color: var(--ink-soft);
+  font-family: var(--font-ui);
+  font-size: var(--t-tiny);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.btn-quiet:hover:not(:disabled) {
+  background: var(--action-quiet-hover);
+  border-color: var(--rule-hi);
+  color: var(--ink);
+}
+.btn-quiet:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.btn-quiet:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn-quiet:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ---- Clerk Dark Theme Institutional Overrides --------------------------- */
+.cl-userButtonPopoverCard {
+  background: var(--panel) !important;
+  border: var(--hair) solid var(--rule-hi) !important;
+  border-radius: 2px !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.75) !important;
+  color: var(--ink) !important;
+  font-family: var(--font-ui) !important;
+}
+
+.cl-userButtonPopoverFooter {
+  background: var(--void-lift) !important;
+  border-top: var(--hair) solid var(--rule) !important;
+}
+
+.cl-userButtonPopoverActionButton {
+  color: var(--ink-soft) !important;
+  border-radius: 2px !important;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out) !important;
+}
+
+.cl-userButtonPopoverActionButton:hover {
+  background: var(--panel-hi) !important;
+  color: var(--ink) !important;
+}
+
+.cl-userButtonPopoverActionButtonText {
+  color: inherit !important;
+  font-size: var(--t-small) !important;
+}
+
+.cl-userButtonPopoverActionButtonIcon {
+  color: var(--ink-dim) !important;
+}
+
+.cl-userPreviewMainIdentifier {
+  color: var(--ink) !important;
+  font-family: var(--font-display) !important;
+  font-size: var(--t-small) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+}
+
+.cl-userPreviewSecondaryIdentifier {
+  color: var(--ink-dim) !important;
+  font-size: var(--t-tiny) !important;
+}
+
+.cl-avatarBox {
+  border-radius: 2px !important;
+  border: var(--hair) solid var(--rule-hi) !important;
+}
+
+/* ---- Solid elevated surface utilities (content layer) ----------------------
+   Despite the names, these are NOT glass: backdrop blur is reserved for
+   floating functional chrome (rail, strip, palette, drawers that float over
+   content). Cards, chips and buttons in the content layer get opaque panel
+   surfaces with border + shadow carrying the elevation instead. Glass must
+   also never nest — a component that keeps its own chrome-level glass (e.g.
+   ProfileDrawer's scoped surface) renders these as solid children. */
+
+.glass-panel {
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+}
+
+.glass-panel-interactive {
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  transition:
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
+}
+.glass-panel-interactive:hover {
+  background: var(--panel-raise);
+  border-color: var(--glass-border-hi);
+  box-shadow: var(--glass-shadow-md), var(--glass-specular);
+}
+
+.glass-card {
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--glass-border-subtle);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+}
+
+.glass-chip {
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--glass-border-subtle);
+  box-shadow: var(--glass-specular-subtle);
+}
+
+.btn-glass {
+  background: var(--panel-hi);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
+}
+.btn-glass:hover:not(:disabled) {
+  background: var(--panel-raise);
+  border-color: var(--glass-border-hi);
+}
+.btn-glass:active:not(:disabled) {
+  transform: scale(0.97);
+  background: var(--void-lift);
+}
+
+.input-glass {
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-specular-subtle);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  transition:
+    border-color var(--dur-fast) ease,
+    outline-color var(--dur-fast) ease;
+}
+/* Focus reads as a soft phosphor halo via outline (never a box-shadow
+   ring — the desk guard forbids 0-offset glow shadows). */
+/* The 18%-phosphor outline this used to carry composited to 1.43:1 against the
+   panel — below the 3:1 WCAG 2.2 SC 2.4.11 asks of a focus indicator, and in
+   practice invisible. Solid phosphor reads at 9.5:1 and matches the ring every
+   other focusable in the app gets. */
+.input-glass:focus-visible {
+  border-color: var(--glass-border-hi);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* ---- material accessibility fallbacks -------------------------------------
+   The settings that change the material (Apple: Reduce Transparency /
+   Increase Contrast). Standard components adapt; ours must too. */
+@media (prefers-reduced-transparency: reduce) {
+  /* The glass-* utilities are solid now; only the remaining blurred
+     .input-glass needs a reduced-transparency fallback. */
+  .input-glass {
+    background: var(--void-lift);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .glass-panel,
+  .glass-panel-interactive,
+  .glass-card,
+  .glass-chip,
+  .btn-glass {
+    border-color: var(--rule-hi);
+  }
+}
+
+/* ---- view transitions & workspace motion --------------------------------- */
+
+.view-fade-enter-active,
+.view-fade-leave-active {
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.view-fade-enter-from {
+  opacity: 0;
+  transform: translateY(3px);
+}
+
+.view-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-2px);
+}
+
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ---- minimalist instrument scrollbars ----------------------------------- */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--void);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: var(--r-xs);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--rule-hi);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) var(--void);
+}
+
+/* ---- screen-reader-only text --------------------------------------------
+   For accessible names that would be redundant on screen: a button whose
+   visible content is already a symbol ticker still needs to announce what
+   activating it does. Clip rather than `display:none` so it stays in the
+   accessibility tree. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Focusable variant, for skip links that must appear when tabbed to. */
+.sr-only-focusable:focus,
+.sr-only-focusable:focus-visible {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+}
+
+/* ---- keyboard affordance for clickable table rows -----------------------
+   A `<tr @click>` is reachable only by mouse, which put several desk boards
+   in breach of WCAG 2.1.1 (Level A) — on Options it made symbol selection,
+   the point of the surface, unavailable without a pointer. Rather than give
+   every row a role and a key handler, the action also lives on a real button
+   laid over the row's first cell: native focus, native Enter/Space, an
+   accessible name, and no layout of its own so nothing moves visually. */
+.row-select-cell {
+  position: relative;
+}
+.row-select-btn {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+}
+.row-select-btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--r-xs);
+}

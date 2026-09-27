@@ -1,0 +1,1 @@
+{"ticker":"NVDA","as_of":"2026-07-30T14:00:00Z","regime":"risk_on","gex_regime":"POSITIVE_GEX","call_wall":190,"put_wall":170,"tmr":{"point":185,"point_pct":1.2,"pi80":[175,195],"point_tag":"bull"},"confidence":{"score":82,"label":"HIGH"},"selective":{"actionable":true}}

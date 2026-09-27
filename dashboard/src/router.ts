@@ -1,0 +1,360 @@
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { isLocalAuthMode, safeRedirect } from './auth'
+export { safeRedirect } from './auth'
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/',
+    name: 'landing',
+    component: () => import('@/views/LandingView.vue'),
+    meta: {
+      // The public front door, so it carries a real page title rather than a
+      // nav label: this is the string that shows in search results and in a
+      // shared link, and "TradeCentral · About" said nothing about the product.
+      documentTitle: 'TradeCentral — dealer positioning and options flow for US equities',
+      description:
+        'Read dealer gamma by strike, signed options flow, and the research trail behind them in one workstation. Every figure names its source and shows when it is stale. Research only — no order routing.',
+      public: true,
+    },
+  },
+  {
+    path: '/about',
+    redirect: { name: 'landing' },
+  },
+  {
+    path: '/license',
+    name: 'license',
+    component: () => import('@/views/LegalView.vue'),
+    meta: {
+      documentTitle: 'TradeCentral · Software License Agreement',
+      description:
+        'Commercial proprietary software license and evaluation agreement for the TradeCentral quantitative workstation.',
+      public: true,
+    },
+  },
+  {
+    path: '/terms',
+    name: 'terms',
+    component: () => import('@/views/LegalView.vue'),
+    meta: {
+      documentTitle: 'TradeCentral · Terms of Service & Disclaimers',
+      description:
+        'Terms of service, market data latency notices, and regulatory safe harbor disclosures for TradeCentral.',
+      public: true,
+    },
+  },
+  {
+    path: '/auth/:pathMatch(.*)*',
+    name: 'auth',
+    component: () => import('@/views/AuthView.vue'),
+    meta: { title: 'Operator access', public: true },
+  },
+  {
+    path: '/waitlist',
+    name: 'waitlist',
+    component: () => import('@/views/AuthView.vue'),
+    meta: { title: 'Request access', public: true },
+  },
+  {
+    path: '/brief',
+    name: 'brief',
+    component: () => import('@/views/BriefView.vue'),
+    meta: { title: 'Brief', index: '00' },
+  },
+  {
+    path: '/decision',
+    name: 'decision',
+    component: () => import('@/views/DecisionView.vue'),
+    meta: { title: 'Live Decision', index: '00' },
+  },
+  {
+    path: '/desk',
+    name: 'desk',
+    component: () => import('@/views/DeskView.vue'),
+    meta: { title: 'Desk', index: '01' },
+  },
+  {
+    path: '/plays',
+    name: 'plays',
+    component: () => import('@/views/PlaysView.vue'),
+    meta: { title: 'Plays', index: '02' },
+  },
+  {
+    path: '/market',
+    name: 'market',
+    component: () => import('@/views/MarketView.vue'),
+    meta: { title: 'Market', index: '02' },
+  },
+  {
+    path: '/sectors',
+    name: 'sectors',
+    component: () => import('@/views/SectorsView.vue'),
+    meta: { title: 'Sectors', index: '03' },
+  },
+  {
+    path: '/sentiment',
+    name: 'sentiment',
+    component: () => import('@/views/SentimentView.vue'),
+    meta: { title: 'Pulse', index: '04' },
+  },
+  {
+    path: '/macro',
+    name: 'macro',
+    component: () => import('@/views/MacroView.vue'),
+    meta: { title: 'Macro', index: '04' },
+  },
+  {
+    path: '/crypto',
+    name: 'crypto',
+    component: () => import('@/views/CryptoView.vue'),
+    meta: { title: 'Crypto', index: '07' },
+  },
+  /* Legacy path — structure + outliers now live on /sentiment */
+  {
+    path: '/anomalies',
+    name: 'anomalies',
+    redirect: (to) => ({
+      name: 'sentiment',
+      query: { ...to.query, tab: 'outliers' },
+    }),
+  },
+  {
+    path: '/options',
+    name: 'options',
+    component: () => import('@/views/OptionsView.vue'),
+    meta: { title: 'Options Drift', index: '05' },
+  },
+  {
+    path: '/drift',
+    name: 'drift',
+    component: () => import('@/views/DriftView.vue'),
+    meta: { title: 'Drift', index: '05' },
+  },
+  {
+    path: '/regime',
+    name: 'regime',
+    component: () => import('@/views/RegimeView.vue'),
+    meta: { title: 'Regime', index: '05' },
+  },
+  {
+    path: '/microstructure-regime',
+    name: 'microstructure-regime',
+    component: () => import('@/views/MicrostructureRegimeView.vue'),
+    meta: { title: 'Microstructure Regime', index: '05' },
+  },
+  {
+    path: '/flow',
+    name: 'flow',
+    component: () => import('@/views/FlowView.vue'),
+    meta: { title: 'Market Flow', index: '06' },
+  },
+  {
+    path: '/absorption',
+    name: 'absorption',
+    component: () => import('@/views/AbsorptionView.vue'),
+    meta: { title: 'Absorption', index: '07' },
+  },
+  {
+    path: '/livestack',
+    name: 'livestack',
+    component: () => import('@/views/LiveStackView.vue'),
+    meta: { title: 'Live Stack', index: '07' },
+  },
+  {
+    path: '/chain',
+    name: 'chain',
+    component: () => import('@/views/ChainView.vue'),
+    meta: { title: 'Supply Chain', index: '05' },
+  },
+  {
+    path: '/gates',
+    name: 'gates',
+    component: () => import('@/views/GatesView.vue'),
+    meta: { title: 'Gates', index: '06' },
+  },
+  {
+    path: '/cloud',
+    name: 'cloud',
+    component: () => import('@/views/CloudView.vue'),
+    meta: { title: 'Cloud', index: '07' },
+  },
+  {
+    path: '/evolution',
+    name: 'evolution',
+    component: () => import('@/views/EvolutionView.vue'),
+    meta: { title: 'Evolution', index: '08' },
+  },
+  {
+    path: '/vpa',
+    name: 'vpa',
+    component: () => import('@/views/VpaView.vue'),
+    meta: { title: 'Volume Price Analysis', index: '08' },
+  },
+  {
+    path: '/liquidity',
+    name: 'liquidity',
+    component: () => import('@/views/LiquidityView.vue'),
+    meta: { title: 'Liquidity', index: '08' },
+  },
+  {
+    path: '/reversal',
+    name: 'reversal',
+    component: () => import('@/views/ReversalView.vue'),
+    meta: { title: 'Reversal Timing', index: '08' },
+  },
+  {
+    path: '/amt',
+    name: 'amt',
+    component: () => import('@/views/AmtView.vue'),
+    meta: { title: 'Auction Market Theory', index: '08' },
+  },
+  {
+    path: '/research',
+    name: 'research',
+    component: () => import('@/views/ResearchView.vue'),
+    meta: { title: 'Research', index: '09' },
+  },
+  {
+    path: '/quantitative-research',
+    name: 'quantitative-research',
+    redirect: (to) => ({
+      name: 'market',
+      query: {
+        ...to.query,
+        tab: 'financials',
+        highlight: 'model-forecast',
+        symbol: typeof to.query.symbol === 'string' && to.query.symbol ? to.query.symbol : 'ASTS',
+      },
+    }),
+    meta: { title: 'Quantitative Research' },
+  },
+  {
+    path: '/graph',
+    name: 'graph',
+    component: () => import('@/views/GraphView.vue'),
+    meta: { title: 'Graph', index: '10' },
+  },
+  {
+    path: '/adaptive',
+    name: 'adaptive',
+    component: () => import('@/views/AdaptiveView.vue'),
+    meta: { title: 'Live Blend', index: '11' },
+  },
+  {
+    path: '/fintel',
+    name: 'fintel',
+    component: () => import('@/views/FintelView.vue'),
+    meta: { title: 'Fintel', index: '12' },
+  },
+  {
+    path: '/insiders',
+    name: 'insiders',
+    redirect: (to) => ({
+      name: 'market',
+      query: { ...to.query, tab: 'insiders' },
+    }),
+    meta: { title: 'Insiders', index: '15' },
+  },
+  {
+    path: '/changepoints',
+    name: 'changepoints',
+    component: () => import('@/views/ChangepointsView.vue'),
+    meta: { title: 'Breaks', index: '13' },
+  },
+  {
+    path: '/kalman',
+    name: 'kalman',
+    component: () => import('@/views/KalmanView.vue'),
+    meta: { title: 'Kalman', index: '14' },
+  },
+  {
+    path: '/momentum',
+    name: 'momentum',
+    component: () => import('@/views/MomentumView.vue'),
+    meta: { title: 'Momentum', index: '14' },
+  },
+  {
+    path: '/suggest',
+    name: 'suggest',
+    component: () => import('@/views/SuggestView.vue'),
+    meta: { title: 'Setups', index: '05' },
+  },
+  {
+    path: '/calculator',
+    name: 'calculator',
+    component: () => import('@/views/CalculatorView.vue'),
+    meta: { title: 'Calculator', index: '05' },
+  },
+  {
+    path: '/voltrend',
+    name: 'voltrend',
+    component: () => import('@/views/VolTrendView.vue'),
+    meta: { title: 'Vol Trend', index: '16' },
+  },
+  {
+    path: '/vanna',
+    name: 'vanna',
+    component: () => import('@/views/VannaView.vue'),
+    meta: { title: 'Vanna', index: '17' },
+  },
+  {
+    path: '/flow-state',
+    name: 'flowstate',
+    redirect: (to) => ({
+      name: 'flow',
+      query: { ...to.query, tab: 'states' },
+    }),
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/' },
+]
+
+export const router = createRouter({
+  history: createWebHistory(),
+  routes,
+  scrollBehavior: () => ({ top: 0 }),
+})
+
+/*
+ * EDGE_AUTH_MODE=local never installs the Clerk plugin (see main.ts), so
+ * AuthView's useClerk()/<SignIn> would throw and render a blank screen. There
+ * is no sign-in step in local mode — the operator is already the session — so
+ * send /auth straight to the requested desk surface instead.
+ */
+router.beforeEach((to) => {
+  if (to.name === 'auth' && to.query.mode !== 'waitlist' && isLocalAuthMode()) {
+    return safeRedirect(to.query.redirect, '/flow')
+  }
+  return true
+})
+
+const DEFAULT_DESCRIPTION =
+  'Instrument panel for the edge/ trading research stack — signals, gates, trajectories, cloud training.'
+
+function setMetaDescription(content: string): void {
+  let tag = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+  if (!tag) {
+    tag = document.createElement('meta')
+    tag.name = 'description'
+    document.head.appendChild(tag)
+  }
+  tag.content = content
+}
+
+router.afterEach((to) => {
+  /* `documentTitle` wins when a route needs a standalone, un-prefixed title
+     (the public landing page). Everything else keeps the desk's
+     "TradeCentral · <nav label>" convention. */
+  const full = to.meta.documentTitle as string | undefined
+  const t = to.meta.title as string | undefined
+  const symRaw = to.query.symbol || to.query.setup
+  const sym = typeof symRaw === 'string' && symRaw ? symRaw.trim().toUpperCase() : ''
+  if (full) {
+    document.title = full
+  } else if (t) {
+    document.title = sym ? `TradeCentral · ${t} (${sym})` : `TradeCentral · ${t}`
+  } else {
+    document.title = 'TradeCentral · Research instrument'
+  }
+
+  setMetaDescription((to.meta.description as string | undefined) ?? DEFAULT_DESCRIPTION)
+})

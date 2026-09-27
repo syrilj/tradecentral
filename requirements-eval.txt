@@ -1,0 +1,5 @@
+# Minimal dependencies for the leak-resistance evaluation tests (eval/).
+# Pinned to match the frozen research environment (requirements-vertex.txt).
+numpy==1.26.4
+pandas==2.3.3
+pytest>=8.0.0

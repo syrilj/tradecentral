@@ -1,0 +1,22 @@
+import { fileURLToPath } from 'node:url'
+import { loadEnv } from 'vite'
+
+const repoDir = fileURLToPath(new URL('../..', import.meta.url))
+const env = loadEnv('preview', repoDir, '')
+const errors = []
+if (env.VITE_EDGE_AUTH_MODE !== 'clerk') {
+  errors.push('VITE_EDGE_AUTH_MODE must be clerk for a preview build')
+}
+if (!String(env.VITE_CLERK_PUBLISHABLE_KEY ?? '').startsWith('pk_test_')) {
+  errors.push('Preview builds must use a Clerk development publishable key')
+}
+if (!/^https:\/\/[^/]+\.convex\.cloud$/.test(String(env.VITE_CONVEX_URL ?? ''))) {
+  errors.push('Preview build must set VITE_CONVEX_URL to an https Convex deployment')
+}
+if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(env.VITE_EDGE_ALLOWED_EMAILS ?? '').trim())) {
+  errors.push('VITE_EDGE_ALLOWED_EMAILS must contain one operator email for the preview')
+}
+if (errors.length) {
+  for (const error of errors) process.stderr.write(`Preview build blocked: ${error}\n`)
+  process.exit(1)
+}

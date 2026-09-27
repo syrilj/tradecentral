@@ -1,0 +1,264 @@
+/** Expand a ticker to symbol + company name when the name is known. */
+
+const KNOWN: Record<string, string> = {
+  AAPL: 'Apple Inc.',
+  MSFT: 'Microsoft Corp.',
+  NVDA: 'NVIDIA Corp.',
+  AMZN: 'Amazon.com Inc.',
+  META: 'Meta Platforms Inc.',
+  GOOGL: 'Alphabet Inc.',
+  GOOG: 'Alphabet Inc.',
+  TSLA: 'Tesla Inc.',
+  AMD: 'Advanced Micro Devices',
+  NFLX: 'Netflix Inc.',
+  AVGO: 'Broadcom Inc.',
+  JPM: 'JPMorgan Chase',
+  XOM: 'Exxon Mobil',
+  JNJ: 'Johnson & Johnson',
+  UNH: 'UnitedHealth Group',
+  V: 'Visa Inc.',
+  MA: 'Mastercard Inc.',
+  COST: 'Costco Wholesale',
+  HD: 'Home Depot',
+  PG: 'Procter & Gamble',
+  SPY: 'SPDR S&P 500 ETF',
+  QQQ: 'Invesco QQQ Trust',
+  IWM: 'iShares Russell 2000',
+  DIA: 'SPDR Dow Jones',
+  XLE: 'Energy Select Sector SPDR',
+  XLK: 'Technology Select Sector SPDR',
+  XLF: 'Financial Select Sector SPDR',
+  GLD: 'SPDR Gold Trust',
+  TLT: 'iShares 20+ Year Treasury',
+}
+
+export function cleanTickerSymbol(raw: string): string {
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, '')
+    .slice(0, 10)
+}
+
+export function tickerCompanyName(symbol: string, known?: string | null): string | null {
+  const clean = cleanTickerSymbol(symbol)
+  const fromKnown = String(known ?? '').trim()
+  if (fromKnown && fromKnown.toUpperCase() !== clean) return fromKnown
+  return KNOWN[clean] ?? null
+}
+
+const SECTOR_MAP: Record<string, string> = {
+  AAPL: 'Technology',
+  MSFT: 'Technology',
+  NVDA: 'Technology',
+  AVGO: 'Technology',
+  AMD: 'Technology',
+  QCOM: 'Technology',
+  INTC: 'Technology',
+  CRM: 'Technology',
+  ADBE: 'Technology',
+  ORCL: 'Technology',
+  TXN: 'Technology',
+  AMAT: 'Technology',
+  MU: 'Technology',
+  PANW: 'Technology',
+  SNOW: 'Technology',
+  PLTR: 'Technology',
+  ARM: 'Technology',
+  SMCI: 'Technology',
+  XLK: 'Technology',
+  GOOGL: 'Communication',
+  GOOG: 'Communication',
+  META: 'Communication',
+  NFLX: 'Communication',
+  DIS: 'Communication',
+  CMCSA: 'Communication',
+  TMUS: 'Communication',
+  VZ: 'Communication',
+  T: 'Communication',
+  SPOT: 'Communication',
+  SNAP: 'Communication',
+  PINS: 'Communication',
+  XLC: 'Communication',
+  AMZN: 'Consumer Discretionary',
+  TSLA: 'Consumer Discretionary',
+  HD: 'Consumer Discretionary',
+  MCD: 'Consumer Discretionary',
+  NKE: 'Consumer Discretionary',
+  SBUX: 'Consumer Discretionary',
+  LOW: 'Consumer Discretionary',
+  BKNG: 'Consumer Discretionary',
+  TJX: 'Consumer Discretionary',
+  TGT: 'Consumer Discretionary',
+  ABNB: 'Consumer Discretionary',
+  LULU: 'Consumer Discretionary',
+  XLY: 'Consumer Discretionary',
+  COST: 'Consumer Staples',
+  PG: 'Consumer Staples',
+  WMT: 'Consumer Staples',
+  KO: 'Consumer Staples',
+  PEP: 'Consumer Staples',
+  PM: 'Consumer Staples',
+  MO: 'Consumer Staples',
+  CL: 'Consumer Staples',
+  MDLZ: 'Consumer Staples',
+  XLP: 'Consumer Staples',
+  JPM: 'Financials',
+  BAC: 'Financials',
+  WFC: 'Financials',
+  MS: 'Financials',
+  GS: 'Financials',
+  V: 'Financials',
+  MA: 'Financials',
+  BLK: 'Financials',
+  C: 'Financials',
+  AXP: 'Financials',
+  SCHW: 'Financials',
+  COIN: 'Financials',
+  HOOD: 'Financials',
+  PYPL: 'Financials',
+  XLF: 'Financials',
+  UNH: 'Healthcare',
+  JNJ: 'Healthcare',
+  LLY: 'Healthcare',
+  ABBV: 'Healthcare',
+  MRK: 'Healthcare',
+  PFE: 'Healthcare',
+  TMO: 'Healthcare',
+  ABT: 'Healthcare',
+  DHR: 'Healthcare',
+  BMY: 'Healthcare',
+  AMGN: 'Healthcare',
+  GILD: 'Healthcare',
+  ISRG: 'Healthcare',
+  XLV: 'Healthcare',
+  XOM: 'Energy',
+  CVX: 'Energy',
+  COP: 'Energy',
+  SLB: 'Energy',
+  EOG: 'Energy',
+  OXY: 'Energy',
+  MPC: 'Energy',
+  PSX: 'Energy',
+  VLO: 'Energy',
+  HES: 'Energy',
+  XLE: 'Energy',
+  GE: 'Industrials',
+  CAT: 'Industrials',
+  UNP: 'Industrials',
+  HON: 'Industrials',
+  BA: 'Industrials',
+  RTX: 'Industrials',
+  DE: 'Industrials',
+  LMT: 'Industrials',
+  UPS: 'Industrials',
+  FDX: 'Industrials',
+  XLI: 'Industrials',
+  LIN: 'Materials',
+  APD: 'Materials',
+  SHW: 'Materials',
+  FCX: 'Materials',
+  NEM: 'Materials',
+  XLB: 'Materials',
+  NEE: 'Utilities',
+  DUK: 'Utilities',
+  SO: 'Utilities',
+  AEP: 'Utilities',
+  XLU: 'Utilities',
+  PLD: 'Real Estate',
+  AMT: 'Real Estate',
+  EQIX: 'Real Estate',
+  SPG: 'Real Estate',
+  XLRE: 'Real Estate',
+  SPY: 'Indices & ETFs',
+  QQQ: 'Indices & ETFs',
+  IWM: 'Indices & ETFs',
+  DIA: 'Indices & ETFs',
+  GLD: 'Indices & ETFs',
+  SLV: 'Indices & ETFs',
+  TLT: 'Indices & ETFs',
+  HYG: 'Indices & ETFs',
+  SOXX: 'Indices & ETFs',
+  SMH: 'Indices & ETFs',
+  ARKK: 'Indices & ETFs',
+}
+
+const SECTOR_CODES: Record<string, string> = {
+  Technology: 'Tech',
+  Communication: 'Comm',
+  'Consumer Discretionary': 'Cons Disc',
+  'Consumer Staples': 'Cons Stpl',
+  Financials: 'Fin',
+  Healthcare: 'Health',
+  Energy: 'Energy',
+  Industrials: 'Ind',
+  Materials: 'Mat',
+  Utilities: 'Util',
+  'Real Estate': 'Real Est',
+  'Indices & ETFs': 'ETF / Index',
+}
+
+export const SECTOR_ETF_MAP: Record<string, string> = {
+  Technology: 'XLK',
+  Communication: 'XLC',
+  'Consumer Discretionary': 'XLY',
+  'Consumer Staples': 'XLP',
+  Financials: 'XLF',
+  Healthcare: 'XLV',
+  Energy: 'XLE',
+  Industrials: 'XLI',
+  Materials: 'XLB',
+  Utilities: 'XLU',
+  'Real Estate': 'XLRE',
+  'Indices & ETFs': 'SPY',
+}
+
+export function tickerSector(symbol: string): string {
+  const clean = cleanTickerSymbol(symbol)
+  return SECTOR_MAP[clean] ?? 'Other'
+}
+
+export function tickerSectorCode(symbol: string): string {
+  const sector = tickerSector(symbol)
+  return SECTOR_CODES[sector] ?? sector
+}
+
+export function tickerSectorEtf(symbol: string): string {
+  const clean = cleanTickerSymbol(symbol)
+  if (
+    [
+      'SPY',
+      'QQQ',
+      'IWM',
+      'DIA',
+      'XLK',
+      'XLF',
+      'XLE',
+      'XLV',
+      'XLI',
+      'XLY',
+      'XLP',
+      'XLU',
+      'XLB',
+      'XLRE',
+      'XLC',
+    ].includes(clean)
+  ) {
+    return clean
+  }
+  const sector = tickerSector(clean)
+  return SECTOR_ETF_MAP[sector] ?? 'SPY'
+}
+
+export function tickerIdentity(
+  symbol: string,
+  known?: string | null,
+): { symbol: string; name: string | null; label: string } {
+  const clean = cleanTickerSymbol(symbol) || symbol.trim().toUpperCase()
+  const name = tickerCompanyName(clean, known)
+  return {
+    symbol: clean,
+    name,
+    label: name ? `${clean} · ${name}` : clean,
+  }
+}

@@ -1,0 +1,600 @@
+/* ============================================================================
+   EDGE · INSTRUMENT — design tokens
+   ----------------------------------------------------------------------------
+   Aesthetic brief: this is a measurement instrument, not a fintech product.
+   The reference points are oscilloscopes, seismographs and printer's
+   registration marks — devices that report what they measured and decline to
+   editorialise. That is the right register for this codebase, where nearly
+   every pre-registered gate came back NO-GO and the dashboard's only real job
+   is to keep saying so.
+
+   Rules the components hold to:
+     · One accent. Phosphor means "live / measured now". Nothing else.
+     · Corner ticks, not rounded cards. Panels are framed like a viewfinder.
+     · Every number is tabular. Columns of figures must align on the decimal.
+     · Green/red are reserved for signed quantities. Never for chrome.
+     · No glow. An instrument is lit evenly; a halo around a figure is one
+       more thing between the reader and the number. Emphasis is carried by
+       weight, a solid rule, or a flat fill — never by `box-shadow: 0 0`,
+       `text-shadow`, or `filter: brightness()`.
+     · Data marks take flat fills. Gradients on a bar imply a second encoded
+       dimension that does not exist.
+   ========================================================================== */
+
+:root {
+  /* ---- surface ---------------------------------------------------------- */
+  --void: #08090c;
+  --void-lift: #0d0f14;
+  --panel: #12141a;
+  --panel-hi: #181b22;
+  --panel-raise: #20242e;
+
+  /* ---- rules & structure ------------------------------------------------ */
+  --rule: #232732;
+  --rule-hi: #343a4a;
+  --rule-faint: #181b22;
+  /* Ultra-subtle substrate grid */
+  --grid: rgba(255, 255, 255, 0.025);
+
+  /* ---- ink ---------------------------------------------------------------
+     A five-step ladder, but only the first four carry text. Every text step
+     clears WCAG AA (4.5:1) against `--panel-raise`, the darkest surface a
+     figure is ever set on — so a token can be chosen for emphasis without
+     having to re-check the contrast of the panel it lands in.
+
+       ink        13.9:1   figures, primary reads
+       ink-soft    9.8:1   body copy
+       ink-dim     5.8:1   secondary meta
+       ink-faint   4.6:1   the legible floor — quietest text allowed
+       ink-ghost   3.4:1   NOT FOR TEXT. Hairlines, disabled chrome, and
+                           decorative separators only. If it has to be read,
+                           it is at least `--ink-faint`.
+
+     Staleness, provenance and age are never set in the bottom two steps —
+     see `--status-stale` and `--meta-provenance` below. An operator misreading
+     stale data as live is the worst failure this interface has, so those
+     labels are held at `--ink-dim` or above. */
+  --ink: #f0f2f7;
+  --ink-soft: #c8cedb;
+  --ink-dim: #949eb2;
+  --ink-faint: #828ca2;
+  --ink-ghost: #6c768a;
+
+  /* ---- the one accent ----------------------------------------------------
+     Sage/phosphor for live state, active tabs, and selection. */
+  --phosphor: #a9c46c;
+  --phosphor-dim: #7f9550;
+  --phosphor-glow: rgba(169, 196, 108, 0.14);
+  --phosphor-wash: rgba(169, 196, 108, 0.07);
+
+  /* ---- Workstation accent theme anchors (stable swatches) ----------------- */
+  --accent-theme-phosphor: #a9c46c;
+  --accent-theme-amber: #d9a441;
+  --accent-theme-cyan: #5b95b5;
+  --accent-theme-monochrome: #f0f2f7;
+
+  /* ---- semantic aliases -------------------------------------------------- */
+  --surface-canvas: var(--void);
+  --surface-base: var(--void-lift);
+  --surface-raised: var(--panel);
+  --surface-overlay: var(--panel-hi);
+  --border-subtle: var(--rule-faint);
+  --border-strong: var(--rule-hi);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-dim);
+  --text-tertiary: var(--ink-faint);
+  --action-focus: var(--phosphor);
+  --selection: var(--phosphor);
+  --status-unknown: var(--ink-faint);
+  --status-halt: var(--halt);
+  --status-success: var(--long);
+  --status-warning: var(--warn);
+  --status-danger: var(--short);
+  --action-primary: var(--phosphor);
+  --action-primary-hover: var(--phosphor-dim);
+  --action-quiet: var(--rule);
+  --action-quiet-hover: var(--panel-hi);
+  --status-live: var(--phosphor);
+  --status-stale: var(--warn);
+  --status-proxy: var(--call);
+
+  /* ---- provenance & freshness ---------------------------------------------
+     Where a number came from, and how old it is. These were previously set in
+     the quietest ink available, which put the staleness of a figure at a lower
+     contrast than the figure itself — exactly backwards. Uncertainty is part
+     of the data model, so it is legible by contract: never below `--ink-dim`. */
+  --meta-provenance: var(--ink-dim);
+  --meta-age: var(--ink-dim);
+
+  /* ---- focus -------------------------------------------------------------
+     WCAG 2.2 SC 2.4.11 wants an indicator with at least the area of a 2px
+     perimeter, so the focus ring is deliberately thicker than `--hair`. */
+  --focus-ring-width: 2px;
+  --focus-ring: var(--focus-ring-width) solid var(--phosphor);
+  --focus-ring-offset: 2px;
+
+  /* ---- neutral washes & shadows ------------------------------------------
+     Flat alpha veils over whatever surface is beneath. These were open-coded
+     as `rgba(255,255,255,0.02)`-style literals in ~50 places; naming them keeps
+     the "no literal colour in a component" rule intact. */
+  --wash-1: rgba(255, 255, 255, 0.02);
+  --wash-2: rgba(255, 255, 255, 0.035);
+  --wash-3: rgba(255, 255, 255, 0.07);
+  --wash-line: rgba(255, 255, 255, 0.045);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.45);
+
+  /* ---- signed quantities --------------------------------------------------
+     Every one of these is set as text on a figure at some point, so each
+     clears 4.5:1 on `--panel-raise` as well as on the darker surfaces. The
+     `-dim` variants used to trade legibility for restraint and fell to
+     2.9–4.1:1 there; they are now held to the same floor as the rest. */
+  --long: #4fae80;
+  --long-wash: rgba(79, 174, 128, 0.12);
+  --short: #d36d78;
+  --short-wash: rgba(207, 95, 107, 0.12);
+  --call: #10b981;
+  --call-hi: #34d399;
+  --call-dim: #109e7a;
+  --call-wash: rgba(16, 185, 129, 0.12);
+  --put: #f66a82;
+  --put-hi: #fb7185;
+  --put-dim: #d9687c;
+  --put-wash: rgba(244, 63, 94, 0.12);
+  --warn: #d9a441;
+  --warn-wash: rgba(217, 164, 65, 0.12);
+  --halt: #d36d78;
+
+  /* ---- translucent panel wash ----------------------------------------------
+     A faint, one-step translucent panel overlay used for read-only legend
+     chips, meta badges, and chart annotations that need to lift off a plot
+     without introducing a second opaque surface. Kept deliberately quiet so
+     it never reads as glassmorphism or a neon scrim. */
+  --panel-wash: rgba(10, 11, 15, 0.7);
+
+  /* ---- Liquid Glass material system (Apple iOS 26 two-layer model) -------
+      The FUNCTIONAL layer only: floating chrome that sits above content —
+      rail navigation, instrument strip, toolbars, popovers, drawers. Glass
+      reads as glass because content scrolls beneath it; it must never be
+      applied to cards, rows, or panels in the content layer (the "blur
+      pile" failure mode). Content surfaces use the opaque panel tokens.
+      Fill is translucent + backdrop blur + saturation lift; a 1px specular
+      highlight along the top edge sells the curvature of the lens. */
+  --glass-base: rgba(13, 15, 20, 0.62);
+  --glass-surface: rgba(20, 23, 30, 0.58);
+  --glass-surface-hi: rgba(32, 36, 46, 0.66);
+  --glass-overlay: rgba(12, 14, 19, 0.72);
+  --glass-tint: rgba(169, 196, 108, 0.08);
+  --glass-rail-bg:
+    linear-gradient(180deg, var(--glass-tint), transparent 180px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 120px),
+    var(--glass-base);
+  --glass-strip-bg:
+    linear-gradient(90deg, var(--glass-tint), transparent 360px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 36px),
+    var(--glass-surface);
+  --glass-profile-btn-bg:
+    linear-gradient(180deg, var(--glass-tint), transparent 30px), var(--void-lift);
+  --glass-drawer-bg: linear-gradient(180deg, var(--glass-tint), transparent 280px), var(--panel);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-border-subtle: rgba(255, 255, 255, 0.055);
+  --glass-border-hi: rgba(255, 255, 255, 0.16);
+  --glass-border-accent: rgba(169, 196, 108, 0.35);
+  --glass-specular: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.28);
+  --glass-specular-subtle: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glass-specular-accent: inset 0 1px 0 rgba(169, 196, 108, 0.28);
+  --glass-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.22);
+  --glass-shadow-md: 0 2px 6px rgba(0, 0, 0, 0.32), 0 12px 32px rgba(0, 0, 0, 0.34);
+  --glass-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.38), 0 24px 64px rgba(0, 0, 0, 0.5);
+  --glass-shadow-drawer: -8px 0 32px rgba(0, 0, 0, 0.65);
+  /* Glass optics: blur softens what's beneath, saturate keeps it vivid —
+      the combination that makes iOS-style glass read "wet" instead of
+      "fogged". --glass-blur-* stay single-function blur(Npx) for utility
+      classes; --chrome-optics-* compose blur + saturation for floating
+      shell chrome (rail, strip, drawers). */
+  --glass-blur-sm: blur(6px);
+  --glass-blur-md: blur(14px);
+  --glass-blur-lg: blur(28px);
+  --glass-blur-xl: blur(44px);
+  --chrome-optics-sm: blur(6px) saturate(150%);
+  --chrome-optics-md: blur(14px) saturate(165%);
+  --chrome-optics-lg: blur(28px) saturate(180%);
+  --chrome-optics-xl: blur(44px) saturate(200%);
+
+  /* ---- concentric geometry ------------------------------------------------
+      Nested surfaces share a common curvature center: an inset element's
+      radius equals its container's radius minus the inset padding. */
+  --r-capsule: 999px;
+  --r-content: 12px;
+  --r-chrome: 16px;
+
+  /* ---- categorical ramp (graph communities only) ------------------------- */
+  --cat-1: #5b95b5;
+  --cat-2: #c1955e;
+  --cat-3: #7f9550;
+  --cat-4: #a8788f;
+  --cat-5: #6f8fa0;
+  --cat-6: #b08a6a;
+  --cat-7: #8791a8;
+  --cat-8: #97a36b;
+
+  /* ---- verdict semantics (gates) ---------------------------------------- */
+  --go: var(--long);
+  --no-go: var(--short);
+  --unknown: var(--ink-faint);
+  --running: var(--warn);
+
+  /* ---- type: self-hosted Geist system ------------------------------------
+     Geist for display/UI, Geist Mono for data. The public paper surfaces
+     (landing/auth) override these stacks inside their own scope with the
+     editorial set — Inter Tight, Inter, Space Mono — never on the desk. */
+  --font-display:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Geist Variable', 'Geist',
+    'Instrument Sans Variable', 'Instrument Sans', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Geist Variable', 'Geist',
+    'Instrument Sans Variable', 'Instrument Sans', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-data:
+    'SF Mono', 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', ui-monospace, Menlo, Monaco,
+    Consolas, monospace;
+  --font-mono:
+    'SF Mono', 'Geist Mono Variable', 'Geist Mono', 'IBM Plex Mono', ui-monospace, Menlo, Monaco,
+    Consolas, monospace;
+  --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
+
+  /* 10px is the floor. Below it, holding 4.5:1 stops being enough to make a
+     label readable — the glyphs are too thin to carry the ratio — and the desk
+     had drifted to 8px and 9px in ~20 places. Nothing is set smaller. */
+  --t-nano: 0.625rem; /* 10px — the smallest label allowed  */
+  --t-micro: 0.6875rem; /* 11px — crisp technical labels     */
+  --t-tiny: 0.75rem; /* 12px — dense table meta           */
+  --t-small: 0.8125rem; /* 13px — table body                 */
+  --t-body: 0.875rem; /* 14px — prose                      */
+  --t-lead: 1rem; /* 16px                              */
+  --t-fig: 1.375rem; /* 22px — readout figures            */
+  --t-fig-lg: 2.25rem; /* 36px — hero readout               */
+  --t-display: 1.125rem; /* 18px — view titles                */
+  --t-view-title: clamp(1.5rem, 1.1rem + 1.4vw, 2rem); /* primary workspace headings */
+  --t-reading: 1rem; /* explanatory copy outside dense tables */
+
+  --track-display: -0.02em; /* tight display tracking         */
+  --track-label: 0.05em; /* balanced uppercase mono tracking */
+  --track-tight: -0.01em;
+
+  /* ---- radius geometry (concentric scale) --------------------------------
+      Softer curves than the old 2/4/6/8 ladder so nested surfaces can share
+      curvature centers: panel r-lg ≈ control r-sm + padding. */
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  /* ---- space (4px base) -------------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  /* ---- density (desktop trading desk defaults to compact) --------------- */
+  --density-row-height: 28px;
+  --density-cell-padding: 3px 8px;
+  --density-gap: 4px;
+  --density-control-h: 28px;
+
+  /* ---- geometry ---------------------------------------------------------- */
+  --rail-w: var(--rail-w-expanded);
+  --rail-w-expanded: 236px;
+  --rail-w-collapsed: 72px;
+  --strip-h: 60px;
+  --tick: 8px;
+  --hair: 1px;
+
+  /* ---- motion ------------------------------------------------------------ */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-normal: var(--dur);
+  --dur-slow: 480ms;
+
+  /* ---- loop durations -----------------------------------------------------
+     Infinite spinners/pulses can't route through --dur/--dur-slow (those are
+     one-shot transition speeds); they need their own tokens so the
+     prefers-reduced-motion block below can zero every loop in one place. */
+  --dur-spin: 800ms; /* refresh-icon spinners (Momentum/FlowState/Sentiment/Changepoints) */
+  --dur-orb: 900ms; /* LoadingState primary ring */
+  --dur-orb-mid: 1200ms; /* LoadingState middle ring (reverse) */
+  --dur-orb-fast: 700ms; /* LoadingState inner ring */
+  --dur-pulse: 2000ms; /* live/alert dot pulse (App nav-pulse, Drift/Flow dot-pulse) */
+  --dur-pulse-fast: 1400ms; /* VerdictChip "running" state dot */
+
+  --z-strip: 40;
+  --z-rail: 45;
+  --z-popover: 50; /* in-view dropdowns (search-hits, autocomplete) — above the strip, below the rail */
+  --z-overlay: 90;
+  --z-tooltip: 95; /* must float above an open --z-overlay drawer */
+  --z-toast: 100;
+
+  /* ---- institutional flow order badges (strictly anti-neon) ------------- */
+  --badge-golden: #d9a441;
+  --badge-golden-wash: rgba(217, 164, 65, 0.14);
+  --badge-golden-border: rgba(217, 164, 65, 0.45);
+  --badge-sweep: #86b7d1;
+  --badge-sweep-wash: rgba(91, 149, 181, 0.12);
+  --badge-block: #c1955e;
+  --badge-block-wash: rgba(193, 149, 94, 0.12);
+  --badge-split: #a8788f;
+  --badge-split-wash: rgba(168, 120, 143, 0.12);
+  --badge-multileg: #6f8fa0;
+  --badge-multileg-wash: rgba(111, 143, 160, 0.12);
+
+  /* ---- paper palette (retained editorial print tokens) ---------------------
+     The original landing/auth "paper" palette: cream stock, near-black ink,
+     one ochre accent. The public landing now carries its own editorial remap
+     (see LandingView.vue), so these are currently unused; kept for future
+     editorial surfaces. Never applied to the desk itself. */
+  --paper-bg: #faf7f0;
+  --paper-bg-alt: #f4f0e6;
+  --paper-card: #fffdf8;
+  --paper-ink: #141412;
+  --paper-ink-soft: #45423a;
+  --paper-ink-dim: #6b675a;
+  --paper-ink-faint: #98937f;
+  --paper-ink-ghost: #bdb7a2;
+  --paper-rule: #e3dccb;
+  --paper-rule-hi: #c8bfa8;
+  --paper-grid: rgba(20, 20, 18, 0.045);
+  --paper-accent: #9c6b0c; /* readable ochre for text + line-art             */
+  --paper-accent-vivid: #e9a825; /* fills only (buttons), always ink text    */
+  --paper-call: #2f7d5a;
+  --paper-put: #b3494f;
+  --paper-warn: #946200;
+}
+
+/* ---- public editorial palette (landing/auth surfaces) ----------------------
+  The public pages borrow the desk vocabulary but resolve it to a warm
+  editorial paper scheme inside their own scope: off-white canvas (#fbfbf8),
+  hairline rules, zinc ink, near-black buttons, one orange accent (#ff5229),
+  decorative yellow/blue, and navy (#151524) bands (see LandingView.vue and
+  AuthView.vue). Inter Tight / Inter / Space Mono replace the desk stacks on
+  those surfaces only. Never applied to the desk itself. */
+
+/* A desk defaults to compact, while review / presentation sessions can be
+   made calmer without changing the component structure. */
+[data-density='comfortable'] {
+  --density-row-height: 36px;
+  --density-cell-padding: 6px 10px;
+  --density-gap: 8px;
+  --density-control-h: 34px;
+}
+
+/* ---- Workstation Accent Themes (Preferences) ----------------------------
+   Customizes the functional accent tone across the desk, interactive controls,
+   specular highlights, and floating glass tint. */
+[data-accent='phosphor'] {
+  --phosphor: #a9c46c;
+  --phosphor-dim: #7f9550;
+  --phosphor-glow: rgba(169, 196, 108, 0.14);
+  --phosphor-wash: rgba(169, 196, 108, 0.07);
+  --glass-tint: rgba(169, 196, 108, 0.08);
+  --glass-border-accent: rgba(169, 196, 108, 0.35);
+}
+
+[data-accent='amber'] {
+  --phosphor: #d9a441;
+  --phosphor-dim: #9e7425;
+  --phosphor-glow: rgba(217, 164, 65, 0.16);
+  --phosphor-wash: rgba(217, 164, 65, 0.08);
+  --glass-tint: rgba(217, 164, 65, 0.09);
+  --glass-border-accent: rgba(217, 164, 65, 0.4);
+}
+
+[data-accent='cyan'] {
+  --phosphor: #5b95b5;
+  --phosphor-dim: #3e6d87;
+  --phosphor-glow: rgba(91, 149, 181, 0.16);
+  --phosphor-wash: rgba(91, 149, 181, 0.08);
+  --glass-tint: rgba(91, 149, 181, 0.09);
+  --glass-border-accent: rgba(91, 149, 181, 0.4);
+}
+
+[data-accent='monochrome'] {
+  --phosphor: #f0f2f7;
+  --phosphor-dim: #949eb2;
+  --phosphor-glow: rgba(240, 242, 247, 0.14);
+  --phosphor-wash: rgba(240, 242, 247, 0.07);
+  --glass-tint: rgba(255, 255, 255, 0.06);
+  --glass-border-accent: rgba(240, 242, 247, 0.35);
+}
+
+/* Flow order badge components */
+.flow-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 19px;
+  padding: 1px 6px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+
+/* Flow order badges resolve through `badge-*` class names only (see
+   flowDisplay.ts). The bare `.golden-sweep` / `.sweep` / `.block` / `.split` /
+   `.multileg` aliases were removed: they matched structural container classes
+   elsewhere (e.g. SqueezeScreener's `.block` sections) and spray-painted red
+   borders and tan washes onto layouts that never asked for a badge. */
+.badge-golden-sweep {
+  color: var(--badge-golden);
+  border: var(--hair) solid var(--badge-golden-border);
+  background: var(--badge-golden-wash);
+  font-weight: 850;
+}
+
+.badge-pip {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.badge-sweep {
+  color: var(--badge-sweep);
+  border: var(--hair) solid color-mix(in srgb, var(--call) 50%, var(--rule));
+  background: var(--badge-sweep-wash);
+  font-weight: 750;
+}
+
+.badge-block {
+  color: var(--put-hi);
+  border: var(--hair) solid color-mix(in srgb, var(--put) 50%, var(--rule));
+  background: var(--badge-block-wash);
+  font-weight: 750;
+}
+
+.badge-split {
+  color: var(--badge-split);
+  border: var(--hair) solid color-mix(in srgb, var(--cat-4) 45%, var(--rule));
+  background: var(--badge-split-wash);
+  font-weight: 750;
+}
+
+.badge-multileg {
+  color: var(--badge-multileg);
+  border: var(--hair) solid color-mix(in srgb, var(--cat-5) 45%, var(--rule));
+  background: var(--badge-multileg-wash);
+  font-weight: 750;
+}
+
+.badge-standard,
+.standard {
+  color: var(--ink-dim);
+  border: var(--hair) solid var(--rule);
+  background: transparent;
+  font-weight: 600;
+}
+
+/* Vol / OI Visualizer Pill */
+.vol-oi-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 1px 5px;
+  font-family: var(--font-data);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  border-radius: var(--r-xs);
+  border: var(--hair) solid var(--rule);
+  background: var(--void-lift);
+  color: var(--ink-dim);
+}
+
+/* No open interest to divide by: show a plain dash, not a boxed figure that
+   looks like a real reading. */
+.vol-oi-pill.unknown {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
+.vol-oi-pill.high,
+.vol-oi-pill.vol-oi-high {
+  color: var(--phosphor);
+  border-color: var(--phosphor-dim);
+  background: var(--phosphor-wash);
+  font-weight: 800;
+}
+
+.vol-oi-pill.extreme,
+.vol-oi-pill.vol-oi-extreme {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-wash);
+  font-weight: 850;
+}
+
+/* Whale Indicators & Premium Tiers ($500k+ / $1M+) */
+.whale-indicator {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 3px;
+  font-size: var(--t-micro);
+  font-weight: 800;
+  border-radius: var(--r-xs);
+}
+
+.whale-indicator.tier-mega-whale,
+.whale-indicator.tier-1m {
+  color: var(--warn);
+  border: var(--hair) solid var(--warn);
+  background: var(--warn-wash);
+}
+
+.whale-indicator.tier-whale,
+.whale-indicator.tier-500k {
+  color: var(--call-hi);
+  border: var(--hair) solid var(--call);
+  background: var(--call-wash);
+  font-weight: 750;
+}
+
+.whale-indicator.tier-large,
+.whale-indicator.tier-100k {
+  color: var(--ink-soft);
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-base);
+}
+
+/* The instrument runs dark. A light variant would be a different instrument.
+   Respect forced-colors and reduced-motion, but do not offer a light theme
+   that this palette was never designed for. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-normal: 0ms;
+    --dur-slow: 0ms;
+    --dur-spin: 0ms;
+    --dur-orb: 0ms;
+    --dur-orb-mid: 0ms;
+    --dur-orb-fast: 0ms;
+    --dur-pulse: 0ms;
+    --dur-pulse-fast: 0ms;
+  }
+  /* A 0s infinite animation still spins — each cycle just completes
+     instantly, back-to-back, forever. Zeroing the duration tokens above
+     removes the perceived motion; this stops the loop outright by forcing
+     every animation (token-driven or not) to run its cycle once and hold. */
+  *,
+  *::before,
+  *::after {
+    animation-iteration-count: 1 !important;
+    /* Zeroing the tokens above covers everything that animates on a token.
+       A handful of rules still hard-code their own timing (the print-arrival
+       flash on Options, a few 0.4s bar transitions), and those kept running at
+       full length. Nothing is exempt now. Near-zero rather than zero so
+       transitionend/animationend still fire and no state machine waiting on
+       one can stall. */
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Affordances that signal "live" by pulsing still have to read as live when
+     they cannot pulse, so they hold their lit state instead of animating to it. */
+  .live-dot,
+  .nav-pulse {
+    opacity: 1 !important;
+  }
+}

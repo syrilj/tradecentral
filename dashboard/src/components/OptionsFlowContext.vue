@@ -1,0 +1,732 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { OptionsIntelligence, OptionsTapeRow } from '@/api'
+import type { OptionsDirectionRead } from '@/optionsDirection'
+import { DASH, num, optCompact, pctFrac } from '@/format'
+
+const props = defineProps<{
+  summary: OptionsIntelligence['summary'] | null | undefined
+  tape: OptionsTapeRow[]
+  anomalyCount: number
+  signedFlowAvailable: boolean
+  tapeStatus: string
+  tapeTitle: string
+  direction: OptionsDirectionRead
+}>()
+
+const premium = computed(() => {
+  // Prefer full backend session summary aggregates (call_premium, put_premium)
+  // so the C/P mix and total premium reflect the complete qualified session flow,
+  // matching FlowDashboard and API summary metrics.
+  // Fall back to summing the displayed tape slice only if session summary is absent.
+  let call = 0
+  let put = 0
+  let fromSummary = false
+
+  const hasSummary =
+    props.summary != null &&
+    (props.summary.call_premium != null || props.summary.put_premium != null)
+
+  if (hasSummary) {
+    call = Number(props.summary?.call_premium) || 0
+    put = Number(props.summary?.put_premium) || 0
+    fromSummary = call + put > 0
+  }
+
+  let classifiedTapeCount = 0
+  if (!fromSummary && props.tape.length) {
+    for (const row of props.tape) {
+      const prem = Number(row.premium)
+      if (!Number.isFinite(prem) || prem < 0) continue
+      if (row.right === 'call') {
+        call += prem
+        classifiedTapeCount += 1
+      } else if (row.right === 'put') {
+        put += prem
+        classifiedTapeCount += 1
+      }
+    }
+  }
+
+  const total = call + put
+  const hasPrem = total > 0 && (fromSummary || classifiedTapeCount > 0)
+  const callPct = hasPrem ? Math.round((call / total) * 100) : 0
+  const putPct = hasPrem ? 100 - callPct : 0
+  const dominantPct = Math.max(callPct, putPct)
+  const tone = !hasPrem ? 'neutral' : callPct >= 58 ? 'call' : putPct >= 58 ? 'put' : 'neutral'
+  const conviction = hasPrem
+    ? dominantPct >= 72
+      ? 'HIGH'
+      : dominantPct >= 62
+        ? 'MED'
+        : 'LOW'
+    : 'NONE'
+  const ratio = hasPrem && put > 0 ? call / put : null
+
+  const label =
+    tone === 'call'
+      ? 'CALL-HEAVY ACTIVITY'
+      : tone === 'put'
+        ? 'PUT-HEAVY ACTIVITY'
+        : total > 0
+          ? 'BALANCED ACTIVITY'
+          : 'NO ACTIVITY MIX'
+
+  const netCall = call - put
+
+  return {
+    call,
+    put,
+    total,
+    hasPrem,
+    callPct,
+    putPct,
+    ratio,
+    fromTape: !fromSummary,
+    fromSummary,
+    netCall,
+    tone,
+    conviction,
+    label,
+  }
+})
+
+const ratioBadge = computed(() => {
+  if (!premium.value.hasPrem || premium.value.total <= 0) {
+    return { text: 'NO FLOW', cls: 'balance-pill', title: 'No qualified premium measured' }
+  }
+  const { call, put, callPct, putPct } = premium.value
+  if (call > 0 && put <= 0) {
+    return { text: '100% CALLS', cls: 'call', title: 'Pure call activity — zero put prints' }
+  }
+  if (put > 0 && call <= 0) {
+    return { text: '100% PUTS', cls: 'put', title: 'Pure put activity — zero call prints' }
+  }
+  if (callPct >= 47 && callPct <= 53) {
+    return {
+      text: 'BALANCED',
+      cls: 'balanced',
+      title: `Balanced activity: ${callPct}% Call / ${putPct}% Put`,
+    }
+  }
+  const cpRatio = call / put
+  return {
+    text: `${num(cpRatio, 2)}x C/P`,
+    cls: callPct > 53 ? 'call' : 'put',
+    title: `Call/Put premium ratio: ${num(cpRatio, 2)}x (${callPct}% Call / ${putPct}% Put)`,
+  }
+})
+
+const tapeStats = computed(() => {
+  let signed = 0
+
+  for (const row of props.tape) {
+    if (row.signed_premium != null || row.aggressor === 'buy' || row.aggressor === 'sell')
+      signed += 1
+  }
+
+  return { signed }
+})
+
+const signedCoverage = computed(() => {
+  if (!props.tape.length) return null
+  return tapeStats.value.signed / props.tape.length
+})
+
+const flipDistance = computed(() => {
+  const spot = props.summary?.spot
+  const flip = props.summary?.gamma_flip
+  if (spot == null || flip == null || spot === 0) return null
+  return (spot - flip) / spot
+})
+
+const callWallDistance = computed(() => {
+  const spot = props.summary?.spot
+  const wall = props.summary?.call_wall
+  if (spot == null || wall == null || spot === 0) return null
+  return (wall - spot) / spot
+})
+
+const putWallDistance = computed(() => {
+  const spot = props.summary?.spot
+  const wall = props.summary?.put_wall
+  if (spot == null || wall == null || spot === 0) return null
+  return (wall - spot) / spot
+})
+
+/**
+ * Concrete research next-step for this underlier. Descriptive only —
+ * never execution authorization.
+ */
+const deskAction = computed(() => {
+  const direction = props.direction.state
+  const regime = String(props.summary?.regime || 'unknown').toLowerCase()
+  const callDist = callWallDistance.value
+  const putDist = putWallDistance.value
+  const flipDist = flipDistance.value
+  const anomalies = props.anomalyCount
+  const signed = props.signedFlowAvailable && (signedCoverage.value ?? 0) >= 0.25
+
+  let priority: 'now' | 'soon' | 'watch' = 'watch'
+  if (props.tapeStatus === 'stale' || props.tapeStatus === 'warm') priority = 'watch'
+  else if (direction === 'bullish' || direction === 'bearish')
+    priority = anomalies > 0 || signed ? 'now' : 'soon'
+  else if (direction === 'mixed') priority = 'soon'
+
+  const levels: string[] = []
+  if (callDist != null && Math.abs(callDist) <= 0.03)
+    levels.push(`call wall ${pctFrac(callDist, 1)} away`)
+  if (putDist != null && Math.abs(putDist) <= 0.03)
+    levels.push(`put wall ${pctFrac(putDist, 1)} away`)
+  if (flipDist != null && Math.abs(flipDist) <= 0.02) levels.push(`near gamma flip`)
+
+  let title = 'No clear lean — map walls, then wait for signed side'
+  let body =
+    'Use put/call walls and net GEX as structure context. Do not invent direction from identity alone.'
+
+  if (direction === 'bullish') {
+    title = signed
+      ? 'Bullish read — confirm call liquidity and upside wall'
+      : 'Bullish momentum read — wait for signed flow confirmation'
+    body = levels.length
+      ? `Focus: ${levels.join(' · ')}. Confirm liquidity at the call wall before acting on the read.`
+      : regime === 'positive'
+        ? 'Positive GEX regime often pins toward the call wall; confirm that wall and expected move first.'
+        : 'Map nearest liquid calls and the call wall; treat lean as triage, not a fill signal.'
+  } else if (direction === 'bearish') {
+    title = signed
+      ? 'Bearish read — confirm put liquidity and downside wall'
+      : 'Bearish momentum read — wait for signed flow confirmation'
+    body = levels.length
+      ? `Focus: ${levels.join(' · ')}. Confirm liquidity at the put wall before acting on the read.`
+      : regime === 'negative'
+        ? 'Negative GEX can amplify moves; confirm put wall and invalidation above flip.'
+        : 'Map nearest liquid puts and the put wall; treat lean as triage, not a fill signal.'
+  } else if (direction === 'mixed') {
+    title = 'Mixed direction — reconcile signed flow and momentum'
+    body = levels.length
+      ? `Structure still matters: ${levels.join(' · ')}. Prefer watch until one side dominates.`
+      : 'Directional inputs disagree. Prefer research-only until signed flow and momentum align.'
+  }
+
+  if (anomalies > 0) {
+    body = `${body} ${anomalies} anomaly print${anomalies === 1 ? '' : 's'} flagged — inspect those strikes first.`
+  }
+
+  return { priority, title, body, direction }
+})
+</script>
+
+<template>
+  <div
+    class="flow-context flow-evidence-bar"
+    :class="[
+      premium.tone,
+      `skew-${premium.conviction.toLowerCase()}`,
+      deskAction.direction,
+      { 'has-flow': premium.total > 0 },
+    ]"
+  >
+    <section class="flow-hero">
+      <div class="flow-hero-copy">
+        <span class="label eyebrow">{{
+          premium.fromSummary ? 'SESSION TOTAL · CONTRACT MIX' : 'DISPLAYED TAPE · CONTRACT MIX'
+        }}</span>
+        <strong class="fig dominant" :class="premium.tone">{{ premium.label }}</strong>
+        <small class="label identity-note"
+          >CONTRACT MIX · NOT SIGNED DIRECTION · IDENTITY, NOT DIRECTION</small
+        >
+      </div>
+      <div class="flow-hero-badges">
+        <span class="label feed-state" :class="tapeStatus">
+          <i aria-hidden="true" />{{ tapeTitle }}
+        </span>
+        <span class="label conviction" :class="premium.tone">{{
+          premium.conviction === 'NONE' ? 'NO SKEW' : `${premium.conviction} SKEW`
+        }}</span>
+      </div>
+    </section>
+
+    <section class="premium-section">
+      <div class="section-head label">
+        <span>PREMIUM SPLIT</span>
+        <span
+          >{{ premium.fromSummary ? 'SESSION TOTAL' : 'TOTAL' }}
+          <b class="fig">${{ optCompact(premium.total) }}</b></span
+        >
+      </div>
+      <div class="premium-track" aria-label="Call versus put premium split">
+        <i
+          class="call-fill"
+          :style="{ width: `${premium.callPct}%` }"
+          :title="`Call premium: $${optCompact(premium.call)} (${premium.callPct}%)`"
+        />
+        <span class="track-center-notch" title="50% balance point" aria-hidden="true" />
+        <i
+          class="put-fill"
+          :style="{ width: `${premium.putPct}%` }"
+          :title="`Put premium: $${optCompact(premium.put)} (${premium.putPct}%)`"
+        />
+      </div>
+      <div class="premium-values">
+        <div class="premium-side call">
+          <span class="label">CALL</span>
+          <strong class="fig">{{ premium.callPct }}%</strong>
+        </div>
+        <div class="premium-center-ratio label">
+          <span class="ratio-pill" :class="ratioBadge.cls" :title="ratioBadge.title">
+            {{ ratioBadge.text }}
+          </span>
+        </div>
+        <div class="premium-side put">
+          <span class="label">PUT</span>
+          <strong class="fig">{{ premium.putPct }}%</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="metric-grid">
+      <div class="metric">
+        <span class="label">C/P IMBALANCE</span>
+        <strong class="fig" :class="premium.call >= premium.put ? 'call' : 'put'">
+          {{
+            (premium.call - premium.put >= 0 ? '+' : '') +
+            '$' +
+            optCompact(premium.call - premium.put)
+          }}
+        </strong>
+        <small class="label">{{ premium.fromSummary ? 'SESSION MIX' : 'IDENTITY MIX' }}</small>
+      </div>
+      <div class="metric">
+        <span class="label">QUALIFIED</span>
+        <strong class="fig">{{ tape.length }}</strong>
+        <small class="label">PRINTS</small>
+      </div>
+      <div class="metric">
+        <span class="label">BUY / SELL SIDE</span>
+        <strong class="fig">{{
+          signedCoverage == null ? DASH : pctFrac(signedCoverage, 0)
+        }}</strong>
+        <small class="label">{{ signedFlowAvailable ? 'COVERAGE' : 'NOT SUPPLIED' }}</small>
+      </div>
+      <div class="metric">
+        <span class="label">TAPE FLAGS</span>
+        <strong class="fig" :class="{ warn: anomalyCount > 0 }">{{ anomalyCount }}</strong>
+        <small class="label">ANOMALIES</small>
+      </div>
+    </section>
+
+    <section class="desk-action" :class="[deskAction.direction, deskAction.priority]">
+      <div class="section-head label">
+        <span>DESK NEXT STEP</span>
+        <span class="priority-tag">{{ deskAction.priority.toUpperCase() }}</span>
+      </div>
+      <strong class="fig action-title">{{ deskAction.title }}</strong>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+/* Surface glass token: var(--glass-surface-hi) */
+.flow-context {
+  --flow-tone: var(--ink-dim);
+  display: grid;
+  grid-template-columns: minmax(190px, 1.05fr) minmax(165px, 0.9fr) minmax(300px, 1.4fr) minmax(
+      210px,
+      1.15fr
+    );
+  align-items: stretch;
+  min-height: 76px;
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur-md);
+  -webkit-backdrop-filter: var(--glass-blur-md);
+  border-radius: var(--r-md);
+  border: var(--hair) solid var(--glass-border);
+  box-shadow: var(--glass-shadow-sm), var(--glass-specular-subtle);
+  color: var(--ink);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+  position: relative;
+  overflow: hidden;
+}
+.flow-context.call {
+  --flow-tone: var(--call);
+  border-color: color-mix(in srgb, var(--call) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--call) 6%, var(--glass-surface));
+}
+.flow-context.put {
+  --flow-tone: var(--put);
+  border-color: color-mix(in srgb, var(--put) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--put) 6%, var(--glass-surface));
+}
+.flow-context.bullish {
+  --flow-tone: var(--long);
+  border-color: color-mix(in srgb, var(--long) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--long) 6%, var(--glass-surface));
+}
+.flow-context.bearish {
+  --flow-tone: var(--short);
+  border-color: color-mix(in srgb, var(--short) 28%, var(--glass-border));
+  background: color-mix(in srgb, var(--short) 6%, var(--glass-surface));
+}
+.flow-context.mixed,
+.flow-context.neutral {
+  --flow-tone: var(--ink);
+  background: var(--glass-surface);
+}
+.dominant.bullish {
+  color: var(--long);
+}
+.dominant.bearish {
+  color: var(--short);
+}
+.dominant.mixed,
+.dominant.neutral {
+  color: var(--ink);
+}
+.conviction.bullish {
+  color: var(--long);
+}
+.conviction.bearish {
+  color: var(--short);
+}
+.identity-note {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.flow-hero {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 14px;
+  border-left: var(--hair) solid var(--glass-border);
+  background: var(--glass-surface-hi);
+}
+.flow-hero-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.flow-hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+.eyebrow {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  line-height: 1.3;
+  letter-spacing: 0.05em;
+  white-space: normal;
+}
+.dominant {
+  color: var(--ink);
+  font-size: var(--t-small);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  white-space: normal;
+  font-weight: 800;
+}
+.dominant.call {
+  color: var(--call-hi);
+}
+.dominant.put {
+  color: var(--put-hi);
+}
+.feed-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  white-space: nowrap;
+}
+.feed-state i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-ghost);
+}
+.feed-state.live i {
+  background: var(--phosphor);
+}
+.feed-state.stale i,
+.feed-state.warm i {
+  background: var(--warn);
+}
+.conviction {
+  padding: 2px 8px;
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink-dim);
+  background: var(--glass-base);
+  font-size: var(--t-micro);
+  white-space: nowrap;
+  border-radius: var(--r-xs);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+.conviction.call {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call) 55%, var(--rule));
+  background: var(--call-wash);
+}
+.conviction.put {
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put) 55%, var(--rule));
+  background: var(--put-wash);
+}
+
+.premium-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 14px;
+  border-left: var(--hair) solid var(--glass-border);
+}
+/* Flex items default to min-width:auto, so "SESSION TOTAL $286.6M" refused to
+   shrink and spilled past the cell's left border — the trailing "M" was cut
+   off, which turns a $286.6M number into a $286.6 one. Let the caption
+   ellipsize and the figure wrap to its own line instead of overflowing. */
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px var(--s2);
+  min-width: 0;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+}
+.section-head > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-head > span:last-child {
+  flex: none;
+  white-space: nowrap;
+}
+.section-head b {
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.premium-track {
+  display: flex;
+  position: relative;
+  height: 11px;
+  overflow: hidden;
+  background: var(--void);
+  border: var(--hair) solid var(--glass-border);
+  border-radius: var(--r-xs);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.premium-track i {
+  height: 100%;
+  transition: opacity var(--dur) var(--ease-out);
+  position: relative;
+}
+.call-fill {
+  background: var(--call-hi);
+  border-radius: var(--r-xs) 0 0 var(--r-xs);
+}
+.put-fill {
+  background: var(--put-hi);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+}
+.track-center-notch {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.38);
+  z-index: 2;
+  pointer-events: none;
+}
+.premium-values {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.premium-side {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.premium-side strong {
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+.premium-side.call strong {
+  color: var(--call-hi);
+}
+.premium-side.put strong {
+  color: var(--put-hi);
+}
+.premium-center-ratio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ratio-pill {
+  font-size: var(--t-micro);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: var(--r-capsule);
+  background: var(--glass-base);
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink-dim);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.ratio-pill.call {
+  color: var(--call-hi);
+  border-color: color-mix(in srgb, var(--call-hi) 45%, var(--rule));
+  background: var(--call-wash);
+}
+.ratio-pill.put {
+  color: var(--put-hi);
+  border-color: color-mix(in srgb, var(--put-hi) 45%, var(--rule));
+  background: var(--put-wash);
+}
+.ratio-pill.balanced {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 40%, var(--rule));
+  background: var(--phosphor-wash);
+}
+.balance-pill {
+  color: var(--ink-faint);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  min-width: 0;
+  background: var(--glass-border);
+  border-left: var(--hair) solid var(--glass-border);
+}
+.metric {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--glass-surface);
+}
+.metric .label {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  line-height: 1.25;
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+}
+.metric strong {
+  color: var(--ink-soft);
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+.metric strong.call {
+  color: var(--call-hi);
+}
+.metric strong.put {
+  color: var(--put-hi);
+}
+.metric small {
+  color: var(--ink-faint);
+  font-size: var(--t-micro);
+}
+.metric .warn {
+  color: var(--warn);
+}
+
+.desk-action {
+  --action-tone: var(--ink-dim);
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 14px;
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--surface-base);
+}
+.desk-action.bullish {
+  --action-tone: var(--long);
+  border-color: var(--call-dim);
+}
+.desk-action.bearish {
+  --action-tone: var(--short);
+  border-color: var(--put-dim);
+}
+.desk-action.mixed {
+  --action-tone: var(--warn);
+  border-color: var(--rule-hi);
+}
+.priority-tag {
+  padding: 1px 6px;
+  border: var(--hair) solid var(--glass-border);
+  color: var(--ink-dim);
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  border-radius: var(--r-xs);
+  background: var(--glass-base);
+}
+.desk-action.now .priority-tag {
+  color: var(--phosphor);
+  border-color: color-mix(in srgb, var(--phosphor) 50%, var(--rule));
+  background: var(--phosphor-wash);
+}
+.desk-action.soon .priority-tag {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
+  background: var(--warn-wash);
+}
+.action-title {
+  color: var(--ink);
+  font-size: var(--t-micro);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  white-space: normal;
+  font-weight: 600;
+}
+
+@media (max-width: 1180px) {
+  .flow-context {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .flow-context {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

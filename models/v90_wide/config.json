@@ -1,0 +1,23 @@
+{
+  "source": "local",
+  "codes": ["TSLA.US", "MU.US", "SPY.US", "IONQ.US", "APLD.US", "XLP.US", "QQQ.US"],
+  "interval": "1H",
+  "commission": 0.001,
+  "engine": "daily",
+  "strategy": {
+    "name": "v90_meta_confidence",
+    "model_version": "v90_meta_confidence",
+    "note": "Two-sided meta-labeler: causal features -> XGBoost LONG/SHORT heads on triple-barrier labels (purged K-fold) -> isotonic-calibrated confidence -> BUY/SELL/FLAT. Raw score drives decision; calibrated probability is the honest confidence. Params/labels frozen before OOS; artifacts from tools/train_v90_meta_confidence.py."
+  },
+  "default_operating_point": {
+    "name": "balanced_top5",
+    "raw_threshold": 0.6711237639188766,
+    "justification": "Pre-hoc rule, not chosen by eyeballing holdout results across candidates: first operating point, in the fixed order active_top10 -> balanced_top5 -> selective_top2 -> sniper_top1, satisfying ALL of n>100, positive avg net return/trade, and a Wilson-95%-lower-bound within reach of 50%. balanced_top5 (n=111, +0.17%/trade, Wilson95=[45.7%,63.9%]) is the first to clear all three; active_top10 (n=320) fails on positive-expectancy (-0.05%/trade, PF 0.94); selective_top2 (n=34) and sniper_top1 (n=11) fail on n>100. Full derivation in thresholds.json:shipped_default_operating_point and MODEL.md.",
+    "other_points": "active_top10, selective_top2, and sniper_top1 remain reported in results.json and MODEL.md for transparency. They are explicitly NOT the shipped default -- do not treat them as validated production operating points."
+  },
+  "provenance": {
+    "ported_from": "TradingAlgoWork/models/poc_va_macdha/v90_meta_confidence",
+    "port_date": "2026-07-29",
+    "notes": "Bit-identical port of the booster/feature/calibration artifacts. Two fixes applied to the ported copy only (Sharpe-artifact removal for n<50, and this default-operating-point justification); source repo left untouched. See MODEL.md 'Fixes applied during port'."
+  }
+}

@@ -1,0 +1,38 @@
+# TradeCentral
+
+> A research workstation for US equities and options. It shows dealer gamma by
+> strike, the signed options tape, and the research trail behind both. It is a
+> decision-support instrument: there is no order routing, no broker connection,
+> and no investment advice anywhere in the product.
+
+## What it does
+
+- [Flow](/flow): dealer gamma exposure by strike, the level where hedging flips
+  from damping a move to feeding it, and the options tape underneath it.
+- [Options](/options): implied volatility surface, implied ranges, unusual
+  activity, and per-contract context.
+- [Market](/market): a broad US equity universe, trajectory comparison, sector
+  rotation, and regime context.
+- [Research](/research): point-in-time tests, pre-registered gates, run
+  artifacts, and shadow-session evidence for every claim the desk makes.
+- [Model lab](/#lab): an interactive Black-Scholes workbench that runs in the
+  browser with no account.
+
+## How to read its output
+
+- Stale, unavailable, and proxied values are labelled as such. They are never
+  converted to zero, so a zero in the interface means a measured zero.
+- Research evidence is ordinal and is presented as ordinal. It is never shown
+  as a calibrated probability or as authorization to trade.
+- Promotion fails closed: readiness and pre-registered gates must both clear
+  before a strategy advances beyond research.
+
+## Access
+
+- [Sign in](/auth?mode=signin)
+- [Create access](/auth?mode=setup)
+
+## Boundaries
+
+TradeCentral does not route orders, connect to a broker, or make performance
+promises. Nothing it publishes is investment advice.

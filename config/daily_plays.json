@@ -1,0 +1,20 @@
+{
+  "schema_version": "daily-plays-config-v1",
+  "shortlist_limit": 10,
+  "regular_quote_max_age_seconds": 30,
+  "swing_dte_min": 30,
+  "swing_dte_max": 60,
+  "intraday_enabled": false,
+  "shadow_only": true,
+  "min_abs_delta": 0.4,
+  "max_abs_delta": 0.6,
+  "max_spread_pct": 0.1,
+  "low_premium_spread_floor": 0.05,
+  "min_open_interest": 500,
+  "min_volume": 50,
+  "max_account_risk_pct": 0.005,
+  "max_position_risk_pct": 0.005,
+  "max_underlying_risk_pct": 0.01,
+  "max_aggregate_open_risk_pct": 0.03,
+  "universe_path": "edge/config/universe_wide.json"
+}

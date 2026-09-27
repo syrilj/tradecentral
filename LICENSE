@@ -1,0 +1,60 @@
+TradeCentral Source-Available Evaluation License
+
+Copyright (c) 2026 Syril Jacob. All rights reserved.
+
+This repository is source-available for portfolio review, technical evaluation,
+security review, and discussion of employment, collaboration, or licensing.
+
+1. Evaluation permission
+
+You may view the source code and documentation through GitHub and may make a
+temporary local copy solely to inspect, test, or evaluate the Software for
+non-commercial purposes.
+
+2. No open-source grant
+
+This is not an open-source license. Except for the limited evaluation permission
+above, no permission is granted to use, copy, modify, merge, publish, distribute,
+sublicense, sell, host, deploy, commercialize, or create derivative products from
+the Software.
+
+3. Restricted uses
+
+Without prior written permission from the copyright holder, you may not:
+
+- operate the Software as a production, hosted, trading, advisory, or commercial service;
+- redistribute the source code or substantial portions of it outside the ordinary
+  functionality provided by GitHub;
+- incorporate the Software into another product or service;
+- use the Software or its documentation to train, fine-tune, distill, or evaluate
+  a machine-learning or generative-AI model; or
+- remove or obscure copyright, attribution, or license notices.
+
+4. Third-party material
+
+No rights are granted to third-party software, data, trademarks, publications,
+market data, or other materials referenced by or used with this project. Their
+respective terms continue to apply.
+
+5. Research-only software
+
+TradeCentral is quantitative research and decision-support software. It does not
+provide investment advice and the checked-in application does not place or route
+broker orders.
+
+6. Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR
+A PARTICULAR PURPOSE, NON-INFRINGEMENT, ACCURACY, OR FITNESS FOR TRADING OR
+INVESTMENT PURPOSES. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT
+HOLDER SHALL NOT BE LIABLE FOR CLAIMS, LOSSES, OR DAMAGES ARISING FROM USE OF OR
+RELIANCE ON THE SOFTWARE.
+
+7. Other rights
+
+Any rights required solely to view, fork, or otherwise interact with this
+repository through GitHub remain subject to GitHub's applicable terms. No
+additional license is granted by making the repository publicly visible.
+
+For permissions beyond the evaluation rights above, contact the repository owner.

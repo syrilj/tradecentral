@@ -1,0 +1,28 @@
+# TradeCentral Cloudflare Worker.
+#
+# This is intentionally a static Clerk waitlist deployment by default. It has
+# no public path to the costly local Python research API. Staging API proxying
+# is a deliberate opt-in: set all three variables below through the Cloudflare
+# dashboard or a non-committed environment-specific config.
+#
+#   API_PROXY_ENABLED=true
+#   PUBLIC_ORIGIN=https://staging.example.com
+#   API_UPSTREAM=https://api-staging.example.com
+#
+# API_UPSTREAM must still enforce Clerk JWT verification and the operator
+# allowlist itself; origin checks at the Worker are not authentication.
+
+name = "tradecentral"
+main = "worker.js"
+compatibility_date = "2026-09-24"
+
+[assets]
+directory = "../runs/dashboard_dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api", "/api/*"]
+
+[vars]
+API_PROXY_ENABLED = "false"
+PUBLIC_ORIGIN = ""
+API_UPSTREAM = ""

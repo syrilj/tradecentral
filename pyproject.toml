@@ -1,0 +1,30 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [
+    ".agents",
+    ".claude",
+    ".factory",
+    ".git",
+    ".qlib-src",
+    ".venv-qlib",
+    "node_modules",
+    "data",
+    "runs",
+    "qlib_xs",
+    "qlib_xs3",
+    "qlib_xs4",
+]
+
+[tool.ruff.lint]
+# Bug-focused rule set. E9 catches runtime errors; F (pyflakes) catches
+# undefined names, redefinitions, and other real defects. Style rules
+# (E4/E7 import/semicolon layout) and unused-import/variable warnings are
+# intentionally relaxed: this frozen research codebase uses lazy imports and
+# exploratory assignments that would otherwise produce noisy churn.
+select = ["E9", "F"]
+ignore = ["F401", "F841"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
