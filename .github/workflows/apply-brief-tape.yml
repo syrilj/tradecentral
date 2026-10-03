@@ -1,0 +1,29 @@
+name: apply brief tape
+on:
+  push:
+    branches: [brief-day-tape]
+    paths:
+      - .github/brief-day-tape.patch
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: brief-day-tape
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore BriefView from main and apply the tape patch
+        run: |
+          git fetch origin main
+          git checkout origin/main -- dashboard/src/views/BriefView.vue
+          git apply --whitespace=nowarn .github/brief-day-tape.patch
+          test "$(git hash-object dashboard/src/views/BriefView.vue)" = "07a76087063f753952cc0a5494c1b52f96c008e1"
+          git config user.email "83786796+syrilj@users.noreply.github.com"
+          git config user.name "Syril Jacob"
+          git add dashboard/src/views/BriefView.vue
+          git rm -f .github/brief-day-tape.patch .github/workflows/apply-brief-tape.yml
+          git commit -m "Replace BriefView with the Today tape implementation."
+          git push origin HEAD:brief-day-tape
