@@ -15,7 +15,7 @@ pytest==8.4.1
 
 # --- pinned to match requirements-vertex.txt ---
 scipy==1.15.3
-scikit-learn==1.7.2
+scikit-learn==1.9.1
 pyarrow==24.0.0
 # cvxpy is imported at module load time by edge/research/optimizer.py and
 # (transitively) edge/tools/xs5_pit_optimizer.py; without it collection of
