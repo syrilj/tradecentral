@@ -49,7 +49,7 @@ gym==0.26.2
 
 # mlflow is qlib's experiment backend. skinny is not enough -- qlib's
 # workflow recorder touches the full tracking store.
-mlflow==3.14.0
+mlflow==3.16.1
 
 # --- qlib itself, pinned to the exact commit the gates were run on ------------
 # NOT the PyPI release. edge/.venv-qlib runs 0.9.8.dev32 from this ref; PyPI
