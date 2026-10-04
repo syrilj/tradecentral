@@ -38,6 +38,6 @@ xgboost==3.2.0
 # (bare `except ImportError: return`) when python-dotenv isn't installed,
 # which made tests/daily_plays/test_environment.py fail for the wrong
 # reason (dependency missing, not the .env-loading logic being broken).
-python-dotenv==1.2.3
+python-dotenv==1.2.4
 # rag/document_parser.py parses research PDFs; pypdf is pure Python
 pypdf==6.4.2
