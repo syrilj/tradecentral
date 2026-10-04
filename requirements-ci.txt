@@ -10,7 +10,7 @@
 
 # --- shared with requirements-eval.txt; pinned identically ---
 numpy==1.26.4
-pandas==2.3.3
+pandas==3.0.6
 pytest==8.4.1
 
 # --- pinned to match requirements-vertex.txt ---
