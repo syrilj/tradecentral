@@ -27,7 +27,7 @@ pyarrow==24.0.0
 cvxpy==1.7.5
 
 # --- not in requirements-vertex.txt; pinned to the versions this file was verified against ---
-requests==2.32.3
+requests==2.34.2
 yfinance==0.2.66
 # edge/research/challengers.py lazy-imports xgboost and fails closed
 # (RuntimeError) when it's absent -- by design, so a missing xgboost never
