@@ -116,3 +116,24 @@ pre-commit install
 
 `.github/workflows/ci.yml` runs lint, type-check, and tests with coverage
 thresholds on every push and pull request.
+
+## Cursor Cloud specific instructions
+
+Cloud Agent checkouts are the repository root (`/workspace`), not a parent
+directory that contains `edge/`. `tools/api_server.py` resolves the checkout as
+`<parent>/edge`, and `pytest.ini` adds that parent to `sys.path`. The
+environment install links `/edge` to the checkout and creates
+`/opt/tradecentral/venv` (Python 3.12, which satisfies the 3.10+ requirement).
+`python3`, `pip`, `pytest`, and `ruff` on `PATH` are wrappers for that venv, so
+`import edge` works from the repo root. Run pytest the way CI does, from the
+repo root: `python3 -m pytest eval -q` and
+`python3 -m pytest tests -q -m "not needs_market_data_files and not needs_live_network"`.
+`python3 -m pytest edge/eval` only works when the current directory is the
+parent of a checkout named `edge`.
+
+Dev servers start on boot and bind to loopback only. They set
+`EDGE_AUTH_MODE=local` and `VITE_EDGE_AUTH_MODE=local`, so the desk opens
+without Clerk or provider keys. API: `http://127.0.0.1:8787` (`/api/health`).
+Vite: `http://127.0.0.1:5178`, proxying `/api`. `data/` is gitignored, so a
+fresh checkout reports market stores as missing. Keys in `.env.example` stay
+optional.
