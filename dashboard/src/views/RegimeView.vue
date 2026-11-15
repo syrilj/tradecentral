@@ -22,7 +22,7 @@
  * IntersectionObserver) — see `breadthActivated` / `breadthRes` below.
  */
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   api,
   type AbsorptionSymbolPayload,
@@ -84,7 +84,6 @@ import RegimeHeaderRibbon from '@/components/RegimeHeaderRibbon.vue'
 import MarketContextCard from '@/components/MarketContextCard.vue'
 import KeyLevelsCard from '@/components/KeyLevelsCard.vue'
 import FlowSummaryDonutCard from '@/components/FlowSummaryDonutCard.vue'
-import StrikeGammaExposureChart from '@/components/StrikeGammaExposureChart.vue'
 import StrikeOpenInterestChart, {
   type StrikeOiPoint,
 } from '@/components/StrikeOpenInterestChart.vue'
@@ -2636,14 +2635,10 @@ function onBreadthActivate(): void {
 
           <!-- Strike Gamma Exposure and Open Interest Charts -->
           <div class="quant-grid-row mid-row">
-            <StrikeGammaExposureChart
-              :rows="optionsRes.data.value?.gex_by_strike ?? []"
-              :spot="regimeRead.spot ?? effectiveSpot"
-              :total-gex-m="totalGexM"
-              :gamma-flip="regimeRead.zeroGamma"
-              :call-wall="regimeRead.callWall"
-              :put-wall="regimeRead.putWall"
-            />
+            <p class="unmeasured-note">
+              Strike gamma for {{ symbol }} is one chart on the
+              <RouterLink :to="{ name: 'options', query: { symbol } }">options board</RouterLink>.
+            </p>
             <StrikeOpenInterestChart
               :rows="strikeOiRows"
               :spot="regimeRead.spot ?? effectiveSpot"

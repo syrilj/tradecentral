@@ -168,12 +168,10 @@ describe('DealerGammaMap source contracts', () => {
     expect(src).toContain('const t = span === 0 ? 0 : (0 - prev.net_gex_m) / span')
   })
 
-  it('lets structural levels widen the window back out to include themselves', () => {
-    // A wall 9% away is more decision-relevant than the strikes either side of
-    // spot; windowing it off the frame hides the level that matters most.
+  it('keeps the selected price window instead of stretching it to a far wall', () => {
     const domainBlock = src.slice(src.indexOf('const priceDomain = computed'))
-    expect(domainBlock.slice(0, 900)).toContain(
-      'for (const v of [props.spot, props.zeroGamma, props.callWall, props.putWall, props.pinStrike])',
-    )
+    expect(domainBlock.slice(0, 700)).toContain('spot * (1 - pct)')
+    expect(domainBlock.slice(0, 700)).toContain('return [lo, hi]')
+    expect(domainBlock.slice(0, 700)).not.toContain('props.callWall')
   })
 })

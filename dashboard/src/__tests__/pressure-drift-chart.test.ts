@@ -94,10 +94,11 @@ describe('PressureDriftChart token & structure gate (shipped SFC)', () => {
 describe('DriftView structure gate (shipped SFC)', () => {
   const src = () => readSrc('views/DriftView.vue')
 
-  it('mounts the charm chart, GEX map, and strike table', () => {
+  it('mounts the charm chart and strike table, and links strike gamma to the options board', () => {
     const s = src()
     expect(s).toContain('PressureDriftChart')
-    expect(s).toContain('GammaExposureMap')
+    expect(s).toContain("name: 'options'")
+    expect(s).not.toContain('GammaExposureMap')
     expect(s).toContain('strike-table')
     expect(s).toContain('charm_by_strike')
     expect(s).toContain('chain_by_strike')

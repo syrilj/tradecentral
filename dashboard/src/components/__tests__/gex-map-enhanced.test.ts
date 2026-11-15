@@ -38,19 +38,17 @@ describe('Enhanced GEX Map Component Verification', () => {
     expect(gexSrc).toContain('ALL STRIKES')
   })
 
-  it('provides analytical overlays: Net Trace & Gamma Regime Zones', () => {
-    expect(gexSrc).toContain('NET TRACE')
+  it('draws the net trace and regime zones on the one profile', () => {
     expect(gexSrc).toContain('netTracePath')
-    expect(gexSrc).toContain('REGIMES')
     expect(gexSrc).toContain('regime-zones')
     expect(gexSrc).toContain('VOLATILITY AMPLIFIED')
     expect(gexSrc).toContain('VOLATILITY DAMPENED')
   })
 
-  it('includes quick structural level jump chips', () => {
-    expect(gexSrc).toContain('quick-levels')
-    expect(gexSrc).toContain('jumpToLevel')
-    expect(gexSrc).toContain('level-chip')
+  it('tracks the pointer across the plot and clears it when the pointer leaves', () => {
+    expect(gexSrc).toContain('onPlotPointer')
+    expect(gexSrc).toContain('setPointerCapture')
+    expect(gexSrc).toContain('@pointerleave="clearLock"')
   })
 
   it('supports keyboard stepping with ArrowLeft / ArrowRight, Enter/Space, and Escape', () => {

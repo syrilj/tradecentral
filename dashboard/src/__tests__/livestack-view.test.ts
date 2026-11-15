@@ -35,7 +35,8 @@ describe('Live Stack tab (stacked-signals surface)', () => {
 
   it('stacks every lens on one page', () => {
     expect(view).toContain('WHAT THE DATA SAYS')
-    expect(view).toContain('GammaExposureMap')
+    expect(view).toContain("name: 'options'")
+    expect(view).not.toContain('GammaExposureMap')
     expect(view).toContain('ThetaVannaChart')
     expect(view).toContain('IvSurfaceChart')
     expect(view).toContain('VolumeProfileChart')
