@@ -307,6 +307,13 @@ const primaryNav = [
     tab: true,
   },
   {
+    name: 'gamma',
+    title: 'Gamma',
+    hint: 'Resistance · flip · support',
+    icon: 'gamma',
+    tab: true,
+  },
+  {
     name: 'suggest',
     title: 'Setups',
     hint: 'Strike · levels · GEX plan',

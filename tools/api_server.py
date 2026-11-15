@@ -446,6 +446,10 @@ from edge.daily_plays.options_intelligence import (  # noqa: E402
     OptionsFilters,
     build_options_intelligence,
 )
+from edge.daily_plays.gamma_resistance import (  # noqa: E402
+    compute_gamma_resistance,
+    parse_dte_param,
+)
 from edge.daily_plays.vanna_exposure import compute_vanna_surface  # noqa: E402
 from edge.daily_plays.regime_attractor_engine import (  # noqa: E402
     ConfluenceCluster,
@@ -10782,6 +10786,42 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         force=force,
                     )
                 )
+
+            elif path == "/api/gamma/resistance":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                max_raw = query.get("max_dte", [None])[0]
+                min_raw = query.get("min_dte", [None])[0]
+                max_dte, max_err = parse_dte_param(max_raw, default=365, lo=0, hi=3650)
+                min_dte, min_err = parse_dte_param(min_raw, default=0, lo=0, hi=3650)
+                if max_err or min_err or max_dte is None or min_dte is None:
+                    self._send_json(
+                        {"error": max_err or min_err or "invalid dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                if min_dte > max_dte:
+                    self._send_json(
+                        {"error": "min_dte cannot exceed max_dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                payload = compute_gamma_resistance(
+                    sym_or_err, max_dte=max_dte, min_dte=min_dte
+                )
+                if payload is None:
+                    self._send_json(
+                        {
+                            "error": f"No options chain is available for {sym_or_err}.",
+                            "endpoint": path,
+                            "symbol": sym_or_err,
+                        },
+                        status=404,
+                    )
+                    return
+                self._send_json(payload)
 
             elif path == "/api/gamma/regime":
                 # No symbol param: the universe is the fixed index + sector

@@ -12,6 +12,7 @@ const configuredTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 30_000
 const REQUEST_TIMEOUT_MS =
   Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 30_000
 import type { RegimeBreadthPayload, MarketRegimePayload } from './regimeContracts'
+import { gammaResistancePath, type GammaResistancePayload } from './gammaResistance'
 
 export type {
   MarketRegimePayload,
@@ -4025,6 +4026,14 @@ export const api = {
    */
   vanna: (symbol: string) =>
     req<VannaPayload>(`/api/vanna?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`),
+
+  /**
+   * Pre-trade gamma reads (`/api/gamma/resistance`): call resistance, absolute
+   * gamma, zero gamma, and nearby support. A 404 means no chain. A 200 with
+   * measurable false means the chain is there and the reads are withheld.
+   */
+  gammaResistance: (symbol: string, maxDte: number) =>
+    req<GammaResistancePayload>(gammaResistancePath(symbol, maxDte)),
 
   /**
    * Unified Layer 3 Market Regime, Calibrated Confidence, and Dynamic Explainability.

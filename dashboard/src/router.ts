@@ -137,6 +137,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Regime', index: '05' },
   },
   {
+    path: '/gamma',
+    name: 'gamma',
+    component: () => import('@/views/GammaResistanceView.vue'),
+    meta: { title: 'Gamma', index: '05' },
+  },
+  {
     path: '/microstructure-regime',
     name: 'microstructure-regime',
     component: () => import('@/views/MicrostructureRegimeView.vue'),

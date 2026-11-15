@@ -39,6 +39,7 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'reversal', title: 'Reversal', idx: '08', hint: 'Bottoms · tops · when to add' },
   { name: 'drift', title: 'Drift', idx: '05', hint: 'Buying vs selling pressure' },
   { name: 'regime', title: 'Regime', idx: '05', hint: 'Dealer-gamma surface & density' },
+  { name: 'gamma', title: 'Gamma', idx: '05', hint: 'Call resistance · zero gamma · support' },
   { name: 'flow', title: 'Flow', idx: '06', hint: 'Market-wide options tape' },
   { name: 'absorption', title: 'Absorption', idx: '07', hint: 'Heavy flow, held level' },
   { name: 'livestack', title: 'Live Stack', idx: '07', hint: 'All lenses, one tape' },

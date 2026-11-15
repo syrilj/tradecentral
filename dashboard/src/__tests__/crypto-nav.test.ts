@@ -54,6 +54,7 @@ describe('Crypto workspace navigation', () => {
       'reversal',
       'options',
       'regime',
+      'gamma',
       'suggest',
       'drift',
       'desk',
@@ -63,7 +64,7 @@ describe('Crypto workspace navigation', () => {
       'voltrend',
       'vanna',
     ])
-    expect(namesIn(primary)).toHaveLength(14)
+    expect(namesIn(primary)).toHaveLength(15)
     expect(namesIn(desk)).toHaveLength(3)
     expect(namesIn(market)).toHaveLength(6)
     expect(namesIn(research)).toHaveLength(8)

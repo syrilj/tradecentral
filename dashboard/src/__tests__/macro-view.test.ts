@@ -39,6 +39,7 @@ describe('Macro tab (cross-asset regime board)', () => {
       'reversal',
       'options',
       'regime',
+      'gamma',
       'suggest',
       'drift',
       'desk',
