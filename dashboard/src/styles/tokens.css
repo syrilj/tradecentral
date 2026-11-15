@@ -24,6 +24,8 @@
 :root {
   /* ---- surface ---------------------------------------------------------- */
   --void: #08090c;
+  /* Public paper (auth, legal). The desk never paints this; theme-color reads it. */
+  --paper: #fbfbf8;
   --void-lift: #0d0f14;
   --panel: #12141a;
   --panel-hi: #181b22;
@@ -297,6 +299,8 @@
   /* ---- motion ------------------------------------------------------------ */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* iOS sheet curve. Drawers only — do not reuse it for buttons or lists. */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --dur-fast: 120ms;
   --dur: 220ms;
   --dur-normal: var(--dur);

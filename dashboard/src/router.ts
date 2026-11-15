@@ -363,6 +363,24 @@ function setMetaDescription(content: string): void {
   tag.content = content
 }
 
+const PAPER_THEME_ROUTES = new Set(['auth', 'waitlist', 'license', 'terms'])
+
+function tokenColor(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
+/** Status bar follows the color at the top of the page: paper on auth/legal, void everywhere else. */
+function setThemeColor(routeName: unknown): void {
+  const paper = PAPER_THEME_ROUTES.has(String(routeName))
+  let tag = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (!tag) {
+    tag = document.createElement('meta')
+    tag.name = 'theme-color'
+    document.head.appendChild(tag)
+  }
+  tag.content = tokenColor(paper ? '--paper' : '--void')
+}
+
 router.afterEach((to) => {
   /* `documentTitle` wins when a route needs a standalone, un-prefixed title
      (the public landing page). Everything else keeps the desk's
@@ -380,4 +398,5 @@ router.afterEach((to) => {
   }
 
   setMetaDescription((to.meta.description as string | undefined) ?? DEFAULT_DESCRIPTION)
+  setThemeColor(to.name)
 })

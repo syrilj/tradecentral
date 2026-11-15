@@ -115,6 +115,20 @@ const displayHits = computed(() => {
   return list
 })
 
+type PaletteRow = { kind: 'view'; name: string } | { kind: 'symbol'; symbol: string }
+
+/** Views sit above tickers, which is the order ↑↓ has to walk. */
+const rows = computed<PaletteRow[]>(() => [
+  ...matchingViews.value.map((view) => ({ kind: 'view' as const, name: view.name })),
+  ...displayHits.value.map((hit) => ({ kind: 'symbol' as const, symbol: hit.symbol })),
+])
+
+const activeRowId = computed(() => (rows.value.length ? `palette-row-${cursor.value}` : undefined))
+
+watch(rows, (list) => {
+  if (!list.length || cursor.value > list.length - 1) cursor.value = 0
+})
+
 function openView(name: string): void {
   emit('close')
   void router.push({ name })
@@ -136,9 +150,39 @@ const run = debounce(async (term: string) => {
   }
 }, 130)
 
-watch(q, (v) => run(cleanTicker(v)))
+watch(q, (v) => {
+  cursor.value = 0
+  run(cleanTicker(v))
+})
 
 function onKeydown(e: KeyboardEvent): void {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+    e.preventDefault()
+    if (!rows.value.length) return
+    const next =
+      e.key === 'Home'
+        ? 0
+        : e.key === 'End'
+          ? rows.value.length - 1
+          : e.key === 'ArrowUp'
+            ? (cursor.value - 1 + rows.value.length) % rows.value.length
+            : (cursor.value + 1) % rows.value.length
+    cursor.value = next
+    const el = document.getElementById(`palette-row-${next}`)
+    el?.scrollIntoView({ block: 'nearest' })
+    if (document.activeElement !== input.value) el?.focus()
+    return
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    emit('close')
+    return
+  }
+  if (e.key === 'Enter' && e.target === input.value) {
+    e.preventDefault()
+    commit()
+    return
+  }
   if (e.key !== 'Tab') return
   const root = paletteEl.value
   if (!root) return
@@ -178,19 +222,23 @@ onUnmounted(() => {
   previousFocus = null
 })
 
-function move(delta: number): void {
-  if (!displayHits.value.length) return
-  cursor.value = (cursor.value + delta + displayHits.value.length) % displayHits.value.length
-  document.getElementById(`hit-${cursor.value}`)?.scrollIntoView({ block: 'nearest' })
-}
-
 function commit(): void {
-  const hit = displayHits.value[cursor.value]
-  if (hit) emit('select', hit.symbol)
-  else {
+  const row = rows.value[cursor.value]
+  if (!row) {
     const term = cleanTicker(q.value)
     if (term) emit('select', term)
+    return
   }
+  if (row.kind === 'view') {
+    openView(row.name)
+    return
+  }
+  if (row.kind === 'symbol') {
+    emit('select', row.symbol)
+    return
+  }
+  const unreachable: never = row
+  return unreachable
 }
 </script>
 
@@ -211,29 +259,41 @@ function commit(): void {
           v-model="q"
           class="input"
           type="text"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded="true"
+          aria-controls="palette-list"
+          :aria-activedescendant="activeRowId"
           aria-label="Search symbols and views"
           :placeholder="`Search ${symbolCount ?? 'all'} symbols · SPY · AAPL · NVDA`"
           autocomplete="off"
+          autocapitalize="none"
+          autocorrect="off"
           spellcheck="false"
+          enterkeyhint="search"
           aria-describedby="search-results-count"
-          @keydown.down.prevent="move(1)"
-          @keydown.up.prevent="move(-1)"
-          @keydown.enter.prevent="commit"
-          @keydown.esc.prevent="emit('close')"
         />
         <span id="search-results-count" class="label state" role="status" aria-live="polite">{{
           busy ? 'SCANNING' : `${displayHits.length} TICKER${displayHits.length === 1 ? '' : 'S'}`
         }}</span>
       </div>
 
-      <p v-if="err" class="err label" role="alert" aria-live="assertive">{{ err }}</p>
-
-      <div v-else class="results-scroll">
+      <div id="palette-list" class="results-scroll" role="listbox">
         <div v-if="matchingViews.length" class="section-block">
           <header class="section-head label">VIEWS &amp; COMMANDS</header>
           <ul class="cmd-list">
-            <li v-for="v in matchingViews" :key="v.name">
-              <button class="cmd-hit" type="button" @click="openView(v.name)" @focus="cursor = 0">
+            <li v-for="(v, i) in matchingViews" :key="v.name">
+              <button
+                :id="`palette-row-${i}`"
+                class="cmd-hit"
+                :class="{ on: cursor === i }"
+                type="button"
+                role="option"
+                :aria-selected="cursor === i"
+                @click="openView(v.name)"
+                @mouseenter="cursor = i"
+                @focus="cursor = i"
+              >
                 <span class="cmd-idx fig">{{ v.idx }}</span>
                 <span class="cmd-title label">{{ v.title }}</span>
                 <span class="cmd-hint label">{{ v.hint }}</span>
@@ -244,15 +304,18 @@ function commit(): void {
 
         <div class="section-block">
           <header class="section-head label">SYMBOLS &amp; TICKERS</header>
+          <p v-if="err" class="err label" role="alert" aria-live="assertive">{{ err }}</p>
           <ul class="hits">
             <li v-for="(h, i) in displayHits" :key="h.symbol + String(h.n_bars)">
               <button
-                :id="`hit-${i}`"
+                :id="`palette-row-${matchingViews.length + i}`"
                 type="button"
                 class="hit"
-                :class="{ on: i === cursor, free: !h.n_bars }"
-                @mouseenter="cursor = i"
-                @focus="cursor = i"
+                role="option"
+                :aria-selected="cursor === matchingViews.length + i"
+                :class="{ on: cursor === matchingViews.length + i, free: !h.n_bars }"
+                @mouseenter="cursor = matchingViews.length + i"
+                @focus="cursor = matchingViews.length + i"
                 @click="emit('select', h.symbol)"
               >
                 <span class="sym fig">{{ h.symbol }}</span>
@@ -277,7 +340,7 @@ function commit(): void {
 
       <footer class="keys">
         <span class="label"><kbd>↑↓</kbd> move</span>
-        <span class="label"><kbd>⏎</kbd> open ticker</span>
+        <span class="label"><kbd>⏎</kbd> open</span>
         <span class="label"><kbd>esc</kbd> dismiss</span>
       </footer>
     </div>
@@ -299,7 +362,7 @@ function commit(): void {
 
 .palette {
   width: min(680px, calc(100vw - var(--s6)));
-  max-height: 66vh;
+  max-height: min(66dvh, 640px);
   display: flex;
   flex-direction: column;
   border: var(--hair) solid var(--glass-border-hi);
@@ -314,7 +377,7 @@ function commit(): void {
     0 24px 64px rgba(0, 0, 0, 0.85),
     var(--glass-specular);
   overflow: hidden;
-  animation: rise var(--dur) var(--ease-out) both;
+  /* ⌘K is used constantly. An entrance animation makes the shortcut feel late. */
 }
 
 .field {
@@ -363,6 +426,7 @@ function commit(): void {
 
 .results-scroll {
   overflow-y: auto;
+  overscroll-behavior: contain;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -399,14 +463,27 @@ function commit(): void {
   align-items: center;
   text-align: left;
   gap: var(--s3);
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px var(--s3);
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
+  border-left: 2px solid transparent;
+  transition:
+    background 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.cmd-hit:hover {
+@media (hover: hover) and (pointer: fine) {
+  .cmd-hit:hover {
+    background: var(--phosphor-wash);
+  }
+}
+.cmd-hit.on {
   background: var(--phosphor-wash);
+  border-left-color: var(--phosphor);
+}
+.cmd-hit:active {
+  transform: scale(0.98);
 }
 .cmd-idx {
   font-family: var(--font-data);
@@ -420,11 +497,16 @@ function commit(): void {
   font-weight: 600;
   font-size: var(--t-small);
   color: var(--ink);
+  flex: 0 0 auto;
   min-width: 90px;
 }
 .cmd-hint {
   color: var(--ink-dim);
   font-size: var(--t-micro);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hits {
@@ -439,12 +521,19 @@ function commit(): void {
   align-items: center;
   text-align: left;
   gap: var(--s3);
-  min-height: 36px;
+  min-height: 44px;
   padding: var(--s2) var(--s3);
   border-radius: var(--r-sm);
   cursor: pointer;
   border-left: 2px solid transparent;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
+}
+.hit:active {
+  transform: scale(0.98);
 }
 
 .hit.on {
@@ -496,6 +585,10 @@ function commit(): void {
 .span {
   color: var(--ink-faint);
   letter-spacing: 0.03em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .bars {
   font-family: var(--font-data);
@@ -511,6 +604,7 @@ function commit(): void {
 }
 .err {
   color: var(--short);
+  overflow-wrap: anywhere;
 }
 
 .keys {
