@@ -50,6 +50,11 @@ withDefaults(
       <path d="M4.5 16.5 9 12l3 2.5 7.5-8" />
       <path d="M16.5 6.5H19v2.5" />
     </template>
+    <template v-else-if="name === 'live'">
+      <circle cx="12" cy="12" r="2.4" />
+      <path d="M12 3.5v3.2M12 17.3v3.2M3.5 12h3.2M17.3 12h3.2" />
+      <path d="M7 16.5h2.2M14.8 7.5H17" />
+    </template>
     <template v-else-if="name === 'options'">
       <path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" />
       <path d="M4 12 12 16.5 20 12" />

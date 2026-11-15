@@ -34,6 +34,7 @@ const NAV_COMMANDS: NavCommand[] = [
   { name: 'macro', title: 'Macro', idx: '04', hint: 'Cross-asset regime board' },
   { name: 'crypto', title: 'Crypto', idx: '07', hint: '24/7 coin tape · Kalman · BTC COT' },
   { name: 'options', title: 'Options', idx: '05', hint: 'One underlier · gamma · density' },
+  { name: 'live-options', title: 'Live', idx: '05', hint: 'One options decision' },
   { name: 'suggest', title: 'Setups', idx: '05', hint: 'Strike · levels · GEX plan' },
   { name: 'chain', title: 'Chain', idx: '05', hint: 'Value chain and growth' },
   { name: 'reversal', title: 'Reversal', idx: '08', hint: 'Bottoms · tops · when to add' },

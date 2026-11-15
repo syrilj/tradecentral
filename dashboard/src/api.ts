@@ -13,6 +13,7 @@ const REQUEST_TIMEOUT_MS =
   Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 30_000
 import type { RegimeBreadthPayload, MarketRegimePayload } from './regimeContracts'
 import { gammaResistancePath, type GammaResistancePayload } from './gammaResistance'
+import { liveOptionsPath, type LiveOptionsPayload } from './liveOptions'
 
 export type {
   MarketRegimePayload,
@@ -4034,6 +4035,14 @@ export const api = {
    */
   gammaResistance: (symbol: string, maxDte: number) =>
     req<GammaResistancePayload>(gammaResistancePath(symbol, maxDte)),
+
+  /**
+   * Live options panel (`/api/live-options`): the gamma reads, the levels to
+   * watch, and whether the chart agrees. A 404 means no chain. The payload
+   * never authorizes an order.
+   */
+  liveOptions: (symbol: string, maxDte: number) =>
+    req<LiveOptionsPayload>(liveOptionsPath(symbol, maxDte)),
 
   /**
    * Unified Layer 3 Market Regime, Calibrated Confidence, and Dynamic Explainability.

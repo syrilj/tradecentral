@@ -300,6 +300,13 @@ const primaryNav = [
     tab: true,
   },
   {
+    name: 'live-options',
+    title: 'Live',
+    hint: 'One options decision',
+    icon: 'live',
+    tab: true,
+  },
+  {
     name: 'regime',
     title: 'Regime',
     hint: 'Dealer gamma · live',

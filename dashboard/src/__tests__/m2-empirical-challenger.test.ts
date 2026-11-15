@@ -198,15 +198,15 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
       ).length
 
       // Regime, Drift, and Setups were promoted from the Tools overflow into
-      // primaryNav. Each must live in exactly one group: overflowActiveItem
-      // matches on route name, so a duplicate would light the primary nav and
-      // mark Tools active at the same time. Brief is the first primary
-      // destination; Crypto is the tenth.
-      expect(primaryCount).toBe(15)
+      // primaryNav. Live is the options decision and stays in that same list.
+      // Each must live in exactly one group: overflowActiveItem matches on
+      // route name, so a duplicate would light the primary nav and mark Tools
+      // active at the same time.
+      expect(primaryCount).toBe(16)
       expect(deskCount).toBe(3)
       expect(marketCount).toBe(6)
       expect(researchCount).toBe(8)
-      expect(primaryCount + deskCount + marketCount + researchCount).toBe(32)
+      expect(primaryCount + deskCount + marketCount + researchCount).toBe(33)
     })
   })
 

@@ -32,6 +32,7 @@ from .options_intelligence import (
     _expiry,
     _first,
     _latest_chain,
+    _net_gex_at_spots,
     _number,
     _timestamp,
 )
@@ -207,6 +208,45 @@ def _net_revalued(legs: Sequence[_Leg], test_spot: float, rate: float) -> float 
     return total if any_leg else None
 
 
+def _net_revalued_grid(
+    legs: Sequence[_Leg],
+    spots: Sequence[float],
+    rate: float,
+) -> list[float] | None:
+    """Signed dollar-gamma at each spot. Same rejects and formula as `_net_revalued`.
+
+    Legs are grouped by dividend yield and priced with the broadcast grid.
+    A non-positive spot contributes nothing in the broadcast; `_zero_gamma`
+    only asks about spots above zero. No usable contract returns None, which
+    is the blank the scalar loop returns, not a row of zeros.
+    """
+    grouped: dict[float, list[dict[str, float]]] = {}
+    for leg in legs:
+        if not leg.revaluable or leg.iv is None or leg.years is None:
+            continue
+        if leg.strike <= 0 or leg.years <= 0 or not 0.005 <= leg.iv <= 5.0:
+            continue
+        sign = 1.0 if leg.right == "call" else -1.0
+        grouped.setdefault(leg.yield_rate, []).append(
+            {
+                "strike": leg.strike,
+                "years": leg.years,
+                "iv": leg.iv,
+                "sign": sign,
+                "oi": leg.oi,
+                "multiplier": leg.multiplier,
+            }
+        )
+    if not grouped:
+        return None
+    totals = [0.0] * len(spots)
+    for yield_rate, contracts in grouped.items():
+        part = _net_gex_at_spots(contracts, spots, rate=rate, yield_rate=yield_rate)
+        for index, value in enumerate(part):
+            totals[index] += value
+    return totals
+
+
 def _zero_gamma(
     legs: Sequence[_Leg],
     spot: float,
@@ -215,13 +255,11 @@ def _zero_gamma(
     lo = spot * (1.0 - ZERO_SEARCH_SPAN)
     hi = spot * (1.0 + ZERO_SEARCH_SPAN)
     steps = 200
-    grid: list[tuple[float, float]] = []
-    for i in range(steps + 1):
-        test = lo + (hi - lo) * i / steps
-        net = _net_revalued(legs, test, rate)
-        if net is None:
-            return None, "not_revaluable"
-        grid.append((test, net))
+    spots = [lo + (hi - lo) * i / steps for i in range(steps + 1)]
+    nets = _net_revalued_grid(legs, spots, rate)
+    if nets is None:
+        return None, "not_revaluable"
+    grid = list(zip(spots, nets))
     peak = max(abs(y) for _, y in grid)
     if peak <= 0:
         return None, "no_sign_change"
@@ -614,9 +652,7 @@ def _nearby_support(
         return None, "put_gamma_immaterial", put_wall
     # Materiality is judged inside the band. A heavier wall further out must
     # not shrink a real nearby shelf below the cutoff.
-    inside = [
-        cell for cell in below if (spot - cell["strike"]) / spot <= NEARBY_BAND_PCT
-    ]
+    inside = [cell for cell in below if (spot - cell["strike"]) / spot <= NEARBY_BAND_PCT]
     if not inside:
         return None, "no_put_gamma_inside_band", put_wall
     peak = max(cell["put"] for cell in inside)

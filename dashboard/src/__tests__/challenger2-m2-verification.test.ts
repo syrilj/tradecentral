@@ -255,6 +255,7 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
         'vpa',
         'reversal',
         'options',
+        'live-options',
         'regime',
         'gamma',
         'suggest',

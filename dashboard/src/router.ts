@@ -125,6 +125,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Options', index: '05' },
   },
   {
+    path: '/live',
+    name: 'live-options',
+    component: () => import('@/views/LiveOptionsView.vue'),
+    meta: { title: 'Live', index: '05' },
+  },
+  {
     path: '/drift',
     name: 'drift',
     component: () => import('@/views/DriftView.vue'),

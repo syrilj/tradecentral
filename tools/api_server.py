@@ -450,6 +450,7 @@ from edge.daily_plays.gamma_resistance import (  # noqa: E402
     compute_gamma_resistance,
     parse_dte_param,
 )
+from edge.daily_plays.live_options import build_live_options  # noqa: E402
 from edge.daily_plays.vanna_exposure import compute_vanna_surface  # noqa: E402
 from edge.daily_plays.regime_attractor_engine import (  # noqa: E402
     ConfluenceCluster,
@@ -4556,6 +4557,32 @@ def _load_symbol_df(symbol: str) -> tuple["_get_pd().DataFrame | None, str | Non
             del _PARQUET_CACHE[k]
         _PARQUET_CACHE[key] = df
     return df, tier
+
+
+def _catalog_closes(symbol: str, n: int = 8) -> list[dict[str, Any]] | None:
+    """Last local daily closes. Names outside the catalog stay missing.
+
+    This does not call a provider. A live pull would stall the panel and
+    could invent a print the desk does not have on disk.
+    """
+    if SYMBOL_INDEX.get(symbol) is None:
+        return None
+    frame, _tier = _load_symbol_df(symbol)
+    if frame is None or getattr(frame, "empty", True) or "close" not in frame.columns:
+        return None
+    rows: list[dict[str, Any]] = []
+    for idx, value in frame["close"].iloc[-n:].items():
+        try:
+            close = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(close) or close <= 0:
+            continue
+        date = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
+        rows.append({"date": date, "close": close})
+    if len(rows) < 2:
+        return None
+    return rows
 
 
 def _sanitize_symbol(raw: str) -> tuple[bool, str]:
@@ -10822,6 +10849,44 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                     )
                     return
                 self._send_json(payload)
+
+            elif path == "/api/live-options":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                max_raw = query.get("max_dte", [None])[0]
+                min_raw = query.get("min_dte", [None])[0]
+                max_dte, max_err = parse_dte_param(max_raw, default=365, lo=0, hi=3650)
+                min_dte, min_err = parse_dte_param(min_raw, default=0, lo=0, hi=3650)
+                if max_err or min_err or max_dte is None or min_dte is None:
+                    self._send_json(
+                        {"error": max_err or min_err or "invalid dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                if min_dte > max_dte:
+                    self._send_json(
+                        {"error": "min_dte cannot exceed max_dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                gamma_payload = compute_gamma_resistance(
+                    sym_or_err, max_dte=max_dte, min_dte=min_dte
+                )
+                if gamma_payload is None:
+                    self._send_json(
+                        {
+                            "error": f"No options chain is available for {sym_or_err}.",
+                            "endpoint": path,
+                            "symbol": sym_or_err,
+                        },
+                        status=404,
+                    )
+                    return
+                self._send_json(
+                    build_live_options(gamma_payload, _catalog_closes(sym_or_err))
+                )
 
             elif path == "/api/gamma/regime":
                 # No symbol param: the universe is the fixed index + sector
