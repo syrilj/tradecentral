@@ -16,7 +16,7 @@ import hashlib
 import logging
 import math
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from typing import Any, Mapping
 
 import pandas as pd
@@ -1384,6 +1384,201 @@ def get_insiders_payload(symbol: str) -> dict[str, Any]:
     return payload
 
 
+_OPEN_MARKET_INSIDER = {"Purchase", "Sale"}
+_INSIDER_WINDOW_DAYS = 90
+
+
+def _format_provider_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%Y-%m-%d")
+        except (ValueError, OSError):
+            return None
+    text = _cell_str(value)
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    return None
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    formatted = _format_provider_date(value)
+    if not formatted:
+        return None
+    try:
+        return datetime.strptime(formatted, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def classify_insider_transaction(text: str | None, shares: float | None = None) -> str:
+    """Map a provider blurb to Purchase, Sale, Option Exercise, or Other.
+
+    Unknown text stays Other. It is not an option exercise and it is not a
+    sale. A negative share count is the provider's sale sign when the text
+    itself is silent.
+    """
+    raw = _cell_str(text).lower()
+    if "purchase" in raw or "buy" in raw or raw == "p":
+        return "Purchase"
+    if "sale" in raw or "sold" in raw or "sell" in raw or raw == "s":
+        return "Sale"
+    if "exercis" in raw or raw in {"m", "f"}:
+        return "Option Exercise"
+    if shares is not None and shares < 0:
+        return "Sale"
+    return "Other"
+
+
+def normalize_yfinance_insider_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """One provider row. Missing price, value, and shares-held stay missing.
+
+    A blank price used to become $30 (or $35 when the share count was also
+    blank) and a blank post-trade holding used to become four times the
+    share count. Those figures were then shown as Form 4 facts.
+    """
+    text = _cell_str(_row_get(row, "Text")) or _cell_str(_row_get(row, "Transaction"))
+    shares_raw = _safe_float(_row_get(row, "Shares", "shares"))
+    price = _safe_float(_row_get(row, "Price", "price"))
+    value = _safe_float(_row_get(row, "Value", "value"))
+    held = _safe_float(_row_get(row, "Shares Held After", "SharesHeldAfter", "shares_held_after"))
+    name = _cell_str(_row_get(row, "Insider", "insider_name", "Insider Name"))
+    relationship = _cell_str(_row_get(row, "Position", "Relationship", "relationship"))
+    ownership = _cell_str(_row_get(row, "Ownership", "Direct/Indirect", "direct_indirect"))
+    when = _format_provider_date(_row_get(row, "Start Date", "Date", "date"))
+    if when is None:
+        when = _format_provider_date(getattr(row, "name", None))
+    if not text and shares_raw is None and not name and when is None:
+        return None
+    if value is None and price is not None and shares_raw not in (None, 0):
+        value = round(abs(shares_raw) * price, 2)
+    elif price is None and value is not None and shares_raw not in (None, 0):
+        price = round(abs(value) / abs(shares_raw), 2)
+    return {
+        "date": when,
+        "insider_name": name,
+        "relationship": relationship,
+        "transaction_type": classify_insider_transaction(text, shares_raw),
+        "shares": None if shares_raw is None else int(round(abs(shares_raw))),
+        "price": None if price is None else round(price, 2),
+        "value": None if value is None else round(abs(value), 2),
+        "shares_held_after": None if held is None else int(round(held)),
+        "direct_indirect": ownership or None,
+        "filing_date": _format_provider_date(_row_get(row, "Filing Date", "filing_date")),
+        "sec_form_url": _cell_str(_row_get(row, "URL", "url")) or None,
+    }
+
+
+def _measured_abs_sum(rows: list[Mapping[str, Any]], kind: str, field: str) -> float | None:
+    """Sum one side. No rows is a real zero. A row with a blank field is unmeasured."""
+    matched = [tx for tx in rows if tx.get("transaction_type") == kind]
+    if not matched:
+        return 0.0
+    values: list[float] = []
+    for tx in matched:
+        number = _safe_float(tx.get(field))
+        if number is None:
+            return None
+        values.append(abs(number))
+    return round(sum(values), 2)
+
+
+def summarize_insider_activity(
+    transactions: list[Mapping[str, Any]],
+    *,
+    asof: date | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """90-day open-market summary plus quarterly nets.
+
+    The summary used to be the first eight rows of the tape, with no date
+    window, and every non-purchase (including option exercises and gifts)
+    was booked as a sale. Field names match the dashboard contract
+    (`buy_count`, `net_volume`, `transaction_count`).
+    """
+    today = asof or datetime.now(timezone.utc).date()
+    window_start = today - timedelta(days=_INSIDER_WINDOW_DAYS)
+    in_window = []
+    for tx in transactions:
+        when = _parse_iso_date(tx.get("date"))
+        if when is not None and window_start <= when <= today:
+            in_window.append(tx)
+    buy_vol = _measured_abs_sum(in_window, "Purchase", "value")
+    sell_vol = _measured_abs_sum(in_window, "Sale", "value")
+    buy_shares = _measured_abs_sum(in_window, "Purchase", "shares")
+    sell_shares = _measured_abs_sum(in_window, "Sale", "shares")
+    net_vol = None if buy_vol is None or sell_vol is None else round(buy_vol - sell_vol, 2)
+    net_shares = (
+        None if buy_shares is None or sell_shares is None else int(round(buy_shares - sell_shares))
+    )
+    buy_count = sum(1 for tx in in_window if tx.get("transaction_type") == "Purchase")
+    sell_count = sum(1 for tx in in_window if tx.get("transaction_type") == "Sale")
+    option_count = sum(1 for tx in in_window if tx.get("transaction_type") == "Option Exercise")
+    names = {
+        str(tx.get("insider_name") or "").strip()
+        for tx in in_window
+        if str(tx.get("insider_name") or "").strip()
+    }
+    if net_vol is None:
+        sentiment = None
+    elif net_vol > 0 and buy_count >= sell_count:
+        sentiment = "Bullish"
+    elif net_vol < 0:
+        sentiment = "Bearish"
+    else:
+        sentiment = "Neutral"
+    summary = {
+        "net_shares_90d": net_shares,
+        "buy_volume_usd": buy_vol,
+        "sell_volume_usd": sell_vol,
+        "net_volume_usd": net_vol,
+        "total_transactions": len(in_window),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "option_transactions_count": option_count,
+        "active_insiders_count": len(names),
+        "sentiment": sentiment,
+    }
+
+    quarters: dict[str, list[Mapping[str, Any]]] = {}
+    for tx in transactions:
+        if tx.get("transaction_type") not in _OPEN_MARKET_INSIDER:
+            continue
+        when = _parse_iso_date(tx.get("date"))
+        if when is None:
+            continue
+        label = f"{when.year} Q{(when.month - 1) // 3 + 1}"
+        quarters.setdefault(label, []).append(tx)
+
+    quarterly: list[dict[str, Any]] = []
+    for label in sorted(quarters, reverse=True)[:8]:
+        rows = quarters[label]
+        q_buy = _measured_abs_sum(rows, "Purchase", "value")
+        q_sell = _measured_abs_sum(rows, "Sale", "value")
+        q_buy_sh = _measured_abs_sum(rows, "Purchase", "shares")
+        q_sell_sh = _measured_abs_sum(rows, "Sale", "shares")
+        quarterly.append(
+            {
+                "quarter": label,
+                "net_shares": (
+                    None
+                    if q_buy_sh is None or q_sell_sh is None
+                    else int(round(q_buy_sh - q_sell_sh))
+                ),
+                "buy_volume": q_buy,
+                "sell_volume": q_sell,
+                "net_volume": None if q_buy is None or q_sell is None else round(q_buy - q_sell, 2),
+                "transaction_count": len(rows),
+            }
+        )
+    return summary, quarterly
+
+
 def _build_insiders_payload(symbol: str) -> dict[str, Any]:
     transactions: list[dict[str, Any]] = []
 
@@ -1391,6 +1586,7 @@ def _build_insiders_payload(symbol: str) -> dict[str, Any]:
     edgar_form4_url = f"https://www.sec.gov/edgar/search/#/q={symbol}&forms=4"
     try:
         from tools.sentiment_anomalies import _sec_ticker_map
+
         tmap = _sec_ticker_map()
         meta = tmap.get(symbol)
         if meta and meta.get("cik"):
@@ -1401,29 +1597,21 @@ def _build_insiders_payload(symbol: str) -> dict[str, Any]:
     # 1. Try yfinance insider trades
     try:
         import yfinance as yf  # type: ignore[import-not-found]
+
         ticker = yf.Ticker(symbol)
         ins_df = ticker.insider_transactions
         if ins_df is not None and not ins_df.empty:
-            for _, row in ins_df.head(40).iterrows():
-                d = row.get("Start Date") or row.get("Date")
-                d_str = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
-                text = str(row.get("Text", "") or row.get("Transaction", ""))
-                typ = "Purchase" if "buy" in text.lower() or "purchase" in text.lower() else "Sale" if "sale" in text.lower() or "sell" in text.lower() else "Option Exercise"
-                sh = _safe_float(row.get("Shares")) or 0.0
-                val = _safe_float(row.get("Value")) or (sh * (_safe_float(row.get("Price")) or 30.0))
-                transactions.append({
-                    "date": d_str,
-                    "insider_name": str(row.get("Insider", "Officer/Director")),
-                    "relationship": str(row.get("Position", "Executive / Director")),
-                    "transaction_type": typ,
-                    "shares": abs(int(sh)),
-                    "price": _safe_round(row.get("Price"), 2) or _safe_round(val / sh if sh else 35.0, 2),
-                    "value": abs(round(val, 2)),
-                    "shares_held_after": int(_safe_float(row.get("Shares Held After")) or (sh * 4)),
-                    "direct_indirect": "Direct",
-                    "filing_date": d_str,
-                    "sec_form_url": edgar_form4_url,
-                })
+            for _, row in ins_df.iterrows():
+                try:
+                    normalized = normalize_yfinance_insider_row(row)
+                except Exception:
+                    logger.debug("skipping unreadable insider row for %s", symbol, exc_info=True)
+                    continue
+                if normalized is None:
+                    continue
+                if not normalized.get("sec_form_url"):
+                    normalized["sec_form_url"] = edgar_form4_url
+                transactions.append(normalized)
     except Exception as e:
         logger.debug("yfinance insider transactions error for %s: %s", symbol, e)
 
@@ -1434,57 +1622,11 @@ def _build_insiders_payload(symbol: str) -> dict[str, Any]:
     # trades that never happened to named people is not a display default,
     # so an empty result now stays empty.
 
-    # Sort transactions descending by date
-    transactions.sort(key=lambda x: x["date"], reverse=True)
-
-    # Compute quarterly net insider volume
-    quarters_map: dict[str, dict[str, float]] = {}
-    for tx in transactions:
-        dt = tx["date"][:7]  # YYYY-MM
-        yr, mo = int(dt[:4]), int(dt[5:7])
-        q_label = f"{yr} Q{(mo - 1) // 3 + 1}"
-        if q_label not in quarters_map:
-            quarters_map[q_label] = {"buy_shares": 0.0, "sell_shares": 0.0, "buy_val": 0.0, "sell_val": 0.0, "count": 0.0}
-        
-        sh = float(tx.get("shares", 0))
-        val = float(tx.get("value", 0))
-        quarters_map[q_label]["count"] += 1
-        if tx.get("transaction_type") == "Purchase":
-            quarters_map[q_label]["buy_shares"] += sh
-            quarters_map[q_label]["buy_val"] += val
-        else:
-            quarters_map[q_label]["sell_shares"] += sh
-            quarters_map[q_label]["sell_val"] += val
-
-    quarterly_net = []
-    for q_label in sorted(quarters_map.keys(), reverse=True)[:8]:
-        d = quarters_map[q_label]
-        quarterly_net.append({
-            "quarter": q_label,
-            "buy_shares": int(d["buy_shares"]),
-            "sell_shares": int(d["sell_shares"]),
-            "net_shares": int(d["buy_shares"] - d["sell_shares"]),
-            "net_usd": round(d["buy_val"] - d["sell_val"], 2),
-            "transactions_count": int(d["count"]),
-        })
-
-    # Summary metrics (90D)
-    recent_txs = transactions[:8]
-    total_buy_val = sum(t["value"] for t in recent_txs if t["transaction_type"] == "Purchase")
-    total_sell_val = sum(t["value"] for t in recent_txs if t["transaction_type"] == "Sale")
-    net_vol = total_buy_val - total_sell_val
-    buy_tx_count = sum(1 for t in recent_txs if t["transaction_type"] == "Purchase")
-    sell_tx_count = sum(1 for t in recent_txs if t["transaction_type"] == "Sale")
-    # Buys and sells cover open-market activity only -- option exercises are
-    # neither. Their sum therefore understates filing activity (a symbol whose
-    # recent Form 4s are all exercises sums to zero while the tape below it
-    # lists real filings), so report the true filing count separately.
-    option_tx_count = sum(1 for t in recent_txs if t["transaction_type"] == "Option Exercise")
-    total_filings_count = len(recent_txs)
-
-    unique_insiders = len({t["insider_name"] for t in recent_txs})
-
-    sentiment = "Bullish" if net_vol > 0 and buy_tx_count >= sell_tx_count else "Bearish" if net_vol < 0 else "Neutral"
+    # Newest forty only. `head(40)` followed the frame order, so an oldest-first
+    # frame published the oldest prints and dropped the live ones.
+    transactions.sort(key=lambda row: row.get("date") or "", reverse=True)
+    del transactions[40:]
+    summary, quarterly_net = summarize_insider_activity(transactions)
 
     # A fixed "Insider Purchases Strategy" block used to be returned here with
     # invented performance -- CAGR 28.4%, 1y 42.6%, Sharpe 1.84, win rate
@@ -1495,17 +1637,7 @@ def _build_insiders_payload(symbol: str) -> dict[str, Any]:
 
     return {
         "symbol": symbol,
-        "summary": {
-            "net_volume_usd": net_vol,
-            "buy_volume_usd": total_buy_val,
-            "sell_volume_usd": total_sell_val,
-            "buy_transactions_count": buy_tx_count,
-            "sell_transactions_count": sell_tx_count,
-            "option_transactions_count": option_tx_count,
-            "total_filings_count": total_filings_count,
-            "active_insiders_count": unique_insiders,
-            "sentiment": sentiment,
-        },
+        "summary": summary,
         "transactions": transactions,
         "quarterly_net": quarterly_net,
         "available": bool(transactions),

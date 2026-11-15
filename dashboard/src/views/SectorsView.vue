@@ -3,7 +3,18 @@ import { computed, inject, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { type SectorFlowPayload, type StatusPayload } from '@/api'
 import type { Resource } from '@/composables/useResource'
-import { age, shortDate, signedPct, tone } from '@/format'
+import { age, shortDate, tone } from '@/format'
+import {
+  benchmarkTrendLabel,
+  benchmarkTrendTone,
+  flowBarStyle,
+  flowLean,
+  flowLeanLabel,
+  flowTrackWidth,
+  formatReturnPct,
+  topFlowRow,
+  watchMatchesFlow,
+} from '@/sectorDisplay'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import HelpTip from '@/components/HelpTip.vue'
@@ -74,43 +85,58 @@ interface SectorRow {
   etf: string
   name: string
   bucket: string
-  ret_1d: number
-  ret_5d: number
-  ret_21d: number
-  rs_5d: number
-  rs_21d: number
-  flow_score: number
+  ret_1d: number | null
+  ret_5d: number | null
+  ret_21d: number | null
+  rs_5d: number | null
+  rs_21d: number | null
+  flow_score: number | null
 }
 
 interface WatchRow {
   symbol: string
   sector_hint: string
   etf: string
-  score: number
-  rs_5d: number
+  score: number | null
+  rs_5d: number | null
 }
 
 const sectors = computed(() => flow.value?.sectors_ranked ?? [])
+const rankedSectors = computed(() =>
+  [...sectors.value].sort((a, b) => {
+    const aOk = a.flow_score != null && Number.isFinite(a.flow_score)
+    const bOk = b.flow_score != null && Number.isFinite(b.flow_score)
+    if (aOk && bOk) return (b.flow_score as number) - (a.flow_score as number)
+    if (aOk) return -1
+    if (bOk) return 1
+    return 0
+  }),
+)
 const watch = computed(() => flow.value?.watch_names ?? [])
 const mkt = computed(() => {
   const raw = flow.value?.market_context
   return raw && typeof raw === 'object' ? raw : undefined
 })
 
-const flowMax = computed(() => Math.max(1e-6, ...sectors.value.map((s) => Math.abs(s.flow_score))))
+const flowMax = computed(() =>
+  Math.max(
+    1e-6,
+    ...sectors.value.map((s) =>
+      s.flow_score == null || !Number.isFinite(s.flow_score) ? 0 : Math.abs(s.flow_score),
+    ),
+  ),
+)
 
-const accumulationSectors = computed(() => sectors.value.filter((s) => s.flow_score > 0))
-const distributionSectors = computed(() => sectors.value.filter((s) => s.flow_score < 0))
+const accumulationSectors = computed(() =>
+  sectors.value.filter((s) => flowLean(s.flow_score) === 'in'),
+)
+const distributionSectors = computed(() =>
+  sectors.value.filter((s) => flowLean(s.flow_score) === 'out'),
+)
 
-const topIn = computed(() => {
-  if (!sectors.value.length) return null
-  return [...sectors.value].sort((a, b) => b.flow_score - a.flow_score)[0]
-})
+const topIn = computed(() => topFlowRow(sectors.value, 'in'))
 
-const topOut = computed(() => {
-  if (!sectors.value.length) return null
-  return [...sectors.value].sort((a, b) => a.flow_score - b.flow_score)[0]
-})
+const topOut = computed(() => topFlowRow(sectors.value, 'out'))
 
 const filteredWatch = computed(() => {
   const query = watchSearch.value.trim().toUpperCase()
@@ -123,11 +149,13 @@ const filteredWatch = computed(() => {
     ) {
       return false
     }
-    if (selectedCategory.value === 'in') return w.score >= 0
-    if (selectedCategory.value === 'out') return w.score < 0
-    return true
+    return watchMatchesFlow(w.score, selectedCategory.value)
   })
 })
+
+function watchBar(score: number | null) {
+  return flowBarStyle(score, flowMax.value)
+}
 
 function open(sym: string | undefined): void {
   if (sym) void router.push({ name: 'market', query: { symbol: sym } })
@@ -142,7 +170,11 @@ const expandedNames = computed(() => {
   if (!etf) return [] as WatchRow[]
   return watch.value
     .filter((w) => w.etf === etf)
-    .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+    .sort((a, b) => {
+      const magnitude = (score: number | null) =>
+        score == null || !Number.isFinite(score) ? 0 : Math.abs(score)
+      return magnitude(b.score) - magnitude(a.score)
+    })
 })
 </script>
 
@@ -154,13 +186,13 @@ const expandedNames = computed(() => {
         <span class="label kpi-label">Benchmark Market Context</span>
         <div class="kpi-val-row">
           <span class="kpi-val">{{ mkt?.benchmark ?? 'SPY' }}</span>
-          <span class="kpi-badge" :class="mkt?.spy_above_ma20 ? 'pos' : 'neg'">
-            {{ mkt?.spy_above_ma20 ? 'ABOVE MA20' : 'BELOW MA20' }}
+          <span class="kpi-badge" :class="benchmarkTrendTone(mkt?.spy_above_ma20)">
+            {{ benchmarkTrendLabel(mkt?.spy_above_ma20) }}
           </span>
         </div>
         <span class="kpi-sub">
-          SPY 1D: {{ signedPct(Number(mkt?.spy_ret_1d ?? 0) * 100, 2) }} · 5D:
-          {{ signedPct(Number(mkt?.spy_ret_5d ?? 0) * 100, 2) }}
+          SPY 1D: {{ formatReturnPct(mkt?.spy_ret_1d) }} · 5D:
+          {{ formatReturnPct(mkt?.spy_ret_5d) }}
         </span>
       </div>
 
@@ -169,7 +201,7 @@ const expandedNames = computed(() => {
         <div class="kpi-val-row">
           <span class="kpi-val sym">{{ topIn ? topIn.etf : '—' }}</span>
           <span class="kpi-badge pos">
-            {{ topIn ? signedPct(topIn.flow_score * 100, 1) : '—' }}
+            {{ topIn ? formatReturnPct(topIn.flow_score, 1) : '—' }}
           </span>
         </div>
         <span class="kpi-sub fl-truncate">
@@ -182,7 +214,7 @@ const expandedNames = computed(() => {
         <div class="kpi-val-row">
           <span class="kpi-val sym">{{ topOut ? topOut.etf : '—' }}</span>
           <span class="kpi-badge neg">
-            {{ topOut ? signedPct(topOut.flow_score * 100, 1) : '—' }}
+            {{ topOut ? formatReturnPct(topOut.flow_score, 1) : '—' }}
           </span>
         </div>
         <span class="kpi-sub fl-truncate">
@@ -230,31 +262,31 @@ const expandedNames = computed(() => {
       <div v-if="mkt" class="mkt-readouts">
         <Readout
           label="SPY 1D Return"
-          :value="signedPct(Number(mkt.spy_ret_1d) * 100)"
+          :value="formatReturnPct(mkt.spy_ret_1d)"
           :tone="tone(mkt.spy_ret_1d)"
           size="sm"
         />
         <Readout
           label="SPY 5D Return"
-          :value="signedPct(Number(mkt.spy_ret_5d) * 100)"
+          :value="formatReturnPct(mkt.spy_ret_5d)"
           :tone="tone(mkt.spy_ret_5d)"
           size="sm"
         />
         <Readout
           label="SPY 21D Return"
-          :value="signedPct(Number(mkt.spy_ret_21d) * 100)"
+          :value="formatReturnPct(mkt.spy_ret_21d)"
           :tone="tone(mkt.spy_ret_21d)"
           size="sm"
         />
         <Readout
           label="SPY Trend"
-          :value="mkt.spy_above_ma20 ? 'ABOVE MA20' : 'BELOW MA20'"
-          :tone="mkt.spy_above_ma20 ? 'pos' : 'neg'"
+          :value="benchmarkTrendLabel(mkt.spy_above_ma20)"
+          :tone="benchmarkTrendTone(mkt.spy_above_ma20)"
           size="sm"
         />
         <Readout
           label="QQQ 5D RS vs SPY"
-          :value="signedPct(Number(mkt.qqq_spy_rs_5d) * 100)"
+          :value="formatReturnPct(mkt.qqq_spy_rs_5d)"
           :tone="tone(mkt.qqq_spy_rs_5d)"
           size="sm"
         />
@@ -262,31 +294,41 @@ const expandedNames = computed(() => {
 
       <!-- Single rotation visual: click a row to expand names under it -->
       <div v-if="sectors.length" class="rotation-strip">
-        <template
-          v-for="s in [...sectors].sort((a, b) => b.flow_score - a.flow_score)"
-          :key="'rot-' + s.etf"
-        >
+        <template v-for="s in rankedSectors" :key="'rot-' + s.etf">
           <div
             class="rot-row"
-            :class="[s.flow_score >= 0 ? 'in' : 'out', { open: expandedEtf === s.etf }]"
+            :class="[
+              flowLean(s.flow_score) === 'out'
+                ? 'out'
+                : flowLean(s.flow_score) === 'in'
+                  ? 'in'
+                  : 'flat',
+              { open: expandedEtf === s.etf },
+            ]"
             @click="toggleSector(s.etf)"
           >
             <span class="fig rot-etf">{{ s.etf }}</span>
             <span class="label rot-name" :title="s.name">{{ s.name }}</span>
             <span class="rot-bar" aria-hidden="true">
               <i
-                :class="s.flow_score >= 0 ? 'in' : 'out'"
-                :style="{ width: `${Math.min(100, (Math.abs(s.flow_score) / flowMax) * 100)}%` }"
+                :class="
+                  flowLean(s.flow_score) === 'out'
+                    ? 'out'
+                    : flowLean(s.flow_score) === 'in'
+                      ? 'in'
+                      : 'flat'
+                "
+                :style="{ width: flowTrackWidth(s.flow_score, flowMax) }"
               />
             </span>
             <span class="fig rot-score" :class="tone(s.flow_score)">{{
-              signedPct(s.flow_score * 100, 1)
+              formatReturnPct(s.flow_score, 1)
             }}</span>
             <span class="fig rot-rs" :class="tone(s.ret_5d)"
-              >{{ signedPct(s.ret_5d * 100, 1) }} 5D</span
+              >{{ formatReturnPct(s.ret_5d, 1) }} 5D</span
             >
             <span class="fig rot-rs" :class="tone(s.rs_5d)"
-              >{{ signedPct(s.rs_5d * 100, 1) }} RS</span
+              >{{ formatReturnPct(s.rs_5d, 1) }} RS</span
             >
             <span class="rot-chev label">{{ expandedEtf === s.etf ? '▴' : '▾' }}</span>
           </div>
@@ -303,11 +345,13 @@ const expandedNames = computed(() => {
                 :key="w.symbol"
                 type="button"
                 class="name-chip"
-                :class="(w.score ?? 0) >= 0 ? 'in' : 'out'"
+                :class="
+                  flowLean(w.score) === 'out' ? 'out' : flowLean(w.score) === 'in' ? 'in' : 'flat'
+                "
                 @click.stop="open(w.symbol)"
               >
                 <span class="fig">{{ w.symbol }}</span>
-                <span class="fig" :class="tone(w.score)">{{ signedPct(w.score * 100, 1) }}</span>
+                <span class="fig" :class="tone(w.score)">{{ formatReturnPct(w.score, 1) }}</span>
               </button>
             </div>
             <p v-else class="note tiny">No watch names mapped to this sleeve this session.</p>
@@ -389,26 +433,26 @@ const expandedNames = computed(() => {
                 <span class="fl-track" aria-hidden="true">
                   <b class="fl-mid" />
                   <i
+                    v-if="watchBar(w.score).side !== 'none'"
                     class="fl-fill"
-                    :class="(w.score ?? 0) >= 0 ? 'in' : 'out'"
+                    :class="watchBar(w.score).side"
                     :style="
-                      (w.score ?? 0) >= 0
-                        ? {
-                            left: '50%',
-                            width: `${Math.min(50, (Math.abs(Number(w.score ?? 0)) / flowMax) * 50)}%`,
-                          }
-                        : {
-                            right: '50%',
-                            width: `${Math.min(50, (Math.abs(Number(w.score ?? 0)) / flowMax) * 50)}%`,
-                          }
+                      watchBar(w.score).side === 'in'
+                        ? { left: '50%', width: watchBar(w.score).width }
+                        : { right: '50%', width: watchBar(w.score).width }
                     "
                   />
                 </span>
               </td>
-              <td class="fig num" :class="tone(w.score)">{{ signedPct(w.score * 100, 2) }}</td>
-              <td class="fig num" :class="tone(w.rs_5d)">{{ signedPct(w.rs_5d * 100, 2) }}</td>
-              <td class="label" :class="(w.score ?? 0) >= 0 ? 'pos' : 'neg'">
-                {{ (w.score ?? 0) >= 0 ? 'money in' : 'money out' }}
+              <td class="fig num" :class="tone(w.score)">{{ formatReturnPct(w.score) }}</td>
+              <td class="fig num" :class="tone(w.rs_5d)">{{ formatReturnPct(w.rs_5d) }}</td>
+              <td
+                class="label"
+                :class="
+                  flowLean(w.score) === 'in' ? 'pos' : flowLean(w.score) === 'out' ? 'neg' : 'dim'
+                "
+              >
+                {{ flowLeanLabel(w.score) }}
               </td>
             </tr>
           </tbody>

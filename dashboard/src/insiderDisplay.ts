@@ -66,9 +66,21 @@ export const FORM_BRIEFS: FormBrief[] = [
 ]
 
 export function classifyFilingKind(form: unknown): SecFilingRow['kind'] {
-  const key = text(form).toUpperCase()
-  if (key === '4' || key === '4/A' || key.startsWith('4')) return 'insider'
-  if (key.startsWith('8-K') || key === '8K') return 'event'
+  const key = text(form).toUpperCase().replace(/\s+/g, ' ')
+  const compact = key.replace(/[\s-]/g, '')
+  // Form 4 only. `startsWith('4')` also matched 424B prospectus supplements
+  // and 40-F, so those filings landed in the insider column.
+  if (
+    key === '4' ||
+    key === '4/A' ||
+    key === 'FORM 4' ||
+    key === 'FORM 4/A' ||
+    compact === 'FORM4' ||
+    compact === 'FORM4/A'
+  ) {
+    return 'insider'
+  }
+  if (key.startsWith('8-K') || key === '8K' || compact === '8K') return 'event'
   if (key.includes('13D') || key.includes('13G')) return 'holder'
   return 'other'
 }
