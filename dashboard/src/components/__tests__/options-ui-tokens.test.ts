@@ -190,7 +190,8 @@ describe('Options UI token gate (shipped SFCs)', () => {
   it('keeps strike inspection outside the plot so it never hides bars or strike labels', () => {
     const gex = readSrc('components/GammaExposureMap.vue')
     expect(gex).toContain('INSPECTING')
-    expect(gex).toContain('LOCKED STRIKE')
+    expect(gex).toContain('onPlotPointer')
+    expect(gex).not.toContain('LOCKED STRIKE')
     expect(gex).toContain('class="strike-focus"')
     expect(gex).not.toContain('strike-hover-card')
     expect(gex).not.toContain('hoverBreakdown')
