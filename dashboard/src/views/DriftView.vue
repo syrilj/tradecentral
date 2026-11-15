@@ -805,9 +805,9 @@ const charmChartKey = computed(
         <summary class="label">Evidence and model limits</summary>
         <p>
           Walls describe option positioning levels; their presence does not confirm support,
-          resistance, or a breakout. Charm is a modeled structural estimate, not observed stock
-          buying or selling. Tape pressure is reported separately and does not override the
-          wall-location read.
+          resistance, or a breakout. Charm is a modeled structural estimate,
+          <span>not observed stock buying or selling</span>. Tape pressure is reported separately
+          and does not override the wall-location read.
         </p>
       </details>
     </section>
