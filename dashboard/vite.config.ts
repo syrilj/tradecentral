@@ -13,8 +13,10 @@ export default defineConfig(({ mode }) => {
     plugins: [vue()],
     envDir: repoDir,
     define: {
+      // Public allowlist only. EDGE_ALLOWED_EMAILS is enforced by the API and
+      // must not be copied into the browser bundle.
       'import.meta.env.VITE_EDGE_ALLOWED_EMAILS': JSON.stringify(
-        env.VITE_EDGE_ALLOWED_EMAILS || env.EDGE_ALLOWED_EMAILS || '',
+        env.VITE_EDGE_ALLOWED_EMAILS || '',
       ),
     },
     resolve: {

@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, type ConfluenceCluster, type OptionsIntelligence, type OptionsMode } from '@/api'
 import { useResource } from '@/composables/useResource'
 import { compact, num, signedPct } from '@/format'
 import Panel from '@/components/Panel.vue'
 import LoadingState from '@/components/LoadingState.vue'
-import GammaExposureMap from '@/components/GammaExposureMap.vue'
 import ThetaVannaChart from '@/components/ThetaVannaChart.vue'
 import IvSurfaceChart from '@/components/IvSurfaceChart.vue'
 import VolumeProfileChart from '@/components/VolumeProfileChart.vue'
@@ -481,13 +480,12 @@ const topConfluence = computed<ConfluenceCluster[]>(() =>
         live
         :meta="`net ${compact(netGex)}M · ${gexRegime.toUpperCase()}`"
       >
-        <GammaExposureMap
-          :rows="payload.gex_by_strike ?? []"
-          :spot="spot ?? 0"
-          :call-wall="callWall"
-          :put-wall="putWall"
-          :gamma-flip="gammaFlip"
-        />
+        <p class="empty">
+          <RouterLink :to="{ name: 'options', query: { symbol } }"
+            >Open {{ symbol }} gamma</RouterLink
+          >
+          — strike gamma is the options board, not a second chart here.
+        </p>
       </Panel>
 
       <!-- decay -->

@@ -9,6 +9,7 @@ import {
 } from '@/api'
 import { useResource } from '@/composables/useResource'
 import { num, compact, DASH } from '@/format'
+import { externalHref } from '@/safeUrl'
 import Panel from '@/components/Panel.vue'
 import Readout from '@/components/Readout.vue'
 import HelpTip from '@/components/HelpTip.vue'
@@ -244,7 +245,12 @@ const depthIsCore = computed(() => (intel.data.value?.depth ?? 'core') === 'core
       <ol class="setup-steps">
         <li>
           Open
-          <a :href="status.data.value.key_setup_url" target="_blank" rel="noopener">
+          <a
+            v-if="externalHref(status.data.value.key_setup_url)"
+            :href="externalHref(status.data.value.key_setup_url)"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             fintel.io/u/dev
           </a>
           → <strong>Generate Key</strong>

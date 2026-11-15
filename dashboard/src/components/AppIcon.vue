@@ -50,6 +50,11 @@ withDefaults(
       <path d="M4.5 16.5 9 12l3 2.5 7.5-8" />
       <path d="M16.5 6.5H19v2.5" />
     </template>
+    <template v-else-if="name === 'live'">
+      <circle cx="12" cy="12" r="2.4" />
+      <path d="M12 3.5v3.2M12 17.3v3.2M3.5 12h3.2M17.3 12h3.2" />
+      <path d="M7 16.5h2.2M14.8 7.5H17" />
+    </template>
     <template v-else-if="name === 'options'">
       <path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" />
       <path d="M4 12 12 16.5 20 12" />
@@ -76,6 +81,13 @@ withDefaults(
       <path d="M3 13h18" stroke-dasharray="3 2.5" />
       <path d="M3 19c4 0 3.5-13 9-13s5 13 9 13" />
       <path d="M12 3v3" />
+    </template>
+    <template v-else-if="name === 'gamma'">
+      <!-- Flip line, call mass above it, a support shelf below. -->
+      <path d="M4 14h16" />
+      <path d="M6 14c2.2-6 3.2-6 6-6s3.8 6 6 6" />
+      <path d="M12 4v3" />
+      <path d="M8 19h3" />
     </template>
     <template v-else-if="name === 'drift'">
       <path d="M3 12h18" />
@@ -279,6 +291,13 @@ withDefaults(
       <path d="M3 17c3.5-3 6.5 3 10 0s5.5-3 8 0" />
       <path d="M6 14 18 4" />
       <path d="M12 4h6v6" />
+    </template>
+    <template v-else-if="name === 'liquidity'">
+      <path d="M4 16c2.2-5 3.6-5 5.4 0s3.2 5 5.2 0 3.2-5 5 0" />
+      <path d="M4 19.5h16" />
+    </template>
+    <template v-else-if="name === 'microstructure'">
+      <path d="M5 19V8M10 19V5M15 19v-7M20 19V9" />
     </template>
     <template v-else>
       <circle cx="12" cy="12" r="8" />

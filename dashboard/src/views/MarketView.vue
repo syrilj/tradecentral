@@ -21,6 +21,7 @@ import {
 import type { Resource } from '@/composables/useResource'
 import { debounce, useResource } from '@/composables/useResource'
 import { num, pct, pctFrac, signedPct, compact, usd, tone, shortDate, DASH } from '@/format'
+import { externalHref } from '@/safeUrl'
 import {
   formatBigUsd,
   formatPerShare,
@@ -721,7 +722,11 @@ const institutionKpis = computed(() => {
 const insMaxQuarterlyVol = computed(() => {
   const bars = insData.value?.quarterly_net
   if (!bars?.length) return 1
-  return Math.max(1, ...bars.map((q: { net_volume: number }) => Math.abs(q.net_volume)))
+  const magnitudes = bars.map((q: { net_volume?: number | null }) => {
+    const v = q.net_volume
+    return v == null || !Number.isFinite(v) ? 0 : Math.abs(v)
+  })
+  return Math.max(1, ...magnitudes)
 })
 
 // SEC Filings from Sentiment Payload
@@ -1437,8 +1442,8 @@ const finChartData = computed(() => {
             <div class="card-kpi-row">
               <span class="kpi-l label">Buy vs Sell Mix</span>
               <strong v-if="insData?.summary" class="kpi-v fig pos">
-                {{ insData.summary.buy_count }} BUY
-                <span class="dim">/ {{ insData.summary.sell_count }} SELL</span>
+                {{ insData.summary.buy_count ?? DASH }} BUY
+                <span class="dim">/ {{ insData.summary.sell_count ?? DASH }} SELL</span>
               </strong>
               <strong v-else class="kpi-v fig dim">—</strong>
             </div>
@@ -1601,13 +1606,13 @@ const finChartData = computed(() => {
             <div class="about-stat-item">
               <span class="stat-lbl label">Website</span>
               <a
-                v-if="profile?.about?.website"
-                :href="profile.about.website"
+                v-if="externalHref(profile?.about?.website)"
+                :href="externalHref(profile?.about?.website)"
                 target="_blank"
-                rel="noopener"
+                rel="noopener noreferrer"
                 class="stat-link label"
               >
-                {{ profile.about.website.replace('https://', '').replace('http://', '') }}
+                {{ (profile?.about?.website ?? '').replace('https://', '').replace('http://', '') }}
               </a>
               <span v-else class="dim">—</span>
             </div>
@@ -2848,14 +2853,32 @@ const finChartData = computed(() => {
             <div class="q-bar-wrapper">
               <div
                 class="q-bar"
-                :class="q.net_volume >= 0 ? 'pos' : 'neg'"
+                :class="
+                  q.net_volume == null || !Number.isFinite(q.net_volume)
+                    ? 'flat'
+                    : q.net_volume >= 0
+                      ? 'pos'
+                      : 'neg'
+                "
                 :style="{
-                  height: `${Math.min(100, Math.max(12, (Math.abs(q.net_volume) / insMaxQuarterlyVol) * 100))}%`,
+                  height:
+                    q.net_volume == null || !Number.isFinite(q.net_volume)
+                      ? '0%'
+                      : `${Math.min(100, Math.max(12, (Math.abs(q.net_volume) / insMaxQuarterlyVol) * 100))}%`,
                 }"
               />
             </div>
             <span class="q-label label">{{ q.quarter }}</span>
-            <span class="q-val fig" :class="q.net_volume >= 0 ? 'pos' : 'neg'">
+            <span
+              class="q-val fig"
+              :class="
+                q.net_volume == null || !Number.isFinite(q.net_volume)
+                  ? 'flat'
+                  : q.net_volume >= 0
+                    ? 'pos'
+                    : 'neg'
+              "
+            >
               {{ formatBigUsd(q.net_volume) }}
             </span>
           </div>
@@ -2932,14 +2955,29 @@ const finChartData = computed(() => {
                 <td>
                   <span
                     class="kind label"
-                    :class="tx.transaction_type === 'Purchase' ? 'pos' : 'neg'"
+                    :class="
+                      tx.transaction_type === 'Purchase'
+                        ? 'pos'
+                        : tx.transaction_type === 'Sale'
+                          ? 'neg'
+                          : 'dim'
+                    "
                   >
                     {{ tx.transaction_type ? tx.transaction_type.toUpperCase() : DASH }}
                   </span>
                 </td>
                 <td class="fig">{{ tx.shares != null ? tx.shares.toLocaleString() : DASH }}</td>
                 <td class="fig">{{ formatPerShare(tx.price) }}</td>
-                <td class="fig" :class="tx.transaction_type === 'Purchase' ? 'pos' : 'neg'">
+                <td
+                  class="fig"
+                  :class="
+                    tx.transaction_type === 'Purchase'
+                      ? 'pos'
+                      : tx.transaction_type === 'Sale'
+                        ? 'neg'
+                        : 'dim'
+                  "
+                >
                   {{ formatBigUsd(tx.value) }}
                 </td>
                 <td class="fig dim">
@@ -2948,11 +2986,11 @@ const finChartData = computed(() => {
                 <td>
                   <a
                     :href="
-                      tx.sec_form_url ||
+                      externalHref(tx.sec_form_url) ||
                       `https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(symbol)}&forms=4`
                     "
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                     class="label link"
                   >
                     Form 4 ↗
@@ -3343,10 +3381,10 @@ const finChartData = computed(() => {
                 <td class="fig bold">{{ c.amount_range || DASH }}</td>
                 <td>
                   <a
-                    v-if="c.source_url"
-                    :href="c.source_url"
+                    v-if="externalHref(c.source_url)"
+                    :href="externalHref(c.source_url)"
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                     class="label link"
                     >STOCK Act</a
                   >
@@ -3885,10 +3923,10 @@ const finChartData = computed(() => {
                 <td class="dim">{{ row.description || DASH }}</td>
                 <td>
                   <a
-                    v-if="row.url"
-                    :href="row.url"
+                    v-if="externalHref(row.url)"
+                    :href="externalHref(row.url)"
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                     class="label link"
                     >Open SEC Filing</a
                   >

@@ -45,6 +45,7 @@ import {
   type TrajWindow,
 } from '@/api'
 import { debounce, useResource } from '@/composables/useResource'
+import { useChartSize } from '@/composables/useChartSize'
 import { DASH, num, optNum, optSigned, shortDate } from '@/format'
 import { linearScale, linePath, niceTicks } from '@/charts'
 import Panel from '@/components/Panel.vue'
@@ -169,7 +170,16 @@ const series = computed<KalmanSeriesPoint[]>(() => d.value?.series ?? [])
    time-proportional axis would open a gap every weekend and holiday that the
    filter never saw. All three panes share one index scale so a feature in
    pane 03 sits directly under the bar that produced it in pane 01. */
-const W = 900
+const chartHost = ref<HTMLElement | null>(null)
+const { width: chartPx } = useChartSize(chartHost, {
+  minW: 320,
+  fallbackW: 720,
+  minH: 40,
+  fallbackH: 40,
+})
+/* Match the viewBox to the pane so labels stay at --t-tiny instead of scaling
+   with a fixed 900-wide box, and so a 22px date strip is not stretched. */
+const W = computed(() => Math.max(320, chartPx.value || 720))
 const PAD_L = 62
 const PAD_R = 16
 const PRICE_H = 190
@@ -179,13 +189,13 @@ const PAD_T = 12
 const PAD_B = 10
 
 const xScale = computed(() =>
-  linearScale([0, Math.max(series.value.length - 1, 1)], [PAD_L, W - PAD_R]),
+  linearScale([0, Math.max(series.value.length - 1, 1)], [PAD_L, W.value - PAD_R]),
 )
 
 const xTicks = computed(() => {
   const s = series.value
   if (s.length < 2) return []
-  const count = Math.min(7, s.length)
+  const count = Math.min(s.length, Math.max(2, Math.floor((W.value - PAD_L - PAD_R) / 84)))
   const out: { x: number; label: string }[] = []
   for (let k = 0; k < count; k++) {
     const i = Math.round((k * (s.length - 1)) / (count - 1))
@@ -298,7 +308,9 @@ const scoreChart = computed(() => {
   if (s.length < 2) return null
   const K = Math.max(entryZ.value, 0.5)
   const warp = (v: number) => Math.asinh(v / K)
-  const vals = s.map((p) => p.score ?? 0).filter((v) => Number.isFinite(v))
+  const vals = s
+    .map((p) => p.score)
+    .filter((v): v is number => v != null && Number.isFinite(v))
   let tMax = warp(K * 2)
   for (const v of vals) tMax = Math.max(tMax, Math.abs(warp(v)))
   const scale = linearScale([-tMax, tMax], [SCORE_H - PAD_B, PAD_T])
@@ -322,7 +334,14 @@ const scoreChart = computed(() => {
     }, [])
 
   return {
-    path: linePath(s.map((p, i) => ({ x: xScale.value(i), y: y(p.score ?? 0) }))),
+    path: linePath(
+      s
+        .map((p, i) => ({
+          x: xScale.value(i),
+          y: p.score == null || !Number.isFinite(p.score) ? Number.NaN : y(p.score),
+        }))
+        .filter((pt) => Number.isFinite(pt.y)),
+    ),
     zeroY: y(0),
     entryY: y(entryZ.value),
     entryNegY: y(-entryZ.value),
@@ -519,14 +538,15 @@ const truncated = computed(() => {
 
         <p class="caveat label">{{ d.caveat }}</p>
 
-        <figure class="figure">
+        <figure ref="chartHost" class="figure">
           <figcaption class="label fig-cap">
             01 · {{ d.symbol }} close, shaded where the rules held a position
           </figcaption>
           <svg
             class="pane"
             :viewBox="`0 0 ${W} ${PRICE_H}`"
-            preserveAspectRatio="none"
+            :style="{ height: `${PRICE_H}px` }"
+            preserveAspectRatio="xMinYMin meet"
             role="img"
             :aria-label="`${d.symbol} close with held positions`"
           >
@@ -554,7 +574,8 @@ const truncated = computed(() => {
           <svg
             class="pane"
             :viewBox="`0 0 ${W} ${SLOPE_H}`"
-            preserveAspectRatio="none"
+            :style="{ height: `${SLOPE_H}px` }"
+            preserveAspectRatio="xMinYMin meet"
             role="img"
             aria-label="Kalman slope"
           >
@@ -585,7 +606,8 @@ const truncated = computed(() => {
           <svg
             class="pane"
             :viewBox="`0 0 ${W} ${SCORE_H}`"
-            preserveAspectRatio="none"
+            :style="{ height: `${SCORE_H}px` }"
+            preserveAspectRatio="xMinYMin meet"
             role="img"
             aria-label="Slope divided by its rolling noise"
           >
@@ -640,16 +662,17 @@ const truncated = computed(() => {
           <svg
             class="axis-pane"
             :viewBox="`0 0 ${W} 22`"
-            preserveAspectRatio="none"
+            :style="{ height: '22px' }"
+            preserveAspectRatio="xMinYMin meet"
             aria-hidden="true"
           >
             <text
-              v-for="t in xTicks"
+              v-for="(t, ti) in xTicks"
               :key="t.label + t.x"
               class="axis fig"
-              :x="t.x"
+              :x="ti === 0 ? PAD_L : ti === xTicks.length - 1 ? W - PAD_R : t.x"
               y="14"
-              text-anchor="middle"
+              :text-anchor="ti === 0 ? 'start' : ti === xTicks.length - 1 ? 'end' : 'middle'"
             >
               {{ t.label }}
             </text>
@@ -880,7 +903,6 @@ const truncated = computed(() => {
 .pane {
   display: block;
   width: 100%;
-  height: auto;
   background: var(--void-lift);
   border: var(--hair) solid var(--rule);
   border-radius: var(--r-sm);
@@ -889,12 +911,13 @@ const truncated = computed(() => {
 .axis-pane {
   display: block;
   width: 100%;
-  height: auto;
+  height: 22px;
 }
 
 .grid {
   stroke: var(--rule-faint);
   stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 .zero {

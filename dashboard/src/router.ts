@@ -122,7 +122,13 @@ const routes: RouteRecordRaw[] = [
     path: '/options',
     name: 'options',
     component: () => import('@/views/OptionsView.vue'),
-    meta: { title: 'Options Drift', index: '05' },
+    meta: { title: 'Options', index: '05' },
+  },
+  {
+    path: '/live',
+    name: 'live-options',
+    component: () => import('@/views/LiveOptionsView.vue'),
+    meta: { title: 'Live', index: '05' },
   },
   {
     path: '/drift',
@@ -135,6 +141,12 @@ const routes: RouteRecordRaw[] = [
     name: 'regime',
     component: () => import('@/views/RegimeView.vue'),
     meta: { title: 'Regime', index: '05' },
+  },
+  {
+    path: '/gamma',
+    name: 'gamma',
+    component: () => import('@/views/GammaResistanceView.vue'),
+    meta: { title: 'Gamma', index: '05' },
   },
   {
     path: '/microstructure-regime',
@@ -305,13 +317,30 @@ const routes: RouteRecordRaw[] = [
       query: { ...to.query, tab: 'states' },
     }),
   },
-  { path: '/:pathMatch(.*)*', redirect: '/' },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: {
+      documentTitle: 'TradeCentral · Page not found',
+      description: 'That address is not a TradeCentral research workspace.',
+      public: true,
+    },
+  },
 ]
 
 export const router = createRouter({
   history: createWebHistory(),
   routes,
-  scrollBehavior: () => ({ top: 0 }),
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition) return savedPosition
+    // In-page overview links (#flow, #method) must land on the section.
+    // Anything else, including an unknown hash, stays at the top.
+    if (/^#[A-Za-z][\w-]*$/.test(to.hash) && document.getElementById(to.hash.slice(1))) {
+      return { el: to.hash, top: 72 }
+    }
+    return { top: 0 }
+  },
 })
 
 /*
@@ -340,6 +369,24 @@ function setMetaDescription(content: string): void {
   tag.content = content
 }
 
+const PAPER_THEME_ROUTES = new Set(['auth', 'waitlist', 'license', 'terms'])
+
+function tokenColor(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
+/** Status bar follows the color at the top of the page: paper on auth/legal, void everywhere else. */
+function setThemeColor(routeName: unknown): void {
+  const paper = PAPER_THEME_ROUTES.has(String(routeName))
+  let tag = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (!tag) {
+    tag = document.createElement('meta')
+    tag.name = 'theme-color'
+    document.head.appendChild(tag)
+  }
+  tag.content = tokenColor(paper ? '--paper' : '--void')
+}
+
 router.afterEach((to) => {
   /* `documentTitle` wins when a route needs a standalone, un-prefixed title
      (the public landing page). Everything else keeps the desk's
@@ -357,4 +404,5 @@ router.afterEach((to) => {
   }
 
   setMetaDescription((to.meta.description as string | undefined) ?? DEFAULT_DESCRIPTION)
+  setThemeColor(to.name)
 })

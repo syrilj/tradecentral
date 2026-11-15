@@ -42,6 +42,7 @@ import {
   type TrajWindow,
 } from '@/api'
 import { debounce, useResource } from '@/composables/useResource'
+import { useChartSize } from '@/composables/useChartSize'
 import { age, DASH, num, pctFrac, shortDate } from '@/format'
 import {
   CHANGEPOINT_FIGURE_LABELS,
@@ -216,13 +217,22 @@ const detailLoading = computed(
    The heatmap's columns are a downsampled stride of the same date range the
    series covers, not a 1:1 index match, so the two panels are aligned by
    parsing actual dates onto one timestamp scale rather than by position. */
-const W = 860
+const topChartRef = ref<SVGSVGElement | null>(null)
+const { width: chartPx } = useChartSize(topChartRef, {
+  minW: 240,
+  fallbackW: 720,
+  minH: 40,
+  fallbackH: 200,
+})
+/* ViewBox width tracks the chart column (not the y-label gutter) and the
+   heights match the CSS boxes, so type and strokes are not stretched. */
+const W = computed(() => Math.max(240, chartPx.value || 720))
 const PAD_L = 56
 const PAD_R = 16
-const TOP_H = 170
+const TOP_H = 200
 const TOP_PAD_T = 12
 const TOP_PAD_B = 8
-const BOT_H = 360
+const BOT_H = 400
 const BOT_PAD_T = 24
 const BOT_PAD_B = 30
 
@@ -241,7 +251,7 @@ const xDomain = computed<[number, number]>(() => {
   }
   return [first, last]
 })
-const xScale = computed(() => linearScale(xDomain.value, [PAD_L, W - PAD_R]))
+const xScale = computed(() => linearScale(xDomain.value, [PAD_L, W.value - PAD_R]))
 function xOf(dateStr: string): number {
   return xScale.value(parseUTC(dateStr))
 }
@@ -444,12 +454,12 @@ const hoveredIndex = ref<number | null>(null)
 
 function onFigureMove(e: MouseEvent): void {
   const series = d.value?.series
-  const host = figureHost.value
+  const host = topChartRef.value
   if (!series?.length || !host) return
   const rect = host.getBoundingClientRect()
   if (rect.width <= 0) return
   const frac = (e.clientX - rect.left) / rect.width
-  const vx = frac * W
+  const vx = frac * W.value
   const targetTs = xScale.value.invert(vx)
   hoveredIndex.value = nearestIndexByTime(series, targetTs)
 }
@@ -792,9 +802,10 @@ const symbolInsight = computed(() => {
           <div class="fig-axis-row">
             <span class="fig-ylab label">{{ CHANGEPOINT_FIGURE_LABELS.yTop }}</span>
             <svg
+              ref="topChartRef"
               :viewBox="`0 0 ${W} ${TOP_H}`"
               class="chart top-chart"
-              preserveAspectRatio="none"
+              preserveAspectRatio="xMinYMin meet"
               role="img"
               :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yTop} with predictive volatility envelope`"
             >
@@ -870,7 +881,7 @@ const symbolInsight = computed(() => {
             <svg
               :viewBox="`0 0 ${W} ${BOT_H}`"
               class="chart bottom-chart"
-              preserveAspectRatio="none"
+              preserveAspectRatio="xMinYMin meet"
               role="img"
               :aria-label="`${CHANGEPOINT_FIGURE_LABELS.yBottom}: ${CHANGEPOINT_FIGURE_LABELS.heatmap}`"
             >

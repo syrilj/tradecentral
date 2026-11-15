@@ -33,7 +33,7 @@
  * Everything is withheld when `quality.measurable` is false — see the note in
  * the template. A blank map is a correct map when there is no chain.
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { GexProfilePoint, StrikeExposure, ChainQuality } from '@/microstructureContracts'
 import type { GammaRegime } from '@/regimeContracts'
 import { linearScale, niceTicks } from '@/charts'
@@ -118,9 +118,8 @@ const plotR = computed(() => padL + innerW.value)
 /* ---- price window -------------------------------------------------------
  * The raw profile spans the whole quoted strike ladder (routinely +/-20%),
  * which compresses spot, the flip and both walls into a few pixels. The window
- * is operator-selectable, and structural levels always widen it back out to
- * include themselves — a wall 9% away is more decision-relevant than the
- * strikes either side of spot. */
+ * is the window. A wall outside it stays off the frame — stretching the
+ * axis back out made ±2% look selected while the chart kept the wide view. */
 const WINDOWS = [
   { key: '2', label: '±2%', pct: 0.02 },
   { key: '4', label: '±4%', pct: 0.04 },
@@ -137,19 +136,14 @@ const priceDomain = computed<[number, number]>(() => {
   const spot = props.spot
   const xs = props.profile.map((p) => p.spot).filter((v) => Number.isFinite(v))
   if (!xs.length) return [0, 1]
-  let lo = Math.min(...xs)
-  let hi = Math.max(...xs)
   const pct = windowPct.value
   if (pct != null && spot && spot > 0) {
-    lo = Math.max(lo, spot * (1 - pct))
-    hi = Math.min(hi, spot * (1 + pct))
+    const lo = spot * (1 - pct)
+    const hi = spot * (1 + pct)
+    if (hi > lo) return [lo, hi]
   }
-  for (const v of [props.spot, props.zeroGamma, props.callWall, props.putWall, props.pinStrike]) {
-    if (v != null && Number.isFinite(v) && v > 0) {
-      lo = Math.min(lo, v)
-      hi = Math.max(hi, v)
-    }
-  }
+  let lo = Math.min(...xs)
+  let hi = Math.max(...xs)
   if (!(hi > lo)) {
     const mid = lo || 1
     return [mid * 0.98, mid * 1.02]
@@ -276,9 +270,9 @@ const curveAreas = computed(() =>
 )
 
 /* ---- ladder lane --------------------------------------------------------
- * Bars are scaled against the largest single-strike |gamma| in view, so the
- * ladder shows this symbol's own distribution rather than being squashed by a
- * fixed $M constant that only fits one order of magnitude. */
+ * Bar length is the square root of each strike's share of the largest
+ * |gamma| in view. A linear scale lets one wall flatten the rest of the
+ * ladder; the lane caption says the scale is √|GEX|. */
 const ladderScaleM = computed(() => {
   let max = 0
   for (const r of visibleStrikes.value) {
@@ -305,8 +299,8 @@ const bars = computed<Bar[]>(() => {
   const out: Bar[] = []
   for (const r of visibleStrikes.value) {
     const cx = x(r.strike)
-    const callH = (Math.abs(r.call_gex_m) / scale) * half
-    const putH = (Math.abs(r.put_gex_m) / scale) * half
+    const callH = Math.sqrt(Math.abs(r.call_gex_m) / scale) * half
+    const putH = Math.sqrt(Math.abs(r.put_gex_m) / scale) * half
     if (callH >= 0.5) {
       out.push({ x: cx, y: ladderMidY.value - callH, h: callH, side: 'call', strike: r.strike })
     }
@@ -450,10 +444,19 @@ const spotX = computed(() => {
 
 const xTicks = computed(() => {
   const [lo, hi] = priceDomain.value
-  const count = innerW.value > 720 ? 8 : innerW.value > 460 ? 6 : 4
-  return niceTicks(lo, hi, count)
-    .filter((t) => t >= lo && t <= hi)
-    .map((t) => ({ v: t, x: xScale.value(t) }))
+  const span = Math.abs(hi - lo)
+  const count = span < 12 ? 4 : innerW.value > 720 ? 6 : innerW.value > 460 ? 5 : 3
+  const dp = span < 12 ? 1 : 0
+  const seen = new Set<string>()
+  const out: { v: number; x: number; label: string }[] = []
+  for (const t of niceTicks(lo, hi, count)) {
+    if (t < lo || t > hi) continue
+    const label = num(t, dp)
+    if (seen.has(label)) continue
+    seen.add(label)
+    out.push({ v: t, x: xScale.value(t), label })
+  }
+  return out
 })
 
 const yTicks = computed(() => {
@@ -517,10 +520,14 @@ const tipStyle = computed(() => {
   }
 })
 
-function onMove(e: MouseEvent) {
+function onMove(e: PointerEvent) {
   const host = hostRef.value
   if (!host) return
   const box = host.getBoundingClientRect()
+  if (box.width <= 0 || box.height <= 0) {
+    cursor.value = null
+    return
+  }
   const sx = W.value / Math.max(1, box.width)
   const sy = H.value / Math.max(1, box.height)
   const px = (e.clientX - box.left) * sx
@@ -530,6 +537,38 @@ function onMove(e: MouseEvent) {
       ? { x: px, y: py }
       : null
 }
+
+function onDown(e: PointerEvent): void {
+  const host = hostRef.value
+  if (host) {
+    try {
+      host.setPointerCapture(e.pointerId)
+    } catch {
+      /* the pointer may already be released */
+    }
+  }
+  onMove(e)
+}
+
+function onUp(e: PointerEvent): void {
+  const host = hostRef.value
+  if (host?.hasPointerCapture(e.pointerId)) {
+    try {
+      host.releasePointerCapture(e.pointerId)
+    } catch {
+      /* already released */
+    }
+  }
+  onMove(e)
+}
+
+function clearCursor(): void {
+  cursor.value = null
+}
+
+watch(windowKey, () => {
+  cursor.value = null
+})
 
 /** Net gamma at live spot, read off the same curve the chart draws — the
  *  headline this map is the evidence for. */
@@ -648,9 +687,10 @@ function signedPctLabel(v: number | null): string {
         class="tv-frame"
         :class="{ 'no-ladder': !showLadder }"
         @pointermove="onMove"
-        @mousemove="onMove"
-        @pointerleave="cursor = null"
-        @mouseleave="cursor = null"
+        @pointerdown="onDown"
+        @pointerup="onUp"
+        @pointerleave="clearCursor"
+        @pointercancel="clearCursor"
       >
         <svg
           class="map-svg"
@@ -796,14 +836,14 @@ function signedPctLabel(v: number | null): string {
           <!-- price axis -->
           <line class="axis-rule" :x1="padL" :x2="plotR" :y1="plotB" :y2="plotB" />
           <text
-            v-for="t in xTicks"
+            v-for="(t, ti) in xTicks"
             :key="`xt-${t.v}`"
             class="axis-label"
-            :x="t.x"
+            :x="ti === 0 ? padL : ti === xTicks.length - 1 ? plotR : t.x"
             :y="plotB + 15"
-            text-anchor="middle"
+            :text-anchor="ti === 0 ? 'start' : ti === xTicks.length - 1 ? 'end' : 'middle'"
           >
-            {{ num(t.v, 0) }}
+            {{ t.label }}
           </text>
           <g v-if="spotX != null" class="pill pill-spot">
             <rect :x="spotX - 27" :y="plotB + 3" width="54" height="16" rx="2" />
@@ -819,7 +859,9 @@ function signedPctLabel(v: number | null): string {
 
         <!-- the ladder caption sits in chrome, not in the plot, so it can never
              collide with the axis labels the way the old <text> one did -->
-        <span v-if="showLadder" class="lane-cap cap-ladder">γ BY STRIKE · CALLS ↑ / PUTS ↓</span>
+        <span v-if="showLadder" class="lane-cap cap-ladder"
+          >γ BY STRIKE · √|GEX| · CALLS ↑ / PUTS ↓</span
+        >
 
         <!-- crosshair tooltip -->
         <div v-if="hovered" class="tv-tip font-mono" :style="tipStyle">
@@ -1026,7 +1068,7 @@ function signedPctLabel(v: number | null): string {
   height: clamp(340px, 42vh, 470px);
   background: var(--void);
   cursor: crosshair;
-  touch-action: none;
+  touch-action: pan-y;
   overflow: hidden;
 }
 

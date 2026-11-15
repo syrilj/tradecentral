@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   api,
   type ChainStrikeRow,
@@ -12,7 +12,6 @@ import { useResource } from '@/composables/useResource'
 import { compact, num, shortDate, signed } from '@/format'
 import Panel from '@/components/Panel.vue'
 import LoadingState from '@/components/LoadingState.vue'
-import GammaExposureMap from '@/components/GammaExposureMap.vue'
 import PressureDriftChart from '@/components/PressureDriftChart.vue'
 import { resolveDealerRead } from '@/dealerRead'
 
@@ -26,8 +25,8 @@ import { resolveDealerRead } from '@/dealerRead'
  *
  *   · charm chart — selling pressure (positive flow) rises UP from zero,
  *     buying pressure (negative flow) grows DOWN
- *   · GEX map — the gamma structure behind the pressure
  *   · strike table — per-contract OI / vol / IV / delta / gamma / charm
+ * Strike gamma is the options board, so this page does not draw a second map.
  *
  * Missing data renders as an explicit missing/stale state, never a fake zero.
  */
@@ -86,7 +85,6 @@ const tableFilter = ref<TableFilterMode>('all')
 const tableSearch = ref('')
 const sortCol = ref<string>('strike')
 const sortAsc = ref(true)
-
 
 const optionsRes = useResource<OptionsIntelligence>(
   () =>
@@ -498,8 +496,6 @@ function exportCsv(): void {
   URL.revokeObjectURL(url)
 }
 
-const focusStrike = ref<number | null>(null)
-
 /** True when the server is serving a cached snapshot (no live feed available).
  *  Used to surface a visible staleness warning on the chart and cascade panels. */
 const isHistoryFallback = computed(
@@ -523,7 +519,8 @@ const charmChartKey = computed(
         >
         <h1>Charm &amp; Pressure Drift</h1>
         <p>
-          Charm estimates how option delta changes as time passes. The output is a model proxy for potential dealer rehedging, not observed buying or selling in the underlying.
+          Charm estimates how option delta changes as time passes. The output is a model proxy for
+          potential dealer rehedging, not observed buying or selling in the underlying.
         </p>
 
         <!-- Quick Ticker Chips -->
@@ -713,35 +710,105 @@ const charmChartKey = computed(
       </div>
     </section>
 
-    <section class="dealer-read-card" :class="dealerRead.tone" data-testid="dealer-primary-read" aria-live="polite">
+    <section
+      class="dealer-read-card"
+      :class="dealerRead.tone"
+      data-testid="dealer-primary-read"
+      aria-live="polite"
+    >
       <div class="dealer-read-heading">
         <div>
           <span class="label eyebrow">PRIMARY STRUCTURAL READ</span>
           <h2>{{ dealerRead.headline }}</h2>
         </div>
         <span class="label freshness-chip" :class="dealerRead.evidence.freshness">
-          {{ dealerRead.evidence.freshness === 'fresh' ? 'FRESH SNAPSHOT' : dealerRead.evidence.freshness === 'stale' ? 'STALE SNAPSHOT' : 'FRESHNESS UNKNOWN' }}
+          {{
+            dealerRead.evidence.freshness === 'fresh'
+              ? 'FRESH SNAPSHOT'
+              : dealerRead.evidence.freshness === 'stale'
+                ? 'STALE SNAPSHOT'
+                : 'FRESHNESS UNKNOWN'
+          }}
         </span>
       </div>
       <p v-if="loading" class="dealer-read-narrative">Loading options snapshot…</p>
-      <p v-else-if="error && !payload" class="dealer-read-narrative">Options data unavailable: {{ error }}</p>
+      <p v-else-if="error && !payload" class="dealer-read-narrative">
+        Options data unavailable: {{ error }}
+      </p>
       <p v-else class="dealer-read-narrative">{{ dealerRead.narrative }}</p>
       <div class="dealer-read-levels">
-        <div><span class="label">LOCATION</span><b class="fig">{{ dealerRead.position }}</b></div>
-        <div><span class="label">WATCH</span><b>{{ dealerRead.watch }}</b></div>
+        <div>
+          <span class="label">LOCATION</span><b class="fig">{{ dealerRead.position }}</b>
+        </div>
+        <div>
+          <span class="label">WATCH</span><b>{{ dealerRead.watch }}</b>
+        </div>
       </div>
       <div class="dealer-evidence label" aria-label="Supporting evidence">
-        <span>Spot <b class="fig">{{ dealerRead.evidence.spot != null ? `$${num(dealerRead.evidence.spot, 2)}` : '—' }}</b></span>
-        <span>Put wall <b class="fig">{{ dealerRead.evidence.putWall != null ? `$${num(dealerRead.evidence.putWall, 2)}` : '—' }}</b></span>
-        <span>Call wall <b class="fig">{{ dealerRead.evidence.callWall != null ? `$${num(dealerRead.evidence.callWall, 2)}` : '—' }}</b></span>
-        <span>Net GEX <b class="fig">{{ dealerRead.evidence.totalGexM != null ? `${signed(dealerRead.evidence.totalGexM, 1)}M` : '—' }}</b></span>
-        <span>Charm model <b class="fig">{{ dealerRead.evidence.netCharmFlow != null ? `${signed(dealerRead.evidence.netCharmFlow, 0)} sh/d · ${dealerRead.evidence.charmPressure ?? 'unclassified'}` : 'unavailable' }}</b></span>
-        <span>Tape pressure <b>{{ dealerRead.evidence.pressureVerdict ?? 'unavailable' }} · {{ dealerRead.evidence.pressureActionable === true ? 'source marks actionable' : dealerRead.evidence.pressureActionable === false ? 'source does not mark actionable' : 'actionability unavailable' }}</b></span>
-        <span>Feed age <b class="fig">{{ dealerRead.evidence.ageSeconds != null ? `${Math.round(dealerRead.evidence.ageSeconds)}s` : 'unknown' }}</b></span>
+        <span
+          >Spot
+          <b class="fig">{{
+            dealerRead.evidence.spot != null ? `$${num(dealerRead.evidence.spot, 2)}` : '—'
+          }}</b></span
+        >
+        <span
+          >Put wall
+          <b class="fig">{{
+            dealerRead.evidence.putWall != null ? `$${num(dealerRead.evidence.putWall, 2)}` : '—'
+          }}</b></span
+        >
+        <span
+          >Call wall
+          <b class="fig">{{
+            dealerRead.evidence.callWall != null ? `$${num(dealerRead.evidence.callWall, 2)}` : '—'
+          }}</b></span
+        >
+        <span
+          >Net GEX
+          <b class="fig">{{
+            dealerRead.evidence.totalGexM != null
+              ? `${signed(dealerRead.evidence.totalGexM, 1)}M`
+              : '—'
+          }}</b></span
+        >
+        <span
+          >Charm model
+          <b class="fig">{{
+            dealerRead.evidence.netCharmFlow != null
+              ? `${signed(dealerRead.evidence.netCharmFlow, 0)} sh/d · ${dealerRead.evidence.charmPressure ?? 'unclassified'}`
+              : 'unavailable'
+          }}</b></span
+        >
+        <span
+          >Tape pressure
+          <b
+            >{{ dealerRead.evidence.pressureVerdict ?? 'unavailable' }} ·
+            {{
+              dealerRead.evidence.pressureActionable === true
+                ? 'source marks actionable'
+                : dealerRead.evidence.pressureActionable === false
+                  ? 'source does not mark actionable'
+                  : 'actionability unavailable'
+            }}</b
+          ></span
+        >
+        <span
+          >Feed age
+          <b class="fig">{{
+            dealerRead.evidence.ageSeconds != null
+              ? `${Math.round(dealerRead.evidence.ageSeconds)}s`
+              : 'unknown'
+          }}</b></span
+        >
       </div>
       <details class="dealer-evidence-details">
         <summary class="label">Evidence and model limits</summary>
-        <p>Walls describe option positioning levels; their presence does not confirm support, resistance, or a breakout. Charm is a modeled structural estimate, not observed stock buying or selling. Tape pressure is reported separately and does not override the wall-location read.</p>
+        <p>
+          Walls describe option positioning levels; their presence does not confirm support,
+          resistance, or a breakout. Charm is a modeled structural estimate,
+          <span>not observed stock buying or selling</span>. Tape pressure is reported separately
+          and does not override the wall-location read.
+        </p>
       </details>
     </section>
 
@@ -810,29 +877,16 @@ const charmChartKey = computed(
       </div>
     </Panel>
 
-    <!-- GEX Map -->
-    <Panel
-      label="GEX BY STRIKE (GAMMA EXPOSURE PROFILE)"
-      :meta="netGex != null ? `NET $${compact(netGex)}M · ${gexRegimeLabel}` : 'NO GEX'"
-      flush
-    >
-      <div class="chart-slot">
-        <LoadingState v-if="loading" label="Building GEX profile…" />
-        <div v-else-if="!gexRows.length" class="placeholder">
-          <span class="ph-msg">GEX unavailable: open interest missing for {{ symbol }}.</span>
-        </div>
-        <GammaExposureMap
-          v-else
-          :rows="gexRows"
-          :spot="spot ?? 0"
-          :call-wall="callWall"
-          :put-wall="putWall"
-          :gamma-flip="gammaFlip"
-          :focus-strike="focusStrike"
-          :max-height="420"
-          @update:focus-strike="focusStrike = $event"
-        />
-      </div>
+    <!-- Strike gamma lives on the options board. This page is the charm read. -->
+    <Panel label="GAMMA BY STRIKE" meta="OPTIONS BOARD" flush>
+      <p class="placeholder">
+        <RouterLink class="label" :to="{ name: 'options', query: { symbol } }">
+          Open {{ symbol }} gamma
+        </RouterLink>
+        <span class="ph-sub label">
+          Call and put gamma by strike is one chart. This page keeps the charm profile.
+        </span>
+      </p>
     </Panel>
 
     <!-- Strike Greeks & Dealer Flow Table -->

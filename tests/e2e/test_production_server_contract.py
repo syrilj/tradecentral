@@ -79,3 +79,8 @@ def test_security_headers_are_present_on_health(api_client, monkeypatch):
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Permissions-Policy"]
     assert response.headers["X-Request-ID"]
+    assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    assert "object-src 'none'" in response.headers["Content-Security-Policy"]
+    assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin-allow-popups"
+    assert response.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+    assert response.headers["X-Permitted-Cross-Domain-Policies"] == "none"

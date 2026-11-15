@@ -1,24 +1,23 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUnmounted, ref } from 'vue'
-import gsap from 'gsap'
-import { ScrollTrigger } from 'gsap/ScrollTrigger'
+import { computed, defineAsyncComponent, inject, onMounted, onUnmounted, ref } from 'vue'
 import { type MarketClock, type Readiness, type StatusPayload } from '@/api'
 import { type Resource } from '@/composables/useResource'
 import { num, DASH } from '@/format'
 
 import AppIcon from '@/components/AppIcon.vue'
-import BsLab from '@/components/BsLab.vue'
 import FlowSignatureDiagram from '@/components/FlowSignatureDiagram.vue'
-import GexFlowVisual from '@/components/GexFlowVisual.vue'
-import McLiveHero from '@/components/McLiveHero.vue'
 import PrincipleDiagram from '@/components/PrincipleDiagram.vue'
 import TradeCentralMark from '@/components/TradeCentralMark.vue'
-import PayoffPlate from '@/components/PayoffPlate.vue'
 import optionsPositioningCapture from '@/assets/showcase/options-positioning.png'
 
 import { impliedRange } from '@/charts/landing-math'
 
-gsap.registerPlugin(ScrollTrigger)
+/* Below-the-fold and tab-hidden instruments stay out of the first evaluation
+   of this route. The overview still names them; they mount when shown. */
+const McLiveHero = defineAsyncComponent(() => import('@/components/McLiveHero.vue'))
+const GexFlowVisual = defineAsyncComponent(() => import('@/components/GexFlowVisual.vue'))
+const BsLab = defineAsyncComponent(() => import('@/components/BsLab.vue'))
+const PayoffPlate = defineAsyncComponent(() => import('@/components/PayoffPlate.vue'))
 
 /**
  * Public product overview — editorial "paper" system.
@@ -100,8 +99,12 @@ function stopRotating(): void {
 const HERO_LINES = ['Read the positioning', 'before the narrative.'] as const
 const heroAriaLabel = HERO_LINES.join(' ')
 const SCRAMBLE_CHARS = '01<>/[]{}#$%&*+=~ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-const scrambledLines = ref<string[]>([...HERO_LINES])
+const churnNodes: Array<HTMLElement | null> = []
 let scrambleRaf = 0
+
+function setChurn(index: number, el: unknown): void {
+  churnNodes[index] = el instanceof HTMLElement ? el : null
+}
 
 function runScramble(): void {
   const started = performance.now()
@@ -109,11 +112,16 @@ function runScramble(): void {
   const staggerMs = 380
   const step = (now: number): void => {
     let settledAll = true
-    scrambledLines.value = HERO_LINES.map((target, li) => {
+    HERO_LINES.forEach((target, li) => {
+      const node = churnNodes[li]
       const elapsed = now - started - li * staggerMs
       const progress = Math.min(1, Math.max(0, elapsed / churnMs))
-      if (progress >= 1) return target
+      if (progress >= 1) {
+        if (node) node.textContent = target
+        return
+      }
       settledAll = false
+      if (!node) return
       const settled = Math.floor(progress * target.length)
       let out = target.slice(0, settled)
       for (let i = settled; i < target.length; i += 1) {
@@ -122,7 +130,7 @@ function runScramble(): void {
             ? ' '
             : SCRAMBLE_CHARS[(settled * 31 + i * 17 + Math.floor(now / 45)) % SCRAMBLE_CHARS.length]
       }
-      return out
+      node.textContent = out
     })
     if (!settledAll) scrambleRaf = requestAnimationFrame(step)
   }
@@ -243,80 +251,113 @@ const MC = { S0: 100, sigma: 0.3, T: 0.25, mu: 0.08, r: 0.05, q: 0, totalPaths: 
 const heroRange = computed(() => impliedRange(MC.S0, MC.T, MC.sigma, MC.r, MC.q))
 
 const landingNavOpen = ref(false)
+const flowReady = ref(false)
+const labReady = ref(false)
+const sectionObservers: IntersectionObserver[] = []
+
+function armSection(id: string, flag: { value: boolean }): void {
+  const el = document.getElementById(id)
+  if (!el || typeof IntersectionObserver === 'undefined') {
+    flag.value = true
+    return
+  }
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      flag.value = true
+      observer.disconnect()
+    },
+    { rootMargin: '280px 0px', threshold: 0.01 },
+  )
+  observer.observe(el)
+  sectionObservers.push(observer)
+}
 
 /* ── GSAP animation orchestration ─────────────────────────────────────────── */
-let ctx: gsap.Context | undefined
+let ctx: { revert: () => void } | undefined
+let motionGeneration = 0
 
 onMounted(() => {
   document.body.classList.add('edge-public-mode')
 
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const generation = ++motionGeneration
 
-  /* GSAP context scopes all animations so ctx.revert() cleans up everything */
-  ctx = gsap.context(() => {
-    /* The masthead hardens once content has scrolled beneath it. Registered
+  /* GSAP is not on the first paint path. The headline and capture are already
+     in the document; scroll reveals start once the library has loaded. */
+  void import('gsap').then(async ({ default: gsap }) => {
+    const { ScrollTrigger } = await import('gsap/ScrollTrigger')
+    if (generation !== motionGeneration) return
+    gsap.registerPlugin(ScrollTrigger)
+    ctx = gsap.context(() => {
+      /* The masthead hardens once content has scrolled beneath it. Registered
        before the Reduce Motion guard: it is a material state, not motion,
        so it applies either way. The class flip keeps the scoped tokens the
        single source of truth for the appearance. */
-    ScrollTrigger.create({
-      start: 40,
-      onToggle: ({ isActive }) => {
-        document.querySelector('.masthead')?.classList.toggle('is-scrolled', isActive)
-      },
-    })
-
-    if (prefersReducedMotion) return
-
-    /* ── Hero copy fades in beside the decoding headline ─────────────────── */
-    gsap.from(
-      '.hero-eyebrow, .hero-lede, .hero-actions, .hero-try-note, .hero-boundary, .hero-warn-note',
-      {
-        y: 12,
-        duration: 0.45,
-        stagger: 0.07,
-        ease: 'power3.out',
-        delay: 0.2,
-      },
-    )
-
-    /* ── Hero instrument frame draws in ───────────────────────────────────── */
-    gsap.from('.hero-visual .instrument-frame', {
-      y: 26,
-      duration: 0.8,
-      delay: 0.45,
-      ease: 'power2.out',
-    })
-
-    /* ── Section reveals via ScrollTrigger ───────────────────────────────── */
-    gsap.utils.toArray<HTMLElement>('.gsap-reveal').forEach((el) => {
-      gsap.from(el, {
-        opacity: 0,
-        y: 20,
-        duration: 0.55,
-        ease: 'power2.out',
-        scrollTrigger: {
-          trigger: el,
-          start: 'top 92%',
-          toggleActions: 'play none none none',
-          once: true,
+      ScrollTrigger.create({
+        start: 40,
+        onToggle: ({ isActive }) => {
+          document.querySelector('.masthead')?.classList.toggle('is-scrolled', isActive)
         },
       })
+
+      if (prefersReducedMotion) return
+
+      /* ── Hero copy fades in beside the decoding headline ─────────────────── */
+      gsap.from(
+        '.hero-eyebrow, .hero-lede, .hero-actions, .hero-try-note, .hero-boundary, .hero-warn-note',
+        {
+          y: 12,
+          duration: 0.45,
+          stagger: 0.07,
+          ease: 'power3.out',
+          delay: 0.2,
+        },
+      )
+
+      /* ── Hero instrument frame draws in ───────────────────────────────────── */
+      gsap.from('.hero-visual .instrument-frame', {
+        y: 26,
+        duration: 0.8,
+        delay: 0.45,
+        ease: 'power2.out',
+      })
+
+      /* ── Section reveals via ScrollTrigger ───────────────────────────────── */
+      gsap.utils.toArray<HTMLElement>('.gsap-reveal').forEach((el) => {
+        gsap.from(el, {
+          opacity: 0,
+          y: 20,
+          duration: 0.55,
+          ease: 'power2.out',
+          scrollTrigger: {
+            trigger: el,
+            start: 'top 92%',
+            toggleActions: 'play none none none',
+            once: true,
+          },
+        })
+      })
     })
+    if (!prefersReducedMotion) {
+      window.setTimeout(() => ScrollTrigger.refresh(), 100)
+    }
   })
 
   if (!prefersReducedMotion) runScramble()
   wireFallIns(prefersReducedMotion)
+  armSection('flow', flowReady)
+  armSection('lab', labReady)
   startRotating()
-  setTimeout(() => {
-    ScrollTrigger.refresh()
-  }, 100)
 })
 
 onUnmounted(() => {
+  motionGeneration += 1
   document.body.classList.remove('edge-public-mode')
   ctx?.revert()
   cancelAnimationFrame(scrambleRaf)
   fallObserver?.disconnect()
+  for (const observer of sectionObservers) observer.disconnect()
   stopRotating()
 })
 </script>
@@ -408,13 +449,13 @@ onUnmounted(() => {
               aria-hidden="true"
             >
               <span class="hero-line-box">{{ line }}</span>
-              <span class="hero-line-churn">{{ scrambledLines[i] }}</span>
+              <span :ref="(el) => setChurn(i, el)" class="hero-line-churn">{{ line }}</span>
             </span>
           </h1>
 
           <p class="hero-lede">
-            Find a symbol and read the source and age of every figure on screen. One focused
-            workspace for flow, positioning, and the research behind its
+            One workstation for US equities and options. Read the source and age of every figure,
+            then the research behind its
             <span class="rotating-word">
               <span
                 v-for="(word, i) in ROTATING_WORDS"
@@ -647,7 +688,7 @@ onUnmounted(() => {
           </RouterLink>
         </div>
         <div class="pf-visual-stack gsap-reveal">
-          <GexFlowVisual class="pf-visual" />
+          <GexFlowVisual v-if="flowReady" class="pf-visual" />
         </div>
       </section>
 
@@ -663,7 +704,7 @@ onUnmounted(() => {
           </p>
         </header>
 
-        <BsLab class="lab-frame gsap-reveal" />
+        <BsLab v-if="labReady" class="lab-frame gsap-reveal" />
 
         <p class="lab-footnote gsap-reveal">
           Unitless model spot S₀ = $100 · carry r = 5% · dividend yield q = 0. The desk swaps these
@@ -681,7 +722,7 @@ onUnmounted(() => {
             >
             <span class="fig-state">BLACK-SCHOLES LEGS · DRAG SPOT · SWITCH STRUCTURE</span>
           </figcaption>
-          <PayoffPlate />
+          <PayoffPlate v-if="labReady" />
           <footer>
             <span class="fig-legend"><i class="leg-iv-high" />Today value</span>
             <span class="fig-legend"><i class="leg-trace" />Expiry P&amp;L</span>
@@ -843,7 +884,7 @@ onUnmounted(() => {
             <RouterLink :to="{ name: 'auth', query: { mode: 'signin', redirect: '/flow' } }"
               >Sign in</RouterLink
             >
-            <RouterLink :to="{ name: 'auth', query: { mode: 'setup', redirect: '/flow' } }"
+            <RouterLink :to="{ name: 'waitlist', query: { redirect: '/flow' } }"
               >Request operator access</RouterLink
             >
           </nav>
@@ -899,7 +940,7 @@ onUnmounted(() => {
 :global(body.edge-public-mode #app),
 :global(body.edge-public-mode .shell) {
   height: auto !important;
-  min-height: 100vh;
+  min-height: 100svh;
   overflow: visible !important;
 }
 :global(body.edge-public-mode .shell) {
@@ -915,7 +956,7 @@ onUnmounted(() => {
   display: block !important;
   width: 100% !important;
   height: auto !important;
-  min-height: 100vh !important;
+  min-height: 100svh !important;
   padding: 0 !important;
   overflow: visible !important;
 }
@@ -981,7 +1022,7 @@ onUnmounted(() => {
 
   position: relative;
   z-index: 3;
-  min-height: 100vh;
+  min-height: 100svh;
   color: var(--ink);
   background: var(--void);
   font-family: var(--font-ui);
@@ -992,7 +1033,7 @@ onUnmounted(() => {
 
 /* Anchored sections must clear the fixed masthead when jumped to. */
 .landing-page section[id] {
-  scroll-margin-top: calc(var(--chrome-h) + 16px);
+  scroll-margin-top: calc(var(--chrome-h) + env(safe-area-inset-top, 0px) + 16px);
 }
 
 /* ── Shared layout primitives ─────────────────────────────────────────────── */
@@ -1000,7 +1041,7 @@ onUnmounted(() => {
   width: min(1480px, 100% - 48px);
   margin-inline: auto;
   border-inline: var(--hair) solid var(--rule);
-  padding-top: var(--chrome-h);
+  padding-top: calc(var(--chrome-h) + env(safe-area-inset-top, 0px));
 }
 .section-pad {
   padding-inline: clamp(20px, 4.5vw, 64px);
@@ -1045,7 +1086,7 @@ onUnmounted(() => {
   text-wrap: balance;
 }
 .section-lede {
-  max-width: 640px;
+  max-width: 65ch;
   font-size: 18px;
   line-height: 1.6;
   color: var(--ink-dim);
@@ -1070,29 +1111,34 @@ onUnmounted(() => {
   transition:
     background var(--dur) var(--ease-out),
     border-color var(--dur) var(--ease-out),
-    color var(--dur) var(--ease-out);
+    color var(--dur) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
 .button-primary {
   background: var(--tc-black);
   color: #fbfbf8;
 }
-.button-primary:hover {
-  background: #26262c;
+@media (hover: hover) and (pointer: fine) {
+  .button-primary:hover {
+    background: #26262c;
+  }
 }
 .button:focus-visible {
   outline: 2px solid var(--phosphor);
   outline-offset: 2px;
 }
 .button:active {
-  transform: translateY(1px);
+  transform: scale(0.97);
 }
 .button-ghost {
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
   background: transparent;
 }
-.button-ghost:hover {
-  background: var(--panel-hi);
+@media (hover: hover) and (pointer: fine) {
+  .button-ghost:hover {
+    background: var(--panel-hi);
+  }
 }
 .button-ghost:focus-visible {
   outline: 2px solid var(--phosphor);
@@ -1172,6 +1218,7 @@ onUnmounted(() => {
   position: fixed;
   z-index: 20;
   inset: 0 0 auto;
+  padding-top: env(safe-area-inset-top, 0px);
   background: var(--void);
   border-bottom: var(--hair) solid var(--rule);
   transition: border-color var(--dur) var(--ease-out);
@@ -2015,6 +2062,7 @@ onUnmounted(() => {
 }
 .lab-frame {
   margin-inline: auto;
+  min-height: 280px;
 }
 .lab-footnote {
   margin-top: 20px;
@@ -2515,12 +2563,26 @@ onUnmounted(() => {
   color: var(--ink-faint);
   background: transparent;
   border: none;
+  min-height: 44px;
   border-radius: 4px;
   cursor: pointer;
-  transition: all var(--dur) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    box-shadow 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.fig-tab-btn:hover {
-  color: var(--ink);
+@media (hover: hover) and (pointer: fine) {
+  .fig-tab-btn:hover {
+    color: var(--ink);
+  }
+}
+.fig-tab-btn:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 2px;
+}
+.fig-tab-btn:active {
+  transform: scale(0.97);
 }
 .fig-tab-btn.active {
   color: var(--ink);
@@ -2544,6 +2606,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 320px;
 }
 
 .product-feature-regimes {

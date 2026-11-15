@@ -7,7 +7,9 @@ Stdlib `http.server` + `socketserver.ThreadingMixIn` only, plus pandas/numpy
 Run with:
   edge/.venv-qlib/bin/python edge/tools/api_server.py [--port 8787] [--no-browser]
 
-Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Allow-Origin: *`):
+Endpoints (all GET unless noted, all JSON). Loopback callers are reflected in
+`Access-Control-Allow-Origin`; a wildcard is not the default. An explicit
+`EDGE_CORS_ORIGINS` allowlist replaces that default:
 
   GET  /api/status[?depth=quick|deep]
       -> latest cached desk board (PEAD candidates, directional signals,
@@ -444,6 +446,11 @@ from edge.daily_plays.options_intelligence import (  # noqa: E402
     OptionsFilters,
     build_options_intelligence,
 )
+from edge.daily_plays.gamma_resistance import (  # noqa: E402
+    compute_gamma_resistance,
+    parse_dte_param,
+)
+from edge.daily_plays.live_options import build_live_options  # noqa: E402
 from edge.daily_plays.vanna_exposure import compute_vanna_surface  # noqa: E402
 from edge.daily_plays.regime_attractor_engine import (  # noqa: E402
     ConfluenceCluster,
@@ -635,6 +642,14 @@ def _is_loopback_host(host: str) -> bool:
     return host.strip().lower() in {"127.0.0.1", "::1", "localhost"}
 
 
+def _is_loopback_origin(origin: str) -> bool:
+    try:
+        hostname = urlparse(origin).hostname or ""
+    except ValueError:
+        return False
+    return _is_loopback_host(hostname)
+
+
 def _auth_mode() -> str:
     """Operator-session mode: 'clerk' (default) or 'local'.
 
@@ -671,10 +686,11 @@ def _background_jobs_enabled() -> bool:
 
 
 def _cors_origins() -> list[str]:
-    configured = _env_csv("EDGE_CORS_ORIGINS")
-    # Preserve the zero-configuration workstation contract. A non-loopback
-    # server is rejected at startup unless it has an explicit origin allowlist.
-    return configured or ["*"]
+    # Empty means "reflect loopback origins only". That keeps the Vite dev
+    # server and the served SPA working without letting an arbitrary website
+    # read the loopback API. A literal "*" is honored only when the operator
+    # sets it, and off-loopback startup still rejects the wildcard.
+    return _env_csv("EDGE_CORS_ORIGINS")
 
 
 def _runtime_config_errors(host: str) -> list[str]:
@@ -4541,6 +4557,32 @@ def _load_symbol_df(symbol: str) -> tuple["_get_pd().DataFrame | None, str | Non
             del _PARQUET_CACHE[k]
         _PARQUET_CACHE[key] = df
     return df, tier
+
+
+def _catalog_closes(symbol: str, n: int = 8) -> list[dict[str, Any]] | None:
+    """Last local daily closes. Names outside the catalog stay missing.
+
+    This does not call a provider. A live pull would stall the panel and
+    could invent a print the desk does not have on disk.
+    """
+    if SYMBOL_INDEX.get(symbol) is None:
+        return None
+    frame, _tier = _load_symbol_df(symbol)
+    if frame is None or getattr(frame, "empty", True) or "close" not in frame.columns:
+        return None
+    rows: list[dict[str, Any]] = []
+    for idx, value in frame["close"].iloc[-n:].items():
+        try:
+            close = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(close) or close <= 0:
+            continue
+        date = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
+        rows.append({"date": date, "close": close})
+    if len(rows) < 2:
+        return None
+    return rows
 
 
 def _sanitize_symbol(raw: str) -> tuple[bool, str]:
@@ -10116,9 +10158,13 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _cors_origin(self) -> str | None:
         allowed = _cors_origins()
+        request_origin = (self.headers.get("Origin") or "").strip()
         if "*" in allowed:
             return "*"
-        request_origin = (self.headers.get("Origin") or "").strip()
+        if not allowed:
+            if request_origin and _is_loopback_origin(request_origin):
+                return request_origin
+            return None
         return request_origin if request_origin in allowed else None
 
     def _cross_site_write_blocked(self) -> bool:
@@ -10141,16 +10187,12 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         if not origin:
             return False
         allowed = _cors_origins()
-        if "*" not in allowed:
+        if allowed and "*" not in allowed:
             # Explicit allowlist configured (required off-loopback): honour it.
             return origin not in allowed
-        # Zero-configuration workstation mode. The server is bound to loopback,
-        # so only a loopback page is a legitimate caller.
-        try:
-            hostname = urlparse(origin).hostname or ""
-        except ValueError:
-            return True
-        return not _is_loopback_host(hostname)
+        # Zero-configuration workstation mode, or an explicit wildcard on
+        # loopback. Only a loopback page is a legitimate browser caller.
+        return not _is_loopback_origin(origin)
 
     def _send_common_headers(self, *, compressed: bool = False) -> None:
         origin = self._cors_origin()
@@ -10168,7 +10210,22 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
-        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+        self.send_header("X-Permitted-Cross-Domain-Policies", "none")
+        # Clerk sign-in opens a popup. same-origin-allow-popups keeps that
+        # working while still isolating the document from other windows.
+        # Script sources stay unrestricted here: a strict script-src or
+        # form-action would break the Clerk session on the served SPA.
+        # frame-ancestors, base-uri, and object-src do not.
+        self.send_header(
+            "Content-Security-Policy",
+            "base-uri 'self'; object-src 'none'; frame-ancestors 'none'",
+        )
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("X-Request-ID", uuid.uuid4().hex[:16])
 
     def _encode_body(self, body: bytes, content_type: str) -> tuple[bytes, bool]:
@@ -10755,6 +10812,80 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
                         require_live_flow=require_live_flow,
                         force=force,
                     )
+                )
+
+            elif path == "/api/gamma/resistance":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                max_raw = query.get("max_dte", [None])[0]
+                min_raw = query.get("min_dte", [None])[0]
+                max_dte, max_err = parse_dte_param(max_raw, default=365, lo=0, hi=3650)
+                min_dte, min_err = parse_dte_param(min_raw, default=0, lo=0, hi=3650)
+                if max_err or min_err or max_dte is None or min_dte is None:
+                    self._send_json(
+                        {"error": max_err or min_err or "invalid dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                if min_dte > max_dte:
+                    self._send_json(
+                        {"error": "min_dte cannot exceed max_dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                payload = compute_gamma_resistance(
+                    sym_or_err, max_dte=max_dte, min_dte=min_dte
+                )
+                if payload is None:
+                    self._send_json(
+                        {
+                            "error": f"No options chain is available for {sym_or_err}.",
+                            "endpoint": path,
+                            "symbol": sym_or_err,
+                        },
+                        status=404,
+                    )
+                    return
+                self._send_json(payload)
+
+            elif path == "/api/live-options":
+                ok, sym_or_err = _sanitize_symbol(query.get("symbol", [""])[0])
+                if not ok:
+                    self._send_json({"error": sym_or_err, "endpoint": path}, status=400)
+                    return
+                max_raw = query.get("max_dte", [None])[0]
+                min_raw = query.get("min_dte", [None])[0]
+                max_dte, max_err = parse_dte_param(max_raw, default=365, lo=0, hi=3650)
+                min_dte, min_err = parse_dte_param(min_raw, default=0, lo=0, hi=3650)
+                if max_err or min_err or max_dte is None or min_dte is None:
+                    self._send_json(
+                        {"error": max_err or min_err or "invalid dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                if min_dte > max_dte:
+                    self._send_json(
+                        {"error": "min_dte cannot exceed max_dte", "endpoint": path},
+                        status=400,
+                    )
+                    return
+                gamma_payload = compute_gamma_resistance(
+                    sym_or_err, max_dte=max_dte, min_dte=min_dte
+                )
+                if gamma_payload is None:
+                    self._send_json(
+                        {
+                            "error": f"No options chain is available for {sym_or_err}.",
+                            "endpoint": path,
+                            "symbol": sym_or_err,
+                        },
+                        status=404,
+                    )
+                    return
+                self._send_json(
+                    build_live_options(gamma_payload, _catalog_closes(sym_or_err))
                 )
 
             elif path == "/api/gamma/regime":

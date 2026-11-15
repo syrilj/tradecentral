@@ -70,16 +70,15 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
     })
   })
 
-  describe('2. Display Layout Switcher (GRAPH, SPLIT, TABLE)', () => {
-    it('supports layout modes: GRAPH, SPLIT, and TABLE', () => {
+  describe('2. One gamma profile', () => {
+    it('opens on the graph and does not offer a second layout', () => {
       expect(gexSrc).toContain("layoutMode = ref<GexLayoutMode>('graph')")
-      expect(gexSrc).toContain('class="mini-segment layout-seg"')
-      expect(gexSrc).toContain('@click="layoutMode = \'graph\'"')
-      expect(gexSrc).toContain('@click="layoutMode = \'split\'"')
-      expect(gexSrc).toContain('@click="layoutMode = \'table\'"')
+      expect(gexSrc).not.toContain('class="mini-segment layout-seg"')
+      expect(gexSrc).not.toContain('@click="layoutMode = \'split\'"')
+      expect(gexSrc).not.toContain('@click="layoutMode = \'table\'"')
     })
 
-    it('renders the SVG chart in GRAPH and SPLIT modes', () => {
+    it('renders the SVG chart unless the layout is forced to the table', () => {
       expect(gexSrc).toContain('v-if="layoutMode !== \'table\'"')
     })
 
@@ -184,12 +183,9 @@ describe('Options Graph Table & Winning Side Bar Profile', () => {
           }),
       })
       const html = await renderToString(app)
-      expect(html).toContain('WINNING SIDE')
-      expect(html).toContain('DUAL BARS')
-      expect(html).toContain('NET PROFILE')
-      expect(html).toContain('GRAPH')
-      expect(html).toContain('SPLIT')
-      expect(html).toContain('TABLE')
+      expect(html).toContain('CALL &amp; PUT GEX')
+      expect(html).not.toContain('>DUAL BARS<')
+      expect(html).not.toContain('>SPLIT<')
       expect(html).toContain('CALL W $105')
       expect(html).toContain('PUT W $95')
       expect(html).toContain('FLIP $98')

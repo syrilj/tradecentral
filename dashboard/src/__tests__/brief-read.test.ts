@@ -92,6 +92,26 @@ describe('readCall', () => {
     expect(readCall(null)).toBeNull()
     expect(readCall(undefined)).toBeNull()
   })
+
+  it('keeps a missing composite and a missing stream score as missing', () => {
+    const call = readCall(
+      {
+        side: 'neutral',
+        composite_score: null,
+        stream_scores: { technical: null, sector: 0.2 },
+        weights: {
+          adapted: { technical: 0.4, sector: 0.6 },
+          adaptation_mode: 'regime_map_only',
+        },
+      },
+      HIT_RATES,
+    )!
+    expect(call.score).toBeNull()
+    const technical = call.streams.find((s) => s.name === 'technical')!
+    expect(technical.score).toBeNull()
+    expect(technical.contribution).toBeNull()
+    expect(call.streams[0].name).toBe('sector')
+  })
 })
 
 describe('humaniseError', () => {

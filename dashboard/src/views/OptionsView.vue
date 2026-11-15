@@ -18,6 +18,7 @@ import {
 import { debounce, useResource, type Resource } from '@/composables/useResource'
 import {
   compact,
+  DASH,
   num,
   optGex,
   optSignedGex,
@@ -2342,7 +2343,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
           <div class="kpi" :class="s?.regime">
             <span class="label">NET GEX</span>
             <strong class="fig" :class="tone(s?.total_gex_m)">{{
-              s?.total_gex_m == null ? '$0.0M' : optSignedGex(s.total_gex_m, 1)
+              s?.total_gex_m == null ? DASH : optSignedGex(s.total_gex_m, 1)
             }}</strong>
             <em class="label">{{ (s?.regime ?? 'UNKNOWN').toUpperCase() }} GAMMA</em>
           </div>
@@ -2351,7 +2352,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <strong class="fig call">{{ optUsd(s?.call_wall) }}</strong>
             <em class="label call-tag">{{
               wallPct('call') == null
-                ? '+0.0%'
+                ? DASH
                 : (wallPct('call')! >= 0 ? '+' : '') + pctFrac(wallPct('call'), 1)
             }}</em>
           </div>
@@ -2360,7 +2361,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
             <strong class="fig put">{{ optUsd(s?.put_wall) }}</strong>
             <em class="label put-tag">{{
               wallPct('put') == null
-                ? '-0.0%'
+                ? DASH
                 : (wallPct('put')! >= 0 ? '+' : '') + pctFrac(wallPct('put'), 1)
             }}</em>
           </div>
@@ -2417,7 +2418,7 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                   <span class="gex-meta-badge"
                     >EXPOSURE
                     {{
-                      !gexMeasurable || s?.total_gex_m == null ? '$0.0M' : optGex(s.total_gex_m, 1)
+                      !gexMeasurable || s?.total_gex_m == null ? DASH : optGex(s.total_gex_m, 1)
                     }}</span
                   >
                   <span v-if="s?.gamma_flip != null" class="gex-meta-badge flip"
@@ -2433,8 +2434,8 @@ const optionsTab = ref<'analysis' | 'scanners'>('analysis')
                 <p class="unmeasured-head label">GAMMA UNMEASURED</p>
                 <p class="unmeasured-body">
                   {{ symbol }} has no open interest on this chain, so every strike fails the OI
-                  filter and the map has nothing to draw. The $0.0M readouts above are the absence
-                  of an input, not a flat gamma profile.
+                  filter and the map has nothing to draw. A dash above is the absence of an input,
+                  not a flat gamma profile.
                 </p>
                 <div class="unmeasured-actions">
                   <button

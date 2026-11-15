@@ -28,18 +28,24 @@ export interface Scale {
 export function linearScale(domain: [number, number], range: [number, number]): Scale {
   const [d0, d1] = domain
   const [r0, r1] = range
-  const dSpan = d1 - d0
-  const rSpan = r1 - r0
+  const finiteDomain = Number.isFinite(d0) && Number.isFinite(d1)
+  const finiteRange = Number.isFinite(r0) && Number.isFinite(r1)
+  const dSpan = finiteDomain ? d1 - d0 : 0
+  const rSpan = finiteRange ? r1 - r0 : 0
 
   const scale = ((v: number): number => {
-    if (dSpan === 0) return (r0 + r1) / 2
+    if (!finiteDomain || !finiteRange || !Number.isFinite(v) || dSpan === 0) {
+      return finiteRange ? (r0 + r1) / 2 : 0
+    }
     return r0 + ((v - d0) / dSpan) * rSpan
   }) as Scale
 
   scale.domain = domain
   scale.range = range
   scale.invert = (px: number): number => {
-    if (rSpan === 0) return (d0 + d1) / 2
+    if (!finiteDomain || !finiteRange || !Number.isFinite(px) || rSpan === 0) {
+      return finiteDomain ? (d0 + d1) / 2 : 0
+    }
     return d0 + ((px - r0) / rSpan) * dSpan
   }
 

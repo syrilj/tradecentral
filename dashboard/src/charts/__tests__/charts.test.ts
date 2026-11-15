@@ -36,6 +36,15 @@ describe('scale', () => {
     expect(s.invert(s(3))).toBeCloseTo(3)
   })
 
+  it('non-finite domain or input never produces NaN or Infinity', () => {
+    const s = linearScale([Number.NaN, 10], [0, 100])
+    expect(Number.isFinite(s(5))).toBe(true)
+    expect(Number.isFinite(s.invert(50))).toBe(true)
+    expect(Number.isFinite(s.invert(Number.NaN))).toBe(true)
+    const flat = linearScale([0, 1], [Number.NaN, 10])
+    expect(Number.isFinite(flat(0.5))).toBe(true)
+  })
+
   it('degenerate domain [5,5] never produces NaN or Infinity', () => {
     const s = linearScale([5, 5], [0, 100])
     expect(Number.isFinite(s(5))).toBe(true)
@@ -103,6 +112,25 @@ describe('scale', () => {
 })
 
 describe('path', () => {
+  it('drops non-finite points instead of writing NaN into the path', () => {
+    const d = linePath([
+      { x: 0, y: 0 },
+      { x: Number.NaN, y: 1 },
+      { x: 10, y: 2 },
+    ])
+    expect(d).not.toContain('NaN')
+    expect(d.startsWith('M')).toBe(true)
+    expect(d).toContain('10')
+  })
+
+  it('sparkline keeps a hole off the zero line and marks the finite extreme', () => {
+    const spark = sparkline([1, Number.NaN, 5], 100, 40, 0)
+    expect(spark.d).not.toContain('NaN')
+    expect(Number.isFinite(spark.min.y)).toBe(true)
+    expect(Number.isFinite(spark.max.y)).toBe(true)
+    expect(spark.max.y).toBeLessThan(spark.min.y)
+  })
+
   it('every path function returns "" on empty input', () => {
     expect(linePath([])).toBe('')
     expect(smoothPath([])).toBe('')

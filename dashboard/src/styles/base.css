@@ -1,9 +1,8 @@
 @import './tokens.css';
 
 /* fonts are bundled, not fetched — a trading desk must render with the
-   network down. */
-@import '@fontsource-variable/geist';
-@import '@fontsource-variable/geist-mono';
+   network down. Variable faces are Latin-only (see latin-faces.css). */
+@import './latin-faces.css';
 /* The dashboard copy is Latin; importing the scoped faces avoids shipping
    Cyrillic and Vietnamese IBM Plex assets with every initial visit. */
 @import '@fontsource/ibm-plex-mono/latin-400.css';
@@ -12,8 +11,6 @@
 /* Public paper surface (landing/auth) follows the editorial system: Inter
    Tight for display, Inter for body, Space Mono for eyebrows and data
    labels. No component consumes Lora anymore, so its faces are not bundled. */
-@import '@fontsource-variable/inter-tight';
-@import '@fontsource-variable/inter';
 @import '@fontsource/space-mono/latin-400.css';
 @import '@fontsource/space-mono/latin-700.css';
 
@@ -54,10 +51,21 @@
   padding: 0;
 }
 
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
 html,
 body,
 #app {
   height: 100%;
+}
+
+html,
+body {
+  /* The desk scrolls inside its panes. A document pull-to-refresh would drag the shell. */
+  overscroll-behavior: none;
 }
 
 /* Defense in depth: #app must never let a descendant's intrinsic size grow
@@ -66,6 +74,36 @@ body,
    else overflows later). Matches the promise body makes below. */
 #app {
   overflow: hidden;
+}
+
+/* Public pages (landing, auth, legal) set this class. The desk chrome must
+   leave, or the mobile workspace bar paints over the article. */
+body.edge-public-mode {
+  overflow: auto;
+  background: var(--paper);
+}
+body.edge-public-mode #app,
+body.edge-public-mode .shell {
+  height: auto;
+  min-height: 100svh;
+  overflow: visible;
+}
+body.edge-public-mode .shell {
+  display: block;
+}
+body.edge-public-mode .rail,
+body.edge-public-mode .strip,
+body.edge-public-mode .foot,
+body.edge-public-mode .skip-link {
+  display: none;
+}
+body.edge-public-mode .stage {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100svh;
+  padding: 0;
+  overflow: visible;
 }
 
 body {
@@ -79,6 +117,39 @@ body {
   font-variant-numeric: tabular-nums;
   overflow: hidden; /* the shell scrolls its panes, never the page */
   caret-color: var(--phosphor);
+}
+
+/* Public routes (overview, access, legal, unknown path) opt into this class.
+   The rules live here, not only inside a route chunk, so /license and
+   /terms can scroll on a direct visit instead of being clipped by the
+   operator shell. */
+body.edge-public-mode {
+  overflow: auto !important;
+  overflow-x: hidden !important;
+  background: var(--editorial-canvas);
+}
+body.edge-public-mode #app,
+body.edge-public-mode .shell {
+  height: auto !important;
+  min-height: 100vh;
+  overflow: visible !important;
+}
+body.edge-public-mode .shell {
+  display: block !important;
+}
+body.edge-public-mode .rail,
+body.edge-public-mode .strip,
+body.edge-public-mode .foot,
+body.edge-public-mode .skip-link {
+  display: none !important;
+}
+body.edge-public-mode .stage {
+  display: block !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 100vh !important;
+  padding: 0 !important;
+  overflow: visible !important;
 }
 
 ::selection {
@@ -253,8 +324,32 @@ a {
   color: var(--phosphor);
   text-decoration: none;
 }
-a:hover {
-  text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    text-decoration: underline;
+  }
+}
+
+/* Press lands on pointer-down. Touch browsers otherwise wait to see if the tap is a double-tap zoom. */
+button,
+a,
+[role='button'] {
+  touch-action: manipulation;
+}
+
+button,
+[role='button'] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* iOS zooms the page when a focused field is under 16px and does not zoom back. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 /* ---- scrollbars: thin, part of the instrument --------------------------- */
@@ -295,9 +390,11 @@ a:hover {
     transform var(--dur-fast) var(--ease-out);
 }
 
-.ticked:hover {
-  border-color: var(--rule-hi);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+@media (hover: hover) and (pointer: fine) {
+  .ticked:hover {
+    border-color: var(--rule-hi);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .hairline {
@@ -428,7 +525,7 @@ td.num {
   outline-offset: var(--focus-ring-offset);
 }
 .btn-primary:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .btn-primary:disabled {
   opacity: 0.55;
@@ -449,19 +546,25 @@ td.num {
   font-size: var(--t-tiny);
   font-weight: 600;
   letter-spacing: 0.02em;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.btn-quiet:hover:not(:disabled) {
-  background: var(--action-quiet-hover);
-  border-color: var(--rule-hi);
-  color: var(--ink);
+@media (hover: hover) and (pointer: fine) {
+  .btn-quiet:hover:not(:disabled) {
+    background: var(--action-quiet-hover);
+    border-color: var(--rule-hi);
+    color: var(--ink);
+  }
 }
 .btn-quiet:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .btn-quiet:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .btn-quiet:disabled {
   opacity: 0.55;
@@ -546,10 +649,12 @@ td.num {
     border-color var(--dur-fast) ease,
     box-shadow var(--dur-fast) ease;
 }
-.glass-panel-interactive:hover {
-  background: var(--panel-raise);
-  border-color: var(--glass-border-hi);
-  box-shadow: var(--glass-shadow-md), var(--glass-specular);
+@media (hover: hover) and (pointer: fine) {
+  .glass-panel-interactive:hover {
+    background: var(--panel-raise);
+    border-color: var(--glass-border-hi);
+    box-shadow: var(--glass-shadow-md), var(--glass-specular);
+  }
 }
 
 .glass-card {
@@ -574,9 +679,11 @@ td.num {
     border-color var(--dur-fast) ease,
     transform var(--dur-fast) ease;
 }
-.btn-glass:hover:not(:disabled) {
-  background: var(--panel-raise);
-  border-color: var(--glass-border-hi);
+@media (hover: hover) and (pointer: fine) {
+  .btn-glass:hover:not(:disabled) {
+    background: var(--panel-raise);
+    border-color: var(--glass-border-hi);
+  }
 }
 .btn-glass:active:not(:disabled) {
   transform: scale(0.97);
@@ -632,19 +739,23 @@ td.num {
 
 .view-fade-enter-active,
 .view-fade-leave-active {
-  transition:
-    opacity var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
-.view-fade-enter-from {
-  opacity: 0;
-  transform: translateY(3px);
+/* The leaving view is taken out of flow so the stage does not collapse to
+   empty and then jump back — that was a layout shift on every route change.
+   Opacity only: a 3px translate read as the page twitching. */
+.view-fade-leave-active {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  overflow: hidden;
+  pointer-events: none;
 }
 
+.view-fade-enter-from,
 .view-fade-leave-to {
   opacity: 0;
-  transform: translateY(-2px);
 }
 
 .fade-slide-enter-active,

@@ -12,7 +12,7 @@
  * Dual-bar representation ensures neutral strikes (e.g. +$50M Call / -$50M Put)
  * show full gamma battleground instead of disappearing into a 0-height net line.
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { GexStrikeRow } from '@/api'
 import { niceTicks } from '@/charts'
 import { useChartSize } from '@/composables/useChartSize'
@@ -86,34 +86,9 @@ const emit = defineEmits<{
   'update:focusStrike': [strike: number | null]
 }>()
 
-function lockStrike(strike: number): void {
-  emit('update:focusStrike', props.focusStrike === strike ? null : strike)
-}
-
 function clearLock(): void {
+  hoverStrike.value = null
   emit('update:focusStrike', null)
-}
-
-function onBarKeydown(e: KeyboardEvent, strike: number): void {
-  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-    e.preventDefault()
-    lockStrike(strike)
-  } else if (e.key === 'Escape') {
-    e.preventDefault()
-    clearLock()
-  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-    e.preventDefault()
-    const rows = orderedRows.value
-    const idx = rows.findIndex((r) => r.strike === strike)
-    if (idx === -1) return
-    const nextIdx =
-      e.key === 'ArrowLeft' ? Math.max(0, idx - 1) : Math.min(rows.length - 1, idx + 1)
-    const nextStrike = rows[nextIdx].strike
-    hoverStrike.value = nextStrike
-    if (props.focusStrike != null) {
-      emit('update:focusStrike', nextStrike)
-    }
-  }
 }
 
 watch(
@@ -127,6 +102,7 @@ watch(
 )
 
 const hostRef = ref<HTMLDivElement | null>(null)
+const svgRef = ref<SVGSVGElement | null>(null)
 const { W: hostW, H: hostH } = useChartSize(hostRef, {
   minW: 200,
   minH: 160,
@@ -138,7 +114,6 @@ const left = 52
 const right = 16
 const top = 48
 const bottom = 28
-const minCol = 14
 
 const hoverStrike = ref<number | null>(null)
 const strikeScope = ref<'atm' | 'near' | 'wide' | 'all'>('near')
@@ -181,13 +156,12 @@ const plotBottom = computed(() => top + plotInnerH.value)
 const zeroY = computed(() => top + plotInnerH.value / 2)
 const halfPlotH = computed(() => Math.max(1, plotInnerH.value / 2 - 8))
 
-const plotInnerW = computed(() => {
-  const minNeed = colCount.value * minCol
-  const hostInner = Math.max(120, hostW.value - left - right)
-  return Math.max(hostInner, minNeed)
-})
+/* The profile always fills the pane. A wider-than-host viewBox made the
+   chart a horizontal scroller, so a drag stuck on the last bar instead of
+   tracking the pointer. */
+const plotInnerW = computed(() => Math.max(120, hostW.value - left - right))
 const W = computed(() => plotInnerW.value + left + right)
-const scrollable = computed(() => W.value > hostW.value + 0.5)
+const scrollable = computed(() => false)
 const bandW = computed(() => plotInnerW.value / colCount.value)
 
 function bandCenter(index: number): number {
@@ -267,6 +241,15 @@ function axisValue(v: number): string {
   return `−${magnitude}`
 }
 
+/** Square-root magnitude in [-1, 1]. A linear scale lets one wall flatten
+ *  every other strike to the 2px floor. Ticks use the same map, and the axis
+ *  caption says so. */
+function signedSqrt(value: number, max: number): number {
+  if (!Number.isFinite(value) || !(max > 0)) return 0
+  const mag = Math.min(1, Math.abs(value) / max)
+  return Math.sign(value) * Math.sqrt(mag)
+}
+
 function strikeLabel(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return DASH
   return num(value, Number.isInteger(value) ? 0 : 2)
@@ -295,14 +278,17 @@ const bars = computed<Bar[]>(() => {
     runningCum += net
     const cumNet = runningCum
 
-    const callH = Math.max(callVal > 0 ? 2 : 0, (callVal / maxAbs.value) * halfPlotH.value)
-    const putH = Math.max(putVal > 0 ? 2 : 0, (putVal / maxAbs.value) * halfPlotH.value)
+    const callH = Math.max(callVal > 0 ? 2 : 0, signedSqrt(callVal, maxAbs.value) * halfPlotH.value)
+    const putH = Math.max(putVal > 0 ? 2 : 0, signedSqrt(putVal, maxAbs.value) * halfPlotH.value)
 
     const isCallWinner = callVal > putVal
     const isPutWinner = putVal > callVal
     const winnerSide: 'call' | 'put' | 'flat' = isCallWinner ? 'call' : isPutWinner ? 'put' : 'flat'
     const winnerVal = isCallWinner ? callVal : isPutWinner ? putVal : callVal
-    const winnerH = Math.max(winnerVal > 0 ? 2 : 0, (winnerVal / maxAbs.value) * halfPlotH.value)
+    const winnerH = Math.max(
+      winnerVal > 0 ? 2 : 0,
+      signedSqrt(winnerVal, maxAbs.value) * halfPlotH.value,
+    )
     const winnerY = isCallWinner ? zeroY.value - winnerH : zeroY.value
 
     const sumVal = callVal + putVal
@@ -316,12 +302,13 @@ const bars = computed<Bar[]>(() => {
 
     const callY = zeroY.value - callH
     const putY = zeroY.value
-    const netY = zeroY.value - (net / maxAbs.value) * halfPlotH.value
-    const netH = Math.max(2, (Math.abs(net) / maxAbs.value) * halfPlotH.value)
+    const netUnit = signedSqrt(net, maxAbs.value)
+    const netY = zeroY.value - netUnit * halfPlotH.value
+    const netH = net === 0 ? 0 : Math.max(2, Math.abs(netUnit) * halfPlotH.value)
     const cumNetY = zeroY.value - (cumNet / cumDenominator) * halfPlotH.value
 
     // ≤ 24px thick per mark spec — never fill the slot; the leftover is air.
-    const thickness = Math.max(4, Math.min(bandW.value * 0.64, 24))
+    const thickness = Math.max(1, Math.min(bandW.value * 0.64, 24))
     const cx = bandCenter(index)
 
     const isSpotNear =
@@ -447,7 +434,8 @@ const filteredTableRows = computed(() => {
 
 const focusBar = computed(() => {
   if (!bars.value.length) return null
-  const target = hoverStrike.value ?? props.focusStrike ?? props.spot
+  const target = hoverStrike.value ?? props.focusStrike
+  if (target == null) return null
   return bars.value.reduce((best, row) =>
     Math.abs(row.strike - target) < Math.abs(best.strike - target) ? row : best,
   )
@@ -615,7 +603,7 @@ const levels = computed<Level[]>(() => {
   return placed.map((level, i) => {
     const labelX = Math.max(minBoundary, Math.min(maxBoundary, xs[i]))
     // Position labels cleanly in dedicated banner lane [24 .. 38]
-    const labelY = hasRemainingOverlap || isWidthConstrained ? (i % 2 === 0 ? 24 : 36) : 30
+    const labelY = hasRemainingOverlap || isWidthConstrained ? (i % 2 === 0 ? 16 : 38) : 30
 
     return {
       ...level,
@@ -669,10 +657,13 @@ const tickCount = computed(() => (H.value < 220 ? 3 : 5))
 
 const yTicks = computed(() => {
   if (!orderedRows.value.length) return []
-  const maxVal = viewMode.value === 'cumulative' ? maxCumulative.value : maxAbs.value
+  const cumulative = viewMode.value === 'cumulative'
+  const maxVal = cumulative ? maxCumulative.value : maxAbs.value
   return niceTicks(-maxVal, maxVal, tickCount.value).map((value) => ({
     value,
-    y: zeroY.value - (value / maxVal) * halfPlotH.value,
+    y: cumulative
+      ? zeroY.value - (value / (maxVal || 1)) * halfPlotH.value
+      : zeroY.value - signedSqrt(value, maxVal) * halfPlotH.value,
   }))
 })
 
@@ -680,7 +671,8 @@ const strikeTicks = computed(() => {
   const rows = orderedRows.value
   const n = rows.length
   if (!n) return [] as { x: number; label: string; strike: number; isSpot: boolean }[]
-  const maxLabels = Math.min(n, Math.max(4, Math.floor(plotInnerW.value / 56)))
+  const labelSlot = plotInnerW.value < 420 ? 84 : 64
+  const maxLabels = Math.min(n, Math.max(2, Math.floor(plotInnerW.value / labelSlot)))
   const indices = new Set<number>()
   if (maxLabels <= 1) indices.add(0)
   else {
@@ -721,50 +713,77 @@ function barAriaLabel(bar: Bar): string {
   return `Strike $${strikeLabel(bar.strike)}. ${callText}, ${putText}, ${netText}.`
 }
 
-function jumpToLevel(strike: number | null): void {
-  if (strike == null || !Number.isFinite(strike)) return
-  const closest = orderedRows.value.reduce(
-    (best, row) => (Math.abs(row.strike - strike) < Math.abs(best.strike - strike) ? row : best),
-    orderedRows.value[0],
-  )
-  if (closest) {
-    lockStrike(closest.strike)
-    scrollToStrike(closest.strike)
-  }
+/** Map a pointer into the viewBox. The svg fills the pane 1:1, so a drag
+ *  tracks the strike under the cursor instead of sticking on the bar that
+ *  received the pointerdown. */
+function strikeAt(clientX: number): number | null {
+  const svg = svgRef.value
+  const rows = orderedRows.value
+  if (!svg || !rows.length || bandW.value <= 0) return null
+  const box = svg.getBoundingClientRect()
+  if (box.width <= 0) return null
+  const px = ((clientX - box.left) / box.width) * W.value
+  if (px < left || px > left + plotInnerW.value) return null
+  const idx = Math.round((px - left) / bandW.value - 0.5)
+  return rows[Math.max(0, Math.min(rows.length - 1, idx))].strike
 }
 
-function scrollToStrike(strike: number): void {
-  if (!hostRef.value || !scrollable.value) return
-  const targetX = xOfPrice(strike)
-  if (targetX != null) {
-    const containerW = hostRef.value.clientWidth
-    hostRef.value.scrollTo({
-      left: Math.max(0, targetX - containerW / 2),
-      behavior: 'smooth',
-    })
-  }
+function onPlotPointer(e: PointerEvent): void {
+  hoverStrike.value = strikeAt(e.clientX)
 }
 
-function centerOnSpot(): void {
-  if (props.spot > 0) {
-    scrollToStrike(props.focusStrike ?? props.spot)
+function onPlotDown(e: PointerEvent): void {
+  const svg = svgRef.value
+  if (svg) {
+    try {
+      svg.setPointerCapture(e.pointerId)
+    } catch {
+      /* the pointer may already be released */
+    }
   }
+  hoverStrike.value = strikeAt(e.clientX)
 }
 
-onMounted(() => {
-  nextTick(() => {
-    centerOnSpot()
-  })
+function onPlotUp(e: PointerEvent): void {
+  const svg = svgRef.value
+  if (svg?.hasPointerCapture(e.pointerId)) {
+    try {
+      svg.releasePointerCapture(e.pointerId)
+    } catch {
+      /* already released */
+    }
+  }
+  hoverStrike.value = strikeAt(e.clientX)
+}
+
+function onPlotKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    clearLock()
+    return
+  }
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  e.preventDefault()
+  const rows = orderedRows.value
+  if (!rows.length) return
+  const current = hoverStrike.value
+  let idx = current == null ? -1 : rows.findIndex((r) => r.strike === current)
+  if (idx < 0) {
+    idx = rows.reduce(
+      (best, row, i) =>
+        Math.abs(row.strike - props.spot) < Math.abs(rows[best].strike - props.spot) ? i : best,
+      0,
+    )
+  }
+  const next = e.key === 'ArrowLeft' ? Math.max(0, idx - 1) : Math.min(rows.length - 1, idx + 1)
+  hoverStrike.value = rows[next].strike
+}
+
+watch(orderedRows, (rows) => {
+  if (hoverStrike.value != null && !rows.some((r) => r.strike === hoverStrike.value)) {
+    hoverStrike.value = null
+  }
 })
-
-watch(
-  () => [props.spot, props.rows, strikeScope.value],
-  () => {
-    nextTick(() => {
-      centerOnSpot()
-    })
-  },
-)
 </script>
 
 <template>
@@ -831,151 +850,10 @@ watch(
         </div>
       </div>
 
-      <div class="control-group">
-        <div class="mini-segment" role="group" aria-label="View format">
-          <button
-            type="button"
-            class="label"
-            :class="{ on: viewMode === 'winner' }"
-            title="Show Winning Side per Strike (Calls Above in Green / Puts Below in Red)"
-            @click="viewMode = 'winner'"
-          >
-            WINNING SIDE
-          </button>
-          <button
-            type="button"
-            class="label"
-            :class="{ on: viewMode === 'dual' }"
-            title="Dual Call / Put Bars"
-            @click="viewMode = 'dual'"
-          >
-            DUAL BARS
-          </button>
-          <button
-            type="button"
-            class="label"
-            :class="{ on: viewMode === 'net' }"
-            title="Single Net Exposure Bar per Strike"
-            @click="viewMode = 'net'"
-          >
-            NET PROFILE
-          </button>
-          <button
-            type="button"
-            class="label"
-            :class="{ on: viewMode === 'cumulative' }"
-            title="Cumulative Hedge Requirement across Strikes"
-            @click="viewMode = 'cumulative'"
-          >
-            CUMULATIVE
-          </button>
-        </div>
-      </div>
-
-      <div class="control-group">
-        <div class="mini-segment layout-seg" role="group" aria-label="Display layout">
-          <button
-            type="button"
-            class="label"
-            :class="{ on: layoutMode === 'graph' }"
-            title="Graph View"
-            @click="layoutMode = 'graph'"
-          >
-            GRAPH
-          </button>
-          <button
-            type="button"
-            class="label"
-            :class="{ on: layoutMode === 'split' }"
-            title="Split Graph + Table View"
-            @click="layoutMode = 'split'"
-          >
-            SPLIT
-          </button>
-          <button
-            type="button"
-            class="label"
-            :class="{ on: layoutMode === 'table' }"
-            title="Strike Matrix Table View"
-            @click="layoutMode = 'table'"
-          >
-            TABLE
-          </button>
-        </div>
-      </div>
-
-      <div v-if="layoutMode !== 'table'" class="control-group toggles">
-        <button
-          type="button"
-          class="pill-toggle label"
-          :class="{ active: showTrace }"
-          title="Toggle Net Profile Trace Line"
-          @click="showTrace = !showTrace"
-        >
-          NET TRACE
-        </button>
-        <button
-          v-if="gammaFlip != null"
-          type="button"
-          class="pill-toggle label"
-          :class="{ active: showRegimes }"
-          title="Toggle Positive vs Negative Gamma Regime Zones"
-          @click="showRegimes = !showRegimes"
-        >
-          REGIMES
-        </button>
-      </div>
-
-      <div
-        v-if="
-          (putWall != null && putWall > 0) ||
-          (gammaFlip != null && gammaFlip > 0) ||
-          (spot != null && spot > 0) ||
-          (callWall != null && callWall > 0)
-        "
-        class="quick-levels"
-      >
-        <span class="label quick-title">JUMP:</span>
-        <button
-          v-if="putWall != null && putWall > 0"
-          type="button"
-          class="level-chip put label"
-          title="Jump to Put Wall"
-          @click="jumpToLevel(putWall)"
-        >
-          PUT W ${{ strikeLabel(putWall) }}
-        </button>
-        <button
-          v-if="gammaFlip != null && gammaFlip > 0"
-          type="button"
-          class="level-chip flip label"
-          title="Jump to Gamma Flip"
-          @click="jumpToLevel(gammaFlip)"
-        >
-          FLIP ${{ strikeLabel(gammaFlip) }}
-        </button>
-        <button
-          v-if="spot != null && spot > 0"
-          type="button"
-          class="level-chip spot label"
-          title="Jump to Spot"
-          @click="jumpToLevel(spot)"
-        >
-          SPOT ${{ strikeLabel(spot) }}
-        </button>
-        <button
-          v-if="callWall != null && callWall > 0"
-          type="button"
-          class="level-chip call label"
-          title="Jump to Call Wall"
-          @click="jumpToLevel(callWall)"
-        >
-          CALL W ${{ strikeLabel(callWall) }}
-        </button>
-      </div>
-
       <span class="coverage label">
-        {{ bars.length < rows.length ? `IN VIEW ${bars.length}/${rows.length}` : 'FULL CHAIN' }} ·
+        {{ bars.length < rows.length ? `IN VIEW ${bars.length}/${rows.length}` : 'FULL CHAIN' }}
+        <template v-if="viewMode !== 'cumulative'"> · √ SCALE</template>
+        ·
         <span class="call-leg"><i class="leg-dot call" />CALL</span> ·
         <span class="put-leg"><i class="leg-dot put" />PUT</span> ·
         <span class="net-leg"><i class="leg-dot net" />NET</span>
@@ -984,10 +862,7 @@ watch(
 
     <!-- Aggregate HUD bar + Interactive Strike Inspector -->
     <div class="exposure-head">
-      <div
-        v-if="!((hoverStrike != null || focusStrike != null) && focusBar)"
-        class="exposure-totals"
-      >
+      <div v-if="hoverStrike == null || !focusBar" class="exposure-totals">
         <div class="exposure-total call">
           <span class="label">{{ metric === 'gex' ? 'CALL GEX' : 'CALL OI' }}</span>
           <strong class="fig">{{ metricValue(callTotal, true) }}</strong>
@@ -1004,9 +879,7 @@ watch(
 
       <div v-else-if="focusBar" class="strike-focus" :class="{ locked: focusStrike != null }">
         <div class="focus-strike">
-          <span class="label">
-            {{ hoverStrike != null ? 'INSPECTING' : 'LOCKED STRIKE' }}
-          </span>
+          <span class="label"> INSPECTING </span>
           <strong class="fig">${{ strikeLabel(focusBar.strike) }}</strong>
           <small class="dist-tag">{{ distanceLabel(focusBar.strike) }}</small>
         </div>
@@ -1039,18 +912,9 @@ watch(
             <template v-else-if="focusBar.isPutWall">★ PUT WALL</template>
             <template v-else-if="focusBar.isFlip">◆ GAMMA FLIP</template>
             <template v-else-if="focusBar.isSpotNear">● ATM</template>
-            <template v-else>click bar to lock</template>
+            <template v-else>under the pointer</template>
           </small>
         </div>
-        <button
-          v-if="focusStrike != null"
-          type="button"
-          class="clear-lock label"
-          title="Clear locked strike (Esc)"
-          @click="clearLock"
-        >
-          CLEAR
-        </button>
       </div>
     </div>
 
@@ -1062,6 +926,7 @@ watch(
       :class="{ scrollable, 'split-view': layoutMode === 'split' }"
     >
       <svg
+        ref="svgRef"
         :viewBox="`0 0 ${W} ${H}`"
         :width="scrollable ? W : '100%'"
         :height="H"
@@ -1072,7 +937,14 @@ watch(
           display: 'block',
         }"
         role="img"
-        aria-label="Call and Put gamma exposure by strike. Calls up, Puts down, Net as a smooth trace line."
+        tabindex="0"
+        aria-label="Call and Put gamma exposure by strike. Calls up, Puts down. Drag or hover to read a strike."
+        @pointermove="onPlotPointer"
+        @pointerdown="onPlotDown"
+        @pointerup="onPlotUp"
+        @pointerleave="clearLock"
+        @pointercancel="clearLock"
+        @keydown="onPlotKey"
       >
         <title>
           Call vs Put GEX by strike. Winning side indicated by Call UP in emerald green or Put DOWN
@@ -1133,7 +1005,7 @@ watch(
              labels, which sit in exactly the same corner. Kept outside the zone
              group because that group is clipped to the plot rect. -->
         <text
-          v-if="showRegimes && flipX != null && rows.length"
+          v-if="showRegimes && flipX != null && rows.length && plotInnerW >= 560"
           :x="left + plotInnerW"
           :y="14"
           text-anchor="end"
@@ -1201,7 +1073,16 @@ watch(
           </text>
         </g>
 
-        <!-- Hover / Focus Column Guide Beam -->
+        <line
+          v-if="hoverStrike != null && focusBar"
+          class="crosshair"
+          :x1="focusBar.cx"
+          :x2="focusBar.cx"
+          :y1="top"
+          :y2="plotBottom"
+        />
+
+        <!-- Hover column. It follows the pointer and clears when the pointer leaves. -->
         <g v-if="focusBar" class="focus-beam" clip-path="url(#gex-plot-clip)" aria-hidden="true">
           <rect
             :x="focusBar.cx - bandW / 2"
@@ -1239,16 +1120,7 @@ watch(
               'put-dominant': bar.putVal > bar.callVal * 1.15,
               'call-dominant': bar.callVal > bar.putVal * 1.15,
             }"
-            tabindex="0"
-            role="button"
-            :aria-pressed="focusStrike === bar.strike"
             :aria-label="barAriaLabel(bar)"
-            @mouseenter="hoverStrike = bar.strike"
-            @mouseleave="hoverStrike = null"
-            @focus="hoverStrike = bar.strike"
-            @blur="hoverStrike = null"
-            @click="lockStrike(bar.strike)"
-            @keydown="onBarKeydown($event, bar.strike)"
           >
             <!-- Full column mouse hit area -->
             <rect
@@ -1350,7 +1222,7 @@ watch(
         </g>
 
         <!-- Wall bars carry direct value labels at the bar tip -->
-        <g v-if="wallLabels.length" class="wall-labels" aria-hidden="true">
+        <g v-if="wallLabels.length && plotInnerW >= 480" class="wall-labels" aria-hidden="true">
           <text
             v-for="wl in wallLabels"
             :key="wl.key"
@@ -1399,7 +1271,7 @@ watch(
             {{ axisValue(tick.value) }}
           </text>
         </g>
-        <text v-if="rows.length" class="axis-cap" :x="left" :y="14">
+        <text v-if="rows.length && plotInnerW >= 560" class="axis-cap" :x="left" :y="14">
           {{
             viewMode === 'cumulative'
               ? metric === 'gex'
@@ -1407,11 +1279,11 @@ watch(
                 : 'CUMULATIVE NET OI'
               : viewMode === 'winner'
                 ? metric === 'gex'
-                  ? 'WINNER GEX $M · CALL UP / PUT DN'
-                  : 'WINNER OI · CALL UP / PUT DN'
+                  ? 'WINNER GEX $M · √ SCALE · CALL UP / PUT DN'
+                  : 'WINNER OI · √ SCALE · CALL UP / PUT DN'
                 : metric === 'gex'
-                  ? 'GEX $M · CALL UP / PUT DN'
-                  : 'OI · CALL UP / PUT DN'
+                  ? 'GEX $M · √ SCALE · CALL UP / PUT DN'
+                  : 'OI · √ SCALE · CALL UP / PUT DN'
           }}
         </text>
 
@@ -1435,9 +1307,17 @@ watch(
               :class="{ 'spot-tick': tick.isSpot }"
             />
             <text
-              :x="tick.x"
+              :x="
+                tick.x < left + 36
+                  ? left
+                  : tick.x > left + plotInnerW - 36
+                    ? left + plotInnerW
+                    : tick.x
+              "
               :y="plotBottom + 19"
-              text-anchor="middle"
+              :text-anchor="
+                tick.x < left + 36 ? 'start' : tick.x > left + plotInnerW - 36 ? 'end' : 'middle'
+              "
               :class="{ 'spot-label': tick.isSpot }"
             >
               ${{ tick.label }}
@@ -1552,9 +1432,6 @@ watch(
               role="row"
               @mouseenter="hoverStrike = bar.strike"
               @mouseleave="hoverStrike = null"
-              @click="lockStrike(bar.strike)"
-              @keydown.enter.prevent="lockStrike(bar.strike)"
-              @keydown.space.prevent="lockStrike(bar.strike)"
             >
               <td class="strike-cell">
                 <span class="strike-val">${{ strikeLabel(bar.strike) }}</span>
@@ -1633,6 +1510,8 @@ watch(
 
 .mini-segment {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   padding: 2px;
   min-height: 26px;
@@ -1984,8 +1863,7 @@ watch(
 
 .plot-scroll {
   position: relative;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -1994,6 +1872,8 @@ watch(
   flex: 1 1 0;
   min-height: 0;
   background: var(--void);
+  cursor: crosshair;
+  touch-action: pan-y;
 }
 
 /* Split view shares the panel with the strike table. Both get a floor so neither
@@ -2122,7 +2002,13 @@ svg {
 }
 
 .strike-bar {
-  cursor: pointer;
+  pointer-events: none;
+}
+
+.crosshair {
+  stroke: var(--ink-dim);
+  stroke-width: 1;
+  pointer-events: none;
 }
 
 .strike-bar:focus-visible {
@@ -2138,7 +2024,7 @@ svg {
 
 .strike-bar .hit {
   fill: transparent;
-  pointer-events: all;
+  pointer-events: none;
 }
 
 .focus-beam .beam-rect {

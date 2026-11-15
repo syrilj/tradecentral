@@ -181,8 +181,8 @@ function printDocument() {
             <p>
               This is not an open-source license. Except for the limited evaluation permission
               above, no permission is granted to use, copy, modify, merge, publish, distribute,
-              sublicense, sell, host, deploy, commercialize, or create derivative products from
-              the Software.
+              sublicense, sell, host, deploy, commercialize, or create derivative products from the
+              Software.
             </p>
           </section>
 
@@ -232,9 +232,7 @@ function printDocument() {
         <article v-else class="contract-article">
           <header class="contract-header">
             <div class="contract-kicker">RESEARCH & RISK DISCLOSURES</div>
-            <h2 class="contract-title">
-              Terms of Service & Research Disclaimers
-            </h2>
+            <h2 class="contract-title">Terms of Service & Research Disclaimers</h2>
             <div class="contract-meta-bar">
               <span><strong>Product posture:</strong> Impersonal research</span>
               <span class="sep">/</span>
@@ -252,9 +250,9 @@ function printDocument() {
             <h3>1. Impersonal quantitative research only</h3>
             <p>
               Quantitative metrics, dealer gamma profiles, options analytics, microstructure
-              classifications, volatility regimes, and scanner outputs are general research
-              outputs. They are not personalized investment advice, portfolio suitability
-              assessments, or instructions to buy or sell a security or derivative.
+              classifications, volatility regimes, and scanner outputs are general research outputs.
+              They are not personalized investment advice, portfolio suitability assessments, or
+              instructions to buy or sell a security or derivative.
             </p>
           </section>
 
@@ -339,7 +337,7 @@ function printDocument() {
 
 <style scoped>
 .legal-page {
-  min-height: 100vh;
+  min-height: 100svh;
   background: #fbfbf8;
   color: #1a1a18;
   font-family:
@@ -353,6 +351,7 @@ function printDocument() {
   position: sticky;
   top: 0;
   z-index: 40;
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .topbar-inner {
@@ -406,14 +405,28 @@ function printDocument() {
   padding: 6px 10px;
   border-radius: 4px;
   border: 1px solid #e0e0d6;
+  min-height: 44px;
   background: #fdfdfc;
-  transition: all 0.15s ease;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
 }
 
-.topbar-link:hover {
-  background: #f0f0ea;
-  color: #111110;
-  border-color: #c8c8be;
+@media (hover: hover) and (pointer: fine) {
+  .topbar-link:hover {
+    background: #f0f0ea;
+    color: #111110;
+    border-color: #c8c8be;
+  }
+}
+.topbar-link:focus-visible {
+  outline: 2px solid #111110;
+  outline-offset: 2px;
+}
+.topbar-link:active {
+  transform: scale(0.97);
 }
 
 .legal-container {
@@ -480,14 +493,28 @@ function printDocument() {
   background: #ffffff;
   border: 1px solid #e5e5dc;
   border-radius: 6px;
+  min-height: 44px;
   text-align: left;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
 }
 
-.tab-btn:hover {
-  border-color: #c0c0b4;
-  background: #fcfcf9;
+@media (hover: hover) and (pointer: fine) {
+  .tab-btn:hover {
+    border-color: #c0c0b4;
+    background: #fcfcf9;
+  }
+}
+.tab-btn:focus-visible {
+  outline: 2px solid #111110;
+  outline-offset: 2px;
+}
+.tab-btn:active {
+  transform: scale(0.97);
 }
 
 .tab-btn.active {
@@ -562,6 +589,7 @@ function printDocument() {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-height: 44px;
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 500;
@@ -570,12 +598,24 @@ function printDocument() {
   border: 1px solid #dcdcd0;
   border-radius: 4px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
 }
 
-.tool-btn:hover {
-  background: #f2f2eb;
-  border-color: #b8b8aa;
+@media (hover: hover) and (pointer: fine) {
+  .tool-btn:hover {
+    background: #f2f2eb;
+    border-color: #b8b8aa;
+  }
+}
+.tool-btn:focus-visible {
+  outline: 2px solid #111110;
+  outline-offset: 2px;
+}
+.tool-btn:active {
+  transform: scale(0.97);
 }
 
 .legal-document-view {
@@ -652,6 +692,10 @@ function printDocument() {
   border-bottom: 1px solid #efefe6;
   padding-bottom: 8px;
   margin: 0 0 16px;
+}
+
+.contract-article {
+  max-width: 65ch;
 }
 
 .legal-section p {

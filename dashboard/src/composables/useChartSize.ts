@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
  * rAF-coalesced so rapid resizes do not thrash Vue updates.
  */
 export function useChartSize(
-  hostRef: Ref<HTMLElement | null>,
+  hostRef: Ref<Element | null>,
   opts: { minW?: number; minH?: number; fallbackW?: number; fallbackH?: number } = {},
 ) {
   const minW = opts.minW ?? 240
@@ -31,7 +31,7 @@ export function useChartSize(
     })
   }
 
-  function observe(el: HTMLElement | null) {
+  function observe(el: Element | null) {
     ro?.disconnect()
     if (!el) return
     const box = el.getBoundingClientRect()

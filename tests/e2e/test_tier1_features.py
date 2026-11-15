@@ -528,10 +528,23 @@ def test_f2_5_gates_endpoint_contract(api_client):
 
 
 def test_f2_5_cors_and_http_methods_contract(api_client):
-    """Server responds with standard CORS headers and handles OPTIONS pre-flight."""
+    """OPTIONS preflight reflects loopback callers and hides the API from other sites."""
     res_options = api_client.options("/api/health")
     assert res_options.status_code == 204
-    assert res_options.headers.get("Access-Control-Allow-Origin") == "*"
+    assert res_options.headers.get("Access-Control-Allow-Origin") != "*"
+
+    loopback = api_client.options(
+        "/api/health",
+        headers={"Origin": "http://127.0.0.1:5178"},
+    )
+    assert loopback.status_code == 204
+    assert loopback.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1:5178"
+
+    foreign = api_client.options(
+        "/api/health",
+        headers={"Origin": "https://evil.example"},
+    )
+    assert "Access-Control-Allow-Origin" not in foreign.headers
 
 
 # ============================================================================

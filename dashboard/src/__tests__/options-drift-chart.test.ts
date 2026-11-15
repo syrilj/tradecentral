@@ -495,7 +495,7 @@ describe('Milestone 5: Options Chart Geometry, Scales, Crosshairs & Tooltips', (
       expect(gexMapSrc).toMatch(
         /transition:\s*transform\s*0\.15s\s*cubic-bezier\(0\.16,\s*1,\s*0\.3,\s*1\)/,
       )
-      expect(gexMapSrc).toContain('level-chip')
+      expect(gexMapSrc).toContain('class="crosshair"')
     })
 
     it('OptionsDriftChart complies with crosshair overlay, crisp zero lines, and responsive activity bars', () => {

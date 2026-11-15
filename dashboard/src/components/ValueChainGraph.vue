@@ -644,7 +644,10 @@ function isNodeConnected(symbol: string): boolean {
   font-size: 0.68rem;
   padding: 0.2rem 0.45rem;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .tier-filter-btn:hover {
@@ -686,14 +689,7 @@ function isNodeConnected(symbol: string): boolean {
 }
 
 .chain-edge.active {
-  stroke-dasharray: 5, 4;
-  animation: dashFlow 1.2s linear infinite;
-}
-
-@keyframes dashFlow {
-  to {
-    stroke-dashoffset: -9;
-  }
+  stroke-dasharray: 5 4;
 }
 
 .floating-edge-pill {
@@ -745,7 +741,9 @@ function isNodeConnected(symbol: string): boolean {
   justify-content: space-between;
   cursor: pointer;
   pointer-events: auto;
-  transition: all 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
   user-select: none;
 }
 
@@ -863,7 +861,10 @@ function isNodeConnected(symbol: string): boolean {
   cursor: pointer;
   border-radius: 2px;
   line-height: 1.1;
-  transition: all 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .node-focus-tag:hover {
