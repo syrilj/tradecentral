@@ -122,7 +122,7 @@ const routes: RouteRecordRaw[] = [
     path: '/options',
     name: 'options',
     component: () => import('@/views/OptionsView.vue'),
-    meta: { title: 'Options Drift', index: '05' },
+    meta: { title: 'Options', index: '05' },
   },
   {
     path: '/drift',
@@ -305,13 +305,30 @@ const routes: RouteRecordRaw[] = [
       query: { ...to.query, tab: 'states' },
     }),
   },
-  { path: '/:pathMatch(.*)*', redirect: '/' },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: {
+      documentTitle: 'TradeCentral · Page not found',
+      description: 'That address is not a TradeCentral research workspace.',
+      public: true,
+    },
+  },
 ]
 
 export const router = createRouter({
   history: createWebHistory(),
   routes,
-  scrollBehavior: () => ({ top: 0 }),
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition) return savedPosition
+    // In-page overview links (#flow, #method) must land on the section.
+    // Anything else, including an unknown hash, stays at the top.
+    if (/^#[A-Za-z][\w-]*$/.test(to.hash) && document.getElementById(to.hash.slice(1))) {
+      return { el: to.hash, top: 72 }
+    }
+    return { top: 0 }
+  },
 })
 
 /*

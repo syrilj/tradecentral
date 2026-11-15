@@ -21,6 +21,7 @@ import {
 import type { Resource } from '@/composables/useResource'
 import { debounce, useResource } from '@/composables/useResource'
 import { num, pct, pctFrac, signedPct, compact, usd, tone, shortDate, DASH } from '@/format'
+import { externalHref } from '@/safeUrl'
 import {
   formatBigUsd,
   formatPerShare,
@@ -1601,13 +1602,13 @@ const finChartData = computed(() => {
             <div class="about-stat-item">
               <span class="stat-lbl label">Website</span>
               <a
-                v-if="profile?.about?.website"
-                :href="profile.about.website"
+                v-if="externalHref(profile?.about?.website)"
+                :href="externalHref(profile?.about?.website)"
                 target="_blank"
-                rel="noopener"
+                rel="noopener noreferrer"
                 class="stat-link label"
               >
-                {{ profile.about.website.replace('https://', '').replace('http://', '') }}
+                {{ (profile?.about?.website ?? '').replace('https://', '').replace('http://', '') }}
               </a>
               <span v-else class="dim">—</span>
             </div>
@@ -2948,11 +2949,11 @@ const finChartData = computed(() => {
                 <td>
                   <a
                     :href="
-                      tx.sec_form_url ||
+                      externalHref(tx.sec_form_url) ||
                       `https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(symbol)}&forms=4`
                     "
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                     class="label link"
                   >
                     Form 4 ↗
@@ -3343,10 +3344,10 @@ const finChartData = computed(() => {
                 <td class="fig bold">{{ c.amount_range || DASH }}</td>
                 <td>
                   <a
-                    v-if="c.source_url"
-                    :href="c.source_url"
+                    v-if="externalHref(c.source_url)"
+                    :href="externalHref(c.source_url)"
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                     class="label link"
                     >STOCK Act</a
                   >
@@ -3885,10 +3886,10 @@ const finChartData = computed(() => {
                 <td class="dim">{{ row.description || DASH }}</td>
                 <td>
                   <a
-                    v-if="row.url"
-                    :href="row.url"
+                    v-if="externalHref(row.url)"
+                    :href="externalHref(row.url)"
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                     class="label link"
                     >Open SEC Filing</a
                   >

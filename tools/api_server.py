@@ -7,7 +7,9 @@ Stdlib `http.server` + `socketserver.ThreadingMixIn` only, plus pandas/numpy
 Run with:
   edge/.venv-qlib/bin/python edge/tools/api_server.py [--port 8787] [--no-browser]
 
-Endpoints (all GET unless noted, all JSON, all CORS-open with `Access-Control-Allow-Origin: *`):
+Endpoints (all GET unless noted, all JSON). Loopback callers are reflected in
+`Access-Control-Allow-Origin`; a wildcard is not the default. An explicit
+`EDGE_CORS_ORIGINS` allowlist replaces that default:
 
   GET  /api/status[?depth=quick|deep]
       -> latest cached desk board (PEAD candidates, directional signals,
@@ -635,6 +637,14 @@ def _is_loopback_host(host: str) -> bool:
     return host.strip().lower() in {"127.0.0.1", "::1", "localhost"}
 
 
+def _is_loopback_origin(origin: str) -> bool:
+    try:
+        hostname = urlparse(origin).hostname or ""
+    except ValueError:
+        return False
+    return _is_loopback_host(hostname)
+
+
 def _auth_mode() -> str:
     """Operator-session mode: 'clerk' (default) or 'local'.
 
@@ -671,10 +681,11 @@ def _background_jobs_enabled() -> bool:
 
 
 def _cors_origins() -> list[str]:
-    configured = _env_csv("EDGE_CORS_ORIGINS")
-    # Preserve the zero-configuration workstation contract. A non-loopback
-    # server is rejected at startup unless it has an explicit origin allowlist.
-    return configured or ["*"]
+    # Empty means "reflect loopback origins only". That keeps the Vite dev
+    # server and the served SPA working without letting an arbitrary website
+    # read the loopback API. A literal "*" is honored only when the operator
+    # sets it, and off-loopback startup still rejects the wildcard.
+    return _env_csv("EDGE_CORS_ORIGINS")
 
 
 def _runtime_config_errors(host: str) -> list[str]:
@@ -10116,9 +10127,13 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _cors_origin(self) -> str | None:
         allowed = _cors_origins()
+        request_origin = (self.headers.get("Origin") or "").strip()
         if "*" in allowed:
             return "*"
-        request_origin = (self.headers.get("Origin") or "").strip()
+        if not allowed:
+            if request_origin and _is_loopback_origin(request_origin):
+                return request_origin
+            return None
         return request_origin if request_origin in allowed else None
 
     def _cross_site_write_blocked(self) -> bool:
@@ -10141,16 +10156,12 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         if not origin:
             return False
         allowed = _cors_origins()
-        if "*" not in allowed:
+        if allowed and "*" not in allowed:
             # Explicit allowlist configured (required off-loopback): honour it.
             return origin not in allowed
-        # Zero-configuration workstation mode. The server is bound to loopback,
-        # so only a loopback page is a legitimate caller.
-        try:
-            hostname = urlparse(origin).hostname or ""
-        except ValueError:
-            return True
-        return not _is_loopback_host(hostname)
+        # Zero-configuration workstation mode, or an explicit wildcard on
+        # loopback. Only a loopback page is a legitimate browser caller.
+        return not _is_loopback_origin(origin)
 
     def _send_common_headers(self, *, compressed: bool = False) -> None:
         origin = self._cors_origin()
@@ -10168,7 +10179,22 @@ class ApiRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
-        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+        self.send_header("X-Permitted-Cross-Domain-Policies", "none")
+        # Clerk sign-in opens a popup. same-origin-allow-popups keeps that
+        # working while still isolating the document from other windows.
+        # Script sources stay unrestricted here: a strict script-src or
+        # form-action would break the Clerk session on the served SPA.
+        # frame-ancestors, base-uri, and object-src do not.
+        self.send_header(
+            "Content-Security-Policy",
+            "base-uri 'self'; object-src 'none'; frame-ancestors 'none'",
+        )
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("X-Request-ID", uuid.uuid4().hex[:16])
 
     def _encode_body(self, body: bytes, content_type: str) -> tuple[bytes, bool]:

@@ -1,9 +1,8 @@
 @import './tokens.css';
 
 /* fonts are bundled, not fetched — a trading desk must render with the
-   network down. */
-@import '@fontsource-variable/geist';
-@import '@fontsource-variable/geist-mono';
+   network down. Variable faces are Latin-only (see latin-faces.css). */
+@import './latin-faces.css';
 /* The dashboard copy is Latin; importing the scoped faces avoids shipping
    Cyrillic and Vietnamese IBM Plex assets with every initial visit. */
 @import '@fontsource/ibm-plex-mono/latin-400.css';
@@ -12,8 +11,6 @@
 /* Public paper surface (landing/auth) follows the editorial system: Inter
    Tight for display, Inter for body, Space Mono for eyebrows and data
    labels. No component consumes Lora anymore, so its faces are not bundled. */
-@import '@fontsource-variable/inter-tight';
-@import '@fontsource-variable/inter';
 @import '@fontsource/space-mono/latin-400.css';
 @import '@fontsource/space-mono/latin-700.css';
 
@@ -79,6 +76,39 @@ body {
   font-variant-numeric: tabular-nums;
   overflow: hidden; /* the shell scrolls its panes, never the page */
   caret-color: var(--phosphor);
+}
+
+/* Public routes (overview, access, legal, unknown path) opt into this class.
+   The rules live here, not only inside a route chunk, so /license and
+   /terms can scroll on a direct visit instead of being clipped by the
+   operator shell. */
+body.edge-public-mode {
+  overflow: auto !important;
+  overflow-x: hidden !important;
+  background: #fbfbf8;
+}
+body.edge-public-mode #app,
+body.edge-public-mode .shell {
+  height: auto !important;
+  min-height: 100vh;
+  overflow: visible !important;
+}
+body.edge-public-mode .shell {
+  display: block !important;
+}
+body.edge-public-mode .rail,
+body.edge-public-mode .strip,
+body.edge-public-mode .foot,
+body.edge-public-mode .skip-link {
+  display: none !important;
+}
+body.edge-public-mode .stage {
+  display: block !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 100vh !important;
+  padding: 0 !important;
+  overflow: visible !important;
 }
 
 ::selection {

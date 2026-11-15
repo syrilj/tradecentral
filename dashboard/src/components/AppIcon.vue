@@ -280,6 +280,13 @@ withDefaults(
       <path d="M6 14 18 4" />
       <path d="M12 4h6v6" />
     </template>
+    <template v-else-if="name === 'liquidity'">
+      <path d="M4 16c2.2-5 3.6-5 5.4 0s3.2 5 5.2 0 3.2-5 5 0" />
+      <path d="M4 19.5h16" />
+    </template>
+    <template v-else-if="name === 'microstructure'">
+      <path d="M5 19V8M10 19V5M15 19v-7M20 19V9" />
+    </template>
     <template v-else>
       <circle cx="12" cy="12" r="8" />
     </template>

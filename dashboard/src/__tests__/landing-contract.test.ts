@@ -49,6 +49,8 @@ describe('Landing page honours the product boundary', () => {
     expect(src).toContain("redirect: '/flow'")
     expect(src).toContain('Sign in')
     expect(src).toContain('Request operator access')
+    expect(src).not.toContain("mode: 'setup'")
+    expect(src).toContain("name: 'waitlist'")
     expect(src).not.toContain('>Create access<')
     expect(src).toContain('GexFlowVisual')
   })

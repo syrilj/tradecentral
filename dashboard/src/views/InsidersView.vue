@@ -9,6 +9,7 @@ import {
 } from '@/api'
 import { useResource } from '@/composables/useResource'
 import { DASH } from '@/format'
+import { externalHref } from '@/safeUrl'
 import Panel from '@/components/Panel.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import LoadingState from '@/components/LoadingState.vue'
@@ -147,7 +148,12 @@ const counts = computed(() => filings.data.value?.symbol_filings?.counts_90d ?? 
               {{ formBrief(row.form).title }}{{ row.description ? ` · ${row.description}` : '' }}
             </td>
             <td>
-              <a v-if="row.url" :href="row.url" target="_blank" rel="noopener" class="label"
+              <a
+                v-if="externalHref(row.url)"
+                :href="externalHref(row.url)"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="label"
                 >open</a
               >
               <span v-else class="dim">{{ DASH }}</span>
