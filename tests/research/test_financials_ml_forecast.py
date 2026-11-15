@@ -12,6 +12,7 @@ try:
         build_report_features,
         score_report_forecast,
     )
+    from edge.tools import financial_data
 except ImportError:
     from research.financials_ml_forecast import (
         GEARING_EXPANSION,
@@ -19,6 +20,7 @@ except ImportError:
         build_report_features,
         score_report_forecast,
     )
+    from tools import financial_data
 
 
 def _row(key: str, label: str, values: list[float | None]) -> dict:
@@ -214,6 +216,34 @@ def test_none_payload_is_missing():
     assert out["status"] == "missing"
     assert out["predicted_price"] is None
     assert out["forecast_score"] is None
+
+
+def test_published_financials_tape_replays_to_the_same_forecast(monkeypatch):
+    """The JSON the endpoint returns is the whole input the scorer used."""
+    intel = {
+        "last_price": 80.0,
+        "current_price": 80.0,
+        "ret_3m": 0.2,
+        "range_position": 0.95,
+        "forward_eps": 2.4,
+        "earnings_growth": 0.35,
+        "revenue_growth": 0.28,
+        "spot_source": "fixture",
+    }
+    monkeypatch.setattr(financial_data, "resolve_forecast_intel", lambda symbol: dict(intel))
+    published = financial_data._with_model_forecast(_growth_report())
+    forecast = published["model_forecast"]
+    replay = score_report_forecast(published)
+    assert forecast["predicted_price"] == replay["predicted_price"]
+    assert forecast["forecast_score"] == replay["forecast_score"]
+    assert forecast["gearing_up_towards"] == replay["gearing_up_towards"]
+    assert published["tape"]["range_position"] == 0.95
+    assert published["tape"]["forward_eps"] == 2.4
+    without_range = dict(published)
+    without_range["tape"] = {
+        key: value for key, value in published["tape"].items() if key != "range_position"
+    }
+    assert score_report_forecast(without_range)["predicted_price"] != forecast["predicted_price"]
 
 
 def test_live_tape_not_synthetic_support_print():
