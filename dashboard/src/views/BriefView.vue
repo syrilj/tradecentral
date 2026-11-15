@@ -369,10 +369,28 @@ const sideLabel = computed(() => {
   }
 })
 
-/** Widest contribution in the set, so the bars share one scale. */
-const maxContribution = computed(() =>
-  Math.max(...(call.value?.streams ?? []).map((s) => Math.abs(s.contribution)), 0.0001),
-)
+/** Widest measured contribution in the set, so the bars share one scale. */
+const maxContribution = computed(() => {
+  const mags = (call.value?.streams ?? [])
+    .map((s) => s.contribution)
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+    .map((v) => Math.abs(v))
+  return Math.max(...mags, 0.0001)
+})
+
+function contributionTone(value: number | null): 'pos' | 'neg' | '' {
+  if (value == null || !Number.isFinite(value)) return ''
+  return value >= 0 ? 'pos' : 'neg'
+}
+
+function contributionStyle(value: number | null): Record<string, string> | null {
+  if (value == null || !Number.isFinite(value)) return null
+  const edge = value >= 0 ? 'insetInlineStart' : 'insetInlineEnd'
+  return {
+    width: `${Math.min(50, (Math.abs(value) / maxContribution.value) * 50)}%`,
+    [edge]: '50%',
+  }
+}
 
 /** Signed distance from spot TO the level — the one convention on this page. */
 const distanceToFlipPct = computed<number | null>(() => {
@@ -818,14 +836,12 @@ function openSymbol(sym: string): void {
               <span class="st-name">{{ s.name }}</span>
               <span class="st-bar" aria-hidden="true">
                 <i
-                  :class="['st-fill', s.contribution >= 0 ? 'up' : 'down']"
-                  :style="{
-                    width: `${Math.min(50, (Math.abs(s.contribution) / maxContribution) * 50)}%`,
-                    [s.contribution >= 0 ? 'insetInlineStart' : 'insetInlineEnd']: '50%',
-                  }"
+                  v-if="contributionStyle(s.contribution)"
+                  :class="['st-fill', contributionTone(s.contribution) === 'neg' ? 'down' : 'up']"
+                  :style="contributionStyle(s.contribution) ?? undefined"
                 />
               </span>
-              <span :class="['st-val', 'fig', s.contribution >= 0 ? 'pos' : 'neg']">{{
+              <span :class="['st-val', 'fig', contributionTone(s.contribution)]">{{
                 signed(s.contribution, 3)
               }}</span>
               <span class="st-w label">{{ (s.weight * 100).toFixed(0) }}%</span>

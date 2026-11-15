@@ -657,6 +657,10 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
             score_report_forecast = None
     out = dict(data)
     intel = resolve_forecast_intel(str(out.get("symbol") or ""))
+    # Coin marks are merged before the tape is frozen. Writing the tape first
+    # published a forecast the JSON could not replay: the scorer saw the coin
+    # book, and a second pass over the payload did not.
+    intel = _with_treasury_intel(out, intel)
     if intel.get("last_price"):
         ratios = dict(out.get("ratios") or {})
         ratios["current_price"] = intel["last_price"]
@@ -689,10 +693,12 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
                 "spot_source",
                 "delayed_last_price",
                 "delayed_spot_gap",
+                "coin",
+                "period_prices",
+                "shares_outstanding",
             )
             if k in intel
         }
-    intel = _with_treasury_intel(out, intel)
     out["model_forecast"] = score_report_forecast(out, intel) if score_report_forecast else None
     return out
 

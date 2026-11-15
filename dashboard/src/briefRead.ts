@@ -15,17 +15,18 @@ export type Side = 'long' | 'short' | 'neutral'
 
 export interface StreamRead {
   name: string
-  /** Raw stream score, ordinal and unbounded in practice. */
-  score: number
+  /** Raw stream score. Null when the payload did not measure this stream. */
+  score: number | null
   /** Weight the stack assigned this stream, 0..1. */
   weight: number
-  /** weight × score — what it actually moved the composite by. */
-  contribution: number
+  /** weight × score — what it actually moved the composite by. Null if neither the payload nor the score can say. */
+  contribution: number | null
 }
 
 export interface CallRead {
   side: Side
-  score: number
+  /** Null when the stack did not send a composite. A missing blend is not a flat zero. */
+  score: number | null
   /** thin | moderate | strong | conflicted, from the stack. */
   band: string
   streams: StreamRead[]
@@ -85,18 +86,25 @@ export function readCall(
 
   const streams: StreamRead[] = Object.keys(weights)
     .map((name) => {
-      const score = scores[name]
+      const rawScore = scores[name]
       const weight = weights[name] ?? 0
-      const contribution = contributions[name] ?? (typeof score === 'number' ? weight * score : 0)
-      return {
-        name,
-        score: typeof score === 'number' ? score : 0,
-        weight,
-        contribution,
-      }
+      const score = typeof rawScore === 'number' && Number.isFinite(rawScore) ? rawScore : null
+      const supplied = contributions[name]
+      const contribution =
+        typeof supplied === 'number' && Number.isFinite(supplied)
+          ? supplied
+          : score == null
+            ? null
+            : weight * score
+      return { name, score, weight, contribution }
     })
     .filter((s) => s.weight > 0)
-    .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution))
+    .sort((a, b) => {
+      if (a.contribution == null && b.contribution == null) return 0
+      if (a.contribution == null) return 1
+      if (b.contribution == null) return -1
+      return Math.abs(b.contribution) - Math.abs(a.contribution)
+    })
 
   const scored = hitRates?.events_scored ?? 0
   const required = hitRates?.min_events ?? 0
@@ -114,7 +122,10 @@ export function readCall(
 
   return {
     side: normaliseSide(signal.side),
-    score: typeof signal.composite_score === 'number' ? signal.composite_score : 0,
+    score:
+      typeof signal.composite_score === 'number' && Number.isFinite(signal.composite_score)
+        ? signal.composite_score
+        : null,
     band: signal.agreement_band ?? 'unknown',
     streams,
     adaptationMode: mode,

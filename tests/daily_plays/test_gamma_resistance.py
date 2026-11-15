@@ -210,6 +210,48 @@ def test_call_only_book_does_not_invent_a_zero():
     assert payload["nearby_support_reason"] == "no_puts_below_spot"
 
 
+def test_zero_gamma_stays_blank_when_less_than_half_the_contracts_have_iv():
+    """A few fat IV strikes must not publish a flip the rest of the book cannot reprice."""
+    priced = [
+        _contract("call", 110, oi=50_000),
+        _contract("put", 90, oi=50_000),
+    ]
+    quoted = [
+        {
+            "right": "call",
+            "strike": strike,
+            "open_interest": 10,
+            "gamma": 0.01,
+            "dte": 30,
+            "spot": 100,
+            "captured_utc": ASOF.isoformat(),
+        }
+        for strike in (98, 100, 102)
+    ]
+    payload = _reads([*priced, *quoted])
+    assert payload["quality"]["gamma_black_scholes"] == 2
+    assert payload["quality"]["contracts_measured"] == 5
+    assert payload["quality"]["revalue_coverage"] > 0.5
+    assert payload["zero_gamma"] is None
+    assert payload["zero_gamma_reason"] == "iv_coverage_insufficient"
+
+
+def test_nearby_shelf_is_not_erased_by_a_heavier_distant_wall():
+    payload = _reads(
+        [
+            _contract("call", 110, oi=2_000),
+            _contract("put", 96, oi=800),
+            _contract("put", 91, oi=40_000),
+        ]
+    )
+    support = payload["nearby_support"]
+    wall = payload["put_wall"]
+    assert wall is not None and wall["level"] == 91
+    assert support is not None
+    assert support["level"] == 96
+    assert abs(support["distance_pct"]) <= 0.08
+
+
 def test_provider_gamma_without_iv_cannot_set_the_zero():
     rows = [
         {

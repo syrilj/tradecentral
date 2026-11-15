@@ -246,6 +246,40 @@ def test_published_financials_tape_replays_to_the_same_forecast(monkeypatch):
     assert score_report_forecast(without_range)["predicted_price"] != forecast["predicted_price"]
 
 
+def test_treasury_coin_marks_are_on_the_published_tape(monkeypatch):
+    """Coin history is an input to the mark. It has to survive on the JSON."""
+    intel = {
+        "last_price": 40.0,
+        "current_price": 40.0,
+        "range_position": 0.4,
+        "forward_eps": 1.1,
+        "spot_source": "fixture",
+    }
+    coin = {
+        "symbol": "BTC-USD",
+        "spot": 60000.0,
+        "period_prices": [50000.0, 62000.0],
+        "annual_vol": 0.55,
+    }
+
+    def _treasury(_payload, base):
+        merged = dict(base)
+        merged["coin"] = dict(coin)
+        merged["period_prices"] = [38.0, 41.0]
+        return merged
+
+    monkeypatch.setattr(financial_data, "resolve_forecast_intel", lambda _symbol: dict(intel))
+    monkeypatch.setattr(financial_data, "_with_treasury_intel", _treasury)
+    published = financial_data._with_model_forecast(_growth_report())
+    assert published["tape"]["coin"] == coin
+    assert published["tape"]["period_prices"] == [38.0, 41.0]
+    assert published["tape"]["range_position"] == 0.4
+    assert published["tape"]["forward_eps"] == 1.1
+    replay = score_report_forecast(published)
+    assert published["model_forecast"]["predicted_price"] == replay["predicted_price"]
+    assert published["model_forecast"]["forecast_score"] == replay["forecast_score"]
+
+
 def test_live_tape_not_synthetic_support_print():
     """ASTS-shaped case: live ~71, expansion tape. Must not print $55 support."""
     payload = _growth_report()

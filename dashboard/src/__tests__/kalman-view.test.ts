@@ -47,6 +47,9 @@ describe('Kalman tab (constant-velocity trend)', () => {
     // asinh keeps entry_z readable when the score runs into the hundreds; a
     // linear domain would collapse the thresholds onto the zero line.
     expect(view).toContain('Math.asinh')
+    // A missing score is a gap. Plotting it at 0 pulls the line to the axis.
+    expect(view).not.toContain('p.score ?? 0')
+    expect(view).toContain('Number.isFinite(p.score)')
     expect(view).toContain('asinh axis')
     expect(view).not.toContain('clipped at')
   })

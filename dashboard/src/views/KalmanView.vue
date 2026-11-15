@@ -308,7 +308,9 @@ const scoreChart = computed(() => {
   if (s.length < 2) return null
   const K = Math.max(entryZ.value, 0.5)
   const warp = (v: number) => Math.asinh(v / K)
-  const vals = s.map((p) => p.score ?? 0).filter((v) => Number.isFinite(v))
+  const vals = s
+    .map((p) => p.score)
+    .filter((v): v is number => v != null && Number.isFinite(v))
   let tMax = warp(K * 2)
   for (const v of vals) tMax = Math.max(tMax, Math.abs(warp(v)))
   const scale = linearScale([-tMax, tMax], [SCORE_H - PAD_B, PAD_T])
@@ -332,7 +334,14 @@ const scoreChart = computed(() => {
     }, [])
 
   return {
-    path: linePath(s.map((p, i) => ({ x: xScale.value(i), y: y(p.score ?? 0) }))),
+    path: linePath(
+      s
+        .map((p, i) => ({
+          x: xScale.value(i),
+          y: p.score == null || !Number.isFinite(p.score) ? Number.NaN : y(p.score),
+        }))
+        .filter((pt) => Number.isFinite(pt.y)),
+    ),
     zeroY: y(0),
     entryY: y(entryZ.value),
     entryNegY: y(-entryZ.value),

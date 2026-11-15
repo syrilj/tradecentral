@@ -22,10 +22,11 @@ export interface Pt {
  * Bad input: `[]` returns `""`.
  */
 export function linePath(pts: Pt[]): string {
-  if (pts.length === 0) return ''
-  let d = `M${r2(pts[0].x)},${r2(pts[0].y)}`
-  for (let i = 1; i < pts.length; i++) {
-    d += `L${r2(pts[i].x)},${r2(pts[i].y)}`
+  const clean = finitePts(pts)
+  if (clean.length === 0) return ''
+  let d = `M${r2(clean[0].x)},${r2(clean[0].y)}`
+  for (let i = 1; i < clean.length; i++) {
+    d += `L${r2(clean[i].x)},${r2(clean[i].y)}`
   }
   return d
 }
@@ -46,18 +47,19 @@ export function linePath(pts: Pt[]): string {
  * falls back to `linePath` (a spline needs at least 3 points to curve).
  */
 export function smoothPath(pts: Pt[], tension = 0.5): string {
-  if (pts.length === 0) return ''
-  if (pts.length === 1) return `M${r2(pts[0].x)},${r2(pts[0].y)}`
-  if (pts.length === 2) return linePath(pts)
+  const clean = finitePts(pts)
+  if (clean.length === 0) return ''
+  if (clean.length === 1) return `M${r2(clean[0].x)},${r2(clean[0].y)}`
+  if (clean.length === 2) return linePath(clean)
 
   const k = clamp(tension, 0, 1) / 3
-  let d = `M${r2(pts[0].x)},${r2(pts[0].y)}`
+  let d = `M${r2(clean[0].x)},${r2(clean[0].y)}`
 
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] ?? pts[i]
-    const p1 = pts[i]
-    const p2 = pts[i + 1]
-    const p3 = pts[i + 2] ?? p2
+  for (let i = 0; i < clean.length - 1; i++) {
+    const p0 = clean[i - 1] ?? clean[i]
+    const p1 = clean[i]
+    const p2 = clean[i + 1]
+    const p3 = clean[i + 2] ?? p2
 
     const cp1x = p1.x + (p2.x - p0.x) * k
     const cp1y = p1.y + (p2.y - p0.y) * k
@@ -76,13 +78,14 @@ export function smoothPath(pts: Pt[], tension = 0.5): string {
  * Bad input: `[]` returns `""`.
  */
 export function areaPath(pts: Pt[], baselineY: number): string {
-  if (pts.length === 0) return ''
-  const first = pts[0]
-  const last = pts[pts.length - 1]
+  const clean = finitePts(pts)
+  if (clean.length === 0 || !Number.isFinite(baselineY)) return ''
+  const first = clean[0]
+  const last = clean[clean.length - 1]
 
   let d = `M${r2(first.x)},${r2(baselineY)}L${r2(first.x)},${r2(first.y)}`
-  for (let i = 1; i < pts.length; i++) {
-    d += `L${r2(pts[i].x)},${r2(pts[i].y)}`
+  for (let i = 1; i < clean.length; i++) {
+    d += `L${r2(clean[i].x)},${r2(clean[i].y)}`
   }
   d += `L${r2(last.x)},${r2(baselineY)}Z`
   return d
@@ -94,11 +97,12 @@ export function areaPath(pts: Pt[], baselineY: number): string {
  * Bad input: `[]` returns `""`.
  */
 export function stepPath(pts: Pt[]): string {
-  if (pts.length === 0) return ''
-  let d = `M${r2(pts[0].x)},${r2(pts[0].y)}`
-  for (let i = 1; i < pts.length; i++) {
-    const prev = pts[i - 1]
-    const curr = pts[i]
+  const clean = finitePts(pts)
+  if (clean.length === 0) return ''
+  let d = `M${r2(clean[0].x)},${r2(clean[0].y)}`
+  for (let i = 1; i < clean.length; i++) {
+    const prev = clean[i - 1]
+    const curr = clean[i]
     d += `L${r2(curr.x)},${r2(prev.y)}L${r2(curr.x)},${r2(curr.y)}`
   }
   return d
@@ -135,6 +139,7 @@ export function candlePath(
 
   for (const bar of bars) {
     const { x, o, h, l, c } = bar
+    if (![x, o, h, l, c].every((n) => Number.isFinite(n))) continue
     const top = r2(Math.max(o, c))
     const bottom = r2(Math.min(o, c))
     const left = r2(x - hw)
@@ -157,14 +162,16 @@ export function candlePath(
  * Bad input: either array empty returns `""`.
  */
 export function bandPath(upper: Pt[], lower: Pt[]): string {
-  if (upper.length === 0 || lower.length === 0) return ''
+  const up = finitePts(upper)
+  const down = finitePts(lower)
+  if (up.length === 0 || down.length === 0) return ''
 
-  let d = `M${r2(upper[0].x)},${r2(upper[0].y)}`
-  for (let i = 1; i < upper.length; i++) {
-    d += `L${r2(upper[i].x)},${r2(upper[i].y)}`
+  let d = `M${r2(up[0].x)},${r2(up[0].y)}`
+  for (let i = 1; i < up.length; i++) {
+    d += `L${r2(up[i].x)},${r2(up[i].y)}`
   }
-  for (let i = lower.length - 1; i >= 0; i--) {
-    d += `L${r2(lower[i].x)},${r2(lower[i].y)}`
+  for (let i = down.length - 1; i >= 0; i--) {
+    d += `L${r2(down[i].x)},${r2(down[i].y)}`
   }
   d += 'Z'
   return d
@@ -193,32 +200,40 @@ export function sparkline(
     return { d: '', area: '', last: zero, min: zero, max: zero }
   }
 
+  const finite = values
+    .map((v, i) => ({ v, i }))
+    .filter((p) => Number.isFinite(p.v))
+  if (finite.length === 0) {
+    return { d: '', area: '', last: zero, min: zero, max: zero }
+  }
+
   const innerW = Math.max(w - pad * 2, 0)
   const innerH = Math.max(h - pad * 2, 0)
 
-  let minV = values[0]
-  let maxV = values[0]
-  let minIdx = 0
-  let maxIdx = 0
-  for (let i = 1; i < values.length; i++) {
-    if (values[i] < minV) {
-      minV = values[i]
-      minIdx = i
+  let minV = finite[0].v
+  let maxV = finite[0].v
+  let minAt = 0
+  let maxAt = 0
+  for (let j = 1; j < finite.length; j++) {
+    const v = finite[j].v
+    if (v < minV) {
+      minV = v
+      minAt = j
     }
-    if (values[i] > maxV) {
-      maxV = values[i]
-      maxIdx = i
+    if (v > maxV) {
+      maxV = v
+      maxAt = j
     }
   }
 
   const n = values.length
   const xScale = linearScale([0, Math.max(n - 1, 0)], [pad, pad + innerW])
   const yScale = linearScale([minV, maxV], [pad + innerH, pad])
-  const pts: Pt[] = values.map((v, i) => ({ x: xScale(i), y: yScale(v) }))
+  const pts: Pt[] = finite.map((p) => ({ x: xScale(p.i), y: yScale(p.v) }))
 
-  const last = pts[n - 1]
-  const min = pts[minIdx]
-  const max = pts[maxIdx]
+  const last = pts[pts.length - 1]
+  const min = pts[minAt]
+  const max = pts[maxAt]
 
   return {
     d: linePath(pts),
@@ -235,6 +250,10 @@ export function sparkline(
 function r2(n: number): number {
   const rounded = Math.round(n * 100) / 100
   return rounded === 0 ? 0 : rounded
+}
+
+function finitePts(pts: Pt[]): Pt[] {
+  return pts.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
 }
 
 function clamp(v: number, lo: number, hi: number): number {
