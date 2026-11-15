@@ -646,6 +646,42 @@ def resolve_forecast_intel(symbol: str) -> dict[str, Any]:
     return dict(intel)
 
 
+# Inputs score_report_forecast reads from intel, not from the statements.
+# Leaving them off the published tape made a replay of the same payload
+# produce a different price (growth, forward EPS, and the 52-week position
+# moved the mark while the response still looked complete).
+_FORECAST_TAPE_KEYS = (
+    "last_price",
+    "current_price",
+    "ret_1m",
+    "ret_3m",
+    "ret_6m",
+    "ret_12m",
+    "vol_realized_30d",
+    "fwd_pe",
+    "pe_forward",
+    "trailing_eps",
+    "forward_eps",
+    "earnings_growth",
+    "revenue_growth",
+    "range_position",
+    "spot_source",
+    "delayed_last_price",
+    "delayed_spot_gap",
+    "insider_net_volume_usd",
+    "institutional_pct",
+)
+
+
+def _forecast_tape(intel: Mapping[str, Any]) -> dict[str, Any]:
+    """Measured scoring inputs only. A missing field stays off the tape."""
+    return {
+        key: intel[key]
+        for key in _FORECAST_TAPE_KEYS
+        if key in intel and intel[key] is not None
+    }
+
+
 def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
     """Attach the report-native ML forecast. Never uses Street targets as labels."""
     try:
@@ -664,25 +700,10 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
         # when the print came from yfinance's delayed consolidated quote.
         ratios["spot_source"] = intel.get("spot_source") or "live"
         out["ratios"] = ratios
-        out["tape"] = {
-            k: intel[k]
-            for k in (
-                "last_price",
-                "current_price",
-                "ret_1m",
-                "ret_3m",
-                "ret_6m",
-                "ret_12m",
-                "vol_realized_30d",
-                "fwd_pe",
-                "trailing_eps",
-                "spot_source",
-                "delayed_last_price",
-                "delayed_spot_gap",
-            )
-            if k in intel
-        }
     intel = _with_treasury_intel(out, intel)
+    tape = _forecast_tape(intel)
+    if tape:
+        out["tape"] = tape
     out["model_forecast"] = score_report_forecast(out, intel) if score_report_forecast else None
     return out
 
