@@ -23,6 +23,7 @@ import {
   type VolTargetTrendPayload,
 } from '@/api'
 import { debounce, useResource } from '@/composables/useResource'
+import { useChartSize } from '@/composables/useChartSize'
 import { DASH, num, optNum, optSigned, shortDate, usd } from '@/format'
 import { linearScale, linePath, niceTicks } from '@/charts'
 import Panel from '@/components/Panel.vue'
@@ -218,7 +219,14 @@ const series = computed<VolTargetSeriesPoint[]>(() => d.value?.series ?? [])
 const signalItems = computed<VolTargetSignalItem[]>(() => signalsResource.data.value?.signals ?? [])
 
 /* ---- shared geometry ---- */
-const W = 900
+const chartHost = ref<HTMLElement | null>(null)
+const { width: chartPx } = useChartSize(chartHost, {
+  minW: 320,
+  fallbackW: 720,
+  minH: 40,
+  fallbackH: 40,
+})
+const W = computed(() => Math.max(320, chartPx.value || 720))
 const PAD_L = 62
 const PAD_R = 16
 const PRICE_H = 190
@@ -228,13 +236,13 @@ const PAD_T = 12
 const PAD_B = 10
 
 const xScale = computed(() =>
-  linearScale([0, Math.max(series.value.length - 1, 1)], [PAD_L, W - PAD_R]),
+  linearScale([0, Math.max(series.value.length - 1, 1)], [PAD_L, W.value - PAD_R]),
 )
 
 const xTicks = computed(() => {
   const s = series.value
   if (s.length < 2) return []
-  const count = Math.min(7, s.length)
+  const count = Math.min(s.length, Math.max(2, Math.floor((W.value - PAD_L - PAD_R) / 84)))
   const out: { x: number; label: string }[] = []
   for (let k = 0; k < count; k++) {
     const i = Math.round((k * (s.length - 1)) / (count - 1))
@@ -905,7 +913,7 @@ const paramsLine = computed(() => {
 
             <p class="caveat label">{{ d.caveat }}</p>
 
-            <figure class="figure">
+            <figure ref="chartHost" class="figure">
               <!-- Pane 01: Price and EMAs -->
               <div class="pane-header">
                 <figcaption class="label fig-cap">
@@ -926,7 +934,8 @@ const paramsLine = computed(() => {
               <svg
                 class="pane"
                 :viewBox="`0 0 ${W} ${PRICE_H}`"
-                preserveAspectRatio="none"
+                :style="{ height: `${PRICE_H}px` }"
+                preserveAspectRatio="xMinYMin meet"
                 role="img"
                 :aria-label="`${d.symbol} close with trend signals`"
               >
@@ -961,7 +970,8 @@ const paramsLine = computed(() => {
               <svg
                 class="pane"
                 :viewBox="`0 0 ${W} ${VOL_H}`"
-                preserveAspectRatio="none"
+                :style="{ height: `${VOL_H}px` }"
+                preserveAspectRatio="xMinYMin meet"
                 role="img"
                 aria-label="Realised volatility vs target"
               >
@@ -992,7 +1002,8 @@ const paramsLine = computed(() => {
               <svg
                 class="pane"
                 :viewBox="`0 0 ${W} ${LEV_H}`"
-                preserveAspectRatio="none"
+                :style="{ height: `${LEV_H}px` }"
+                preserveAspectRatio="xMinYMin meet"
                 role="img"
                 aria-label="Dynamic leverage"
               >
@@ -1018,12 +1029,18 @@ const paramsLine = computed(() => {
               <svg
                 class="axis-bar"
                 :viewBox="`0 0 ${W} 22`"
-                preserveAspectRatio="none"
+                :style="{ height: '22px' }"
+                preserveAspectRatio="xMinYMin meet"
                 role="presentation"
               >
                 <g v-for="(t, i) in xTicks" :key="`xt${i}`">
                   <line class="axis-tick" :x1="t.x" y1="0" :x2="t.x" y2="4" />
-                  <text class="axis fig" :x="t.x" y="15" text-anchor="middle">
+                  <text
+                    class="axis fig"
+                    :x="i === 0 ? PAD_L : i === xTicks.length - 1 ? W - PAD_R : t.x"
+                    y="15"
+                    :text-anchor="i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'"
+                  >
                     {{ t.label }}
                   </text>
                 </g>
@@ -1302,7 +1319,6 @@ const paramsLine = computed(() => {
 
 .pane {
   width: 100%;
-  height: auto;
   display: block;
   background: var(--panel-hi);
   border: var(--hair) solid var(--rule);
@@ -1319,6 +1335,7 @@ const paramsLine = computed(() => {
   stroke: var(--rule);
   stroke-width: 1px;
   stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
 }
 
 .axis {

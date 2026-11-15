@@ -67,6 +67,20 @@ const barH = computed(() => {
   return Math.max(2, Math.min(18, raw))
 })
 
+/** Local volume minima outside the value area. Everything else outside the
+ *  value area is just thinner trade, not an LVN, and must not be labelled one. */
+const lvnPrices = computed(() => {
+  const bins = ordered.value
+  const set = new Set<number>()
+  for (let i = 0; i < bins.length; i++) {
+    const v = bins[i].volume
+    const left = i > 0 ? bins[i - 1].volume : Infinity
+    const right = i < bins.length - 1 ? bins[i + 1].volume : Infinity
+    if (v < left && v < right && !bins[i].in_value_area) set.add(bins[i].price)
+  }
+  return set
+})
+
 function binClass(bin: VolumeProfileBin): string {
   if (
     props.poc != null &&
@@ -76,7 +90,8 @@ function binClass(bin: VolumeProfileBin): string {
     if (bin.price === props.bins.find((b) => b.volume === volMax.value)?.price) return 'is-poc'
   }
   if (bin.in_value_area) return 'is-va'
-  return 'is-lvn'
+  if (lvnPrices.value.has(bin.price)) return 'is-lvn'
+  return 'is-outside'
 }
 
 const ticks = computed(() => niceTicks(0, volMax.value, 3))
@@ -183,7 +198,9 @@ const rows = computed<Row[]>(() =>
                 ? 'var(--call)'
                 : row.cls === 'is-va'
                   ? 'var(--call-dim)'
-                  : `url(#${uid}-lvn)`
+                  : row.cls === 'is-lvn'
+                    ? `url(#${uid}-lvn)`
+                    : 'var(--rule-hi)'
             "
             :stroke="row.cls === 'is-lvn' ? 'var(--ink-ghost)' : 'none'"
             stroke-width="0.5"
@@ -263,11 +280,7 @@ const rows = computed<Row[]>(() =>
   transition: opacity var(--dur-fast) var(--ease-out);
 }
 
-.vp-wrap:hover .vp-bar {
-  opacity: 0.55;
-}
-
-.vp-wrap:hover .vp-bar:hover {
+.vp-bar:hover {
   opacity: 1;
 }
 
