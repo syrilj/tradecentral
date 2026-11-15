@@ -313,7 +313,7 @@ const flip = computed(() => curX.value > W.value * 0.62)
 <template>
   <figure ref="hostRef" class="chart" :style="{ minHeight: `${height}px` }">
     <svg
-      v-if="W > 0"
+      v-if="W"
       ref="svg"
       class="svg"
       :viewBox="`0 0 ${W} ${totalH}`"
