@@ -147,6 +147,32 @@ def test_calculate_bs_charm_per_day():
     assert charm_sub_day is None
 
 
+def _bs_delta_q0(spot: float, strike: float, years: float, iv: float, rate: float, *, is_call: bool) -> float:
+    """Black–Scholes delta with dividend yield 0. Independent of the charm routine."""
+    root_t = math.sqrt(years)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * years) / (iv * root_t)
+    cdf = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
+    return cdf if is_call else cdf - 1.0
+
+
+def test_put_charm_matches_call_charm_and_a_delta_bump():
+    """q = 0, so put charm is call charm. Adding r·e^{-rT}/365 is not a dividend."""
+    spot, strike, years, iv, rate = 100.0, 80.0, 30.0 / 365.0, 0.20, 0.045
+    call = calculate_bs_charm_per_day(spot, strike, years, iv, rate, is_call=True)
+    put = calculate_bs_charm_per_day(spot, strike, years, iv, rate, is_call=False)
+    assert call is not None and put is not None
+    assert put == pytest.approx(call, abs=0.0)
+
+    day = 1.0 / 365.0
+    bumped = _bs_delta_q0(spot, strike, years - day, iv, rate, is_call=False)
+    today = _bs_delta_q0(spot, strike, years, iv, rate, is_call=False)
+    finite_difference = bumped - today
+    assert put == pytest.approx(finite_difference, abs=2e-5)
+    # The discarded put term is about 1.2e-4 here, larger than the real charm.
+    bogus = put + (rate * math.exp(-rate * years) / 365.0)
+    assert abs(bogus - finite_difference) > abs(put - finite_difference)
+
+
 def test_calculate_dollar_gamma_1pct():
     """Verify dollar gamma 1% calculation: OI * M * Gamma * S^2 * 0.01."""
     oi = 1000.0
@@ -247,6 +273,38 @@ def test_compute_gamma_flip_and_walls():
     assert flip is not None
     assert 460.0 <= flip <= 540.0
     assert len(mapped) > 0
+
+
+def test_call_wall_is_dollar_gamma_not_open_interest():
+    """A far OTM strike with huge OI and no gamma is not call resistance."""
+    spot = 100.0
+    chain = [
+        {"strike": 102.0, "right": "call", "open_interest": 2000, "iv": 0.25, "dte": 7},
+        {"strike": 160.0, "right": "call", "open_interest": 80000, "iv": 0.25, "dte": 7},
+    ]
+    _flip, call_wall, put_wall, _gex, mapped = compute_gamma_flip_and_walls(chain, spot=spot)
+    by_strike = {row["strike"]: row for row in mapped}
+    assert by_strike[160.0]["call_oi"] > by_strike[102.0]["call_oi"]
+    assert by_strike[102.0]["call_gex_m"] > by_strike[160.0]["call_gex_m"]
+    assert call_wall == 102.0
+    assert put_wall is None
+
+
+def test_balanced_strike_is_not_a_gamma_flip():
+    """Net zero between two same-sign prints is not the hedging boundary."""
+    spot = 100.0
+    chain = [
+        {"strike": 80.0, "right": "put", "open_interest": 10000, "iv": 0.20, "dte": 30},
+        {"strike": 90.0, "right": "call", "open_interest": 10000, "iv": 0.20, "dte": 30},
+        {"strike": 100.0, "right": "call", "open_interest": 5000, "iv": 0.20, "dte": 30},
+        {"strike": 100.0, "right": "put", "open_interest": 5000, "iv": 0.20, "dte": 30},
+        {"strike": 110.0, "right": "call", "open_interest": 8000, "iv": 0.20, "dte": 30},
+    ]
+    flip, _call, _put, _gex, mapped = compute_gamma_flip_and_walls(chain, spot=spot)
+    at_spot = next(row for row in mapped if row["strike"] == spot)
+    assert at_spot["net_gex_m"] == pytest.approx(0.0, abs=1e-9)
+    assert flip is not None
+    assert flip < 95.0
 
 
 def test_directional_walls_one_sided_chain():

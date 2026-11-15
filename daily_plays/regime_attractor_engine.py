@@ -248,7 +248,12 @@ def calculate_bs_charm_per_day(
     rate: float = 0.045,
     is_call: bool = True,
 ) -> float | None:
-    """Calculates Black-Scholes Charm per day (dDelta/dt / 365) with tenor floor guard."""
+    """Black–Scholes charm per calendar day (∂Δ/∂t / 365), q = 0.
+
+    With no dividend yield, put delta is call delta minus one, so charm does
+    not depend on right. Adding ``r·e^{-rT}/365`` to puts treats the financing
+    rate as a dividend and mis-signs the hedge.
+    """
     if years < 1.0 / 365.0:
         return None
     d1_d2 = bs_d1_d2(spot, strike, years, iv, rate)
@@ -261,13 +266,7 @@ def calculate_bs_charm_per_day(
         term1 = rate / vol_sqrt_t
         term2 = d2 / (2.0 * years)
         charm_call_annual = -phi * (term1 - term2)
-        charm_call_day = charm_call_annual / 365.0
-        if is_call:
-            return charm_call_day
-        else:
-            discount = math.exp(-rate * years)
-            charm_put_day = charm_call_day + (rate * discount) / 365.0
-            return charm_put_day
+        return charm_call_annual / 365.0
     except (ValueError, ZeroDivisionError, OverflowError):
         return None
 
@@ -330,6 +329,35 @@ def calculate_max_pain(
                 best_strike = candidate
 
     return best_strike
+
+
+def _crossings_where_sign_changes(points: Sequence[tuple[float, float]]) -> list[float]:
+    """Prices where a net-exposure series changes sign.
+
+    An exact zero counts only when the nearest non-zero samples on either
+    side have opposite signs. A strike whose call and put gamma cancel, or
+    that simply has no exposure, is not a gamma flip just because it prints 0
+    between two readings of the same sign.
+    """
+    n = len(points)
+    crossings: list[float] = []
+    for i in range(n - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        if y0 == 0.0 or y1 == 0.0:
+            continue
+        if y0 * y1 < 0.0:
+            denom = abs(y0) + abs(y1)
+            if denom > 1e-9:
+                crossings.append(float(x0 + (abs(y0) / denom) * (x1 - x0)))
+    for i, (x, y) in enumerate(points):
+        if y != 0.0:
+            continue
+        prev = next((points[j][1] for j in range(i - 1, -1, -1) if points[j][1] != 0.0), None)
+        nxt = next((points[j][1] for j in range(i + 1, n) if points[j][1] != 0.0), None)
+        if prev is not None and nxt is not None and prev * nxt < 0.0:
+            crossings.append(float(x))
+    return crossings
 
 
 def compute_gamma_flip_and_walls(
@@ -396,37 +424,32 @@ def compute_gamma_flip_and_walls(
             }
         )
 
-    # Directional Call Wall: strictly above spot with maximum call OI
-    calls_above = [r for r in mapped_strike_gex if r["strike"] > spot and r["call_oi"] > 0]
+    # Call resistance is the largest call dollar-gamma above spot, not the
+    # largest call open interest. A far OTM strike can carry huge OI and
+    # almost no gamma; that is not where dealers hedge.
+    calls_above = [r for r in mapped_strike_gex if r["strike"] > spot and r["call_gex_m"] > 0]
     call_wall: float | None = (
-        max(calls_above, key=lambda r: (r["call_oi"], -abs(r["strike"] - spot)))["strike"]
+        max(calls_above, key=lambda r: (r["call_gex_m"], -abs(r["strike"] - spot)))["strike"]
         if calls_above
         else None
     )
 
-    # Directional Put Wall: strictly below spot with maximum put OI
-    puts_below = [r for r in mapped_strike_gex if r["strike"] < spot and r["put_oi"] > 0]
+    puts_below = [r for r in mapped_strike_gex if r["strike"] < spot and r["put_gex_m"] > 0]
     put_wall: float | None = (
-        max(puts_below, key=lambda r: (r["put_oi"], -abs(r["strike"] - spot)))["strike"]
+        max(puts_below, key=lambda r: (r["put_gex_m"], -abs(r["strike"] - spot)))["strike"]
         if puts_below
         else None
     )
 
-    # Continuous Gamma Flip S* via linear interpolation across zero-crossings
+    # Gamma flip is a sign change in net GEX, nearest to spot.
     has_pos = any(r["net_gex_m"] > 1e-6 for r in mapped_strike_gex)
     has_neg = any(r["net_gex_m"] < -1e-6 for r in mapped_strike_gex)
     crossings: list[float] = []
 
     if has_pos and has_neg:
-        for i in range(len(mapped_strike_gex) - 1):
-            k1, g1 = mapped_strike_gex[i]["strike"], mapped_strike_gex[i]["net_gex_m"]
-            k2, g2 = mapped_strike_gex[i + 1]["strike"], mapped_strike_gex[i + 1]["net_gex_m"]
-            if g1 == 0.0:
-                crossings.append(float(k1))
-            elif (g1 < 0 and g2 > 0) or (g1 > 0 and g2 < 0):
-                denom = abs(g1) + abs(g2)
-                if denom > 1e-9:
-                    crossings.append(float(k1 + (abs(g1) / denom) * (k2 - k1)))
+        crossings = _crossings_where_sign_changes(
+            [(float(r["strike"]), float(r["net_gex_m"])) for r in mapped_strike_gex]
+        )
 
     gamma_flip: float | None = None
     if crossings:
@@ -1181,15 +1204,9 @@ def calculate_market_regime(
 
     crossings: list[float] = []
     if has_pos and has_neg:
-        for i in range(len(sorted_strikes) - 1):
-            k1, g1, _, _, _, _ = sorted_strikes[i]
-            k2, g2, _, _, _, _ = sorted_strikes[i + 1]
-            if g1 == 0.0:
-                crossings.append(float(k1))
-            elif (g1 < 0 and g2 > 0) or (g1 > 0 and g2 < 0):
-                denom = abs(g1) + abs(g2)
-                if denom > 1e-9:
-                    crossings.append(float(k1 + (abs(g1) / denom) * (k2 - k1)))
+        crossings = _crossings_where_sign_changes(
+            [(float(k), float(g)) for k, g, _, _, _, _ in sorted_strikes]
+        )
 
     gamma_flip: float | None = None
     if crossings:

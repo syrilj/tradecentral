@@ -1,4 +1,5 @@
 import math
+import time
 from datetime import date, datetime, timezone
 
 import pytest
@@ -1560,6 +1561,39 @@ def test_gex_flip_outside_the_band_matches_scalar_search():
         round(total / 1_000_000.0, 6) for total in profile_totals
     ]
     assert [point["spot"] for point in profile] == [round(value, 4) for value in profile_spots]
+
+
+def test_net_gex_grid_is_faster_than_the_scalar_loop():
+    """The broadcast is the live-path speedup. Numerical agreement alone still
+    passes if this function turns back into a Python loop."""
+    contracts = []
+    for i in range(400):
+        strike = 50.0 + (i % 80)
+        contracts.append(
+            {
+                "strike": strike,
+                "years": (7 + (i % 40)) / 365.0,
+                "iv": 0.15 + (i % 20) * 0.01,
+                "sign": 1.0 if i % 2 == 0 else -1.0,
+                "oi": 100 + (i % 50) * 20,
+                "multiplier": 100,
+            }
+        )
+    spots = [80.0 + i * 0.5 for i in range(81)]
+    _net_gex_at_spots(contracts, spots, rate=0.045)
+    _scalar_net_gex(contracts, spots, 0.045)
+
+    def _elapsed(fn, repeats: int) -> float:
+        start = time.perf_counter()
+        for _ in range(repeats):
+            fn()
+        return time.perf_counter() - start
+
+    vector = _elapsed(lambda: _net_gex_at_spots(contracts, spots, rate=0.045), 3)
+    scalar = _elapsed(lambda: _scalar_net_gex(contracts, spots, 0.045), 1)
+    # One scalar pass against three vectorized passes. The grid still has to
+    # be clearly cheaper per call, not merely tied once the interpreter is warm.
+    assert scalar / 1.0 > (vector / 3.0) * 2.0
 
 
 def test_a_thin_same_day_strike_cannot_invert_the_whole_chains_charm_sign():
