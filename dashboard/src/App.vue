@@ -1144,22 +1144,44 @@ function openFearGreed(): void {
                 ? `Operator: ${operatorEmail} · Account and settings`
                 : 'Account and settings'
             "
-            @click="profileDrawerOpen = true"
           >
-            <div class="operator-avatar-frame">
-              <UserButton v-if="!localMode" after-sign-out-url="/" />
-              <span
-                v-else
-                class="local-operator-avatar fig"
-                title="Local operator session"
-                aria-hidden="true"
-                >OP</span
+            <button
+              v-if="localMode"
+              type="button"
+              class="account-open"
+              :aria-expanded="profileDrawerOpen"
+              aria-haspopup="dialog"
+              aria-label="Operator profile and workstation settings"
+              @click="profileDrawerOpen = true"
+            >
+              <span class="local-operator-avatar fig" aria-hidden="true">OP</span>
+              <span class="operator-meta">
+                <span class="nav-title label">Account</span>
+                <span class="operator-mail">{{ operatorEmail || 'Local operator' }}</span>
+              </span>
+            </button>
+            <template v-else>
+              <div class="operator-avatar-frame">
+                <UserButton after-sign-out-url="/" />
+              </div>
+              <button
+                type="button"
+                class="account-open"
+                :aria-expanded="profileDrawerOpen"
+                aria-haspopup="dialog"
+                :aria-label="
+                  operatorEmail
+                    ? `Operator profile for ${operatorEmail}`
+                    : 'Operator profile and workstation settings'
+                "
+                @click="profileDrawerOpen = true"
               >
-            </div>
-            <div class="operator-meta">
-              <span class="nav-title label">Account</span>
-              <span class="operator-mail">{{ operatorEmail || 'Local operator' }}</span>
-            </div>
+                <span class="operator-meta">
+                  <span class="nav-title label">Account</span>
+                  <span class="operator-mail">{{ operatorEmail || 'Local operator' }}</span>
+                </span>
+              </button>
+            </template>
             <button
               type="button"
               class="account-signout label"
@@ -1554,7 +1576,8 @@ function openFearGreed(): void {
   transition:
     color var(--dur-fast) var(--ease-out),
     background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+    border-color var(--dur-fast) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
 .rail-toggle-btn::after {
   content: '';
@@ -1565,17 +1588,19 @@ function openFearGreed(): void {
   height: 44px;
   transform: translate(-50%, -50%);
 }
-.rail-toggle-btn:hover {
-  background: var(--panel-hi);
-  border-color: var(--glass-border-hi);
-  color: var(--ink);
+@media (hover: hover) and (pointer: fine) {
+  .rail-toggle-btn:hover {
+    background: var(--panel-hi);
+    border-color: var(--glass-border-hi);
+    color: var(--ink);
+  }
 }
 .rail-toggle-btn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .rail-toggle-btn:active {
-  transform: scale(0.96);
+  transform: scale(0.97);
 }
 
 .nav {
@@ -1635,9 +1660,11 @@ function openFearGreed(): void {
   justify-content: center;
   padding: 2px 0;
 }
-.mark:hover {
-  color: var(--phosphor);
-  text-decoration: none;
+@media (hover: hover) and (pointer: fine) {
+  .mark:hover {
+    color: var(--phosphor);
+    text-decoration: none;
+  }
 }
 
 .mark-word {
@@ -1657,8 +1684,10 @@ function openFearGreed(): void {
 .mark-word strong:last-child {
   color: var(--ink-dim);
 }
-.mark:hover .mark-word strong:last-child {
-  color: currentColor;
+@media (hover: hover) and (pointer: fine) {
+  .mark:hover .mark-word strong:last-child {
+    color: currentColor;
+  }
 }
 
 /* ---- nav ------------------------------------------------------------------ */
@@ -1691,22 +1720,20 @@ function openFearGreed(): void {
   padding: 4px 2px;
   gap: 2px;
 }
-.nav-item:hover {
-  color: var(--ink);
-  background: var(--panel-hi);
-  border-color: var(--glass-border);
-  text-decoration: none;
-  transform: translateX(2px);
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover {
+    color: var(--ink);
+    background: var(--panel-hi);
+    border-color: var(--glass-border);
+    text-decoration: none;
+  }
 }
 .nav-item:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .nav-item:active {
-  transform: scale(0.98);
-}
-.rail.is-collapsed .nav-item:hover {
-  transform: scale(1.04);
+  transform: scale(0.97);
 }
 
 .nav-item.on {
@@ -1805,7 +1832,26 @@ function openFearGreed(): void {
   padding: 4px 6px;
   border-top: var(--hair) solid var(--rule-faint);
   border-radius: var(--r-xs);
-  cursor: pointer;
+}
+.account-open {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  border-radius: var(--r-xs);
+}
+.account-open:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.rail.is-collapsed .account-open {
+  flex-direction: column;
+  justify-content: center;
 }
 .rail.is-collapsed .clerk-user {
   flex-direction: column;
@@ -1898,16 +1944,34 @@ function openFearGreed(): void {
   transition:
     color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+    background var(--dur-fast) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
 .account-signout .signout-icon {
   color: inherit;
   opacity: 0.85;
 }
-.account-signout:hover:not(:disabled) {
-  color: var(--short);
-  border-color: color-mix(in srgb, var(--short) 60%, var(--rule));
-  background: var(--short-wash);
+.account-signout {
+  position: relative;
+}
+.account-signout::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+@media (hover: hover) and (pointer: fine) {
+  .account-signout:hover:not(:disabled) {
+    color: var(--short);
+    border-color: color-mix(in srgb, var(--short) 60%, var(--rule));
+    background: var(--short-wash);
+  }
+}
+.account-signout:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .account-signout:disabled {
   opacity: 0.6;
@@ -1918,7 +1982,7 @@ function openFearGreed(): void {
 .clerk-redirect {
   position: relative;
   z-index: 5;
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-content: center;
   justify-items: center;
@@ -1945,7 +2009,7 @@ function openFearGreed(): void {
   border: var(--hair) solid var(--glass-border-hi);
   border-radius: var(--r-xl);
   min-width: 220px;
-  max-height: min(72vh, 540px);
+  max-height: min(72dvh, 540px);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1966,6 +2030,7 @@ function openFearGreed(): void {
   flex-direction: row;
   align-items: center;
   gap: var(--s3);
+  min-height: 44px;
   padding: var(--s2) var(--s3);
   margin: 1px 0;
   border-radius: var(--r-sm);
@@ -1974,13 +2039,17 @@ function openFearGreed(): void {
   transition:
     background var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+    transform 140ms var(--ease-out);
   white-space: nowrap;
+}
+.more-item:active {
+  transform: scale(0.98);
 }
 .more-search {
   display: flex;
   width: 100%;
   align-items: center;
+  min-height: 44px;
   gap: var(--s3);
   padding: var(--s2) var(--s3);
   margin-bottom: 3px;
@@ -1994,15 +2063,16 @@ function openFearGreed(): void {
     color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
 }
-.more-search:hover {
-  color: var(--phosphor);
-  background: var(--phosphor-wash);
-  border-color: var(--phosphor-dim);
-}
-.more-item:hover {
-  background: var(--panel-hi);
-  color: var(--ink);
-  transform: translateX(2px);
+@media (hover: hover) and (pointer: fine) {
+  .more-search:hover {
+    color: var(--phosphor);
+    background: var(--phosphor-wash);
+    border-color: var(--phosphor-dim);
+  }
+  .more-item:hover {
+    background: var(--panel-hi);
+    color: var(--ink);
+  }
 }
 .more-item:focus-visible,
 .more-search:focus-visible {
@@ -2087,6 +2157,9 @@ function openFearGreed(): void {
   overflow: hidden;
 }
 
+.gauge-btn {
+  transition: transform 140ms var(--ease-out);
+}
 .gauge {
   position: relative;
   display: grid;
@@ -2169,7 +2242,7 @@ function openFearGreed(): void {
   outline-offset: var(--focus-ring-offset);
 }
 .gauge-btn:active {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .gauge-btn.loading .g-val {
   color: var(--ink-dim);
@@ -2528,20 +2601,23 @@ function openFearGreed(): void {
     color var(--dur-fast) var(--ease-out),
     background var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.strip-search:hover {
-  color: var(--ink);
-  background: var(--panel-hi);
-  border-color: var(--glass-border-hi);
-  box-shadow: var(--glass-specular);
+@media (hover: hover) and (pointer: fine) {
+  .strip-search:hover {
+    color: var(--ink);
+    background: var(--panel-hi);
+    border-color: var(--glass-border-hi);
+    box-shadow: var(--glass-specular);
+  }
 }
 .strip-search:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .strip-search:active {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .strip-search .label {
   color: inherit;
@@ -2570,6 +2646,7 @@ function openFearGreed(): void {
 }
 
 .strip-profile-btn {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2586,20 +2663,32 @@ function openFearGreed(): void {
     color var(--dur-fast) var(--ease-out),
     background var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.strip-profile-btn:hover {
-  background: var(--panel-hi);
-  border-color: var(--glass-border-hi);
-  box-shadow: var(--glass-specular);
-  color: var(--ink);
+.strip-profile-btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+@media (hover: hover) and (pointer: fine) {
+  .strip-profile-btn:hover {
+    background: var(--panel-hi);
+    border-color: var(--glass-border-hi);
+    box-shadow: var(--glass-specular);
+    color: var(--ink);
+  }
 }
 .strip-profile-btn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .strip-profile-btn:active {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .strip-profile-avatar {
   position: relative;
@@ -2751,7 +2840,7 @@ function openFearGreed(): void {
     display: none;
   }
   .strip-search {
-    min-width: 34px;
+    min-width: 44px;
     padding: 0 8px;
   }
   .strip-search .label,
@@ -2956,7 +3045,8 @@ function openFearGreed(): void {
     display: none;
   }
   .strip-search {
-    min-width: 34px;
+    min-width: 44px;
+    min-height: 44px;
     padding: 0 8px;
     border-left: 0;
   }

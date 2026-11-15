@@ -188,6 +188,34 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   { id: 'cyan', label: 'Cyan', tokenColor: 'var(--accent-theme-cyan)' },
   { id: 'monochrome', label: 'Mono', tokenColor: 'var(--accent-theme-monochrome)' },
 ]
+const densityModes = ['compact', 'comfortable'] as const satisfies readonly DensityMode[]
+const accentIds = accentOptions.map((opt) => opt.id)
+
+function onAccentKey(event: KeyboardEvent): void {
+  const current = accentIds.find((id) => id === accent.value) ?? accentIds[0]
+  if (current === undefined) return
+  stepRadio(event, accentIds, current, onAccentSelect)
+}
+
+function stepRadio<T extends string>(
+  event: KeyboardEvent,
+  ids: readonly T[],
+  current: T,
+  select: (id: T) => void,
+): void {
+  const forward = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+  const back = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+  if (!forward && !back) return
+  event.preventDefault()
+  const index = Math.max(0, ids.indexOf(current))
+  const next = ids[(index + (forward ? 1 : -1) + ids.length) % ids.length]
+  if (next === undefined) return
+  select(next)
+  void nextTick(() => {
+    const group = (event.currentTarget as HTMLElement | null)?.parentElement
+    group?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()
+  })
+}
 </script>
 
 <template>
@@ -237,12 +265,14 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
               </div>
               <div class="operator-meta">
                 <div class="operator-name-row">
-                  <span class="operator-name">{{
+                  <span class="operator-name" :title="userName || userEmail || undefined">{{
                     userName || userEmail || 'Institutional Operator'
                   }}</span>
                   <span class="operator-badge label">OP·AUTH</span>
                 </div>
-                <span v-if="userEmail" class="operator-email mono">{{ userEmail }}</span>
+                <span v-if="userEmail" class="operator-email mono" :title="userEmail">{{
+                  userEmail
+                }}</span>
                 <span class="operator-role label">{{ operatorRole }}</span>
               </div>
             </div>
@@ -279,7 +309,9 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
                   :class="{ active: density === 'compact' }"
                   role="radio"
                   :aria-checked="density === 'compact'"
+                  :tabindex="density === 'compact' ? 0 : -1"
                   @click="onDensitySelect('compact')"
+                  @keydown="stepRadio($event, densityModes, density, onDensitySelect)"
                 >
                   <AppIcon name="density" :size="13" class="segment-icon" />
                   <span class="segment-text">Compact</span>
@@ -291,7 +323,9 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
                   :class="{ active: density === 'comfortable' }"
                   role="radio"
                   :aria-checked="density === 'comfortable'"
+                  :tabindex="density === 'comfortable' ? 0 : -1"
                   @click="onDensitySelect('comfortable')"
+                  @keydown="stepRadio($event, densityModes, density, onDensitySelect)"
                 >
                   <AppIcon name="density" :size="13" class="segment-icon" />
                   <span class="segment-text">Comfortable</span>
@@ -316,8 +350,10 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
                   :class="{ active: accent === opt.id }"
                   role="radio"
                   :aria-checked="accent === opt.id"
+                  :tabindex="accent === opt.id ? 0 : -1"
                   :title="`Accent: ${opt.label}`"
                   @click="onAccentSelect(opt.id)"
+                  @keydown="onAccentKey"
                 >
                   <span class="swatch-dot" :style="{ backgroundColor: opt.tokenColor }" />
                   <span class="swatch-label label">{{ opt.label }}</span>
@@ -469,17 +505,16 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   }
 }
 
-/* Slide Transition */
-.drawer-slide-enter-active,
+/* Sheet: enter on the drawer curve, leave faster so dismiss feels immediate. */
+.drawer-slide-enter-active {
+  transition: transform 320ms var(--ease-drawer);
+}
 .drawer-slide-leave-active {
-  transition:
-    transform var(--dur) var(--ease-out),
-    opacity var(--dur) var(--ease-out);
+  transition: transform 200ms var(--ease-out);
 }
 .drawer-slide-enter-from,
 .drawer-slide-leave-to {
   transform: translateX(100%);
-  opacity: 0.8;
 }
 
 /* Header */
@@ -487,7 +522,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--s4) var(--s5);
+  padding: calc(var(--s4) + env(safe-area-inset-top, 0px)) var(--s5) var(--s4);
   border-bottom: var(--hair) solid var(--glass-border);
   background: var(--glass-overlay);
 }
@@ -509,6 +544,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   letter-spacing: var(--track-tight);
 }
 .btn-close {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -519,12 +555,27 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   background: var(--wash-1);
   color: var(--ink-dim);
   font-size: var(--t-small);
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.btn-close:hover {
-  background: var(--wash-3);
-  border-color: var(--glass-border-hi);
-  color: var(--ink);
+.btn-close::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn-close:hover {
+    background: var(--wash-3);
+    border-color: var(--glass-border-hi);
+    color: var(--ink);
+  }
 }
 .btn-close:focus-visible {
   outline: var(--focus-ring);
@@ -538,6 +589,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
 .drawer-body {
   flex: 1 1 auto;
   overflow-y: auto;
+  overscroll-behavior: contain;
   overflow-x: hidden;
   padding: var(--s4) var(--s5);
   display: flex;
@@ -723,20 +775,27 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   border-radius: var(--r-xs);
   border: var(--hair) solid transparent;
   color: var(--ink-dim);
+  min-height: 44px;
   font-size: var(--t-tiny);
   font-weight: 600;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.segment-btn:hover {
-  color: var(--ink);
-  background: var(--wash-2);
+@media (hover: hover) and (pointer: fine) {
+  .segment-btn:hover {
+    color: var(--ink);
+    background: var(--wash-2);
+  }
 }
 .segment-btn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .segment-btn:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .segment-btn.active {
   color: var(--ink);
@@ -769,21 +828,29 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   padding: 6px 4px;
   border-radius: var(--r-sm);
   border: var(--hair) solid var(--glass-border);
+  min-height: 44px;
   background: var(--panel-wash);
   color: var(--ink-dim);
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    box-shadow 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.accent-pill:hover {
-  border-color: var(--glass-border-hi);
-  color: var(--ink);
-  background: var(--wash-1);
+@media (hover: hover) and (pointer: fine) {
+  .accent-pill:hover {
+    border-color: var(--glass-border-hi);
+    color: var(--ink);
+    background: var(--wash-1);
+  }
 }
 .accent-pill:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .accent-pill:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .accent-pill.active {
   border-color: var(--glass-border-accent);
@@ -839,7 +906,19 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   border-radius: 10px;
   border: var(--hair) solid var(--rule);
   background: var(--panel-wash);
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
+}
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
 }
 .toggle-switch.on {
   border-color: var(--phosphor-dim);
@@ -904,7 +983,7 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
 
 /* Footer / Sign-out */
 .drawer-foot {
-  padding: var(--s4) var(--s5);
+  padding: var(--s4) var(--s5) calc(var(--s4) + env(safe-area-inset-bottom, 0px));
   border-top: var(--hair) solid var(--glass-border);
   background: var(--panel-wash);
 }
@@ -914,26 +993,32 @@ const accentOptions: { id: AccentTheme; label: string; tokenColor: string }[] = 
   justify-content: center;
   gap: var(--s2);
   width: 100%;
-  min-height: 36px;
+  min-height: 44px;
   padding: var(--s2) var(--s4);
   border-radius: var(--r-sm);
   border: var(--hair) solid var(--rule);
   background: var(--wash-1);
   color: var(--ink-dim);
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.btn-signout:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--short) 60%, var(--rule));
-  background: var(--short-wash);
-  color: var(--short);
+@media (hover: hover) and (pointer: fine) {
+  .btn-signout:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--short) 60%, var(--rule));
+    background: var(--short-wash);
+    color: var(--short);
+  }
 }
 .btn-signout:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .btn-signout:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .btn-signout:disabled {
   opacity: 0.5;

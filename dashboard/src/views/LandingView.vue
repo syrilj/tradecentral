@@ -899,7 +899,7 @@ onUnmounted(() => {
 :global(body.edge-public-mode #app),
 :global(body.edge-public-mode .shell) {
   height: auto !important;
-  min-height: 100vh;
+  min-height: 100svh;
   overflow: visible !important;
 }
 :global(body.edge-public-mode .shell) {
@@ -915,7 +915,7 @@ onUnmounted(() => {
   display: block !important;
   width: 100% !important;
   height: auto !important;
-  min-height: 100vh !important;
+  min-height: 100svh !important;
   padding: 0 !important;
   overflow: visible !important;
 }
@@ -981,7 +981,7 @@ onUnmounted(() => {
 
   position: relative;
   z-index: 3;
-  min-height: 100vh;
+  min-height: 100svh;
   color: var(--ink);
   background: var(--void);
   font-family: var(--font-ui);
@@ -992,7 +992,7 @@ onUnmounted(() => {
 
 /* Anchored sections must clear the fixed masthead when jumped to. */
 .landing-page section[id] {
-  scroll-margin-top: calc(var(--chrome-h) + 16px);
+  scroll-margin-top: calc(var(--chrome-h) + env(safe-area-inset-top, 0px) + 16px);
 }
 
 /* ── Shared layout primitives ─────────────────────────────────────────────── */
@@ -1000,7 +1000,7 @@ onUnmounted(() => {
   width: min(1480px, 100% - 48px);
   margin-inline: auto;
   border-inline: var(--hair) solid var(--rule);
-  padding-top: var(--chrome-h);
+  padding-top: calc(var(--chrome-h) + env(safe-area-inset-top, 0px));
 }
 .section-pad {
   padding-inline: clamp(20px, 4.5vw, 64px);
@@ -1045,7 +1045,7 @@ onUnmounted(() => {
   text-wrap: balance;
 }
 .section-lede {
-  max-width: 640px;
+  max-width: 65ch;
   font-size: 18px;
   line-height: 1.6;
   color: var(--ink-dim);
@@ -1070,29 +1070,34 @@ onUnmounted(() => {
   transition:
     background var(--dur) var(--ease-out),
     border-color var(--dur) var(--ease-out),
-    color var(--dur) var(--ease-out);
+    color var(--dur) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
 .button-primary {
   background: var(--tc-black);
   color: #fbfbf8;
 }
-.button-primary:hover {
-  background: #26262c;
+@media (hover: hover) and (pointer: fine) {
+  .button-primary:hover {
+    background: #26262c;
+  }
 }
 .button:focus-visible {
   outline: 2px solid var(--phosphor);
   outline-offset: 2px;
 }
 .button:active {
-  transform: translateY(1px);
+  transform: scale(0.97);
 }
 .button-ghost {
   border: var(--hair) solid var(--rule-hi);
   color: var(--ink);
   background: transparent;
 }
-.button-ghost:hover {
-  background: var(--panel-hi);
+@media (hover: hover) and (pointer: fine) {
+  .button-ghost:hover {
+    background: var(--panel-hi);
+  }
 }
 .button-ghost:focus-visible {
   outline: 2px solid var(--phosphor);
@@ -1172,6 +1177,7 @@ onUnmounted(() => {
   position: fixed;
   z-index: 20;
   inset: 0 0 auto;
+  padding-top: env(safe-area-inset-top, 0px);
   background: var(--void);
   border-bottom: var(--hair) solid var(--rule);
   transition: border-color var(--dur) var(--ease-out);
@@ -2515,12 +2521,26 @@ onUnmounted(() => {
   color: var(--ink-faint);
   background: transparent;
   border: none;
+  min-height: 44px;
   border-radius: 4px;
   cursor: pointer;
-  transition: all var(--dur) var(--ease-out);
+  transition:
+    background 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    box-shadow 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.fig-tab-btn:hover {
-  color: var(--ink);
+@media (hover: hover) and (pointer: fine) {
+  .fig-tab-btn:hover {
+    color: var(--ink);
+  }
+}
+.fig-tab-btn:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 2px;
+}
+.fig-tab-btn:active {
+  transform: scale(0.97);
 }
 .fig-tab-btn.active {
   color: var(--ink);

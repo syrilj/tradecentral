@@ -309,7 +309,7 @@ watch(
 :global(body.edge-public-mode #app),
 :global(body.edge-public-mode .shell) {
   height: auto !important;
-  min-height: 100vh;
+  min-height: 100svh;
   overflow: visible !important;
 }
 :global(body.edge-public-mode .shell) {
@@ -325,7 +325,7 @@ watch(
   display: block !important;
   width: 100% !important;
   height: auto !important;
-  min-height: 100vh !important;
+  min-height: 100svh !important;
   padding: 0 !important;
   overflow: visible !important;
 }
@@ -344,7 +344,7 @@ watch(
   --font-data: var(--font-ui);
   position: relative;
   z-index: 3;
-  min-height: 100vh;
+  min-height: 100svh;
   display: grid;
   grid-template-rows: auto 1fr auto;
   overflow-x: hidden;
@@ -365,6 +365,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding-top: env(safe-area-inset-top, 0px);
   border-bottom: 1px solid var(--auth-rule);
 }
 

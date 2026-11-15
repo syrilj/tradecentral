@@ -54,10 +54,21 @@
   padding: 0;
 }
 
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
 html,
 body,
 #app {
   height: 100%;
+}
+
+html,
+body {
+  /* The desk scrolls inside its panes. A document pull-to-refresh would drag the shell. */
+  overscroll-behavior: none;
 }
 
 /* Defense in depth: #app must never let a descendant's intrinsic size grow
@@ -66,6 +77,36 @@ body,
    else overflows later). Matches the promise body makes below. */
 #app {
   overflow: hidden;
+}
+
+/* Public pages (landing, auth, legal) set this class. The desk chrome must
+   leave, or the mobile workspace bar paints over the article. */
+body.edge-public-mode {
+  overflow: auto;
+  background: var(--paper);
+}
+body.edge-public-mode #app,
+body.edge-public-mode .shell {
+  height: auto;
+  min-height: 100svh;
+  overflow: visible;
+}
+body.edge-public-mode .shell {
+  display: block;
+}
+body.edge-public-mode .rail,
+body.edge-public-mode .strip,
+body.edge-public-mode .foot,
+body.edge-public-mode .skip-link {
+  display: none;
+}
+body.edge-public-mode .stage {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100svh;
+  padding: 0;
+  overflow: visible;
 }
 
 body {
@@ -253,8 +294,32 @@ a {
   color: var(--phosphor);
   text-decoration: none;
 }
-a:hover {
-  text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    text-decoration: underline;
+  }
+}
+
+/* Press lands on pointer-down. Touch browsers otherwise wait to see if the tap is a double-tap zoom. */
+button,
+a,
+[role='button'] {
+  touch-action: manipulation;
+}
+
+button,
+[role='button'] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* iOS zooms the page when a focused field is under 16px and does not zoom back. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 /* ---- scrollbars: thin, part of the instrument --------------------------- */
@@ -295,9 +360,11 @@ a:hover {
     transform var(--dur-fast) var(--ease-out);
 }
 
-.ticked:hover {
-  border-color: var(--rule-hi);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+@media (hover: hover) and (pointer: fine) {
+  .ticked:hover {
+    border-color: var(--rule-hi);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .hairline {
@@ -428,7 +495,7 @@ td.num {
   outline-offset: var(--focus-ring-offset);
 }
 .btn-primary:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .btn-primary:disabled {
   opacity: 0.55;
@@ -449,19 +516,25 @@ td.num {
   font-size: var(--t-tiny);
   font-weight: 600;
   letter-spacing: 0.02em;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform 140ms var(--ease-out);
 }
-.btn-quiet:hover:not(:disabled) {
-  background: var(--action-quiet-hover);
-  border-color: var(--rule-hi);
-  color: var(--ink);
+@media (hover: hover) and (pointer: fine) {
+  .btn-quiet:hover:not(:disabled) {
+    background: var(--action-quiet-hover);
+    border-color: var(--rule-hi);
+    color: var(--ink);
+  }
 }
 .btn-quiet:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 .btn-quiet:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 .btn-quiet:disabled {
   opacity: 0.55;
@@ -546,10 +619,12 @@ td.num {
     border-color var(--dur-fast) ease,
     box-shadow var(--dur-fast) ease;
 }
-.glass-panel-interactive:hover {
-  background: var(--panel-raise);
-  border-color: var(--glass-border-hi);
-  box-shadow: var(--glass-shadow-md), var(--glass-specular);
+@media (hover: hover) and (pointer: fine) {
+  .glass-panel-interactive:hover {
+    background: var(--panel-raise);
+    border-color: var(--glass-border-hi);
+    box-shadow: var(--glass-shadow-md), var(--glass-specular);
+  }
 }
 
 .glass-card {
@@ -574,9 +649,11 @@ td.num {
     border-color var(--dur-fast) ease,
     transform var(--dur-fast) ease;
 }
-.btn-glass:hover:not(:disabled) {
-  background: var(--panel-raise);
-  border-color: var(--glass-border-hi);
+@media (hover: hover) and (pointer: fine) {
+  .btn-glass:hover:not(:disabled) {
+    background: var(--panel-raise);
+    border-color: var(--glass-border-hi);
+  }
 }
 .btn-glass:active:not(:disabled) {
   transform: scale(0.97);
