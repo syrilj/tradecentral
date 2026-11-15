@@ -267,6 +267,15 @@ function axisValue(v: number): string {
   return `−${magnitude}`
 }
 
+/** Square-root magnitude in [-1, 1]. A linear scale lets one wall flatten
+ *  every other strike to the 2px floor. Ticks use the same map, and the axis
+ *  caption says so. */
+function signedSqrt(value: number, max: number): number {
+  if (!Number.isFinite(value) || !(max > 0)) return 0
+  const mag = Math.min(1, Math.abs(value) / max)
+  return Math.sign(value) * Math.sqrt(mag)
+}
+
 function strikeLabel(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return DASH
   return num(value, Number.isInteger(value) ? 0 : 2)
@@ -295,14 +304,17 @@ const bars = computed<Bar[]>(() => {
     runningCum += net
     const cumNet = runningCum
 
-    const callH = Math.max(callVal > 0 ? 2 : 0, (callVal / maxAbs.value) * halfPlotH.value)
-    const putH = Math.max(putVal > 0 ? 2 : 0, (putVal / maxAbs.value) * halfPlotH.value)
+    const callH = Math.max(callVal > 0 ? 2 : 0, signedSqrt(callVal, maxAbs.value) * halfPlotH.value)
+    const putH = Math.max(putVal > 0 ? 2 : 0, signedSqrt(putVal, maxAbs.value) * halfPlotH.value)
 
     const isCallWinner = callVal > putVal
     const isPutWinner = putVal > callVal
     const winnerSide: 'call' | 'put' | 'flat' = isCallWinner ? 'call' : isPutWinner ? 'put' : 'flat'
     const winnerVal = isCallWinner ? callVal : isPutWinner ? putVal : callVal
-    const winnerH = Math.max(winnerVal > 0 ? 2 : 0, (winnerVal / maxAbs.value) * halfPlotH.value)
+    const winnerH = Math.max(
+      winnerVal > 0 ? 2 : 0,
+      signedSqrt(winnerVal, maxAbs.value) * halfPlotH.value,
+    )
     const winnerY = isCallWinner ? zeroY.value - winnerH : zeroY.value
 
     const sumVal = callVal + putVal
@@ -316,8 +328,9 @@ const bars = computed<Bar[]>(() => {
 
     const callY = zeroY.value - callH
     const putY = zeroY.value
-    const netY = zeroY.value - (net / maxAbs.value) * halfPlotH.value
-    const netH = Math.max(2, (Math.abs(net) / maxAbs.value) * halfPlotH.value)
+    const netUnit = signedSqrt(net, maxAbs.value)
+    const netY = zeroY.value - netUnit * halfPlotH.value
+    const netH = net === 0 ? 0 : Math.max(2, Math.abs(netUnit) * halfPlotH.value)
     const cumNetY = zeroY.value - (cumNet / cumDenominator) * halfPlotH.value
 
     // ≤ 24px thick per mark spec — never fill the slot; the leftover is air.
@@ -669,10 +682,13 @@ const tickCount = computed(() => (H.value < 220 ? 3 : 5))
 
 const yTicks = computed(() => {
   if (!orderedRows.value.length) return []
-  const maxVal = viewMode.value === 'cumulative' ? maxCumulative.value : maxAbs.value
+  const cumulative = viewMode.value === 'cumulative'
+  const maxVal = cumulative ? maxCumulative.value : maxAbs.value
   return niceTicks(-maxVal, maxVal, tickCount.value).map((value) => ({
     value,
-    y: zeroY.value - (value / maxVal) * halfPlotH.value,
+    y: cumulative
+      ? zeroY.value - (value / (maxVal || 1)) * halfPlotH.value
+      : zeroY.value - signedSqrt(value, maxVal) * halfPlotH.value,
   }))
 })
 
@@ -975,7 +991,9 @@ watch(
       </div>
 
       <span class="coverage label">
-        {{ bars.length < rows.length ? `IN VIEW ${bars.length}/${rows.length}` : 'FULL CHAIN' }} ·
+        {{ bars.length < rows.length ? `IN VIEW ${bars.length}/${rows.length}` : 'FULL CHAIN' }}
+        <template v-if="viewMode !== 'cumulative'"> · √ SCALE</template>
+        ·
         <span class="call-leg"><i class="leg-dot call" />CALL</span> ·
         <span class="put-leg"><i class="leg-dot put" />PUT</span> ·
         <span class="net-leg"><i class="leg-dot net" />NET</span>
@@ -1141,9 +1159,13 @@ watch(
           :class="spotAboveFlip ? 'pos' : 'neg'"
         >
           {{
-            spotAboveFlip
-              ? 'LONG GAMMA · VOLATILITY DAMPENED'
-              : 'SHORT GAMMA · VOLATILITY AMPLIFIED'
+            plotInnerW < 560
+              ? spotAboveFlip
+                ? 'LONG γ'
+                : 'SHORT γ'
+              : spotAboveFlip
+                ? 'LONG GAMMA · VOLATILITY DAMPENED'
+                : 'SHORT GAMMA · VOLATILITY AMPLIFIED'
           }}
         </text>
 
@@ -1399,19 +1421,23 @@ watch(
             {{ axisValue(tick.value) }}
           </text>
         </g>
-        <text v-if="rows.length" class="axis-cap" :x="left" :y="14">
+        <text v-if="rows.length && plotInnerW >= 560" class="axis-cap" :x="left" :y="14">
           {{
             viewMode === 'cumulative'
               ? metric === 'gex'
                 ? 'CUMULATIVE NET GEX $M'
                 : 'CUMULATIVE NET OI'
-              : viewMode === 'winner'
+              : plotInnerW < 560
                 ? metric === 'gex'
-                  ? 'WINNER GEX $M · CALL UP / PUT DN'
-                  : 'WINNER OI · CALL UP / PUT DN'
-                : metric === 'gex'
-                  ? 'GEX $M · CALL UP / PUT DN'
-                  : 'OI · CALL UP / PUT DN'
+                  ? 'GEX $M · √'
+                  : 'OI · √'
+                : viewMode === 'winner'
+                  ? metric === 'gex'
+                    ? 'WINNER GEX $M · √ SCALE · CALL UP / PUT DN'
+                    : 'WINNER OI · √ SCALE · CALL UP / PUT DN'
+                  : metric === 'gex'
+                    ? 'GEX $M · √ SCALE · CALL UP / PUT DN'
+                    : 'OI · √ SCALE · CALL UP / PUT DN'
           }}
         </text>
 
@@ -1435,9 +1461,17 @@ watch(
               :class="{ 'spot-tick': tick.isSpot }"
             />
             <text
-              :x="tick.x"
+              :x="
+                tick.x < left + 36
+                  ? left
+                  : tick.x > left + plotInnerW - 36
+                    ? left + plotInnerW
+                    : tick.x
+              "
               :y="plotBottom + 19"
-              text-anchor="middle"
+              :text-anchor="
+                tick.x < left + 36 ? 'start' : tick.x > left + plotInnerW - 36 ? 'end' : 'middle'
+              "
               :class="{ 'spot-label': tick.isSpot }"
             >
               ${{ tick.label }}

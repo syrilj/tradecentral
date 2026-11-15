@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { num } from '@/format'
+import { num, shortDate } from '@/format'
 import { linearScale, niceTicks } from '@/charts'
 import { useChartSize } from '@/composables/useChartSize'
 
@@ -28,7 +28,7 @@ const props = withDefaults(
 
 const hostRef = ref<HTMLDivElement | null>(null)
 const { W } = useChartSize(hostRef, { minW: 340, minH: 260, fallbackW: 800, fallbackH: 280 })
-const H = 280
+const H = 260
 
 const pad = {
   l: 44,
@@ -90,16 +90,26 @@ const xScale = computed(() => {
   return (idx: number) => (n <= 1 ? pad.l : pad.l + (idx / (n - 1)) * innerW.value)
 })
 
+function axisTime(raw: string): string {
+  return /^\d{4}-\d{2}-\d{2}/.test(raw) ? shortDate(raw.slice(0, 10)) : raw
+}
+
+const volBarW = computed(() => {
+  const n = Math.max(1, seriesData.value.length)
+  return Math.max(1, Math.min(4, (innerW.value / n) * 0.65))
+})
+
 const timeTicks = computed(() => {
   const n = seriesData.value.length
   if (n < 2) return []
-  const maxTicks = 6
+  const maxTicks = Math.max(2, Math.min(5, Math.floor(innerW.value / 84)))
   const step = Math.max(1, Math.ceil((n - 1) / (maxTicks - 1)))
   const ticks: { label: string; x: number }[] = []
-  for (let i = 0; i < n; i += step)
-    ticks.push({ label: seriesData.value[i].time, x: xScale.value(i) })
+  for (let i = 0; i < n; i += step) {
+    ticks.push({ label: axisTime(seriesData.value[i].time), x: xScale.value(i) })
+  }
   if (ticks[ticks.length - 1].x !== xScale.value(n - 1)) {
-    ticks.push({ label: seriesData.value[n - 1].time, x: xScale.value(n - 1) })
+    ticks.push({ label: axisTime(seriesData.value[n - 1].time), x: xScale.value(n - 1) })
   }
   return ticks
 })
@@ -217,16 +227,6 @@ function formatGammaTick(v: number): string {
         preserveAspectRatio="none"
       >
         <title>{{ `Net dealer gamma against spot price over time.` }}</title>
-        <defs>
-          <linearGradient id="ng-pos-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--call)" stop-opacity="0.5" />
-            <stop offset="100%" stop-color="var(--call)" stop-opacity="0.05" />
-          </linearGradient>
-          <linearGradient id="ng-neg-grad" x1="0" y1="1" x2="0" y2="0">
-            <stop offset="0%" stop-color="var(--put)" stop-opacity="0.5" />
-            <stop offset="100%" stop-color="var(--put)" stop-opacity="0.05" />
-          </linearGradient>
-        </defs>
 
         <!-- Zero Horizontal Line -->
         <line
@@ -240,10 +240,10 @@ function formatGammaTick(v: number): string {
         />
 
         <!-- Positive Gamma Filled Area -->
-        <path :d="posAreaPath" fill="url(#ng-pos-grad)" />
+        <path :d="posAreaPath" fill="var(--call)" fill-opacity="0.16" />
 
         <!-- Negative Gamma Filled Area -->
-        <path :d="negAreaPath" fill="url(#ng-neg-grad)" />
+        <path :d="negAreaPath" fill="var(--put)" fill-opacity="0.16" />
 
         <!-- SPY Price Trace -->
         <path
@@ -258,11 +258,12 @@ function formatGammaTick(v: number): string {
         <!-- Volume / Delta Bars at bottom -->
         <g v-for="(d, i) in seriesData" :key="`vol-${i}`">
           <rect
-            :x="xScale(i) - 2"
-            :y="pad.t + innerH - Math.min(24, Math.abs(d.volumeDelta ?? 10) * 0.4)"
-            width="4"
-            :height="Math.min(24, Math.abs(d.volumeDelta ?? 10) * 0.4)"
-            :fill="(d.volumeDelta ?? 0) >= 0 ? 'var(--call)' : 'var(--put)'"
+            v-if="d.volumeDelta != null && Number.isFinite(d.volumeDelta) && d.volumeDelta !== 0"
+            :x="xScale(i) - volBarW / 2"
+            :y="pad.t + innerH - Math.min(24, Math.abs(d.volumeDelta) * 0.4)"
+            :width="volBarW"
+            :height="Math.min(24, Math.abs(d.volumeDelta) * 0.4)"
+            :fill="d.volumeDelta >= 0 ? 'var(--call)' : 'var(--put)'"
             opacity="0.75"
           />
         </g>
@@ -307,7 +308,12 @@ function formatGammaTick(v: number): string {
 
         <!-- Bottom X-Axis (Time) -->
         <g v-for="(t, ti) in timeTicks" :key="`x-${ti}`">
-          <text :x="t.x" :y="pad.t + innerH + 16" text-anchor="middle" class="axis-tick font-mono">
+          <text
+            :x="ti === 0 ? pad.l : ti === timeTicks.length - 1 ? pad.l + innerW : t.x"
+            :y="pad.t + innerH + 16"
+            :text-anchor="ti === 0 ? 'start' : ti === timeTicks.length - 1 ? 'end' : 'middle'"
+            class="axis-tick font-mono"
+          >
             {{ t.label }}
           </text>
         </g>

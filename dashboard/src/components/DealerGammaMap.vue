@@ -276,9 +276,9 @@ const curveAreas = computed(() =>
 )
 
 /* ---- ladder lane --------------------------------------------------------
- * Bars are scaled against the largest single-strike |gamma| in view, so the
- * ladder shows this symbol's own distribution rather than being squashed by a
- * fixed $M constant that only fits one order of magnitude. */
+ * Bar length is the square root of each strike's share of the largest
+ * |gamma| in view. A linear scale lets one wall flatten the rest of the
+ * ladder; the lane caption says the scale is √|GEX|. */
 const ladderScaleM = computed(() => {
   let max = 0
   for (const r of visibleStrikes.value) {
@@ -305,8 +305,8 @@ const bars = computed<Bar[]>(() => {
   const out: Bar[] = []
   for (const r of visibleStrikes.value) {
     const cx = x(r.strike)
-    const callH = (Math.abs(r.call_gex_m) / scale) * half
-    const putH = (Math.abs(r.put_gex_m) / scale) * half
+    const callH = Math.sqrt(Math.abs(r.call_gex_m) / scale) * half
+    const putH = Math.sqrt(Math.abs(r.put_gex_m) / scale) * half
     if (callH >= 0.5) {
       out.push({ x: cx, y: ladderMidY.value - callH, h: callH, side: 'call', strike: r.strike })
     }
@@ -819,7 +819,9 @@ function signedPctLabel(v: number | null): string {
 
         <!-- the ladder caption sits in chrome, not in the plot, so it can never
              collide with the axis labels the way the old <text> one did -->
-        <span v-if="showLadder" class="lane-cap cap-ladder">γ BY STRIKE · CALLS ↑ / PUTS ↓</span>
+        <span v-if="showLadder" class="lane-cap cap-ladder"
+          >γ BY STRIKE · √|GEX| · CALLS ↑ / PUTS ↓</span
+        >
 
         <!-- crosshair tooltip -->
         <div v-if="hovered" class="tv-tip font-mono" :style="tipStyle">

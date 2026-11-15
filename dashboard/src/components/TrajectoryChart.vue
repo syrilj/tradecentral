@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import type { TrajectoryBar } from '@/api'
 import { linearScale, niceTicks, dateTicks, ema, linePath, areaPath } from '@/charts'
+import { useChartSize } from '@/composables/useChartSize'
 import { num, signedPct, shortDate } from '@/format'
 
 /**
@@ -14,8 +15,6 @@ interface TrajectoryLevel {
   price: number
   tone?: 'pos' | 'neg' | 'accent' | 'flat'
 }
-
-const CANDLE_CAP = 260
 
 function aggregateBars(series: TrajectoryBar[], cap: number): TrajectoryBar[] {
   if (series.length <= cap) return series
@@ -62,8 +61,18 @@ const props = withDefaults(
   },
 )
 
-const W = 1000
-const PAD = { t: 14, r: 62, b: 22, l: 10 }
+const hostRef = ref<HTMLElement | null>(null)
+const { width: measuredW } = useChartSize(hostRef, {
+  minW: 280,
+  fallbackW: 640,
+  minH: 160,
+  fallbackH: 340,
+})
+/* 1 user unit = 1 CSS pixel, so axis type stays at its token size instead of
+   shrinking with a fixed 1000-wide viewBox. 0 until the host is measured;
+   the svg stays unmounted so the first paint is already the real width. */
+const W = computed(() => (measuredW.value > 0 ? Math.max(280, measuredW.value) : 0))
+const PAD = { t: 14, r: 68, b: 28, l: 8 }
 const DD_H = 74 // underwater pane
 const GAP = 16
 
@@ -74,9 +83,15 @@ const wantCandles = computed(
   () => props.mode === 'price' && props.renderAs === 'candles' && props.series.length > 0,
 )
 
-/** Long windows aggregate OHLC so the pane does not paint 1k+ SVG candles. */
+/** Keep candle bodies at least ~4px. A fixed 260-bar cap still turns to dust
+ *  once the pane is narrower than the old 1000-unit viewBox. */
+const candleCap = computed(() => {
+  const inner = Math.max(160, (W.value || 640) - PAD.l - PAD.r)
+  return Math.max(24, Math.floor(inner / 4.5))
+})
+
 const plotSeries = computed(() =>
-  wantCandles.value ? aggregateBars(props.series, CANDLE_CAP) : props.series,
+  wantCandles.value ? aggregateBars(props.series, candleCap.value) : props.series,
 )
 
 const values = computed(() =>
@@ -110,7 +125,10 @@ const ema21 = computed(() => {
 })
 
 const x = computed(() =>
-  linearScale([0, Math.max(1, plotSeries.value.length - 1)], [PAD.l, W - PAD.r]),
+  linearScale(
+    [0, Math.max(1, plotSeries.value.length - 1)],
+    [PAD.l, Math.max(PAD.l + 1, W.value - PAD.r)],
+  ),
 )
 
 const useCandles = computed(() => wantCandles.value)
@@ -171,7 +189,7 @@ const candles = computed(() => {
       w: number
     }[]
   const n = plotSeries.value.length
-  const slot = Math.max(1, (W - PAD.l - PAD.r) / Math.max(1, n))
+  const slot = Math.max(1, (Math.max(PAD.l + PAD.r + 1, W.value) - PAD.l - PAD.r) / Math.max(1, n))
   const bodyW = Math.max(1.5, Math.min(10, slot * 0.68))
   return plotSeries.value.map((b, i) => {
     const cx = x.value(i)
@@ -230,10 +248,34 @@ const lastOverlays = computed(() => {
 })
 
 const yTicks = computed(() => niceTicks(yDomain.value[0], yDomain.value[1], 5))
-const xTicks = computed(() =>
-  dateTicks(
+const xTicks = computed(() => {
+  const inner = Math.max(80, W.value - PAD.l - PAD.r)
+  const count = Math.max(2, Math.min(6, Math.floor(inner / 88)))
+  return dateTicks(
     plotSeries.value.map((b) => b.d),
-    6,
+    count,
+  )
+})
+
+/** Level names share the right gutter with the price ticks. Drop a tick that
+ *  would land on a level, and push level names apart when two prices sit
+ *  within a line-height of each other. */
+const levelLabels = computed(() => {
+  const items = plottedLevels.value.map((lv) => ({ ...lv, yLabel: lv.y }))
+  const sorted = [...items].sort((a, b) => a.y - b.y)
+  const floor = PAD.t + priceH.value - 2
+  let prev = PAD.t
+  for (const item of sorted) {
+    const y = Math.min(floor, Math.max(item.y, prev + 12))
+    item.yLabel = y
+    prev = y
+  }
+  return items
+})
+
+const yTickLabels = computed(() =>
+  yTicks.value.filter((t) =>
+    levelLabels.value.every((lv) => Math.abs(y.value(t) - lv.yLabel) > 11),
   ),
 )
 
@@ -250,11 +292,12 @@ const stroke = computed(() => (up.value ? 'var(--long)' : 'var(--short)'))
 const hover = ref<number | null>(null)
 const svg = ref<SVGSVGElement | null>(null)
 
-function onMove(e: MouseEvent): void {
+function onMove(e: PointerEvent): void {
   const el = svg.value
-  if (!el || !plotSeries.value.length) return
+  if (!el || !plotSeries.value.length || W.value <= 0) return
   const box = el.getBoundingClientRect()
-  const px = ((e.clientX - box.left) / box.width) * W
+  if (box.width <= 0) return
+  const px = ((e.clientX - box.left) / box.width) * W.value
   const i = Math.round(x.value.invert(px))
   hover.value = Math.max(0, Math.min(plotSeries.value.length - 1, i))
 }
@@ -264,28 +307,24 @@ const curX = computed(() => (hover.value === null ? 0 : x.value(hover.value)))
 const curY = computed(() => (hover.value === null ? 0 : y.value(values.value[hover.value] ?? 0)))
 /* Flip the readout to the left half once the cursor passes centre so it never
    runs off the plot. */
-const flip = computed(() => curX.value > W * 0.62)
+const flip = computed(() => curX.value > W.value * 0.62)
 </script>
 
 <template>
-  <figure class="chart">
+  <figure ref="hostRef" class="chart" :style="{ minHeight: `${height}px` }">
     <svg
+      v-if="W"
       ref="svg"
       class="svg"
       :viewBox="`0 0 ${W} ${totalH}`"
-      preserveAspectRatio="none"
+      :style="{ height: `${totalH}px` }"
+      preserveAspectRatio="xMinYMin meet"
       role="img"
       :aria-label="`${symbol} ${mode} trajectory, ${plotSeries.length} bars`"
-      @mousemove="onMove"
-      @mouseleave="hover = null"
+      @pointermove="onMove"
+      @pointerdown="onMove"
+      @pointerleave="hover = null"
     >
-      <defs>
-        <linearGradient :id="`g-${symbol}`" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" :stop-color="stroke" stop-opacity="0.20" />
-          <stop offset="100%" :stop-color="stroke" stop-opacity="0" />
-        </linearGradient>
-      </defs>
-
       <!-- horizontal graticule -->
       <g class="grid">
         <line
@@ -317,7 +356,7 @@ const flip = computed(() => curX.value > W * 0.62)
         <path v-if="vwapPath" class="overlay vwap" :d="vwapPath" />
       </template>
       <template v-else>
-        <path :d="fill" :fill="`url(#g-${symbol})`" />
+        <path :d="fill" class="trace-fill" :fill="stroke" />
         <path v-if="ema21Path" class="overlay ema21" :d="ema21Path" />
         <path v-if="ema9Path" class="overlay ema9" :d="ema9Path" />
         <path v-if="vwapPath" class="overlay vwap" :d="vwapPath" />
@@ -325,16 +364,16 @@ const flip = computed(() => curX.value > W * 0.62)
       </template>
 
       <!-- case / mark reference levels — scale includes prices below the live print -->
-      <g v-if="plottedLevels.length" class="levels">
-        <g v-for="lv in plottedLevels" :key="lv.label" class="level" :class="lv.tone || 'flat'">
+      <g v-if="levelLabels.length" class="levels">
+        <g v-for="lv in levelLabels" :key="lv.label" class="level" :class="lv.tone || 'flat'">
           <line :x1="PAD.l" :x2="W - PAD.r" :y1="lv.y" :y2="lv.y" />
-          <text :x="W - PAD.r + 8" :y="lv.y + 3">{{ lv.label }}</text>
+          <text :x="W - PAD.r + 8" :y="lv.yLabel + 3">{{ lv.label }}</text>
         </g>
       </g>
 
-      <!-- y labels, right gutter -->
+      <!-- y labels, right gutter. Ticks that would sit on a level name are omitted. -->
       <g class="ylab">
-        <text v-for="t in yTicks" :key="`y${t}`" :x="W - PAD.r + 8" :y="y(t) + 3">
+        <text v-for="t in yTickLabels" :key="`y${t}`" :x="W - PAD.r + 8" :y="y(t) + 3">
           {{ mode === 'growth' ? `${num(t, 2)}×` : num(t, 2) }}
         </text>
       </g>
@@ -349,7 +388,13 @@ const flip = computed(() => curX.value > W * 0.62)
 
       <!-- x labels -->
       <g class="xlab">
-        <text v-for="t in xTicks" :key="`x${t.i}`" :x="x(t.i)" :y="totalH - 6">
+        <text
+          v-for="(t, ti) in xTicks"
+          :key="`x${t.i}`"
+          :x="ti === 0 ? PAD.l : ti === xTicks.length - 1 ? W - PAD.r : x(t.i)"
+          :y="totalH - 8"
+          :text-anchor="ti === 0 ? 'start' : ti === xTicks.length - 1 ? 'end' : 'middle'"
+        >
           {{ t.label }}
         </text>
       </g>
@@ -407,14 +452,19 @@ const flip = computed(() => curX.value > W * 0.62)
 .svg {
   display: block;
   width: 100%;
-  height: auto;
-  overflow: visible;
+  overflow: hidden;
+  touch-action: pan-y;
 }
 
 .grid line {
   stroke: var(--rule-faint);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
+}
+
+.trace-fill {
+  fill-opacity: 0.12;
+  stroke: none;
 }
 
 .trace {
@@ -534,10 +584,10 @@ const flip = computed(() => curX.value > W * 0.62)
 
 .dd {
   fill: var(--short);
-  fill-opacity: 0.24;
+  fill-opacity: 0.16;
   stroke: var(--short);
   stroke-width: 1;
-  stroke-opacity: 0.55;
+  stroke-opacity: 0.7;
   vector-effect: non-scaling-stroke;
 }
 
@@ -558,7 +608,6 @@ text {
   text-anchor: start;
 }
 .xlab text {
-  text-anchor: middle;
   fill: var(--ink-faint);
 }
 
@@ -587,10 +636,12 @@ text {
 .readout {
   position: absolute;
   top: 0;
-  right: 66px;
+  right: 72px;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--s3);
+  gap: 2px var(--s3);
+  max-width: calc(100% - 80px);
   padding: 3px 0;
   pointer-events: none;
   background: var(--panel);

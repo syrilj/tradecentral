@@ -1433,7 +1433,7 @@ function openFearGreed(): void {
       <!-- ── content ──────────────────────────────────────────────────────── -->
       <main id="main-content" ref="stage" class="stage" tabindex="-1">
         <RouterView v-slot="{ Component }">
-          <Transition name="view-fade" mode="out-in">
+          <Transition name="view-fade">
             <component :is="Component" />
           </Transition>
         </RouterView>
@@ -2686,6 +2686,7 @@ function openFearGreed(): void {
 /* ---- stage --------------------------------------------------------------- */
 .stage {
   grid-area: stage;
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: auto;
