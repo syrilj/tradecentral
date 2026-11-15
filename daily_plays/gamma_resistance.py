@@ -48,8 +48,9 @@ MATERIAL_SHARE_OF_PEAK = 0.20
 # Puts that are a rounding share of the whole book are not a shelf.
 PUT_BOOK_SHARE_MIN = 0.02
 
-# Zero gamma is withheld when less than half the absolute dollar-gamma can
-# be repriced from IV. A root fit on the remainder would be a different book.
+# Zero gamma is withheld when less than half the measured contracts have
+# implied vol. Dollar-gamma weight is not a substitute: a few fat strikes
+# can carry most of the gamma while most of the book cannot be repriced.
 REVALUE_COVERAGE_MIN = 0.50
 # A call node this small, relative to every call above spot, is not a wall.
 CONCENTRATED_SHARE_MIN = 0.15
@@ -424,6 +425,7 @@ def gamma_resistance_from_chain(
     net = total_call - total_put
     revalue_abs = sum(leg.dollar for leg in legs if leg.revaluable)
     coverage = (revalue_abs / total_abs) if total_abs > 0 else None
+    iv_share = sum(1 for leg in legs if leg.revaluable) / len(legs)
 
     peak_cell = max(
         by_strike.values(),
@@ -431,7 +433,7 @@ def gamma_resistance_from_chain(
     )
     call_resistance, call_reason = _call_resistance(by_strike, spot)
     support, support_reason, put_wall = _nearby_support(by_strike, spot, total_abs)
-    if coverage is None or coverage < REVALUE_COVERAGE_MIN:
+    if iv_share < REVALUE_COVERAGE_MIN:
         zero, zero_reason = None, "iv_coverage_insufficient"
     else:
         zero, zero_reason = _zero_gamma(legs, spot, rate)
@@ -610,15 +612,15 @@ def _nearby_support(
     put_total = sum(cell["put"] for cell in below)
     if total_abs <= 0 or put_total / total_abs < PUT_BOOK_SHARE_MIN:
         return None, "put_gamma_immaterial", put_wall
-    peak = max(cell["put"] for cell in below)
-    material = [
-        cell
-        for cell in below
-        if cell["put"] >= MATERIAL_SHARE_OF_PEAK * peak
-        and (spot - cell["strike"]) / spot <= NEARBY_BAND_PCT
+    # Materiality is judged inside the band. A heavier wall further out must
+    # not shrink a real nearby shelf below the cutoff.
+    inside = [
+        cell for cell in below if (spot - cell["strike"]) / spot <= NEARBY_BAND_PCT
     ]
-    if not material:
+    if not inside:
         return None, "no_put_gamma_inside_band", put_wall
+    peak = max(cell["put"] for cell in inside)
+    material = [cell for cell in inside if cell["put"] >= MATERIAL_SHARE_OF_PEAK * peak]
     nearest = min(material, key=lambda cell: (spot - cell["strike"], -cell["put"]))
     level = _level(nearest["strike"], spot, nearest["put"], signed=-nearest["put"])
     level["share_of_peak"] = _round(nearest["put"] / peak, 6) if peak > 0 else None
