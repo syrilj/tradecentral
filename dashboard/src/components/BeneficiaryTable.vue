@@ -259,7 +259,7 @@ function navMarket(symbol: string) {
                 <button
                   type="button"
                   class="action-btn"
-                  title="View Options Drift"
+                  title="View Options"
                   @click="navOptions(n.symbol)"
                 >
                   OPT

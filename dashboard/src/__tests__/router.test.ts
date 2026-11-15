@@ -42,4 +42,19 @@ describe('public entry and operator routing', () => {
     expect(routerSource).toContain('to.query.symbol || to.query.setup')
     expect(routerSource).toContain('document.title = sym ?')
   })
+
+  it('names the options workspace Options and renders an unknown path', () => {
+    expect(routerSource).toContain("name: 'options'")
+    expect(routerSource).toContain("title: 'Options'")
+    expect(routerSource).not.toContain("title: 'Options Drift'")
+    expect(routerSource).toContain("name: 'not-found'")
+    expect(routerSource).toContain("import('@/views/NotFoundView.vue')")
+    expect(routerSource).not.toMatch(/path:\s*'\/:pathMatch\(\.\*\)\*'\s*,\s*redirect:\s*'\/'/)
+  })
+
+  it('scrolls in-page overview hashes onto their sections', () => {
+    expect(routerSource).toContain('savedPosition')
+    expect(routerSource).toContain('el: to.hash')
+    expect(routerSource).toContain('document.getElementById')
+  })
 })

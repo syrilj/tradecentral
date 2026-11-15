@@ -884,7 +884,7 @@ def build_unusual_options_flow(
             "OTM distance is max(strike/spot−1, 0) for calls and max(1−strike/spot, 0) for puts.",
             "This feed is a 15s HTTP poll of LSE prints, not a websocket firehose and not /api/flow-state daily-bar proxy.",
             "Unusual, sweep, and heat are descriptive flags — not ENTER and not decision authorization.",
-            "Click a row to open Options Drift / GEX for that symbol.",
+            "Click a row to open Options / GEX for that symbol.",
         ],
     }
 

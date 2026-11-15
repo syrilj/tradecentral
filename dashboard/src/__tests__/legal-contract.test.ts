@@ -7,6 +7,7 @@ const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = join(srcRoot, '..', '..')
 
 const routerSource = readFileSync(join(srcRoot, 'router.ts'), 'utf8')
+const baseCss = readFileSync(join(srcRoot, 'styles', 'base.css'), 'utf8')
 const landingSource = readFileSync(join(srcRoot, 'views', 'LandingView.vue'), 'utf8')
 const authSource = readFileSync(join(srcRoot, 'views', 'AuthView.vue'), 'utf8')
 const licensePath = join(repoRoot, 'LICENSE')
@@ -30,6 +31,8 @@ describe('Source-available license and in-app legal pages', () => {
     expect(routerSource).toContain("name: 'terms'")
     expect(routerSource).toMatch(/path:\s*'\/license'[\s\S]*?public:\s*true/)
     expect(routerSource).toMatch(/path:\s*'\/terms'[\s\S]*?public:\s*true/)
+    expect(baseCss).toContain('body.edge-public-mode .stage')
+    expect(baseCss).toContain('overflow: visible')
   })
 
   it('links to License Agreement and Terms of Service in LandingView footer', () => {

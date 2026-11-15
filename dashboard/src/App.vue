@@ -473,7 +473,30 @@ const macroTools = [
   },
 ] as const
 
-const overflowNav = [...deskTools, ...marketTools, ...macroTools, ...researchTools] as const
+const structureTools = [
+  {
+    name: 'liquidity',
+    idx: 'S1',
+    title: 'Liquidity',
+    hint: 'Stops, sweeps, and pools',
+    icon: 'liquidity',
+  },
+  {
+    name: 'microstructure-regime',
+    idx: 'S2',
+    title: 'Microstructure',
+    hint: 'Envelope, breadth, and flow',
+    icon: 'microstructure',
+  },
+] as const
+
+const overflowNav = [
+  ...deskTools,
+  ...marketTools,
+  ...macroTools,
+  ...structureTools,
+  ...researchTools,
+] as const
 
 function isTabDest(item: { name: string; tab?: boolean }): boolean {
   return item.tab === true
@@ -1105,6 +1128,21 @@ function openFearGreed(): void {
                   <div class="more-group label">Macro</div>
                   <RouterLink
                     v-for="n in macroTools"
+                    :key="n.name"
+                    :to="{ name: n.name }"
+                    class="more-item"
+                    :class="{ on: route.name === n.name }"
+                    :title="n.hint"
+                    role="menuitem"
+                    @click="moreOpen = false"
+                  >
+                    <AppIcon :name="n.icon" :size="16" />
+                    <span class="more-title label">{{ n.title }}</span>
+                    <span class="more-idx fig">{{ n.idx }}</span>
+                  </RouterLink>
+                  <div class="more-group label">Structure</div>
+                  <RouterLink
+                    v-for="n in structureTools"
                     :key="n.name"
                     :to="{ name: n.name }"
                     class="more-item"
