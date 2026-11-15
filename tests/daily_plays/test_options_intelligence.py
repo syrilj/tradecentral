@@ -1,16 +1,19 @@
-from datetime import datetime, timezone
+import math
+from datetime import date, datetime, timezone
 
 import pytest
-
 from edge.daily_plays.options_intelligence import (
     OptionsFilters,
     _best_observation_time,
+    _bs_delta,
+    _bs_gamma,
+    _gex_map,
     _imbalance_confidence,
+    _net_gex_at_spots,
     _setup_from_gex_score,
     _usd_millions,
     build_options_intelligence,
 )
-
 
 ASOF = datetime(2026, 7, 31, 15, 0, tzinfo=timezone.utc)
 
@@ -1292,9 +1295,6 @@ def test_pressure_gauge_stays_bounded_and_unsigned_context_never_votes():
 
 def test_bs_gamma_matches_bs_delta_on_dividend_handling():
     """Gamma dropped the yield terms that d1/delta carried, so they disagreed."""
-    import math
-    from edge.daily_plays.options_intelligence import _bs_gamma, _bs_delta
-
     kwargs = dict(spot=100, strike=105, years=30 / 365, iv=0.35, rate=0.045)
     q = 0.03
     # Finite-difference gamma from the dividend-adjusted delta.
@@ -1307,6 +1307,259 @@ def test_bs_gamma_matches_bs_delta_on_dividend_handling():
     # q = 0 must be unchanged from the previous behaviour.
     assert _bs_gamma(**kwargs) == pytest.approx(_bs_gamma(**kwargs, yield_rate=0.0))
     assert not math.isclose(_bs_gamma(**kwargs), _bs_gamma(**kwargs, yield_rate=q))
+
+
+def _scalar_net_gex(contracts, spots, rate, yield_rate=0.0):
+    """Independent per-spot sum through `_bs_gamma`. Oracle for the grid."""
+    totals = []
+    for spot in spots:
+        spot_f = float(spot)
+        total = 0.0
+        for row in contracts:
+            gamma = _bs_gamma(
+                spot=spot_f,
+                strike=float(row["strike"]),
+                years=float(row["years"]),
+                iv=float(row.get("iv") or 0.0),
+                rate=rate,
+                yield_rate=yield_rate,
+            )
+            if gamma is None:
+                continue
+            total += (
+                float(row["sign"])
+                * gamma
+                * float(row["oi"])
+                * float(row["multiplier"])
+                * spot_f
+                * spot_f
+                * 0.01
+            )
+        totals.append(total)
+    return totals
+
+
+def _crossings(grid):
+    found = []
+    for (x0, y0), (x1, y1) in zip(grid, grid[1:]):
+        if y0 == 0:
+            found.append(x0)
+        elif y0 * y1 < 0:
+            found.append(x0 + (x1 - x0) * abs(y0) / (abs(y0) + abs(y1)))
+    return found
+
+
+def test_bs_gamma_locks_atm_one_year_value():
+    """S = K = 100, T = 1, σ = 0.20, r = q = 0 → d1 = 0.1, Γ = φ(d1) / (S σ)."""
+    d1 = 0.1
+    expected = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi) / (100.0 * 0.2)
+    got = _bs_gamma(spot=100.0, strike=100.0, years=1.0, iv=0.2, rate=0.0, yield_rate=0.0)
+    assert got == pytest.approx(expected, rel=1e-12)
+    assert got == pytest.approx(0.0198476273663, rel=1e-9)
+
+
+def test_net_gex_grid_matches_scalar_black_scholes():
+    rate = 0.045
+    yield_rate = 0.02
+    contracts = [
+        {
+            "strike": 100.0,
+            "years": 30 / 365,
+            "iv": 0.25,
+            "sign": 1.0,
+            "oi": 1500,
+            "multiplier": 100,
+        },
+        {
+            "strike": 90.0,
+            "years": 30 / 365,
+            "iv": 0.32,
+            "sign": -1.0,
+            "oi": 2200,
+            "multiplier": 100,
+        },
+        {
+            "strike": 110.0,
+            "years": 7 / 365,
+            "iv": 0.18,
+            "sign": 1.0,
+            "oi": 800,
+            "multiplier": 100,
+        },
+        # Rejected by _bs_gamma: must not move the total even with huge OI.
+        {
+            "strike": 100.0,
+            "years": 30 / 365,
+            "iv": 0.001,
+            "sign": 1.0,
+            "oi": 5_000_000,
+            "multiplier": 100,
+        },
+        {
+            "strike": -5.0,
+            "years": 30 / 365,
+            "iv": 0.30,
+            "sign": -1.0,
+            "oi": 5_000_000,
+            "multiplier": 100,
+        },
+        {
+            "strike": 100.0,
+            "years": 0.0,
+            "iv": 0.30,
+            "sign": 1.0,
+            "oi": 5_000_000,
+            "multiplier": 100,
+        },
+    ]
+    spots = [0.0, -10.0, 80.0, 100.0, 120.0]
+    got = _net_gex_at_spots(contracts, spots, rate=rate, yield_rate=yield_rate)
+    ref = _scalar_net_gex(contracts, spots, rate, yield_rate)
+    assert got == pytest.approx(ref, rel=1e-12, abs=1e-9)
+    assert got[0] == 0.0
+    assert got[1] == 0.0
+    assert _net_gex_at_spots([], [100.0], rate=rate) == [0.0]
+    assert _net_gex_at_spots(contracts, [], rate=rate) == []
+
+
+def test_gex_price_profile_matches_scalar_gamma_grid():
+    spot = 100.0
+    rate = 0.045
+    asof = datetime(2026, 11, 15, 15, 0, tzinfo=timezone.utc)
+    expiry = date(2026, 12, 19)
+    rows = []
+    # Puts below spot and calls above it, so net exposure changes sign in the band.
+    for strike, right, oi in (
+        (80.0, "put", 4000),
+        (90.0, "put", 8000),
+        (100.0, "call", 1500),
+        (100.0, "put", 1500),
+        (110.0, "call", 8000),
+        (120.0, "call", 4000),
+    ):
+        rows.append(
+            {
+                "strike": strike,
+                "dte": 34,
+                "expiry": expiry,
+                "iv": 0.22 + abs(strike - spot) / 400.0,
+                "gamma": None,
+                "right": right,
+                "open_interest": oi,
+                "multiplier": 100,
+            }
+        )
+    rows.append(
+        {
+            "strike": 100.0,
+            "dte": 34,
+            "expiry": expiry,
+            "iv": 0.001,
+            "gamma": None,
+            "right": "call",
+            "open_interest": 9_000_000,
+            "multiplier": 100,
+        }
+    )
+    _mapped, summary, _source, _by_expiry, profile = _gex_map(rows, spot=spot, asof=asof, rate=rate)
+    enriched = []
+    for row in rows:
+        years = max(float(row["dte"] or 0), 0.5) / 365.0
+        gamma = _bs_gamma(
+            spot=spot,
+            strike=float(row["strike"]),
+            years=years,
+            iv=float(row["iv"] or 0.0),
+            rate=rate,
+        )
+        if not row["strike"] or gamma is None or row["right"] not in {"call", "put"}:
+            continue
+        enriched.append(
+            {
+                "strike": float(row["strike"]),
+                "years": years,
+                "iv": row["iv"],
+                "sign": 1.0 if row["right"] == "call" else -1.0,
+                "oi": row["open_interest"],
+                "multiplier": row["multiplier"],
+            }
+        )
+    band_spots = [spot * (0.80 + i * 0.005) for i in range(81)]
+    band_totals = _scalar_net_gex(enriched, band_spots, rate)
+    assert [point["net_gex_m"] for point in profile] == [
+        round(total / 1_000_000.0, 6) for total in band_totals
+    ]
+    assert [point["spot"] for point in profile] == [round(value, 4) for value in band_spots]
+    crossings = _crossings(list(zip(band_spots, band_totals)))
+    assert crossings
+    scalar_flip = min(crossings, key=lambda value: abs(value - spot))
+    assert summary["gamma_flip"] == round(scalar_flip, 4)
+    assert summary["zero_gamma"] == summary["gamma_flip"]
+
+
+def test_gex_flip_outside_the_band_matches_scalar_search():
+    """A zero past ±20% still has to land on the scalar extended search."""
+    spot = 100.0
+    rate = 0.045
+    asof = datetime(2026, 11, 15, 15, 0, tzinfo=timezone.utc)
+    expiry = date(2026, 12, 19)
+    rows = [
+        {
+            "strike": 100.0,
+            "dte": 30,
+            "expiry": expiry,
+            "iv": 0.25,
+            "gamma": None,
+            "right": "put",
+            "open_interest": 50_000,
+            "multiplier": 100,
+        },
+        {
+            "strike": 250.0,
+            "dte": 30,
+            "expiry": expiry,
+            "iv": 0.35,
+            "gamma": None,
+            "right": "call",
+            "open_interest": 80_000,
+            "multiplier": 100,
+        },
+    ]
+    _mapped, summary, _source, _by_expiry, profile = _gex_map(rows, spot=spot, asof=asof, rate=rate)
+    enriched = []
+    for row in rows:
+        years = max(float(row["dte"] or 0), 0.5) / 365.0
+        enriched.append(
+            {
+                "strike": float(row["strike"]),
+                "years": years,
+                "iv": row["iv"],
+                "sign": 1.0 if row["right"] == "call" else -1.0,
+                "oi": row["open_interest"],
+                "multiplier": 100,
+            }
+        )
+    band_spots = [spot * (0.80 + i * 0.005) for i in range(81)]
+    assert not _crossings(list(zip(band_spots, _scalar_net_gex(enriched, band_spots, rate))))
+    search_lo = max(spot * 0.20, 100.0 * 0.90)
+    search_hi = min(spot * 3.00, 250.0 * 1.10)
+    step = (search_hi - search_lo) / 120
+    ext_spots = [search_lo + i * step for i in range(121)]
+    ext_totals = _scalar_net_gex(enriched, ext_spots, rate)
+    crossings = _crossings(list(zip(ext_spots, ext_totals)))
+    assert crossings
+    scalar_flip = min(crossings, key=lambda value: abs(value - spot))
+    assert scalar_flip > spot * 1.20
+    assert summary["gamma_flip"] == round(scalar_flip, 4)
+    profile_lo = min(spot * 0.80, scalar_flip * 0.95)
+    profile_hi = max(spot * 1.20, scalar_flip * 1.05)
+    step = (profile_hi - profile_lo) / 80
+    profile_spots = [profile_lo + i * step for i in range(81)]
+    profile_totals = _scalar_net_gex(enriched, profile_spots, rate)
+    assert [point["net_gex_m"] for point in profile] == [
+        round(total / 1_000_000.0, 6) for total in profile_totals
+    ]
+    assert [point["spot"] for point in profile] == [round(value, 4) for value in profile_spots]
 
 
 def test_a_thin_same_day_strike_cannot_invert_the_whole_chains_charm_sign():

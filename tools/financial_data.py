@@ -664,6 +664,9 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
         # when the print came from yfinance's delayed consolidated quote.
         ratios["spot_source"] = intel.get("spot_source") or "live"
         out["ratios"] = ratios
+        # The operator payload is replayed through score_report_forecast with no
+        # second intel argument. Every input that moves the mark has to ride
+        # along, or the published price and the scorer disagree.
         out["tape"] = {
             k: intel[k]
             for k in (
@@ -675,7 +678,14 @@ def _with_model_forecast(data: dict[str, Any]) -> dict[str, Any]:
                 "ret_12m",
                 "vol_realized_30d",
                 "fwd_pe",
+                "pe_forward",
                 "trailing_eps",
+                "forward_eps",
+                "earnings_growth",
+                "revenue_growth",
+                "range_position",
+                "insider_net_volume_usd",
+                "institutional_pct",
                 "spot_source",
                 "delayed_last_price",
                 "delayed_spot_gap",
