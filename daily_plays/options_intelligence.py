@@ -8,12 +8,15 @@ signed when the source includes an explicit aggressor field.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
-from datetime import date, datetime, timedelta, timezone
 import math
 import re
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
+from datetime import date, datetime, timedelta, timezone
 from statistics import median
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
+
+import numpy as np
 
 from .activity_lean import describe_activity_lean
 
@@ -172,6 +175,54 @@ def _bs_gamma(
     d1 = (math.log(spot / strike) + (rate - yield_rate + 0.5 * iv * iv) * years) / (iv * root_t)
     pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
     return math.exp(-yield_rate * years) * pdf_d1 / (spot * iv * root_t)
+
+
+def _net_gex_at_spots(
+    contracts: Sequence[Mapping[str, Any]],
+    spots: Sequence[float],
+    *,
+    rate: float,
+    yield_rate: float = 0.0,
+) -> list[float]:
+    """Net gamma exposure at each spot. Same formula and rejects as `_bs_gamma`.
+
+    Each value is sign * gamma * oi * multiplier * spot^2 * 0.01 (not millions).
+    Contracts `_bs_gamma` would reject contribute nothing.
+    """
+    spot_arr = np.asarray(spots, dtype=np.float64)
+    totals = np.zeros(spot_arr.shape, dtype=np.float64)
+    if spot_arr.size == 0 or not contracts:
+        return totals.reshape(-1).tolist()
+    n = len(contracts)
+    strike = np.empty(n, dtype=np.float64)
+    years = np.empty(n, dtype=np.float64)
+    iv = np.empty(n, dtype=np.float64)
+    weight = np.empty(n, dtype=np.float64)
+    for i, row in enumerate(contracts):
+        strike[i] = float(row["strike"])
+        years[i] = float(row["years"])
+        iv[i] = float(row.get("iv") or 0.0)
+        weight[i] = float(row["sign"]) * float(row["oi"]) * float(row["multiplier"]) * 0.01
+    valid = (strike > 0.0) & (years > 0.0) & (iv >= 0.005) & (iv <= 5.0)
+    # `_bs_gamma` returns None for spot <= 0, so those spots contribute nothing.
+    finite_positive = np.isfinite(spot_arr) & (spot_arr > 0.0)
+    if not np.any(valid) or not np.any(finite_positive):
+        return totals.reshape(-1).tolist()
+    strike = strike[valid]
+    years = years[valid]
+    iv = iv[valid]
+    weight = weight[valid]
+    root_t = np.sqrt(years)
+    vol_root = iv * root_t
+    drift = (rate - yield_rate + 0.5 * iv * iv) * years
+    discount = np.exp(-yield_rate * years)
+    live = spot_arr[finite_positive]
+    d1 = (np.log(live)[:, None] - np.log(strike) + drift) / vol_root
+    pdf = np.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+    gamma = discount * pdf / (live[:, None] * vol_root)
+    exposure = gamma * weight * (live * live)[:, None]
+    totals[finite_positive] = exposure.sum(axis=1)
+    return totals.reshape(-1).tolist()
 
 
 def _bs_d1(
@@ -2061,34 +2112,18 @@ def _gex_map(
     flip: float | None = None
     price_profile: list[dict[str, Any]] = []
     if enriched:
-
-        def _calc_net_gex_at(test_spot: float) -> float:
-            tot = 0.0
-            for r in enriched:
-                gm = _bs_gamma(
-                    spot=test_spot,
-                    strike=float(r["strike"]),
-                    years=float(r["years"]),
-                    iv=float(r["iv"] or 0),
-                    rate=rate,
-                )
-                if gm is not None:
-                    tot += r["sign"] * gm * r["oi"] * r["multiplier"] * test_spot * test_spot * 0.01
-            return tot
-
-        grid: list[tuple[float, float]] = []
         # ±20% in 0.5% steps — standard band used for zero-gamma search; also the
         # IF-style "gamma price profile" (projected net GEX at each test spot).
-        for i in range(81):
-            test_spot = spot * (0.80 + i * 0.005)
-            total = _calc_net_gex_at(test_spot)
-            grid.append((test_spot, total))
-            price_profile.append(
-                {
-                    "spot": round(test_spot, 4),
-                    "net_gex_m": round(total / 1_000_000.0, 6),
-                }
-            )
+        band_spots = [spot * (0.80 + i * 0.005) for i in range(81)]
+        band_totals = _net_gex_at_spots(enriched, band_spots, rate=rate)
+        grid = list(zip(band_spots, band_totals))
+        price_profile = [
+            {
+                "spot": round(test_spot, 4),
+                "net_gex_m": round(total / 1_000_000.0, 6),
+            }
+            for test_spot, total in grid
+        ]
         crossings: list[float] = []
         for (x0, y0), (x1, y1) in zip(grid, grid[1:]):
             if y0 == 0:
@@ -2108,11 +2143,9 @@ def _gex_map(
             if search_hi > search_lo:
                 extended_steps = 120
                 step_size = (search_hi - search_lo) / extended_steps
-                ext_grid = []
-                for s_i in range(extended_steps + 1):
-                    ts = search_lo + s_i * step_size
-                    tot = _calc_net_gex_at(ts)
-                    ext_grid.append((ts, tot))
+                ext_spots = [search_lo + s_i * step_size for s_i in range(extended_steps + 1)]
+                ext_totals = _net_gex_at_spots(enriched, ext_spots, rate=rate)
+                ext_grid = list(zip(ext_spots, ext_totals))
                 for (x0, y0), (x1, y1) in zip(ext_grid, ext_grid[1:]):
                     if y0 == 0:
                         crossings.append(x0)
@@ -2128,16 +2161,16 @@ def _gex_map(
             ):
                 profile_lo = min(spot * 0.80, flip * 0.95)
                 profile_hi = max(spot * 1.20, flip * 1.05)
-                price_profile = []
-                for s_i in range(81):
-                    ts = profile_lo + s_i * ((profile_hi - profile_lo) / 80)
-                    tot = _calc_net_gex_at(ts)
-                    price_profile.append(
-                        {
-                            "spot": round(ts, 4),
-                            "net_gex_m": round(tot / 1_000_000.0, 6),
-                        }
-                    )
+                step = (profile_hi - profile_lo) / 80
+                profile_spots = [profile_lo + s_i * step for s_i in range(81)]
+                profile_totals = _net_gex_at_spots(enriched, profile_spots, rate=rate)
+                price_profile = [
+                    {
+                        "spot": round(ts, 4),
+                        "net_gex_m": round(tot / 1_000_000.0, 6),
+                    }
+                    for ts, tot in zip(profile_spots, profile_totals)
+                ]
 
     gex_by_expiry = []
     asof_day = asof.date() if isinstance(asof, datetime) else asof
