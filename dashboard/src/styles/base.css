@@ -85,7 +85,7 @@ body {
 body.edge-public-mode {
   overflow: auto !important;
   overflow-x: hidden !important;
-  background: #fbfbf8;
+  background: var(--editorial-canvas);
 }
 body.edge-public-mode #app,
 body.edge-public-mode .shell {

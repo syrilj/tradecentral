@@ -354,6 +354,8 @@
   --paper-call: #2f7d5a;
   --paper-put: #b3494f;
   --paper-warn: #946200;
+  /* Public overview, access, legal, and unknown-path canvas. */
+  --editorial-canvas: #fbfbf8;
 }
 
 /* ---- public editorial palette (landing/auth surfaces) ----------------------
