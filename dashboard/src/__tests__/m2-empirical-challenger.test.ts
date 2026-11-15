@@ -202,11 +202,11 @@ describe('Milestone 2 Empirical Challenger: Unified Navigation Shell & Top Bar S
       // matches on route name, so a duplicate would light the primary nav and
       // mark Tools active at the same time. Brief is the first primary
       // destination; Crypto is the tenth.
-      expect(primaryCount).toBe(14)
+      expect(primaryCount).toBe(15)
       expect(deskCount).toBe(3)
       expect(marketCount).toBe(6)
       expect(researchCount).toBe(8)
-      expect(primaryCount + deskCount + marketCount + researchCount).toBe(31)
+      expect(primaryCount + deskCount + marketCount + researchCount).toBe(32)
     })
   })
 

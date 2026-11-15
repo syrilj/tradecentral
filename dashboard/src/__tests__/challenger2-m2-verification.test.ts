@@ -256,6 +256,7 @@ describe('Challenger 2 Empirical Verification — Milestone 2 Shell & Layout Ove
         'reversal',
         'options',
         'regime',
+        'gamma',
         'suggest',
         'drift',
         'desk',
