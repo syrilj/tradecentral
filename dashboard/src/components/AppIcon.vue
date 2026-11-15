@@ -77,6 +77,13 @@ withDefaults(
       <path d="M3 19c4 0 3.5-13 9-13s5 13 9 13" />
       <path d="M12 3v3" />
     </template>
+    <template v-else-if="name === 'gamma'">
+      <!-- Flip line, call mass above it, a support shelf below. -->
+      <path d="M4 14h16" />
+      <path d="M6 14c2.2-6 3.2-6 6-6s3.8 6 6 6" />
+      <path d="M12 4v3" />
+      <path d="M8 19h3" />
+    </template>
     <template v-else-if="name === 'drift'">
       <path d="M3 12h18" />
       <path d="M6 12V6.5M9 12V8M12 12V5M15 12V8.5M18 12V7" />
