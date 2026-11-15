@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   classifyFilingKind,
@@ -13,8 +14,12 @@ describe('insider display', () => {
     expect(classifyInsiderSide('S-Sale')).toBe('sell')
     expect(classifyInsiderSide('')).toBe('other')
     expect(classifyFilingKind('4')).toBe('insider')
+    expect(classifyFilingKind('4/A')).toBe('insider')
+    expect(classifyFilingKind('FORM 4')).toBe('insider')
     expect(classifyFilingKind('8-K')).toBe('event')
     expect(classifyFilingKind('SC 13D')).toBe('holder')
+    expect(classifyFilingKind('424B5')).toBe('other')
+    expect(classifyFilingKind('40-F')).toBe('other')
   })
 
   it('normalizes Fintel insider rows and SEC filings', () => {
@@ -47,5 +52,13 @@ describe('insider display', () => {
     })
     expect(filings[0].kind).toBe('insider')
     expect(filings[1].kind).toBe('event')
+  })
+
+  it('does not paint a non-sale as a sale on the market insider tape', () => {
+    const src = readFileSync(new URL('../views/MarketView.vue', import.meta.url), 'utf8')
+    expect(src).toContain('insData.summary.buy_count')
+    expect(src).toContain('insData.summary.sell_count')
+    expect(src).not.toContain("transaction_type === 'Purchase' ? 'pos' : 'neg'")
+    expect(src).toContain("transaction_type === 'Sale'")
   })
 })
